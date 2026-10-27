@@ -33,7 +33,12 @@ import {
 
 export type OnboardingConfigRouteOptions = {
   env?: NodeJS.ProcessEnv;
-  readWorksheetHeader?: (clientAccountId: string) => Promise<WorksheetHeaderRead | null>;
+  /** Explicit exact-v3 onboarding test worksheet reader. Not the existing-tab header reader. */
+  readWorksheetHeader?: (
+    clientAccountId: string,
+    target?: { spreadsheetId: string; worksheetId: number } | null
+  ) => Promise<WorksheetHeaderRead | null>;
+  /** Existing worksheet header reader for column-map draft, publish, and target save. */
   readExistingWorksheet?: (
     clientAccountId: string,
     spreadsheetId: string,
@@ -56,6 +61,8 @@ const worksheetSchema = z
   .object({
     requestId: z.string().uuid(),
     clientAccountId: z.string().optional(),
+    spreadsheetId: z.string().trim().min(1).max(200).optional(),
+    worksheetId: z.number().int().nonnegative().optional(),
   })
   .strict();
 
@@ -161,8 +168,18 @@ export const adminClientOnboardingV2ConfigRoutes: FastifyPluginAsync<OnboardingC
     if (parsed.data.clientAccountId && parsed.data.clientAccountId !== clientAccountId) {
       return reply.status(400).send({ ok: false, error: "client_account_mismatch" });
     }
+    const target =
+      parsed.data.spreadsheetId !== undefined && parsed.data.worksheetId !== undefined
+        ? { spreadsheetId: parsed.data.spreadsheetId, worksheetId: parsed.data.worksheetId }
+        : null;
     const saved = await approveExactV3TestWorksheet(
-      { clientAccountId, requestId: parsed.data.requestId, actorLabel: actorLabel(request) },
+      {
+        clientAccountId,
+        requestId: parsed.data.requestId,
+        actorLabel: actorLabel(request),
+        spreadsheetId: target?.spreadsheetId ?? null,
+        worksheetId: target?.worksheetId ?? null,
+      },
       readHeader
     );
     if (!saved.ok) return reply.status(saved.statusCode).send({ ok: false, error: saved.error, detail: saved.detail });

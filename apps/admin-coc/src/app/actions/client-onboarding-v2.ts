@@ -6,9 +6,15 @@ import { requireAdminCocAdminSession } from "@/lib/admin-coc-session-guard";
 import {
   bindCompanySheetsTab,
   fetchCompanySheetsDispatch,
+  probeCompanySheetWrite,
   saveCompanySheetsDestination,
 } from "@/lib/admin-api/company-google-sheets";
-import { readOnboardingFailure } from "@/lib/admin-api/client-onboarding-v2";
+import {
+  approveOnboardingTestWorksheet,
+  browseResolvedOnboardingFolder,
+  listOnboardingTestRuns,
+  readOnboardingFailure,
+} from "@/lib/admin-api/client-onboarding-v2";
 import {
   listOnboardingSpreadsheets,
   loadOnboardingWorkflows,
@@ -40,6 +46,7 @@ import type {
   OnboardingSpreadsheetListItem,
   OnboardingTestIdentity,
   OnboardingTestRun,
+  StoredTestRunView,
   OnboardingWorkflowMatch,
   OnboardingWorkflowSave,
   ColumnMapAssignment,
@@ -122,6 +129,64 @@ export async function previewOnboardingSpreadsheetAction(
   const id = spreadsheetId.trim();
   if (!id || id.length > 500) return { ok: false, error: "invalid_spreadsheet_ref", status: 400 };
   return previewOnboardingSpreadsheet(clientAccountId, id);
+}
+
+export async function browseResolvedOnboardingFolderAction(
+  clientAccountId: string,
+  folderId: string
+): Promise<OnboardingActionResult<OnboardingSpreadsheetListItem[]>> {
+  await requireAdminCocAdminSession();
+  const rejected = rejectClient(clientAccountId);
+  if (rejected) return rejected;
+  const id = folderId.trim();
+  if (!id) return { ok: false, error: "invalid_folder", status: 400 };
+  return browseResolvedOnboardingFolder(clientAccountId, id);
+}
+
+export async function approveOnboardingTestWorksheetAction(
+  clientAccountId: string,
+  input: { spreadsheetId: string; worksheetId: number }
+): Promise<OnboardingActionResult<{ worksheetId: number }>> {
+  await requireAdminCocAdminSession();
+  const rejected = rejectClient(clientAccountId);
+  if (rejected) return rejected;
+  const spreadsheetId = input.spreadsheetId.trim();
+  if (!spreadsheetId || !Number.isInteger(input.worksheetId) || input.worksheetId < 0) {
+    return { ok: false, error: "invalid_body", status: 400 };
+  }
+  return approveOnboardingTestWorksheet(clientAccountId, {
+    requestId: crypto.randomUUID(),
+    spreadsheetId,
+    worksheetId: input.worksheetId,
+  });
+}
+
+export async function probeOnboardingSheetWriteAction(
+  clientAccountId: string,
+  input: { spreadsheetId: string; worksheetId: number }
+): Promise<OnboardingActionResult<{ canEdit: boolean | null }>> {
+  await requireAdminCocAdminSession();
+  const rejected = rejectClient(clientAccountId);
+  if (rejected) return rejected;
+  const spreadsheetId = input.spreadsheetId.trim();
+  if (!spreadsheetId || !Number.isInteger(input.worksheetId) || input.worksheetId < 0) {
+    return { ok: false, error: "invalid_body", status: 400 };
+  }
+  const probed = await probeCompanySheetWrite(clientAccountId, { spreadsheetId, worksheetId: input.worksheetId });
+  if (!probed.ok) return { ok: false, ...readOnboardingFailure(probed.status, probed.body) };
+  if (probed.data.permissionProbe !== true || probed.data.rowWritten !== false || probed.data.campaignDeliveryVerified !== false) {
+    return { ok: false, error: "malformed_response", status: 502 };
+  }
+  return { ok: true, data: { canEdit: probed.data.canEdit } };
+}
+
+export async function listOnboardingTestRunsAction(
+  clientAccountId: string
+): Promise<OnboardingActionResult<StoredTestRunView[]>> {
+  await requireAdminCocAdminSession();
+  const rejected = rejectClient(clientAccountId);
+  if (rejected) return rejected;
+  return listOnboardingTestRuns(clientAccountId);
 }
 
 export async function saveOnboardingSheetsDestinationAction(

@@ -4,12 +4,16 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import {
+  approveOnboardingTestWorksheetAction,
   bindOnboardingCampaignWorksheetAction,
+  browseResolvedOnboardingFolderAction,
   listOnboardingSpreadsheetsAction,
+  listOnboardingTestRunsAction,
   loadOnboardingWorkflowsAction,
   previewOnboardingNoteAction,
   previewOnboardingSpreadsheetAction,
   previewOnboardingStoredLeadAction,
+  probeOnboardingSheetWriteAction,
   publishOnboardingColumnMapAction,
   recordOnboardingActivationIntentAction,
   resolveOnboardingFolderAction,
@@ -56,6 +60,7 @@ export function SetupDeliveryWorkspace({
   initialRuns = [],
   initialIdentity = null,
   profileRevision = null,
+  testRunListLoaded = false,
   actions,
 }: {
   clientAccountId: string;
@@ -72,14 +77,20 @@ export function SetupDeliveryWorkspace({
    * Null means the summary did not include it. Do not substitute setupRequest.revision or 0.
    */
   profileRevision?: number | null;
+  /** True when GET .../onboarding/test-runs returned a list, including an empty one. */
+  testRunListLoaded?: boolean;
   /** Tests pass mocked contracts. The page omits this and uses the server actions. */
   actions?: OnboardingWorkspaceActions;
 }) {
   const bound = actions ?? liveActions(clientAccountId);
-  const revision = knownProfileRevision(profileRevision);
+  const revision = knownProfileRevision(profileRevision ?? summary?.destinationProfile?.revision);
   const sources = summary?.sources;
   const leads = useMemo(() => selectableStoredLeads(sources ?? []), [sources]);
-  const [viewed, setViewed] = useState<{ spreadsheetTitle: string; worksheet: OnboardingWorksheetPreview } | null>(null);
+  const [viewed, setViewed] = useState<{
+    spreadsheetId: string;
+    spreadsheetTitle: string;
+    worksheet: OnboardingWorksheetPreview;
+  } | null>(null);
   const [attempts, setAttempts] = useState<OnboardingTestAttempt[]>(initialRuns.flatMap((run) => run.attempts));
   const clientName = summary?.client.clientDisplayName ?? clientAccountId;
 
@@ -95,7 +106,20 @@ export function SetupDeliveryWorkspace({
         <div className="mt-2 flex flex-wrap items-center gap-2">
           {summary ? <Badge variant="outline">{summary.client.status}</Badge> : null}
           <Badge variant="outline">Setup request is not an activation</Badge>
+          {summary?.runtime ? (
+            <Badge variant="outline">
+              Activation {summary.runtime.activationEnabled ? "enabled" : "disabled"}
+            </Badge>
+          ) : null}
         </div>
+        {summary?.runtime ? (
+          <p className="mt-2 max-w-3xl text-xs text-slate-600">
+            Captured-test flag: {summary.runtime.capturedTestEnabled ? "on" : "off"}. GHL location test adapter:{" "}
+            {summary.runtime.ghlLocationTestAdapterApproved ? "approved" : "not approved"}. GHL production host: not
+            allowed. Sheets execution: {summary.runtime.companySheetsExecutionEnabled ? "on" : "off"}. Sheets dispatch:{" "}
+            {summary.runtime.companySheetsDispatchEnabled ? "on" : "off"}.
+          </p>
+        ) : null}
         <p className="mt-2 max-w-3xl text-sm text-slate-600">
           One workspace for the sources and destinations already stored for this client. Search prefers the existing
           client. {clientSwitchLine(summary, dispatch)}
@@ -132,7 +156,9 @@ export function SetupDeliveryWorkspace({
           connectionError={connectionError}
           dispatch={dispatch}
           actions={bound}
-          onViewWorksheet={(worksheet, spreadsheetTitle) => setViewed({ worksheet, spreadsheetTitle })}
+          onViewWorksheet={(worksheet, spreadsheetTitle, spreadsheetId) =>
+            setViewed({ worksheet, spreadsheetTitle, spreadsheetId })
+          }
         />
         <GhlCard
           clientAccountId={clientAccountId}
@@ -148,6 +174,7 @@ export function SetupDeliveryWorkspace({
         actions={bound}
         initialRuns={initialRuns}
         initialIdentity={initialIdentity}
+        testRunListLoaded={testRunListLoaded}
         viewedWorksheet={viewed}
         onAttempts={setAttempts}
       />
@@ -158,6 +185,7 @@ export function SetupDeliveryWorkspace({
         dispatchError={dispatchError}
         actions={bound}
         profileRevision={revision}
+        viewedWorksheet={viewed}
       />
     </div>
   );
@@ -168,7 +196,11 @@ function liveActions(clientAccountId: string): OnboardingWorkspaceActions {
     searchDrive: (input) => searchOnboardingDriveAction(clientAccountId, input),
     resolveFolder: (folder) => resolveOnboardingFolderAction(clientAccountId, folder),
     listSpreadsheets: () => listOnboardingSpreadsheetsAction(clientAccountId),
+    browseResolvedFolder: (folderId) => browseResolvedOnboardingFolderAction(clientAccountId, folderId),
     previewSpreadsheet: (spreadsheetId) => previewOnboardingSpreadsheetAction(clientAccountId, spreadsheetId),
+    approveTestWorksheet: (input) => approveOnboardingTestWorksheetAction(clientAccountId, input),
+    probeSheetWrite: (input) => probeOnboardingSheetWriteAction(clientAccountId, input),
+    listTestRuns: () => listOnboardingTestRunsAction(clientAccountId),
     saveSheetsDestination: (input) => saveOnboardingSheetsDestinationAction(clientAccountId, input),
     bindCampaignWorksheet: (input) => bindOnboardingCampaignWorksheetAction(clientAccountId, input),
     saveDestination: (input) => saveOnboardingDestinationAction(clientAccountId, input),

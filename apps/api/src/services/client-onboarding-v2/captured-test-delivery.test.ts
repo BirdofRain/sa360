@@ -27,6 +27,7 @@ import {
   type AgentBLeadNotePlan,
   type CapturedTestRequest,
   type CapturedTestWorld,
+  type PlannedSheet,
   type ProductionSnapshot,
   type StoredSourceEvent,
 } from "./captured-test-delivery.js";
@@ -180,6 +181,7 @@ function harness(overrides: { sheets?: ReturnType<typeof createFakeSheetsAppend>
       sheets,
       ghl,
       execution: "injected_fakes" as const,
+      rereadSheet: async (sheet: PlannedSheet) => sheet,
     },
   };
 }
@@ -478,6 +480,34 @@ test("a changed worksheet header is refused before the append port is called", a
   assert.equal(refused.ok, false);
   if (refused.ok) return;
   assert.equal(refused.error, "header_changed");
+  assert.equal(box.sheets.calls.length, 0);
+});
+
+test("an executable exact-v3 delivery without rereadSheet does not append", async () => {
+  const box = harness();
+  const { rereadSheet: _ignored, ...deps } = box.deps;
+  const refused = await runCapturedTestDelivery(
+    delivery({ requestId: "req_no_reread", destinations: ["google_sheets"] }),
+    box.snapshot,
+    deps
+  );
+  assert.equal(refused.ok, false);
+  if (refused.ok) return;
+  assert.equal(refused.error, "worksheet_blocked");
+  assert.equal(refused.externalCalls.sheets, false);
+  assert.equal(box.sheets.calls.length, 0);
+});
+
+test("disabled execution still reports execution_pending_review when rereadSheet is absent", async () => {
+  const box = harness();
+  const { rereadSheet: _ignored, ...deps } = box.deps;
+  const refused = await runCapturedTestDelivery(delivery({ destinations: ["google_sheets"] }), box.snapshot, {
+    ...deps,
+    execution: "disabled_pending_review",
+  });
+  assert.equal(refused.ok, false);
+  if (refused.ok) return;
+  assert.equal(refused.error, "execution_pending_review");
   assert.equal(box.sheets.calls.length, 0);
 });
 

@@ -115,7 +115,8 @@ export function ColumnMapEditor({
       ) : null}
       <p className="text-xs text-slate-600">
         Appends add a new row only. The header row is not rewritten. Existing data rows are not rewritten. A column
-        whose header or row-2 cell starts with = is omitted, so the formula stays. An unmapped or blank column is an
+        whose header or row-2 cell starts with = is omitted, so the existing formula stays. The new row leaves that
+        cell empty. An unmapped or blank column is an
         empty cell on the new row only. Columns past the saved header are not written.
       </p>
       <ul className="space-y-2">

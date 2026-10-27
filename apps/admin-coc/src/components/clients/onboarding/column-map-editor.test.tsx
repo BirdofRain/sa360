@@ -52,7 +52,8 @@ test("an operator maps an existing tab and a live campaign switch blocks the edi
   assert.ok(screen.getByText(/Confirm this suggestion or mark the column unmapped/));
   assert.ok(screen.getByText(/A blank header cannot be mapped/));
   assert.ok(screen.getByText(/Appends add a new row only/));
-  assert.ok(screen.getByText(/so the formula stays/));
+  assert.ok(screen.getByText(/so the existing formula stays/));
+  assert.ok(screen.getByText(/The new row leaves that cell empty/));
   assert.equal(screen.queryByText(/omitted_when_header/), null);
   const blankNote = screen.getByText(/A blank header cannot be mapped/);
   assert.equal(blankNote.closest("li")?.textContent?.includes("Suggestion only"), false);

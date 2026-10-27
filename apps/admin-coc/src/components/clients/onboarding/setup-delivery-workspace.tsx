@@ -95,8 +95,15 @@ export function SetupDeliveryWorkspace({
         </p>
       ) : null}
       <div className="grid gap-4 xl:grid-cols-2">
-        <LeadCaptureCard sources={sourcesByKind(sources ?? [], ["leadcapture"])} evidenceTruncated={summary?.evidenceTruncated === true} />
-        <FacebookCard sources={sourcesByKind(sources ?? [], ["meta_lead_ads", "zapier_facebook"])} />
+        <LeadCaptureCard
+          sources={sourcesByKind(sources ?? [], ["leadcapture"])}
+          evidenceTruncated={summary?.evidenceTruncated === true}
+          proofLoaded={summary !== null}
+        />
+        <FacebookCard
+          sources={sourcesByKind(sources ?? [], ["meta_lead_ads", "zapier_facebook"])}
+          proofLoaded={summary !== null}
+        />
         <SheetsCard
           clientName={clientName}
           summary={summary}
@@ -109,6 +116,7 @@ export function SetupDeliveryWorkspace({
       </div>
       <TestConsole
         leads={leads}
+        proofLoaded={summary !== null}
         actions={bound}
         initialRuns={initialRuns}
         initialIdentity={initialIdentity}

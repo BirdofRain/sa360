@@ -89,13 +89,17 @@ function ProofRow({ source }: { source: OnboardingSourceProof }) {
 export function LeadCaptureCard({
   sources,
   evidenceTruncated,
+  proofLoaded,
 }: {
   sources: OnboardingSourceProof[];
   evidenceTruncated: boolean;
+  proofLoaded: boolean;
 }) {
   return (
     <CardShell title="LeadCapture" testId="card-leadcapture">
-      {sources.length === 0 ? (
+      {!proofLoaded ? (
+        <p className="text-sm text-slate-600">Source proof was not loaded. A missing summary is not an empty source list.</p>
+      ) : sources.length === 0 ? (
         <p className="text-sm text-slate-600">No LeadCapture source is stored for this client.</p>
       ) : (
         sources.map((source) => <ProofRow key={source.sourceFunnelId} source={source} />)
@@ -107,14 +111,16 @@ export function LeadCaptureCard({
   );
 }
 
-export function FacebookCard({ sources }: { sources: OnboardingSourceProof[] }) {
+export function FacebookCard({ sources, proofLoaded }: { sources: OnboardingSourceProof[]; proofLoaded: boolean }) {
   return (
     <CardShell title="Facebook" testId="card-facebook">
       <p className="text-sm text-slate-600">
         Page and form association is capture evidence. Meta capture-only is complete when it is linked and observed.
         Routing and delivery stay separate and are not failures.
       </p>
-      {sources.length === 0 ? (
+      {!proofLoaded ? (
+        <p className="text-sm text-slate-600">Page and form proof was not loaded.</p>
+      ) : sources.length === 0 ? (
         <p className="text-sm text-slate-600">No Facebook page and form association is stored.</p>
       ) : (
         sources.map((source) => (
@@ -209,7 +215,9 @@ export function SheetsCard({
           detail="The client campaign switch is shown as stored. This card does not change it."
         />
       </div>
-      {states?.destinationSaved ? (
+      {!states ? (
+        <p className="text-sm text-slate-600">Sheets destination state was not loaded. Unknown is not the same as unsaved.</p>
+      ) : states.destinationSaved ? (
         <p className="text-sm text-slate-700">
           Saved spreadsheet <span className="font-mono">{states.spreadsheetId}</span>
           {states.campaignTab ? <> · campaign tab {states.campaignTab}</> : null}
@@ -434,12 +442,17 @@ export function GhlCard({
   return (
     <CardShell title="GoHighLevel" testId="card-ghl">
       <p className="text-sm text-slate-700">
-        Mode {ghl?.mode ?? "unknown"}. Location {ghl?.locationIdPresent ? "is stored" : "is not stored"}. Workflow id{" "}
-        {ghl?.workflowIdPresent ? "is stored" : "is not stored"}. Trigger {ghl?.workflowTriggerMode ?? "unset"}.
+        {ghl
+          ? `Mode ${ghl.mode}. Location ${ghl.locationIdPresent ? "is stored" : "is not stored"}. Workflow id ${
+              ghl.workflowIdPresent ? "is stored" : "is not stored"
+            }. Trigger ${ghl.workflowTriggerMode ?? "unset"}.`
+          : "GHL destination was not loaded."}
       </p>
       <p className="text-xs text-slate-500">
-        Notes {ghl?.notesEnabled ? "enabled" : "not enabled"}
-        {ghl?.notesContractVersion ? ` · ${ghl.notesContractVersion}` : ""}. An HTTP 200 is not proof a workflow completed.
+        {ghl
+          ? `Notes ${ghl.notesEnabled ? "enabled" : "not enabled"}${ghl.notesContractVersion ? ` · ${ghl.notesContractVersion}` : ""}.`
+          : "Notes state was not loaded."}{" "}
+        An HTTP 200 is not proof a workflow completed.
       </p>
       <div className="grid gap-2 sm:grid-cols-2">
         <StatusMark label="HTTP accepted" state={proofs.http_accepted === "proven" ? "proven" : "unproven"} detail="Separate from contact, note, and enrollment." />

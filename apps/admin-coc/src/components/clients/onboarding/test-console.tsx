@@ -25,6 +25,7 @@ import type {
 
 export function TestConsole({
   leads,
+  proofLoaded,
   actions,
   initialRuns,
   initialIdentity,
@@ -32,6 +33,7 @@ export function TestConsole({
   onAttempts,
 }: {
   leads: SelectableLead[];
+  proofLoaded: boolean;
   actions: OnboardingWorkspaceActions;
   initialRuns: StoredTestRunView[];
   initialIdentity: OnboardingTestIdentity | null;
@@ -63,7 +65,9 @@ export function TestConsole({
           Preview uses a stored source lead. It does not resend the provider webhook. Sheets and GHL results stay independent.
         </p>
       </div>
-      {leads.length === 0 ? (
+      {!proofLoaded ? (
+        <p className="text-sm text-slate-600">Source proof was not loaded, so no stored lead can be selected.</p>
+      ) : leads.length === 0 ? (
         <p className="text-sm text-slate-600">
           No stored source-generated lead is on the source proof. A linked source is not receiving leads.
         </p>

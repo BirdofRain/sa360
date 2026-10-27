@@ -182,7 +182,7 @@ describe("boundary B package", () => {
     assert.match(text, /Do not execute this cutover/);
     assert.match(text, /20261026200000_company_sheets_setup_grants/);
     assert.match(text, /93 finished/);
-    const fingerprint = "aa3742fba4496ad86c360499dba8d172c5f830545be21bc314d5e2ce8260342f";
+    const fingerprint = "d337d60be371bc946432f95c01ee4986d2bde8b7db34dd610041266f401bf3eb";
     assert.match(text, new RegExp(fingerprint));
     assert.match(
       readFileSync(join(repoRoot, "scripts/boundary-b/controller.mjs"), "utf8"),

@@ -44,7 +44,7 @@ import { canonicalJson, planDatabaseUrlOverrides } from "./spec-plan.mjs";
 
 export const PRODUCTION_APP_ID = "2c381355-37a1-415f-bf06-ad477add164e";
 export const ADMIN_APP_ID = "2075694a-ed30-4e7c-ae59-87b3ebfa9db7";
-export const PINNED_SA360_FINGERPRINT = "aa3742fba4496ad86c360499dba8d172c5f830545be21bc314d5e2ce8260342f";
+export const PINNED_SA360_FINGERPRINT = "d337d60be371bc946432f95c01ee4986d2bde8b7db34dd610041266f401bf3eb";
 
 const PREVIEW_PASSWORD = "b2-preview-placeholder-value-not-installed";
 const repoRootDefault = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");

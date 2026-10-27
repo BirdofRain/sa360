@@ -30,6 +30,7 @@ import {
   consoleCommands,
   evaluatePostActive,
   healthTargets,
+  collectMigrationLog,
   migrateBinding,
   migrateEvidenceFromLog,
   openConsole,
@@ -485,15 +486,7 @@ async function reconcileLostPut(ctx, proposed) {
 
 async function migrateLogText(ctx, deploymentId) {
   const listed = await request(ctx, "GET", `/v2/apps/${ctx.appId}/deployments/${deploymentId}/logs?type=RUN&component_name=sa360-migrate`);
-  const urls = Array.isArray(listed?.historic_urls) ? listed.historic_urls : [];
-  const parts = [];
-  for (const url of urls) {
-    if (typeof url !== "string" || !url.startsWith("https://")) continue;
-    const response = await ctx.fetchImpl(url);
-    if (!response.ok) continue;
-    parts.push(await response.text());
-  }
-  return parts.join("\n");
+  return collectMigrationLog(ctx.fetchImpl, listed);
 }
 
 async function componentReport(ctx, component, deploymentId) {

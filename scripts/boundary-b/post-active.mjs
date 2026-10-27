@@ -62,17 +62,87 @@ export function passingPostActiveEvidence() {
   };
 }
 
-export function migrateEvidenceFromLog(logText, binding = {}) {
+export function classifyMigrationLog(logText) {
   const text = String(logText ?? "");
-  const denied = /permission denied/i.test(text);
+  const failed = /permission denied/i.test(text) || /P3009|P3018|migrate found failed migrations|migration failed/i.test(text);
   const applied = /Applying migration|successfully applied/i.test(text);
-  const completed = !denied && !applied && /No pending migrations to apply\./.test(text);
+  const noPending = /No pending migrations to apply\./.test(text);
+  if (!text.trim()) return "missing";
+  if (failed) return "failed";
+  if (applied && noPending) return "ambiguous";
+  if (applied) return "applied";
+  if (noPending) return "no_pending";
+  return "incomplete";
+}
+
+export function migrateEvidenceFromLog(logText, binding = {}) {
+  const classification = classifyMigrationLog(logText);
+  const completed = classification === "no_pending";
   const identity = completed && binding.appUser === "doadmin" && binding.migrateOverride !== true ? "doadmin" : null;
   return {
     completed,
     identity,
     identity_source: identity === "doadmin" ? "catalog_read" : null,
+    classification,
   };
+}
+
+export function migrationLogLocations(listed) {
+  const historic = Array.isArray(listed?.historic_urls)
+    ? listed.historic_urls.filter((url) => typeof url === "string" && url.startsWith("https://"))
+    : [];
+  const live = typeof listed?.live_url === "string" && listed.live_url.startsWith("https://") ? listed.live_url : null;
+  return { historic, live };
+}
+
+export async function readLogBody(response, options = {}) {
+  const maxBytes = options.maxBytes ?? 1_000_000;
+  const idleMs = options.idleMs ?? 2_000;
+  const deadline = Date.now() + (options.timeoutMs ?? 15_000);
+  if (response?.body && typeof response.body.getReader === "function") {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    let bytes = 0;
+    try {
+      while (bytes < maxBytes && Date.now() < deadline) {
+        const remaining = Math.max(1, Math.min(idleMs, deadline - Date.now()));
+        const next = await Promise.race([
+          reader.read(),
+          new Promise((resolve) => setTimeout(() => resolve({ idle: true }), remaining)),
+        ]);
+        if (next.idle || next.done) break;
+        bytes += next.value.byteLength;
+        text += decoder.decode(next.value, { stream: true });
+      }
+    } finally {
+      try {
+        await reader.cancel();
+      } catch {
+        /* The log server can already have closed the body. */
+      }
+    }
+    return text.slice(0, maxBytes);
+  }
+  if (typeof response?.text === "function") return String(await response.text()).slice(0, maxBytes);
+  return "";
+}
+
+async function readOneLog(fetchImpl, url, options) {
+  const response = await fetchImpl(url, { signal: AbortSignal.timeout(options.timeoutMs ?? 15_000) });
+  if (!response?.ok) return "";
+  return readLogBody(response, options);
+}
+
+export async function collectMigrationLog(fetchImpl, listed, options = {}) {
+  const locations = migrationLogLocations(listed);
+  const parts = [];
+  for (const url of locations.historic) parts.push(await readOneLog(fetchImpl, url, options));
+  let text = parts.join("\n");
+  const classification = classifyMigrationLog(text);
+  const terminal = classification === "no_pending" || classification === "applied" || classification === "failed" || classification === "ambiguous";
+  if (locations.live && !terminal) text = `${text}\n${await readOneLog(fetchImpl, locations.live, options)}`;
+  return text;
 }
 
 export function parseComponentReport(text) {

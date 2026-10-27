@@ -17,7 +17,7 @@ import {
   recoverCutover,
 } from "./controller.mjs";
 import { buildLoginUrl, changePasswordWithLibpq, escapePgpass, generatePassword, operatorConnectionPolicy, operatorVerifyFull, productionAdminUrlAccepted, validateOperatorCa } from "./password-install.mjs";
-import { completeComponentLine, componentScript, consoleCommands, evaluatePostActive, healthTargets, migrateEvidenceFromLog, openConsole, parseComponentReport, parseSummaryRow, passingPostActiveEvidence, readPublicHealth } from "./post-active.mjs";
+import { classifyMigrationLog, collectMigrationLog, completeComponentLine, componentScript, consoleCommands, evaluatePostActive, healthTargets, migrateEvidenceFromLog, migrationLogLocations, openConsole, parseComponentReport, parseSummaryRow, passingPostActiveEvidence, readLogBody, readPublicHealth } from "./post-active.mjs";
 import { productionProbeChecks, runProbe } from "./probe.mjs";
 import { redact } from "./redact.mjs";
 import { auditProposedSpec, planDatabaseUrlOverrides } from "./spec-plan.mjs";
@@ -897,6 +897,13 @@ describe("boundary B post-ACTIVE validation", () => {
     const finished = `${partial},"paths":{"sheets":true}}\n`;
     assert.equal(JSON.parse(completeComponentLine(finished).slice(`COMPONENT_${"REPORT"} `.length)).paths.sheets, true);
     assert.equal(migrateEvidenceFromLog("No pending migrations to apply.", { appUser: "doadmin", migrateOverride: true }).identity, null);
+    assert.equal(classifyMigrationLog("94 migrations found\nNo pending migrations to apply.\n"), "no_pending");
+    assert.equal(classifyMigrationLog("Applying migration `20261027000000_example`\nAll migrations have been successfully applied.\n"), "applied");
+    assert.equal(classifyMigrationLog("Error: P3009\nmigrate found failed migrations in the target database\n"), "failed");
+    assert.equal(classifyMigrationLog("permission denied for table _prisma_migrations"), "failed");
+    assert.equal(classifyMigrationLog(""), "missing");
+    assert.equal(classifyMigrationLog("94 migrations found in prisma/migrations\n"), "incomplete");
+    assert.equal(migrateEvidenceFromLog("Applying migration `20261027000000_example`\nNo pending migrations to apply.\n", { appUser: "doadmin", migrateOverride: false }).classification, "ambiguous");
     assert.equal(healthTargets({}).code, "post_active_unconfigured");
     const commands = consoleCommands(componentScript);
     assert.equal(commands.join("\n").includes("postgres://"), false);
@@ -943,6 +950,45 @@ describe("boundary B post-ACTIVE validation", () => {
       }
     });
     assert.equal(parseComponentReport(split).paths.sheets, true);
+  });
+
+  it("reads a live migrate log when the archive has no terminal result", async () => {
+    assert.deepEqual(migrationLogLocations({ historic_urls: ["http://logs.example/open"], live_url: "https://logs.example/live" }), {
+      historic: [],
+      live: "https://logs.example/live",
+    });
+    const archived = "94 migrations found\nNo pending migrations to apply.\n";
+    const calls = [];
+    const fetchImpl = async (url) => {
+      calls.push(url);
+      const body = url.endsWith("/archive")
+        ? archived
+        : url.endsWith("/partial")
+          ? "94 migrations found\n"
+          : "Applying migration `20261027000000_example`\nAll migrations have been successfully applied.\n";
+      return { ok: true, text: async () => body };
+    };
+    const archivedLog = await collectMigrationLog(fetchImpl, {
+      historic_urls: ["https://logs.example/archive"],
+      live_url: "https://logs.example/live",
+    });
+    assert.deepEqual(calls, ["https://logs.example/archive"]);
+    assert.equal(migrateEvidenceFromLog(archivedLog, { appUser: "doadmin", migrateOverride: false }).classification, "no_pending");
+    const liveLog = await collectMigrationLog(fetchImpl, { historic_urls: [], live_url: "https://logs.example/live" });
+    assert.equal(calls.at(-1), "https://logs.example/live");
+    assert.equal(migrateEvidenceFromLog(liveLog, { appUser: "doadmin", migrateOverride: false }).classification, "applied");
+    const partial = await collectMigrationLog(fetchImpl, {
+      historic_urls: ["https://logs.example/partial"],
+      live_url: "https://logs.example/live",
+    });
+    assert.equal(classifyMigrationLog(partial), "applied");
+    const hanging = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("94 migrations found\nNo pending migrations to apply.\n"));
+      },
+    });
+    const bounded = await readLogBody({ ok: true, body: hanging }, { idleMs: 30, timeoutMs: 200 });
+    assert.equal(classifyMigrationLog(bounded), "no_pending");
   });
 
   async function expectRecovery(label, mode, mutate) {

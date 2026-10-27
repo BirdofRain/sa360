@@ -14,6 +14,8 @@ import {
   COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V2,
   COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3,
   COMPANY_SHEETS_LEAD_HEADER_V2,
+  COMPANY_SHEETS_WRITE_READINESS_NOT_VERIFIED,
+  COMPANY_SHEETS_WRITE_READINESS_VERIFIED,
   companySheetsCampaignHeader,
   grantedScopeList,
   isCompanyGoogleSheetsEnabled,
@@ -580,20 +582,6 @@ export async function probeCompanySheetWritePermission(
   if (!metadataResult.ok) return fail("spreadsheet_unavailable");
   const worksheet = metadataResult.metadata.worksheets.find((sheet) => sheet.sheetId === input.worksheetId);
   if (!worksheet) return fail("worksheet_unavailable");
-  const control = await establishControl(
-    {
-      connection: ready.connection,
-      accessToken: ready.accessToken,
-      spreadsheetId: input.spreadsheetId,
-      metadata: metadataResult.metadata,
-    },
-    { ...deps, env, db }
-  );
-  if (!control.ok) return control;
-  const drive = await (deps.getDriveFile ?? getCompanyDriveFile)(
-    { fileId: input.spreadsheetId, accessToken: ready.accessToken },
-    deps.fetchImpl
-  );
   const destination = await db.companySheetsDestination.findUnique({
     where: { clientAccountId: client.clientAccountId },
     include: { tabContracts: true },
@@ -604,14 +592,43 @@ export async function probeCompanySheetWritePermission(
       destination.spreadsheetId === input.spreadsheetId &&
       campaign?.worksheetId === input.worksheetId
   );
+  const control = await establishControl(
+    {
+      connection: ready.connection,
+      accessToken: ready.accessToken,
+      spreadsheetId: input.spreadsheetId,
+      metadata: metadataResult.metadata,
+    },
+    { ...deps, env, db }
+  );
+  if (!control.ok) {
+    if (destination && matchesBoundCampaignTab && control.code === "insufficient_capability") {
+      await db.companySheetsDestination.update({
+        where: { id: destination.id },
+        data: { writeReadiness: COMPANY_SHEETS_WRITE_READINESS_NOT_VERIFIED },
+      });
+    }
+    return control;
+  }
+  const drive = await (deps.getDriveFile ?? getCompanyDriveFile)(
+    { fileId: input.spreadsheetId, accessToken: ready.accessToken },
+    deps.fetchImpl
+  );
+  const canEdit = drive.ok ? drive.file.capabilities.canEdit : null;
+  if (destination && matchesBoundCampaignTab && canEdit === true) {
+    await db.companySheetsDestination.update({
+      where: { id: destination.id },
+      data: { writeReadiness: COMPANY_SHEETS_WRITE_READINESS_VERIFIED },
+    });
+  }
   return {
     ok: true,
     permissionProbe: true,
-    canEdit: drive.ok ? drive.file.capabilities.canEdit : null,
+    canEdit,
     campaignDeliveryVerified: false,
-      inventoryAffected: false,
-      rowWritten: false,
-      spreadsheetId: metadataResult.metadata.spreadsheetId,
+    inventoryAffected: false,
+    rowWritten: false,
+    spreadsheetId: metadataResult.metadata.spreadsheetId,
     spreadsheetTitle: metadataResult.metadata.title,
     worksheetTitle: worksheet.title,
     boundCampaignWorksheetId: campaign?.worksheetId ?? null,

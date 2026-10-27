@@ -63,6 +63,19 @@ import { adminBulkImportsRoutes } from "./routes/admin-bulk-imports.js";
 import { adminDeliveryRuntimeModeRoutes } from "./routes/admin-delivery-runtime-mode.js";
 import { adminRuntimeSettingsRoutes } from "./routes/admin-runtime-settings.js";
 import { adminSupportTicketRoutes } from "./routes/admin-support-tickets.js";
+import { adminClientOnboardingV2ReadRoutes } from "./routes/admin-client-onboarding-v2-read.js";
+import { adminClientOnboardingV2GhlRoutes } from "./routes/admin-client-onboarding-v2-ghl.js";
+import { adminClientOnboardingV2TestRoutes } from "./routes/admin-client-onboarding-v2-test.js";
+import { adminClientOnboardingV2ConfigRoutes } from "./routes/admin-client-onboarding-v2-config.js";
+import { onboardingGhlRouteDeps } from "./services/client-onboarding-v2/onboarding-ghl-bindings.js";
+import { createPrismaCapturedTestStore } from "./services/client-onboarding-v2/onboarding-test-store.js";
+import { loadCapturedTestWorld } from "./services/client-onboarding-v2/onboarding-world.js";
+import { capturedTestNoteBuilder } from "./services/client-onboarding-v2/onboarding-note-bridge.js";
+import {
+  createFailClosedGhlPort,
+  createFailClosedSheetsAppend,
+} from "./services/client-onboarding-v2/onboarding-execution-binding.js";
+import { saveVerifiedTestIdentity } from "./services/client-onboarding-v2/onboarding-config.service.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -141,6 +154,23 @@ export async function buildApp() {
   await app.register(adminCompanySheetsDeliveryRoutes, { prefix: "/admin/v1" });
   await app.register(adminKanbanRoutes, { prefix: "/admin/v1" });
   await app.register(adminSupportTicketRoutes, { prefix: "/admin/v1" });
+  await app.register(adminClientOnboardingV2ReadRoutes, { prefix: "/admin/v1" });
+  await app.register(adminClientOnboardingV2GhlRoutes, {
+    prefix: "/admin/v1",
+    deps: onboardingGhlRouteDeps(),
+  });
+  await app.register(adminClientOnboardingV2ConfigRoutes, { prefix: "/admin/v1" });
+  await app.register(adminClientOnboardingV2TestRoutes, {
+    prefix: "/admin/v1",
+    store: createPrismaCapturedTestStore(),
+    notes: capturedTestNoteBuilder(),
+    sheets: createFailClosedSheetsAppend(),
+    ghl: createFailClosedGhlPort(),
+    execution: "injected_fakes",
+    rereadSheet: async () => null,
+    loadWorld: (clientAccountId, sourceLeadEventId) => loadCapturedTestWorld(clientAccountId, sourceLeadEventId),
+    saveTestIdentity: (input) => saveVerifiedTestIdentity(input),
+  });
   await app.register(agentWorkspaceRoutes, { prefix: "/agent-workspace/v1" });
   await app.register(automationDashboardRoutes, {
     prefix: "/admin/v1/automation-dashboard",

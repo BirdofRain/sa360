@@ -37,7 +37,7 @@ export type ClientOnboardingV2ReadRouteOptions = {
 
 /**
  * Read and preview routes for client onboarding v2.
- * Not registered in app.ts. A later serial change mounts this plugin at /admin/v1.
+ * Mounted once from app.ts at /admin/v1. These paths stay off the observer allowlist.
  */
 export const adminClientOnboardingV2ReadRoutes: FastifyPluginAsync<ClientOnboardingV2ReadRouteOptions> = async (
   app,

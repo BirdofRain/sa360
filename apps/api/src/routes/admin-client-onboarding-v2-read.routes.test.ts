@@ -358,7 +358,7 @@ test("onboarding reads require the admin key and reject portal, workspace, and a
   }
 });
 
-test("the read flag is exact, the plugin is not mounted, and observers are not allowlisted", async () => {
+test("the read flag is exact, onboarding plugins mount once, and observers are not allowlisted", async () => {
   const previous = process.env.ADMIN_API_KEY;
   process.env.ADMIN_API_KEY = ADMIN_KEY;
   const appSource = readFileSync(new URL("../app.ts", import.meta.url), "utf8");
@@ -366,8 +366,10 @@ test("the read flag is exact, the plugin is not mounted, and observers are not a
     new URL("../../../admin-coc/src/lib/admin-coc-observer-access.ts", import.meta.url),
     "utf8"
   );
-  assert.equal(appSource.includes("adminClientOnboardingV2ReadRoutes"), false);
-  assert.equal(appSource.includes("admin-client-onboarding-v2-read"), false);
+  assert.equal((appSource.match(/app\.register\(adminClientOnboardingV2ReadRoutes/g) ?? []).length, 1);
+  assert.equal((appSource.match(/app\.register\(adminClientOnboardingV2GhlRoutes/g) ?? []).length, 1);
+  assert.equal((appSource.match(/app\.register\(adminClientOnboardingV2TestRoutes/g) ?? []).length, 1);
+  assert.equal((appSource.match(/app\.register\(adminClientOnboardingV2ConfigRoutes/g) ?? []).length, 1);
   assert.equal(allowlist.includes("onboarding"), false);
 
   const { db, calls } = throwingDb();

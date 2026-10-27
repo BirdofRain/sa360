@@ -96,8 +96,8 @@ export async function readClientOnboardingSummary(
         workflowTriggerMode: string | null;
         workflowIdPresent: boolean;
         inboundWebhookArmed: boolean;
-        notesEnabled: false;
-        notesContractVersion: null;
+        notesEnabled: boolean;
+        notesContractVersion: string | null;
       };
       externalZapier: { preserved: true; replacedByNative: false };
       gates: OnboardingGate[];
@@ -110,6 +110,7 @@ export async function readClientOnboardingSummary(
     where: { clientAccountId },
     include: {
       onboardingSetup: true,
+      onboardingDestinationProfile: true,
       ghlDestination: true,
       companySheetsDestination: { include: { tabContracts: true } },
     },
@@ -142,11 +143,19 @@ export async function readClientOnboardingSummary(
   const sourceProvider = setupData?.success ? (setupData.data.sourceProvider ?? null) : null;
   const destination = client.companySheetsDestination;
   const campaign = destination?.tabContracts.find((contract) => contract.role === "campaign") ?? null;
-  const sheetsSelected = destinationChoice === "google_sheets" || destinationChoice === "both";
-  const ghlSelected = destinationChoice === "ghl" || destinationChoice === "both";
+  const profile = client.onboardingDestinationProfile;
+  const profileMode = isProfileGhlMode(profile?.ghlMode);
+  const sheetsSelected = profile
+    ? profile.sheetsSelected
+    : destinationChoice === "google_sheets" || destinationChoice === "both";
+  const ghlSelected = profile
+    ? profile.ghlMode === "location_api" || profile.ghlMode === "inbound_webhook"
+    : destinationChoice === "ghl" || destinationChoice === "both";
   const locationIdPresent = Boolean(client.ghlDestination?.destinationSubaccountIdGhl?.trim());
   const inboundWebhookArmed = webhookTargets.some((target) => target.enabled);
-  const mode = locationIdPresent ? "location_api" : "unset";
+  const mode = profileMode ?? (locationIdPresent ? "location_api" : "unset");
+  const notesEnabled = profile?.notesEnabled ?? false;
+  const notesContractVersion = profile?.notesContractVersion ?? null;
   const header = stringArray(campaign?.headerContract);
   const expected = campaign ? companySheetsCampaignHeader(campaign.schemaVersion) : null;
   const headerReady = Boolean(
@@ -177,6 +186,8 @@ export async function readClientOnboardingSummary(
     locationIdPresent,
     webhookTargets,
     inboundWebhookArmed,
+    notesEnabled,
+    noteContractReady: notesEnabled && notesContractVersion === "sa360_lead_note_v2",
     evidence: {
       destinationId: destination?.id ?? null,
       campaignContractId: campaign?.id ?? null,
@@ -219,8 +230,8 @@ export async function readClientOnboardingSummary(
       workflowTriggerMode: client.ghlDestination?.workflowTriggerMode ?? null,
       workflowIdPresent: Boolean(client.ghlDestination?.destinationWorkflowIdGhl?.trim()),
       inboundWebhookArmed,
-      notesEnabled: false,
-      notesContractVersion: null,
+      notesEnabled,
+      notesContractVersion,
     },
     externalZapier: { preserved: true, replacedByNative: false },
     gates,
@@ -234,7 +245,7 @@ function buildGates(input: {
   sourceProvider: string | null;
   sheetsSelected: boolean;
   ghlSelected: boolean;
-  mode: "unset" | "location_api";
+  mode: "unset" | "location_api" | "inbound_webhook" | "external_zapier";
   destinationSaved: boolean;
   controlVerified: boolean;
   tabBound: boolean;
@@ -245,6 +256,8 @@ function buildGates(input: {
   locationIdPresent: boolean;
   webhookTargets: Array<{ id: string; enabled: boolean; isPrimary: boolean; isRequired: boolean }>;
   inboundWebhookArmed: boolean;
+  notesEnabled: boolean;
+  noteContractReady: boolean;
   evidence: { destinationId: string | null; campaignContractId: string | null; webhookIds: string[] };
 }): OnboardingGate[] {
   const leadcapture = input.sources.filter((source) => source.sourceKind === "leadcapture");
@@ -313,10 +326,19 @@ function buildGates(input: {
       webhookStoredDisabled && !input.inboundWebhookArmed,
       input.evidence.webhookIds
     ),
-    gate("ghl_note_contract_ready", false, false, []),
+    gate("ghl_note_contract_ready", input.notesEnabled, input.noteContractReady, []),
     gate("zapier_not_disabled", true, true, []),
     gate("aged_not_activated_by_onboarding", true, true, []),
   ];
+}
+
+function isProfileGhlMode(
+  value: string | null | undefined
+): "unset" | "location_api" | "inbound_webhook" | "external_zapier" | null {
+  if (value === "unset" || value === "location_api" || value === "inbound_webhook" || value === "external_zapier") {
+    return value;
+  }
+  return null;
 }
 
 function exactCells(actual: readonly string[], expected: readonly string[]): boolean {

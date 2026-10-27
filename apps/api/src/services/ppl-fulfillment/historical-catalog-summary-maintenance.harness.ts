@@ -120,6 +120,7 @@ export function migrate(databaseUrl: string): void {
 export const postBoundaryAMigrations = [
   "20261023220000_company_sheets_setup_links",
   "20261026200000_company_sheets_setup_grants",
+  "20261026233000_client_onboarding_v2_persistence",
 ] as const;
 
 /**

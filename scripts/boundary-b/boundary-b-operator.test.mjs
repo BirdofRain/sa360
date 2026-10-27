@@ -17,6 +17,7 @@ import {
   recoverCutover,
 } from "./controller.mjs";
 import { buildLoginUrl, changePasswordWithLibpq, escapePgpass, generatePassword, operatorConnectionPolicy, operatorVerifyFull, productionAdminUrlAccepted, validateOperatorCa } from "./password-install.mjs";
+import { completeComponentLine, componentScript, consoleCommands, evaluatePostActive, healthTargets, migrateEvidenceFromLog, openConsole, parseComponentReport, parseSummaryRow, passingPostActiveEvidence, readPublicHealth } from "./post-active.mjs";
 import { productionProbeChecks, runProbe } from "./probe.mjs";
 import { redact } from "./redact.mjs";
 import { auditProposedSpec, planDatabaseUrlOverrides } from "./spec-plan.mjs";
@@ -197,12 +198,13 @@ async function runMode(mode, extra = {}) {
     token: "test-token",
     maxPolls: extra.maxPolls ?? 3,
     pollIntervalMs: 0,
-    fetchImpl: extra.fetchImpl ?? platform.fetchImpl,
+    fetchImpl: extra.wrapFetch ? extra.wrapFetch(platform.fetchImpl) : (extra.fetchImpl ?? platform.fetchImpl),
     installPassword: extra.installPassword ?? (async ({ adminUrl }) => {
       installs += 1;
       return { ok: true, password: PASSWORD, url: buildLoginUrl(adminUrl, "sa360_app", PASSWORD) };
     }),
     probe: extra.probe ?? (async () => ({ ok: true, results: [] })),
+    collectPostActive: extra.collectPostActive ?? (async () => passingPostActiveEvidence()),
   });
   return { report, platform, dir, installs };
 }
@@ -852,6 +854,183 @@ describe("boundary B password installation", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("boundary B post-ACTIVE validation", () => {
+  function failing(mutate) {
+    const evidence = passingPostActiveEvidence();
+    mutate(evidence);
+    return async () => evidence;
+  }
+
+  it("accepts only component-console evidence", () => {
+    assert.equal(evaluatePostActive(passingPostActiveEvidence()).ok, true);
+    const operator = passingPostActiveEvidence();
+    operator.api.source = "operator_probe";
+    const rejected = evaluatePostActive(operator);
+    assert.equal(rejected.ok, false);
+    assert.equal(rejected.failures.includes("api_identity"), true);
+    const prefixed = `\u001b[?2004l\rCOMPONENT_${"REPORT"} ${JSON.stringify({
+      user: "sa360_app",
+      database: "defaultdb",
+      port: 25060,
+      ssl: true,
+      grants_ok: true,
+      summary_functions: 0,
+      summary_triggers: 0,
+      projection: { ready: true, counts_match: true, triggers_enabled: 3 },
+      paths: { intake: true, sheets: true, onboarding: true },
+    })}`;
+    const parsed = parseComponentReport(prefixed);
+    assert.equal(parsed.user, "sa360_app");
+    assert.equal(parsed.source, "component_console");
+    assert.equal(parseSummaryRow("SET\n"), null);
+    assert.deepEqual(parseSummaryRow("SET\nf|0\n"), { ready: false, functions: 0 });
+    const migrate = migrateEvidenceFromLog("94 migrations found\nNo pending migrations to apply.\n", { appUser: "doadmin", migrateOverride: false });
+    assert.equal(migrate.identity, "doadmin");
+    assert.equal(migrate.identity_source, "catalog_read");
+    assert.equal(migrateEvidenceFromLog("permission denied for table _prisma_migrations", { appUser: "doadmin", migrateOverride: false }).completed, false);
+    assert.equal(migrateEvidenceFromLog("Applying migration 20261027000000_new\nAll migrations have been successfully applied.", { appUser: "doadmin", migrateOverride: false }).completed, false);
+    const partial = `COMPONENT_${"REPORT"} {"user":"sa360_app","projection":{"ready":true}`;
+    assert.equal(completeComponentLine(partial), null);
+    const finished = `${partial},"paths":{"sheets":true}}\n`;
+    assert.equal(JSON.parse(completeComponentLine(finished).slice(`COMPONENT_${"REPORT"} `.length)).paths.sheets, true);
+    assert.equal(migrateEvidenceFromLog("No pending migrations to apply.", { appUser: "doadmin", migrateOverride: true }).identity, null);
+    assert.equal(healthTargets({}).code, "post_active_unconfigured");
+    const commands = consoleCommands(componentScript);
+    assert.equal(commands.join("\n").includes("postgres://"), false);
+    assert.equal(componentScript.includes(`COMPONENT_${"REPORT"} `), false);
+  });
+
+  it("reads public health without treating an operator connection as a component", async () => {
+    const pages = {
+      "https://api.example/health": { ok: true, service: "api" },
+      "https://api.example/health/db": { ok: true, db: "connected" },
+      "https://api.example/health/queue": { ok: true, queue: "PONG" },
+      "https://portal.example/api/health": { ok: true, service: "admin-coc" },
+    };
+    const health = await readPublicHealth(async (url) => ({ status: 200, json: async () => pages[url] }), {
+      apiBase: "https://api.example",
+      adminHealth: "https://portal.example/api/health",
+    });
+    assert.deepEqual(health, { api: true, database: true, queue: true, admin: true });
+    let output = "";
+    const socket = await openConsole("wss://console.example/exec", ["printf ok"], class FakeSocket {
+      addEventListener(name, fn) { this[name] = fn; }
+      send() {}
+      close() { this.closeEvent?.(); }
+      constructor() {
+        queueMicrotask(() => {
+          this.open?.();
+          this.message?.({ data: JSON.stringify({ data: `\u001b[?2004lCOMPONENT_${"REPORT"} {"user":"doadmin"}\n` }) });
+        });
+      }
+    });
+    output = socket;
+    assert.equal(parseComponentReport(output).user, "doadmin");
+    const marker = `COMPONENT_${"REPORT"} `;
+    const split = await openConsole("wss://console.example/exec", ["printf ok"], class SplitSocket {
+      addEventListener(name, fn) { this[name] = fn; }
+      send() {}
+      close() {}
+      constructor() {
+        queueMicrotask(() => {
+          this.open?.();
+          this.message?.({ data: JSON.stringify({ data: `${marker}{"user":"sa360_app","projection":{"ready":true}` }) });
+          this.message?.({ data: JSON.stringify({ data: `,"paths":{"sheets":true}}\n` }) });
+        });
+      }
+    });
+    assert.equal(parseComponentReport(split).paths.sheets, true);
+  });
+
+  async function expectRecovery(label, mode, mutate) {
+    const result = await runMode(mode, { collectPostActive: failing(mutate) });
+    assert.equal(result.report.code, "recovered", label);
+    assert.equal(result.installs, 1, label);
+    assert.equal(result.report.problems.includes(label) || result.report.problems.length > 0, true, label);
+    return result;
+  }
+
+  it("recovers an API identity mismatch without a second password", async () => {
+    const result = await expectRecovery("api_identity", "ok", (evidence) => { evidence.api.user = "doadmin"; });
+    assert.equal(result.report.problems.includes("api_identity"), true);
+    assert.equal(result.platform.state.calls.filter((call) => call.path.endsWith("/rollback") && !call.path.endsWith("/validate")).length, 1);
+  });
+
+  it("recovers a worker identity mismatch", async () => {
+    const result = await expectRecovery("worker_identity", "ok", (evidence) => { evidence.worker.user = "doadmin"; });
+    assert.equal(result.report.problems.includes("worker_identity"), true);
+  });
+
+  it("recovers a failed migration, an unhealthy queue, and a Sheets permission failure", async () => {
+    const migration = await expectRecovery("migrate_completed", "ok", (evidence) => { evidence.migrate.completed = false; evidence.migrate.identity = null; evidence.migrate.identity_source = null; });
+    assert.equal(migration.report.problems.includes("migrate_completed"), true);
+    const queue = await expectRecovery("queue_health", "ok", (evidence) => { evidence.health.queue = false; });
+    assert.equal(queue.report.problems.includes("queue_health"), true);
+    const sheets = await expectRecovery("sheets_path", "ok", (evidence) => { evidence.api.paths.sheets = false; });
+    assert.equal(sheets.report.problems.includes("sheets_path"), true);
+  });
+
+  it("recovers when ACTIVE runtime configuration is wrong", async () => {
+    const result = await expectRecovery("summary_inactive", "ok", (evidence) => { evidence.summary.ready = true; });
+    assert.equal(result.report.problems.includes("summary_inactive"), true);
+    assert.equal(result.installs, 1);
+  });
+
+  it("recovers a lost post-ACTIVE response from the saved spec", async () => {
+    const result = await runMode("ok", { collectPostActive: async () => { throw Object.assign(new Error("http_lost"), { code: "http_lost" }); } });
+    assert.equal(result.report.code, "recovered");
+    assert.equal(result.report.problems.includes("post_active_lost"), true);
+    assert.equal(result.installs, 1);
+    assert.equal(result.platform.state.spec.services[0].envs.some((env) => env.key === "DATABASE_URL"), false);
+  });
+
+  it("reports an ambiguous rollback when recovery cannot see the saved spec", async () => {
+    let puts = 0;
+    const result = await runMode("ok", {
+      collectPostActive: failing((evidence) => { evidence.api.user = "doadmin"; }),
+      wrapFetch(inner) {
+        return async (url, options = {}) => {
+          const method = options.method ?? "GET";
+          const requestPath = new URL(url).pathname;
+          if (method === "POST" && requestPath.endsWith("/rollback") && !requestPath.endsWith("/validate")) {
+            throw new Error("socket hang up fixture-canary-do-not-print");
+          }
+          if (method === "PUT") {
+            puts += 1;
+            if (puts > 1) throw new Error("socket hang up fixture-canary-do-not-print");
+          }
+          return inner(url, options);
+        };
+      },
+    });
+    assert.equal(result.report.code, "fallback_ambiguous");
+    assert.equal(result.report.ok, false);
+    assert.equal(result.installs, 1);
+    assert.equal(result.report.problems.includes("api_identity"), true);
+    assert.equal(result.platform.state.spec.services[0].envs.some((env) => env.key === "DATABASE_URL"), true);
+  });
+
+  it("uses one saved-spec update when rollback is lost", async () => {
+    const result = await runMode("ok", {
+      collectPostActive: failing((evidence) => { evidence.worker.source = "operator_probe"; }),
+      wrapFetch(inner) {
+        return async (url, options = {}) => {
+          const method = options.method ?? "GET";
+          const requestPath = new URL(url).pathname;
+          if (method === "POST" && requestPath.endsWith("/rollback") && !requestPath.endsWith("/validate")) {
+            throw new Error("socket hang up fixture-canary-do-not-print");
+          }
+          return inner(url, options);
+        };
+      },
+    });
+    assert.equal(result.report.code, "recovered");
+    assert.equal(result.report.recovery, "saved_spec");
+    assert.equal(result.installs, 1);
+    assert.equal(result.report.problems.includes("worker_identity"), true);
   });
 });
 

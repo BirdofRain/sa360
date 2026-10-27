@@ -25,6 +25,18 @@ import { fileURLToPath } from "node:url";
 
 import { specFingerprint } from "../app-spec-shape.mjs";
 import { buildLoginUrl, changePasswordWithLibpq, generatePassword, operatorConnectionPolicy, operatorVerifyFull, productionAdminUrlAccepted } from "./password-install.mjs";
+import {
+  componentScript,
+  consoleCommands,
+  evaluatePostActive,
+  healthTargets,
+  migrateBinding,
+  migrateEvidenceFromLog,
+  openConsole,
+  parseComponentReport,
+  readPublicHealth,
+  readSummaryControl,
+} from "./post-active.mjs";
 import { runProbe } from "./probe.mjs";
 import { redact } from "./redact.mjs";
 import { canonicalJson, planDatabaseUrlOverrides } from "./spec-plan.mjs";
@@ -89,6 +101,7 @@ function makeCtx(prepared, options) {
     artifactsRoot: options.artifactsRoot ?? "/opt/cursor/artifacts",
     rootCert: options.rootCert ?? prepared.env.SA360_BOUNDARY_B_ROOT_CERT ?? "",
     probe: options.probe ?? null,
+    collectPostActive: options.collectPostActive,
     secrets: [PREVIEW_PASSWORD],
     state: { rollbackAttempts: 0, fallbackAttempts: 0 },
     savedSpec: null,
@@ -150,7 +163,7 @@ function finish(ctx, code, extra = {}) {
     recovery: extra.recovery ?? null,
     deployment_id: extra.deploymentId ?? null,
     changes: extra.changes ?? [],
-    problems: publicProblems(extra.problems ?? []),
+    problems: publicProblems([...(extra.problems ?? []), ...(ctx.postActiveFailures ?? [])]),
     rollback_attempts: ctx.state?.rollbackAttempts ?? 0,
     fallback_attempts: ctx.state?.fallbackAttempts ?? 0,
   };
@@ -463,11 +476,79 @@ async function reconcileLostPut(ctx, proposed) {
     const deploymentId = current.inProgress?.id ?? current.active?.id ?? null;
     if (!deploymentId) return finish(ctx, "deployment_ambiguous");
     const polled = await pollDeployment(ctx, deploymentId);
-    if (polled.outcome === "active") return finish(ctx, "deployed", { deploymentId });
+    if (polled.outcome === "active") return acceptActive(ctx, deploymentId);
     if (polled.outcome === "failed") return recoverFromSaved(ctx);
     return finish(ctx, "deployment_ambiguous");
   }
   return finish(ctx, "spec_unrecognized");
+}
+
+async function migrateLogText(ctx, deploymentId) {
+  const listed = await request(ctx, "GET", `/v2/apps/${ctx.appId}/deployments/${deploymentId}/logs?type=RUN&component_name=sa360-migrate`);
+  const urls = Array.isArray(listed?.historic_urls) ? listed.historic_urls : [];
+  const parts = [];
+  for (const url of urls) {
+    if (typeof url !== "string" || !url.startsWith("https://")) continue;
+    const response = await ctx.fetchImpl(url);
+    if (!response.ok) continue;
+    parts.push(await response.text());
+  }
+  return parts.join("\n");
+}
+
+async function componentReport(ctx, component, deploymentId) {
+  try {
+    const listed = await request(ctx, "GET", `/v2/apps/${ctx.appId}/deployments/${deploymentId}/components/${component}/exec`);
+    const url = typeof listed?.url === "string" ? listed.url : "";
+    if (!url.startsWith("wss://")) return null;
+    const output = await openConsole(url, consoleCommands(componentScript));
+    return parseComponentReport(output);
+  } catch {
+    return null;
+  }
+}
+
+async function productionCollect(ctx, deploymentId) {
+  const targets = healthTargets(ctx.env);
+  const migrate = migrateEvidenceFromLog(await migrateLogText(ctx, deploymentId).catch(() => ""), ctx.migrateBinding ?? {});
+  const api = await componentReport(ctx, "sa360-api", deploymentId);
+  const worker = await componentReport(ctx, "sa360-worker", deploymentId);
+  let health = { api: false, database: false, queue: false, admin: false };
+  if (targets.ok) {
+    try {
+      health = await readPublicHealth(ctx.fetchImpl, targets);
+    } catch {
+      health = { api: false, database: false, queue: false, admin: false };
+    }
+  }
+  let summary = { ready: null, functions: null };
+  try {
+    const read = await readSummaryControl(adminDatabaseUrl(ctx.savedSpec), {
+      rootCert: ctx.rootCert,
+      repoRoot: ctx.repoRoot,
+      artifactsRoot: ctx.artifactsRoot,
+    });
+    if (read.ok) summary = { ready: read.ready, functions: read.functions };
+  } catch {
+    summary = { ready: null, functions: null };
+  }
+  return { migrate, api, worker, health, summary };
+}
+
+async function acceptActive(ctx, deploymentId) {
+  const collect = ctx.collectPostActive ?? ((id) => productionCollect(ctx, id));
+  try {
+    const evidence = await collect(deploymentId);
+    const evaluated = evaluatePostActive(evidence);
+    if (!evaluated.ok) {
+      ctx.postActiveFailures = evaluated.failures;
+      return recoverFromSaved(ctx);
+    }
+  } catch {
+    ctx.postActiveFailures = ["post_active_lost"];
+    return recoverFromSaved(ctx);
+  }
+  return finish(ctx, "deployed", { deploymentId, changes: ctx.changes });
 }
 
 async function putProposed(ctx, proposed) {
@@ -480,7 +561,7 @@ async function putProposed(ctx, proposed) {
     const deploymentId = deploymentIdFrom(json);
     if (!deploymentId) return reconcileLostPut(ctx, proposed);
     const polled = await pollDeployment(ctx, deploymentId);
-    if (polled.outcome === "active") return finish(ctx, "deployed", { deploymentId, changes: ctx.changes });
+    if (polled.outcome === "active") return acceptActive(ctx, deploymentId);
     if (polled.outcome === "failed") return recoverFromSaved(ctx);
     return finish(ctx, "deployment_ambiguous", { deploymentId });
   } catch (error) {
@@ -527,6 +608,10 @@ export async function executeCutover(options = {}) {
   if (gate === "unauthorized") return finish(ctx, "update_not_authorized");
   if (gate === "invalid") return finish(ctx, "rollback_target_invalid");
   if (gate !== "valid") return finish(ctx, "validate_lost");
+  if (ctx.appId === PRODUCTION_APP_ID) {
+    const targets = healthTargets(ctx.env);
+    if (!targets.ok) return finish(ctx, targets.code);
+  }
   if (ctx.appId === PRODUCTION_APP_ID || !ctx.installPassword) {
     const accepted = productionAdminUrlAccepted(inspected.adminUrl);
     if (!accepted.ok) return finish(ctx, accepted.code);
@@ -560,6 +645,7 @@ export async function executeCutover(options = {}) {
   const proposed = planDatabaseUrlOverrides(inspected.current.spec, installed.url, rulesFor(ctx, inspected.adminUrl));
   if (!proposed.ok) return finish(ctx, "spec_rejected", { problems: proposed.problems });
   ctx.changes = proposed.changes;
+  ctx.migrateBinding = migrateBinding(proposed.next);
   return putProposed(ctx, proposed.next);
 }
 

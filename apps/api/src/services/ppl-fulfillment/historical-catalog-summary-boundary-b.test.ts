@@ -959,4 +959,180 @@ describe("sa360_app on disposable PostgreSQL 18.6", { skip: !run, timeout: 600_0
     const appMigrate = capture("sa360_app", `SELECT count(*) FROM _prisma_migrations`);
     assert.notEqual(appMigrate.status, 0, appMigrate.output);
   });
+
+  it("lets sa360_app use the onboarding grants and denies the omitted operations", () => {
+    const owner = roleUrl("doadmin");
+    assert.equal(
+      scalar(
+        owner,
+        `SELECT (finished_at IS NOT NULL AND rolled_back_at IS NULL)::text
+         FROM "_prisma_migrations"
+         WHERE migration_name = '20261026233000_client_onboarding_v2_persistence'`,
+      ),
+      "true",
+    );
+    const names = [
+      "ClientOnboardingDestinationProfile",
+      "ClientOnboardingVerifiedTestIdentity",
+      "ClientOnboardingTestWorksheet",
+      "ClientOnboardingTestRun",
+      "ClientOnboardingTestAttempt",
+      "ClientOnboardingTestAttemptKey",
+      "ClientSheetColumnMap",
+      "ClientOnboardingActivationIntent",
+      "ClientOnboardingV2AuditEvent",
+    ];
+    assert.equal(
+      scalar(
+        owner,
+        `SELECT count(*)::text
+         FROM pg_class AS relation
+         JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+         JOIN pg_roles AS owner_role ON owner_role.oid = relation.relowner
+         WHERE namespace.nspname = 'public'
+           AND owner_role.rolname = 'doadmin'
+           AND relation.relname IN (${names.map((name) => `'${name}'`).join(",")})`,
+      ),
+      "9",
+    );
+    const privileges: Record<string, string> = {
+      ClientOnboardingDestinationProfile: "SELECT,INSERT,UPDATE,DELETE",
+      ClientOnboardingVerifiedTestIdentity: "SELECT,INSERT,UPDATE,DELETE",
+      ClientOnboardingTestWorksheet: "SELECT,INSERT,UPDATE,DELETE",
+      ClientOnboardingTestRun: "SELECT,INSERT,UPDATE,DELETE",
+      ClientOnboardingTestAttempt: "SELECT,INSERT,UPDATE,DELETE",
+      ClientOnboardingTestAttemptKey: "DELETE,INSERT,SELECT",
+      ClientSheetColumnMap: "SELECT,INSERT,UPDATE,DELETE",
+      ClientOnboardingActivationIntent: "SELECT,INSERT,UPDATE,DELETE",
+      ClientOnboardingV2AuditEvent: "INSERT,SELECT,UPDATE",
+    };
+    for (const [table, expected] of Object.entries(privileges)) {
+      assert.equal(
+        scalar(
+          owner,
+          `SELECT coalesce(string_agg(privilege_type, ',' ORDER BY privilege_type), '')
+           FROM information_schema.role_table_grants
+           WHERE grantee = 'sa360_app' AND table_schema = 'public' AND table_name = '${table}'
+             AND privilege_type IN ('SELECT','INSERT','UPDATE','DELETE')`,
+        ),
+        expected.split(",").sort().join(","),
+        table,
+      );
+    }
+    assert.equal(
+      scalar(
+        owner,
+        `SELECT count(*)::text FROM information_schema.role_table_grants
+         WHERE grantee IN ('sa360_app', 'PUBLIC')
+           AND is_grantable = 'YES'
+           AND table_name IN (${names.map((name) => `'${name}'`).join(",")})`,
+      ),
+      "0",
+    );
+    assert.equal(
+      scalar(
+        owner,
+        `SELECT count(*)::text FROM information_schema.role_table_grants
+         WHERE grantee = 'PUBLIC' AND table_name IN (${names.map((name) => `'${name}'`).join(",")})`,
+      ),
+      "0",
+    );
+    assert.equal(scalar(owner, `SELECT count(*)::text FROM pg_default_acl`), "0");
+    assert.equal(
+      scalar(
+        owner,
+        `SELECT count(*)::text FROM pg_proc
+         WHERE pronamespace = 'public'::regnamespace
+           AND proname LIKE 'client_onboarding_v2_%'
+           AND prosecdef`,
+      ),
+      "0",
+    );
+    assert.equal(
+      scalar(
+        owner,
+        `SELECT has_function_privilege('sa360_app', 'client_onboarding_v2_test_attempt_guard()', 'EXECUTE')::text`,
+      ),
+      "true",
+    );
+    const written = capture(
+      "sa360_app",
+      `BEGIN;
+       INSERT INTO "ClientAccount" ("clientAccountId", "clientDisplayName", "updatedAt")
+       VALUES ('b2-onboard', 'Boundary B onboarding', now()),
+              ('b2-onboard-next', 'Boundary B onboarding next', now());
+       INSERT INTO "ClientOnboardingDestinationProfile"
+         (id, "clientAccountId", "ghlMode", "notesEnabled", revision, "updatedAt")
+       VALUES ('b2-profile', 'b2-onboard', 'location_api', false, 1, now());
+       UPDATE "ClientOnboardingDestinationProfile" SET revision = 2, "updatedAt" = now() WHERE id = 'b2-profile';
+       INSERT INTO "ClientOnboardingVerifiedTestIdentity"
+         (id, "clientAccountId", email, "evidenceJson", "requestId", "updatedAt")
+       VALUES ('b2-identity', 'b2-onboard', 'operator@example.invalid', '{}'::jsonb, 'b2-identity-req', now());
+       INSERT INTO "ClientOnboardingTestWorksheet"
+         (id, "clientAccountId", "spreadsheetId", "worksheetId", "worksheetTitle", "schemaVersion",
+          header, "headerSha256", "destinationRevision", "controlBasis", "approvedAt", "updatedAt")
+       VALUES (
+         'b2-worksheet', 'b2-onboard', 'sheet-b2-onboard', 1, 'Campaign', 'company_sheets_campaign_v3',
+         client_onboarding_v2_exact_v3_header(), repeat('ab', 32), 1,
+         '{"establishControl":"company_created","checkedAt":"2026-10-27T00:00:00Z"}'::jsonb,
+         now(), now()
+       );
+       INSERT INTO "ClientOnboardingTestRun"
+         (id, "clientAccountId", kind, destinations, "isolationMode", "requestId", status,
+          "requestSnapshot", "warningCodes", "updatedAt")
+       VALUES (
+         'b2-run', 'b2-onboard', 'preview', '["ghl_location_api"]'::jsonb, 'verified_test_identity',
+         'b2-run-req', 'executing', '{"fixture":"boundary-b"}'::jsonb, '[]'::jsonb, now()
+       );
+       INSERT INTO "ClientOnboardingTestAttempt"
+         (id, "testRunId", destination, "idempotencyKey", status, "ownerClientAccountId", "updatedAt")
+       VALUES (
+         'b2-attempt', 'b2-run', 'ghl_location_api', 'onboarding-test:b2:ghl-contact', 'executing',
+         'b2-onboard', now()
+       );
+       INSERT INTO "ClientOnboardingTestAttemptKey" ("idempotencyKey", "attemptId", "callKind")
+       VALUES ('onboarding-test:b2:ghl-contact', 'b2-attempt', 'ghl_contact');
+       UPDATE "ClientOnboardingTestAttempt" SET status = 'succeeded', "updatedAt" = now() WHERE id = 'b2-attempt';
+       UPDATE "ClientOnboardingTestRun" SET status = 'succeeded', "updatedAt" = now() WHERE id = 'b2-run';
+       INSERT INTO "ClientSheetColumnMap"
+         (id, "clientAccountId", "sourceScope", "spreadsheetId", "worksheetId", "mapVersion", status,
+          "baseSchemaVersion", "headerSnapshot", assignments, revision, "updatedAt")
+       VALUES (
+         'b2-map', 'b2-onboard', 'shared', 'sheet-b2-onboard', 2, 1, 'draft',
+         'company_sheets_campaign_v3', '["Phone"]'::jsonb, '[]'::jsonb, 1, now()
+       );
+       UPDATE "ClientSheetColumnMap" SET revision = 2, "updatedAt" = now() WHERE id = 'b2-map';
+       INSERT INTO "ClientOnboardingActivationIntent"
+         (id, "clientAccountId", destination, status, "requestId", "expectedReceiptIds",
+          "readinessEvidenceJson", "confirmationPhrase", "updatedAt")
+       VALUES (
+         'b2-intent-onboard', 'b2-onboard', 'ghl_location_api', 'ready_for_operator', 'b2-activate-req',
+         '[]'::jsonb, '{}'::jsonb, 'ACTIVATE CLIENT ONBOARDING DESTINATION', now()
+       );
+       INSERT INTO "ClientOnboardingV2AuditEvent"
+         (id, "clientAccountId", "historicalClientAccountId", "requestId", action, destinations, "metadataJson")
+       VALUES (
+         'b2-audit', 'b2-onboard', 'b2-onboard', 'b2-audit-req', 'destination_saved', '[]'::jsonb, '{}'::jsonb
+       );
+       UPDATE "ClientOnboardingV2AuditEvent" SET "clientAccountId" = 'b2-onboard-next' WHERE id = 'b2-audit';
+       UPDATE "ClientOnboardingTestRun" SET "clientAccountId" = 'b2-onboard-next', "updatedAt" = now() WHERE id = 'b2-run';
+       COMMIT;`,
+    );
+    assert.equal(written.status, 0, written.output);
+    assert.equal(
+      scalar(owner, `SELECT "ownerClientAccountId" FROM "ClientOnboardingTestAttempt" WHERE id = 'b2-attempt'`),
+      "b2-onboard-next",
+    );
+    const denied = [
+      ["attempt key update", `UPDATE "ClientOnboardingTestAttemptKey" SET "callKind" = "callKind"`],
+      ["audit delete", `DELETE FROM "ClientOnboardingV2AuditEvent" WHERE id = 'b2-audit'`],
+      ["profile truncate", `TRUNCATE "ClientOnboardingDestinationProfile"`],
+      ["migration select", `SELECT count(*) FROM "_prisma_migrations"`],
+    ] as const;
+    for (const [name, statement] of denied) {
+      const result = capture("sa360_app", statement);
+      assert.notEqual(result.status, 0, name);
+      assert.match(result.output, /permission denied/i, name);
+    }
+  });
 });

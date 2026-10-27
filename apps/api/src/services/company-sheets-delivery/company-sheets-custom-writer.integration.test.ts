@@ -8,6 +8,10 @@ import { after, before, describe, it } from "node:test";
 import { COMPANY_SHEETS_V3_HEADER } from "@sa360/shared";
 import { PrismaClient } from "@prisma/client";
 
+import {
+  COMPANY_SHEETS_ACCEPT_RECONCILED_ROW_PHRASE,
+  COMPANY_SHEETS_RELEASE_HOLD_PHRASE,
+} from "../../lib/company-google-sheets-env.js";
 import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
 import {
   COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA,
@@ -16,8 +20,10 @@ import {
   syntheticCustomCampaignLead,
   type ColumnAssignment,
 } from "./company-sheets-custom-row.js";
+import { deleteCompanySheetsDestinationForClient } from "../company-google/company-sheets-destination.service.js";
 import {
   executeCompanySheetsDeliveryJob,
+  releaseCompanySheetsDeliveryHold,
   sendCompanySheetsCampaignTestRow,
   type CompanySheetsDeliveryDeps,
 } from "./company-sheets-delivery.service.js";
@@ -122,6 +128,8 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
         const headerRow = input.spreadsheetId === customSheet && mode === "drift" ? ["Changed header"] : grid[0] ?? [];
         if (input.range.includes("A1:ZZ2")) return { ok: true as const, values: [headerRow, grid[1] ?? []] };
         if (input.range.includes("!A1:A")) return { ok: true as const, values: grid.map((row) => [row[0] ?? ""]) };
+        const rowMatch = /!\$?[A-Z]+\$?(\d+)/.exec(input.range);
+        if (rowMatch?.[1]) return { ok: true as const, values: [grid[Number(rowMatch[1]) - 1] ?? []] };
         return { ok: true as const, values: [] };
       },
       appendValues: async (input) => {
@@ -259,13 +267,69 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
     }
   });
 
-  it("refuses a custom append when the custom writer flag is off", async () => {
-    const sent = await sendCompanySheetsCampaignTestRow(customClient, { ...deps(), env: env(false) });
-    assert.equal(sent.ok, false);
-    if (sent.ok) return;
-    assert.equal(sent.code, "custom_writer_disabled");
+  it("keeps a cutoff when the destination is removed and runs a paused test with the writer flag off", async () => {
+    const before = await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId: customClient } });
+    const removed = await deleteCompanySheetsDestinationForClient(customClient, { env: env(false), db });
+    assert.equal(removed.ok, false);
+    if (removed.ok) return;
+    assert.equal(removed.code, "cutoff_retained");
+    const after = await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId: customClient } });
+    assert.equal(after.id, before.id);
+    assert.equal(after.campaignDispatchNotBefore?.toISOString(), before.campaignDispatchNotBefore?.toISOString());
+    assert.equal(after.destinationRevision, before.destinationRevision);
+
+    await db.companySheetsDestination.update({
+      where: { clientAccountId: customClient },
+      data: { campaignDispatchEnabled: true },
+    });
+    const blocked = await sendCompanySheetsCampaignTestRow(customClient, { ...deps(), env: env(false) });
+    assert.equal(blocked.ok, false);
+    if (blocked.ok) return;
+    assert.equal(blocked.code, "delivery_not_paused");
     assert.equal(appends.length, 0);
-    assert.equal(updates.length, 0);
+    await db.companySheetsDestination.update({
+      where: { clientAccountId: customClient },
+      data: { campaignDispatchEnabled: false },
+    });
+    const lead = await db.companySheetsDeliveryJob.create({
+      data: {
+        kind: "lead",
+        status: "queued",
+        clientAccountId: customClient,
+        companyConnectionId: connectionId,
+        destinationId: before.id,
+        spreadsheetId: customSheet,
+        spreadsheetUrl: before.spreadsheetUrl,
+        worksheetId: GID,
+        worksheetTitle: "VET Web Form",
+        controlBasis: before.controlBasis,
+        destinationUpdatedAt: before.updatedAt,
+        headerContract: HEADER,
+        schemaVersion: COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA,
+        destinationRevision: before.destinationRevision,
+        idempotencyKey: `lead:${customClient}:writer-off`,
+        rowsTotal: 1,
+        rows: {
+          create: {
+            spreadsheetId: customSheet,
+            worksheetId: GID,
+            stableRowId: `lead:${customClient}:writer-off`,
+            ordinal: 0,
+            valuesJson: ["Live", "555", "", "", "live@example.invalid"],
+            status: "pending",
+          },
+        },
+      },
+    });
+    const live = await executeCompanySheetsDeliveryJob(lead.id, {
+      ...deps(),
+      env: { ...env(false), SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED: "true" },
+    });
+    assert.equal(live.ok, false);
+    if (live.ok) return;
+    assert.equal(live.code, "custom_writer_disabled");
+    assert.equal(appends.length, 0);
+    await db.companySheetsDeliveryJob.delete({ where: { id: lead.id } });
   });
 
   it("appends one mapped row on the selected gid and leaves the header and historical row", async () => {
@@ -315,6 +379,13 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
     assert.match(job.contentSha256 ?? "", /^column-map:.+:v1$/);
     assert.equal(job.appendStartedAt, null);
     assert.equal(job.status, "succeeded");
+    const beforeFlagOff = appends.length;
+    const flagOff = await sendCompanySheetsCampaignTestRow(customClient, { ...deps(), env: env(false) });
+    assert.equal(flagOff.ok, true);
+    if (!flagOff.ok) return;
+    assert.equal(flagOff.worksheetId, GID);
+    assert.equal(appends.length, beforeFlagOff + 1);
+    assert.equal(rows[1]?.[3], "=D2");
   });
 
   it("keeps a reordered formula column empty on the new row and does not shift later cells", async () => {
@@ -351,7 +422,7 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
     const failed = await sendCompanySheetsCampaignTestRow(customClient, deps());
     assert.equal(failed.ok, false);
     if (failed.ok) return;
-    assert.equal(failed.code, "uncertain");
+    assert.equal(failed.code, "partial_row_confirmed");
     assert.equal(appends.length, beforeAppends + 1);
     assert.equal(rows.length, beforeRows + 1);
     const partial = rows[rows.length - 1];
@@ -363,17 +434,36 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
       orderBy: { createdAt: "desc" },
     });
     assert.ok(held?.appendStartedAt);
-    mode = "ok";
-    const again = await sendCompanySheetsCampaignTestRow(customClient, deps());
-    assert.equal(again.ok, false);
-    if (again.ok) return;
-    assert.equal(again.code, "campaign_test_unresolved");
+    assert.equal(held?.uncertainReason, "partial_row_confirmed");
+    assert.match(held?.lastError ?? "", /^partial_row_confirmed:[2-9]\d*$/);
+    const removed = await deleteCompanySheetsDestinationForClient(customClient, { env: env(true), db });
+    assert.equal(removed.ok, false);
+    if (removed.ok) return;
+    assert.equal(removed.code, "unresolved_delivery");
+    const releaseEnv = { ...deps(), env: { ...env(true), SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED: "true" } };
+    const retry = await releaseCompanySheetsDeliveryHold(held?.id ?? "", COMPANY_SHEETS_RELEASE_HOLD_PHRASE, releaseEnv);
+    assert.equal(retry.ok, false);
+    if (retry.ok) return;
+    assert.equal(retry.code, "partial_row_hold");
+    const wrong = await releaseCompanySheetsDeliveryHold(held?.id ?? "", COMPANY_SHEETS_ACCEPT_RECONCILED_ROW_PHRASE, releaseEnv, 2);
+    assert.equal(wrong.ok, false);
+    if (wrong.ok) return;
+    assert.equal(wrong.code, "reconciled_row_mismatch");
+    const accepted = await releaseCompanySheetsDeliveryHold(
+      held?.id ?? "",
+      COMPANY_SHEETS_ACCEPT_RECONCILED_ROW_PHRASE,
+      releaseEnv
+    );
+    assert.equal(accepted.ok, true);
+    if (!accepted.ok) return;
+    assert.equal(accepted.status, "succeeded");
+    assert.equal(accepted.appended, false);
     assert.equal(appends.length, beforeAppends + 1);
-    assert.equal(rows.length, beforeRows + 1);
-    await db.companySheetsDeliveryJob.deleteMany({
-      where: { id: held?.id, status: "uncertain" },
-    });
-    await db.companySheetsWorksheetLock.deleteMany({ where: { spreadsheetId: customSheet } });
+    assert.equal(rows[1]?.[3], "=D2");
+    const closed = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: held?.id } });
+    assert.equal(closed.status, "succeeded");
+    assert.equal(closed.appendStartedAt, null);
+    mode = "ok";
 
     mode = "update_timeout";
     const beforeTimeout = appends.length;
@@ -381,7 +471,7 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
     const timedOut = await sendCompanySheetsCampaignTestRow(customClient, deps());
     assert.equal(timedOut.ok, false);
     if (timedOut.ok) return;
-    assert.equal(timedOut.code, "uncertain");
+    assert.equal(timedOut.code, "partial_row_confirmed");
     assert.equal(appends.length, beforeTimeout + 1);
     assert.equal(rows.length, beforeTimeoutRows + 1);
     assert.equal(rows.at(-1)?.[3], "");

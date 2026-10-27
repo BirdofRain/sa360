@@ -193,6 +193,7 @@ describe("existing tab column maps", { skip: !runIntegration }, () => {
     if (paused.ok) return;
     assert.equal(paused.error, "delivery_not_paused");
     const stillOn = await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId } });
+    const destinationId = stillOn.id;
     assert.equal(stillOn.campaignDispatchEnabled, true);
     assert.equal(stillOn.campaignDispatchNotBefore?.toISOString(), cutoff.toISOString());
 
@@ -253,6 +254,7 @@ describe("existing tab column maps", { skip: !runIntegration }, () => {
       where: { clientAccountId },
       include: { tabContracts: true },
     });
+    assert.equal(afterSelect.id, destinationId);
     assert.equal(afterSelect.destinationRevision, 5);
     assert.equal(afterSelect.writeReadiness, "not_verified");
     assert.equal(afterSelect.campaignDispatchEnabled, false);

@@ -76,6 +76,10 @@ const OPERATOR_ERRORS: Record<string, string> = {
   recorded_folder_unavailable: "The recorded client folder is not usable. A second folder was not created.",
   folder_not_in_parent: "That folder is not an allowed client folder under the approved parent.",
   pause_delivery_first: "Pause this client's Sheets delivery before replacing the saved spreadsheet.",
+  unresolved_delivery:
+    "A queued, running, or uncertain delivery is still open. The destination was not deleted and no row was appended.",
+  cutoff_retained:
+    "This destination still has a delivery cutoff. Remove was refused. Change the tab from Setup & Delivery. The cutoff and existing jobs stay on this destination.",
   invalid_folder_intent: "Choose inspect, link, or create for the client folder.",
   unsupported_schema: "That column template is not a supported campaign schema.",
   destination_missing: "Save a destination before changing delivery.",

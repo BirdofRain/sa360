@@ -9,6 +9,7 @@ import {
   COMPANY_SHEETS_CANARY_SCHEMA_VERSION,
   COMPANY_SHEETS_DELIVERY_BATCH_SIZE,
   COMPANY_SHEETS_RECONCILE_ROW_CAP,
+  COMPANY_SHEETS_ACCEPT_RECONCILED_ROW_PHRASE,
   COMPANY_SHEETS_RELEASE_HOLD_PHRASE,
   companySheetsCampaignHeader,
   companySheetsDeliveryState,
@@ -269,13 +270,14 @@ async function resolveCampaignWrite(
   env: NodeJS.ProcessEnv,
   destination: CompanySheetsDestination,
   contract: BoundContract,
-  lead: CampaignSheetLeadInput & { sourceFunnelId: string | null }
+  lead: CampaignSheetLeadInput & { sourceFunnelId: string | null },
+  options: { controlledTest?: boolean } = {}
 ): Promise<
   | { ok: true; schemaVersion: string; header: string[]; values: string[]; contentSha256: string | null }
   | DeliveryFailure
 > {
   if (contract.schemaVersion === COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA) {
-    if (!isCustomSheetsWriterEnabled(env)) return fail("custom_writer_disabled", 409);
+    if (!options.controlledTest && !isCustomSheetsWriterEnabled(env)) return fail("custom_writer_disabled", 409);
     const map = await findPublishedColumnMap(db, {
       clientAccountId: destination.clientAccountId,
       spreadsheetId: destination.spreadsheetId,
@@ -488,6 +490,9 @@ export async function sendCompanySheetsCampaignTestRow(
   };
   const contract = await loadBoundContract(db, destination, "campaign");
   if (!("worksheetId" in contract)) return contract;
+  if (contract.schemaVersion === COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA && destination.campaignDispatchEnabled) {
+    return fail("delivery_not_paused", 409);
+  }
   const unresolved = await db.companySheetsDeliveryJob.findFirst({
     where: {
       clientAccountId: id,
@@ -547,7 +552,7 @@ export async function sendCompanySheetsCampaignTestRow(
   const resolved =
     resumable && unresolved
       ? null
-      : await resolveCampaignWrite(db, env, destination, contract, { ...syntheticLead, sourceFunnelId: null });
+      : await resolveCampaignWrite(db, env, destination, contract, { ...syntheticLead, sourceFunnelId: null }, { controlledTest: true });
   if (resolved && !resolved.ok) return resolved;
   const job = resumable && unresolved
     ? unresolved
@@ -884,7 +889,11 @@ export async function executeCompanySheetsDeliveryJob(
     }
   }
 
-  if (job.schemaVersion === COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA && !isCustomSheetsWriterEnabled(env)) {
+  if (
+    job.schemaVersion === COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA &&
+    !isCustomSheetsWriterEnabled(env) &&
+    deps.controlledCampaignTest !== true
+  ) {
     const held = await finishOwned(db, job, claimToken, "retryable", { lastError: "custom_writer_disabled" });
     if (held) return held;
     return fail("custom_writer_disabled", 409);
@@ -1095,6 +1104,23 @@ async function runJob(
           deps.fetchImpl
         );
     if (!wrote.ok) {
+      if (wrote.reason === "partial_row_confirmed" && wrote.rowNumber != null) {
+        const lost = await finishOwned(db, job, claimToken, "uncertain", {
+          lastError: `partial_row_confirmed:${wrote.rowNumber}`,
+          uncertainReason: "partial_row_confirmed",
+        });
+        if (lost) return lost;
+        return fail("partial_row_confirmed", 409);
+      }
+      if (customSheet && wrote.reason === "append_outcome_unknown") {
+        const confirmed = wrote.confirmedRows.length > 0 ? ` confirmed:${wrote.confirmedRows.join(",")}` : "";
+        const lost = await finishOwned(db, job, claimToken, "uncertain", {
+          lastError: `append_outcome_unknown${confirmed}`,
+          uncertainReason: "append_outcome_unknown",
+        });
+        if (lost) return lost;
+        return fail("uncertain", 409);
+      }
       if (uncertainAppendReason(wrote.reason)) {
         const again = await reconcilePending(job, title, token.accessToken, deps, db, claimToken);
         if (!again.ok) {
@@ -1242,6 +1268,12 @@ async function ensureHeader(
   return { ok: true, prependHeader: inspected.action === "prepend", sampleRow: inspected.sampleRow };
 }
 
+type MappedAppendResult =
+  | { ok: true }
+  | { ok: false; reason: "partial_row_confirmed"; rowNumber: number; confirmedRows: number[] }
+  | { ok: false; reason: "append_outcome_unknown"; confirmedRows: number[] }
+  | { ok: false; reason: string; confirmedRows: number[]; rowNumber?: undefined };
+
 async function appendMappedRows(
   job: CompanySheetsDeliveryJob,
   title: string,
@@ -1250,13 +1282,15 @@ async function appendMappedRows(
   rows: string[][],
   accessToken: string,
   deps: CompanySheetsDeliveryDeps
-): Promise<{ ok: true } | { ok: false; reason: string }> {
+): Promise<MappedAppendResult> {
   const formulas = formulaColumnIndexes(header, sampleRow);
-  let mutated = false;
+  const confirmedRows: number[] = [];
   for (const row of rows) {
     const segments = customAppendSegments(row, formulas);
     if (segments.length === 0) {
-      return mutated ? { ok: false, reason: "append_outcome_unknown" } : { ok: false, reason: "mapping_required" };
+      return confirmedRows.length > 0
+        ? { ok: false, reason: "append_outcome_unknown", confirmedRows }
+        : { ok: false, reason: "mapping_required", confirmedRows };
     }
     let appendedRow: number | null = null;
     for (let index = 0; index < segments.length; index += 1) {
@@ -1273,15 +1307,20 @@ async function appendMappedRows(
           },
           deps.fetchImpl
         );
-        // A later row must not be retried once an earlier row in this batch
-        // already inserted. Retrying would append that earlier row again.
-        if (!wrote.ok) return mutated ? { ok: false, reason: "append_outcome_unknown" } : wrote;
-        mutated = true;
+        if (!wrote.ok) {
+          // A 400 or timeout on a later row must not be retried: an earlier
+          // row in this batch is already on the sheet.
+          return confirmedRows.length > 0
+            ? { ok: false, reason: "append_outcome_unknown", confirmedRows }
+            : { ok: false, reason: wrote.reason, confirmedRows };
+        }
         appendedRow = appendedRowNumber(wrote.updatedRange);
-        if (segments.length > 1 && appendedRow == null) return { ok: false, reason: "append_outcome_unknown" };
+        if (segments.length > 1 && (appendedRow == null || appendedRow < 2)) {
+          return { ok: false, reason: "append_outcome_unknown", confirmedRows };
+        }
         continue;
       }
-      if (appendedRow == null || appendedRow < 2) return { ok: false, reason: "append_outcome_unknown" };
+      if (appendedRow == null || appendedRow < 2) return { ok: false, reason: "append_outcome_unknown", confirmedRows };
       const wrote = await (deps.updateValues ?? updateSheetValues)(
         {
           spreadsheetId: job.spreadsheetId,
@@ -1291,11 +1330,11 @@ async function appendMappedRows(
         },
         deps.fetchImpl
       );
-      // The insert already happened. Any follow-up failure, including a
-      // timeout or a 400, stays uncertain so the next attempt cannot insert
-      // a second copy of the partial row.
-      if (!wrote.ok) return { ok: false, reason: "append_outcome_unknown" };
+      // The append returned this row number. A later update timeout or 400
+      // leaves that row in place. It is not an unknown insert.
+      if (!wrote.ok) return { ok: false, reason: "partial_row_confirmed", rowNumber: appendedRow, confirmedRows };
     }
+    if (appendedRow != null && appendedRow >= 2) confirmedRows.push(appendedRow);
   }
   return { ok: true };
 }
@@ -1411,19 +1450,139 @@ async function readWorksheetIdCounts(
  * when this call observed a complete column and appendStartedAt is null.
  * A missing row while appendStartedAt is set stays uncertain.
  */
+function storedPartialRow(lastError: string | null): number | null {
+  const match = /^partial_row_confirmed:(\d+)$/.exec(lastError ?? "");
+  if (!match?.[1]) return null;
+  const row = Number(match[1]);
+  return row >= 2 ? row : null;
+}
+
+function customCellsMatch(
+  actual: string[],
+  expected: string[],
+  formulas: readonly number[],
+  mode: "partial" | "complete"
+): boolean {
+  const segments = customAppendSegments(expected, formulas);
+  if (segments.length === 0) return false;
+  const required = mode === "partial" ? segments.slice(0, 1) : segments;
+  for (const segment of required) {
+    for (let offset = 0; offset < segment.values.length; offset += 1) {
+      if ((actual[segment.startIndex + offset] ?? "") !== (segment.values[offset] ?? "")) return false;
+    }
+  }
+  if (mode === "partial") {
+    for (const segment of segments.slice(1)) {
+      for (let offset = 0; offset < segment.values.length; offset += 1) {
+        const cell = actual[segment.startIndex + offset] ?? "";
+        const wanted = segment.values[offset] ?? "";
+        if (cell !== "" && cell !== wanted) return false;
+      }
+    }
+  }
+  return true;
+}
+
+/**
+ * Confirms one already-inserted custom row and closes the hold. The phrase
+ * does not append, and a mismatch leaves the lock in place.
+ */
+async function acceptReconciledCustomRow(
+  job: CompanySheetsDeliveryJob,
+  observedRowNumber: number | null,
+  deps: CompanySheetsDeliveryDeps,
+  db: PrismaClient,
+  env: NodeJS.ProcessEnv
+): Promise<{ ok: true; status: "succeeded"; appended: false } | DeliveryFailure> {
+  const pending = await db.companySheetsDeliveryRow.findMany({
+    where: { jobId: job.id, status: "pending" },
+    orderBy: { ordinal: "asc" },
+  });
+  if (pending.length !== 1) return fail("partial_row_hold", 409);
+  const expected = rowValues(pending[0]?.valuesJson ?? []);
+  const storedRow = storedPartialRow(job.lastError);
+  const rowNumber = job.uncertainReason === "partial_row_confirmed" ? storedRow : observedRowNumber;
+  if (rowNumber == null || rowNumber < 2) return fail("partial_row_hold", 409);
+  if (job.uncertainReason === "partial_row_confirmed" && observedRowNumber != null && observedRowNumber !== storedRow) {
+    return fail("reconciled_row_mismatch", 409);
+  }
+  if (job.uncertainReason === "append_outcome_unknown" && observedRowNumber == null) return fail("partial_row_hold", 409);
+  const token = await (deps.getAccessToken ?? getValidCompanyGoogleAccessToken)({
+    env,
+    db,
+    fetchImpl: deps.fetchImpl,
+    now: deps.now,
+  });
+  if (!token.ok) return fail("append_outcome_unresolved", 409);
+  const metadataResult = await (deps.getMetadata ?? getSpreadsheetMetadata)(
+    { spreadsheetId: job.spreadsheetId, accessToken: token.accessToken },
+    deps.fetchImpl
+  );
+  if (!metadataResult.ok) return fail("append_outcome_unresolved", 409);
+  const worksheet = metadataResult.metadata.worksheets.find((sheet) => sheet.sheetId === job.worksheetId);
+  if (!worksheet || worksheet.sheetType !== "GRID") return fail("worksheet_unavailable", 409);
+  const title = quoteSheetTitle(worksheet.title);
+  const sample = await (deps.getValues ?? getSheetValues)(
+    { spreadsheetId: job.spreadsheetId, range: `${title}!A1:ZZ2`, accessToken: token.accessToken },
+    deps.fetchImpl
+  );
+  const read = await (deps.getValues ?? getSheetValues)(
+    { spreadsheetId: job.spreadsheetId, range: `${title}!A${rowNumber}:ZZ${rowNumber}`, accessToken: token.accessToken },
+    deps.fetchImpl
+  );
+  if (!sample.ok || !read.ok) return fail("append_outcome_unresolved", 409);
+  const header = headerOf(job);
+  if (!exactHeader(sample.values[0] ?? [], header)) return fail("header_changed", 409);
+  const formulas = formulaColumnIndexes(header, sample.values[1] ?? []);
+  const mode = job.uncertainReason === "partial_row_confirmed" ? "partial" : "complete";
+  if (!customCellsMatch(read.values[0] ?? [], expected, formulas, mode)) return fail("reconciled_row_mismatch", 409);
+  const pendingRow = pending[0];
+  if (!pendingRow) return fail("partial_row_hold", 409);
+  const closed = await db.$transaction(async (tx) => {
+    const owned = await tx.companySheetsDeliveryJob.updateMany({
+      where: { id: job.id, status: "uncertain" },
+      data: {
+        status: "succeeded",
+        uncertainReason: null,
+        lastError: null,
+        appendStartedAt: null,
+        rowsWritten: 1,
+        finishedAt: new Date(),
+      },
+    });
+    if (owned.count !== 1) return false;
+    await tx.companySheetsDeliveryRow.updateMany({
+      where: { id: pendingRow.id, status: "pending" },
+      data: { status: "written" },
+    });
+    return true;
+  });
+  if (!closed) return fail("not_uncertain", 409);
+  await releaseWorksheetLock(db, job);
+  await syncEvidence(db, job.id, "succeeded");
+  return { ok: true, status: "succeeded", appended: false };
+}
+
 export async function releaseCompanySheetsDeliveryHold(
   jobId: string,
   confirmation: string,
-  deps: CompanySheetsDeliveryDeps = {}
+  deps: CompanySheetsDeliveryDeps = {},
+  observedRowNumber: number | null = null
 ): Promise<{ ok: true; status: "retryable" | "succeeded"; appended: false } | DeliveryFailure> {
   const env = deps.env ?? process.env;
   const disabled = executionOff(env);
   if (disabled) return disabled;
-  if (confirmation.trim() !== COMPANY_SHEETS_RELEASE_HOLD_PHRASE) return fail("confirmation_required", 400);
   const db = deps.db ?? prisma;
   const job = await db.companySheetsDeliveryJob.findUnique({ where: { id: jobId } });
   if (!job) return fail("job_not_found", 404);
   if (job.status !== "uncertain") return fail("not_uncertain", 409);
+  if (job.schemaVersion === COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA && (job.uncertainReason === "partial_row_confirmed" || job.uncertainReason === "append_outcome_unknown")) {
+    const phrase = confirmation.trim();
+    if (phrase === COMPANY_SHEETS_RELEASE_HOLD_PHRASE) return fail("partial_row_hold", 409);
+    if (phrase !== COMPANY_SHEETS_ACCEPT_RECONCILED_ROW_PHRASE) return fail("confirmation_required", 400);
+    return acceptReconciledCustomRow(job, observedRowNumber, deps, db, env);
+  }
+  if (confirmation.trim() !== COMPANY_SHEETS_RELEASE_HOLD_PHRASE) return fail("confirmation_required", 400);
   const observed = await readWorksheetIdCounts(job, deps, db, env);
   if (!observed.ok) return fail("append_outcome_unresolved", 409);
   const rows = await db.companySheetsDeliveryRow.findMany({

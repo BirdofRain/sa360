@@ -322,11 +322,11 @@ export type SheetsAppendRequest = {
 };
 
 export type SheetsAppendOutcome =
-  | { status: "succeeded"; rowsWritten: number; externalCallExecuted: true }
+  | { status: "succeeded"; rowsWritten: number; externalCallExecuted: boolean }
   | { status: "failed"; externalCallExecuted: boolean; error: string }
   | {
       status: "uncertain";
-      externalCallExecuted: true;
+      externalCallExecuted: boolean;
       reason: "timeout" | "unknown" | "in_flight";
       appendStartedAt: string;
     };
@@ -652,8 +652,8 @@ export type CapturedTestDeps = {
    */
   keyOverride?: string[];
   /**
-   * Execute reads row 1 again. A difference from the planned snapshot is
-   * `header_changed` and the append port is not called.
+   * Execute reads row 1 again. A missing callback, a null or throwing reread,
+   * or a difference from the planned snapshot blocks before the append port.
    */
   rereadSheet?: (sheet: PlannedSheet) => Promise<{
     header: string[];
@@ -996,6 +996,19 @@ export async function runCapturedTestDelivery(
       idempotencyKeys: plan.idempotencyKeys,
       testRunId: plan.testRunId,
       detail: "External adapters stay unwired until schema, persistence, and authorization review.",
+    });
+  }
+
+  if (
+    plan.kind === "captured_event_delivery" &&
+    plan.sheet?.sheetsContract === "exact_v3_test_worksheet" &&
+    !deps.rereadSheet
+  ) {
+    return failure(409, "worksheet_blocked", {
+      detail: "An exact-v3 captured test requires a sheet reread before any external call.",
+      warningCodes: plan.warningCodes,
+      idempotencyKeys: plan.idempotencyKeys,
+      testRunId: plan.testRunId,
     });
   }
 

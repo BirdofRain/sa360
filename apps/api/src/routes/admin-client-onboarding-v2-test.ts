@@ -76,7 +76,9 @@ export const adminClientOnboardingV2TestRoutes: FastifyPluginAsync<CapturedTestR
       store,
       sheets: opts.sheets,
       ghl: opts.ghl,
+      ghlAggregate: opts.ghlAggregate,
       syntheticSheets: opts.syntheticSheets,
+      rereadSheet: opts.rereadSheet,
       execution,
       priors: opts.priors,
     });

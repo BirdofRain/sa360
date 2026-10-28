@@ -715,6 +715,59 @@ test("a missing profile revision leaves Select Time Zone unsaved", async () => {
   assert.equal(calls.some((call) => call.startsWith("save-workflow")), false);
 });
 
+test("selecting Sheets shows a valid custom map as a prerequisite and keeps the receipt as evidence", () => {
+  const loaded = summary({
+    sheets: {
+      destinationSaved: true,
+      spreadsheetId: "sheet_custom",
+      campaignTab: "VET Web Form",
+      campaignDispatchEnabled: false,
+      campaignDispatchNotBefore: "2026-10-27T14:43:39.233Z",
+      agedDispatchEnabled: false,
+      writeReadiness: "verified",
+      deliveryExecution: "disabled",
+      uncertainJob: false,
+    },
+    destinationProfile: {
+      present: true,
+      revision: 3,
+      sheetsSelected: true,
+      ghlMode: "unset",
+      notesEnabled: false,
+    },
+    gates: [
+      { id: "sheets_destination_saved", required: true, satisfied: true, evidenceIds: ["dest"] },
+      { id: "sheets_header_dispatch_ready", required: true, satisfied: true, evidenceIds: ["tab"] },
+      { id: "sheets_custom_map_published", required: true, satisfied: true, evidenceIds: ["map"] },
+      { id: "sheets_permission_probe", required: true, satisfied: true, evidenceIds: ["dest"] },
+      { id: "sheets_writer_receipt", role: "evidence", required: false, satisfied: false, evidenceIds: [] },
+    ],
+    blockers: [],
+  });
+  const { api } = actions();
+  render(
+    <SetupDeliveryWorkspace
+      clientAccountId="alex_gross"
+      summary={loaded}
+      summaryError={null}
+      connection={null}
+      connectionError={null}
+      dispatch={{ dispatchFlagEnabled: false, campaignDispatchEnabled: false, agedDispatchEnabled: false }}
+      dispatchError={null}
+      profileRevision={3}
+      actions={api}
+    />
+  );
+  const prerequisites = screen.getByTestId("sheets-selection-prerequisites");
+  assert.match(prerequisites.textContent ?? "", /Custom column map published · required yes · satisfied yes/);
+  assert.equal((prerequisites.textContent ?? "").includes("Sheets writer receipt"), false);
+  const evidence = screen.getByRole("heading", { name: "Post-activation evidence" }).parentElement;
+  assert.match(evidence?.textContent ?? "", /Sheets writer receipt · satisfied no/);
+  assert.match(evidence?.textContent ?? "", /does not block first activation/);
+  const missing = screen.getByRole("heading", { name: "Missing prerequisites and blockers" }).parentElement;
+  assert.equal((missing?.textContent ?? "").includes("Sheets writer receipt"), false);
+});
+
 test("an allowed sheet save stays unbound until the operator binds that worksheet", async () => {
   const { api, calls } = actions();
   render(

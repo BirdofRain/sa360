@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import Link from "next/link";
 
-import { actionErrorCopy, ACTIVATION_INTENT_CONFIRMATION, gateLabel, knownProfileRevision, MISSING_PROFILE_REVISION_READ, requiredGaps } from "@/lib/clients/onboarding/view";
+import { actionErrorCopy, ACTIVATION_INTENT_CONFIRMATION, gateLabel, knownProfileRevision, MISSING_PROFILE_REVISION_READ, postActivationEvidence, requiredGaps, sheetPrerequisiteRequired, sheetSelectionPrerequisites } from "@/lib/clients/onboarding/view";
 import type {
   OnboardingActivationIntent,
   OnboardingGhlMode,
@@ -41,6 +41,7 @@ export function ActivationPanel({
   viewedWorksheet?: { spreadsheetId: string; spreadsheetTitle: string; worksheet: OnboardingWorksheetPreview } | null;
 }) {
   const gaps = summary ? requiredGaps(summary.gates) : [];
+  const evidence = summary ? postActivationEvidence(summary.gates) : [];
   const [confirmation, setConfirmation] = useState("");
   const [destination, setDestination] = useState<"google_sheets_campaign" | "ghl_location_api">("google_sheets_campaign");
   const [intent, setIntent] = useState<OnboardingActivationIntent | null>(null);
@@ -98,6 +99,23 @@ export function ActivationPanel({
           </ul>
         ) : (
           <p className="mt-2 text-sm text-slate-600">Readiness gates are unavailable until the onboarding summary loads.</p>
+        )}
+      </div>
+      <div>
+        <h3 className="text-sm font-medium">Post-activation evidence</h3>
+        {evidence.length === 0 ? (
+          <p className="mt-1 text-sm text-slate-600">No post-activation evidence is recorded on this summary.</p>
+        ) : (
+          <>
+            <ul className="mt-1 space-y-1 text-sm">
+              {evidence.map((gate) => (
+                <li key={gate.id}>
+                  {gateLabel(gate.id)} · satisfied {gate.satisfied ? "yes" : "no"}
+                </li>
+              ))}
+            </ul>
+            <p className="mt-1 text-sm text-slate-600">A missing live writer receipt does not block first activation.</p>
+          </>
         )}
       </div>
       <div>
@@ -296,6 +314,19 @@ function DestinationForm({
         <input type="checkbox" checked={sheetsSelected} onChange={(event) => setSheetsSelected(event.target.checked)} />
         Sheets selected
       </label>
+      {sheetsSelected && summary ? (
+        <div data-testid="sheets-selection-prerequisites">
+          <p className="font-medium">Sheets prerequisites</p>
+          <ul className="space-y-1">
+            {sheetSelectionPrerequisites(summary.gates).map((gate) => (
+              <li key={gate.id}>
+                {gateLabel(gate.id)} · required {sheetPrerequisiteRequired(gate, true) ? "yes" : "no"} · satisfied{" "}
+                {gate.satisfied ? "yes" : "no"}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       <select
         className="h-8 rounded-lg border border-slate-200 px-2"
         value={ghlMode}

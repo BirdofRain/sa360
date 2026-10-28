@@ -43,6 +43,12 @@ import {
 export const CAPTURED_TEST_DELIVERY_CLASS = "onboarding_captured_test" as const;
 export const CONFIRM_DELIVER = "DELIVER CAPTURED TEST LEAD";
 export const CONFIRM_REPEAT = "REPEAT CAPTURED TEST LEAD";
+/** One Sheets append. This phrase cannot select a GHL destination. */
+export const CONFIRM_ONE_GOOGLE_SHEETS_ROW = "DELIVER ONE GOOGLE SHEETS TEST ROW";
+/** Enrichment recordClass for a future operator-owned test event. Not a customer lead. */
+export const ONBOARDING_OPERATOR_OWNED_TEST_CLASS = "onboarding_operator_owned_test";
+/** Stored on a one-shot run so a later request cannot append again. */
+export const GOOGLE_ONLY_ONE_SHOT_WARNING = "google_only_one_shot";
 export const WARNING_DOWNSTREAM = "ghl_workflow_may_start_downstream_automation";
 export const PR228_RECONCILE_DISCREPANCY =
   "PR #228 reconcile treats operator inspection as enough to authorize a new captured delivery. An absent sheet row or an unknown GHL POST is not proof the first request cannot commit later. This module records the inspection, does not clear appendStartedAt or the worksheet lock, and keeps repeat_blocked_uncertain.";
@@ -112,6 +118,16 @@ export type StoredSourceEvent = {
   receivedAt: string;
   sourceLeadId: string | null;
   deliveryResultJson: unknown;
+  /**
+   * Counts for this event only. Absent means they were not read.
+   * The one-shot Sheets phrase refuses an absent or non-zero snapshot.
+   */
+  downstream?: {
+    inventoryCount: number;
+    fulfillmentCount: number;
+    allocationCount: number;
+    dispatchIntentCount: number;
+  };
 };
 
 export type VerifiedTestIdentity = {
@@ -216,6 +232,11 @@ export type CapturedTestWorld = {
   ghl: GhlTargetSnapshot | null;
   /** Approved stored-lead view of `event`. The GHL adapter formats Notes v2 from this. */
   storedLead?: CapturedStoredLead | null;
+  /**
+   * True when this event's email or phone is also a verified identity for another client.
+   * Absent is not proof the contact belongs only to this client.
+   */
+  testIdentitySharedWithOtherClient?: boolean;
   production: ProductionSnapshot;
 };
 
@@ -524,6 +545,8 @@ export type PlannedSheet = {
   valuesSha256: string;
   kind: "onboarding_captured_test";
   headerCompatible: boolean;
+  /** One-shot Sheets test refuses a reread whose body is not empty. */
+  bodyMustBeEmpty?: boolean;
 };
 
 export type PlannedNotePart = { part: number; body: string; idempotencyKey: string };
@@ -661,6 +684,7 @@ export type CapturedTestDeps = {
     control: WorksheetControlSnapshot | null;
     ownerClientAccountId: string;
     destinationRevision: number;
+    historicalDataRows?: "empty" | "has_rows" | "truncated";
   } | null>;
 };
 
@@ -814,6 +838,9 @@ export function priorDeliveryBlock(
       discrepancy: PR228_RECONCILE_DISCREPANCY,
     };
   }
+  if (relevant.some((run) => run.warningCodes.includes(GOOGLE_ONLY_ONE_SHOT_WARNING))) {
+    return { statusCode: 409, error: "one_test_already_used" };
+  }
   const terminal = relevant
     .filter((run) => run.status === "succeeded" || run.status === "failed" || run.status === "note_too_long")
     .slice()
@@ -825,7 +852,9 @@ export function priorDeliveryBlock(
     }
     return null;
   }
-  if (input.confirmation !== CONFIRM_DELIVER || input.repeatOfTestRunId) {
+  const firstRun =
+    input.confirmation === CONFIRM_DELIVER || input.confirmation === CONFIRM_ONE_GOOGLE_SHEETS_ROW;
+  if (!firstRun || input.repeatOfTestRunId) {
     return { statusCode: 400, error: "invalid_confirmation" };
   }
   return null;
@@ -861,6 +890,25 @@ export function planCapturedTestDelivery(
   }
 
   if (input.kind === "captured_event_delivery") {
+    const held = priorDeliveryBlock(deps.priors, {
+      clientAccountId: input.clientAccountId,
+      sourceLeadEventId: event!.id,
+      destinations,
+      confirmation: input.confirmation ?? null,
+      repeatOfTestRunId: input.repeatOfTestRunId ?? null,
+    });
+    if (
+      held &&
+      (held.error === "repeat_blocked_uncertain" ||
+        held.error === "repeat_blocked_in_flight" ||
+        held.error === "one_test_already_used")
+    ) {
+      return failure(held.statusCode, held.error, { discrepancy: held.discrepancy });
+    }
+    if (input.confirmation === CONFIRM_ONE_GOOGLE_SHEETS_ROW) {
+      const pilot = requireGoogleOnlyPilot(input, world, event!);
+      if (pilot) return pilot;
+    }
     const isolation = requireIsolation(input, world, event!);
     if ("ok" in isolation) return isolation;
   }
@@ -909,8 +957,21 @@ export function planCapturedTestDelivery(
     ? planSheet(input, world, event, deps.testRunId)
     : { sheet: null as PlannedSheet | null, error: null as CapturedTestError | null };
   if (sheet.error) return sheet.error;
+  if (sheet.sheet && input.confirmation === CONFIRM_ONE_GOOGLE_SHEETS_ROW) {
+    sheet.sheet.bodyMustBeEmpty = true;
+    if (sheet.sheet.productionCampaignBind || sheet.sheet.spreadsheetId === world.sheets?.spreadsheetId) {
+      return failure(409, "test_worksheet_not_approved", {
+        detail: "the one-shot row must use a spreadsheet that is not the saved production file",
+      });
+    }
+  }
 
-  const warnings = [...(destinations.includes("ghl_location_api") ? [WARNING_DOWNSTREAM] : [])];
+  const warnings = [
+    ...(destinations.includes("ghl_location_api") ? [WARNING_DOWNSTREAM] : []),
+    ...(input.kind === "captured_event_delivery" && input.confirmation === CONFIRM_ONE_GOOGLE_SHEETS_ROW
+      ? [GOOGLE_ONLY_ONE_SHOT_WARNING]
+      : []),
+  ];
 
   const ghl = planGhl(input, world, event, deps.testRunId, notePlan.note);
   const plan: CapturedTestPlan = {
@@ -1958,7 +2019,95 @@ async function sheetContractDrift(
   ) {
     return failure(409, "header_changed");
   }
+  if (sheet.bodyMustBeEmpty && current.historicalDataRows !== "empty") {
+    return failure(409, "worksheet_blocked", {
+      detail: "test worksheet body is not empty or the body read is incomplete",
+    });
+  }
   return null;
+}
+
+function requireGoogleOnlyPilot(
+  input: CapturedTestRequest,
+  world: CapturedTestWorld,
+  event: StoredSourceEvent
+): CapturedTestError | null {
+  if (input.destinations.length !== 1 || input.destinations[0] !== "google_sheets") {
+    return failure(409, "ghl_destination_not_allowed", {
+      detail: "DELIVER ONE GOOGLE SHEETS TEST ROW accepts only google_sheets",
+    });
+  }
+  if (input.isolation?.mode !== "isolated_destination" || input.isolation.sheetsContract !== "exact_v3_test_worksheet") {
+    return failure(422, "test_isolation_required", {
+      detail: "the one-shot row requires isolated_destination and exact_v3_test_worksheet",
+    });
+  }
+  if (world.sheets?.campaignDispatchEnabled || world.sheets?.agedDispatchEnabled) {
+    return failure(409, "live_tab_test_refused", {
+      detail: "campaign and aged dispatch must stay off",
+    });
+  }
+  const approved = world.sheets?.approvedTestWorksheet ?? null;
+  if (!approved || approved.spreadsheetId === world.sheets?.spreadsheetId) {
+    return failure(409, "test_worksheet_not_approved", {
+      detail: "the approved worksheet must be a different spreadsheet from the saved production file",
+    });
+  }
+  if (recordClassOf(event) !== ONBOARDING_OPERATOR_OWNED_TEST_CLASS) {
+    return failure(409, "event_not_operator_owned", {
+      detail: "the source event is not an operator-owned test record",
+    });
+  }
+  if (event.deliveryResultJson != null) {
+    return failure(409, "event_not_operator_owned", {
+      detail: "the source event already has a delivery result",
+    });
+  }
+  if (!identityMatches(event, world.identities)) {
+    return failure(403, "verified_test_identity_mismatch");
+  }
+  if (world.testIdentitySharedWithOtherClient !== false) {
+    return failure(403, "verified_test_identity_mismatch", {
+      detail: "test identity exclusivity was not proven for this client",
+    });
+  }
+  const contact = campaignLeadIdentityFromPayload(event.normalizedPayloadJson);
+  if (syntheticContact(contact.email)) {
+    return failure(409, "synthetic_contact_refused", {
+      detail: "synthetic and .invalid addresses are not an operator-owned identity",
+    });
+  }
+  const downstream = event.downstream;
+  if (
+    !downstream ||
+    downstream.inventoryCount !== 0 ||
+    downstream.fulfillmentCount !== 0 ||
+    downstream.allocationCount !== 0 ||
+    downstream.dispatchIntentCount !== 0
+  ) {
+    return failure(409, "event_not_operator_owned", {
+      detail: "inventory, fulfillment, allocation, and dispatch intent counts must be read and zero",
+    });
+  }
+  return null;
+}
+
+function recordClassOf(event: StoredSourceEvent): string {
+  const meta = event.enrichmentMetadataJson;
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) return "";
+  const value = (meta as { recordClass?: unknown }).recordClass;
+  return typeof value === "string" ? value : "";
+}
+
+function syntheticContact(email: string): boolean {
+  const value = email.trim().toLowerCase();
+  if (!value) return false;
+  if (value.endsWith(".invalid") || value.endsWith("@example.com")) return true;
+  return (
+    value === "synthetic@example.invalid" ||
+    value === "synthetic-preview@example.invalid" ||
+    value === "sheets-pilot@example.invalid"
+  );
 }
 
 function planGhl(

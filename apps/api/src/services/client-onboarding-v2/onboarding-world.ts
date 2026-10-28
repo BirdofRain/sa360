@@ -14,6 +14,7 @@ import type {
   WorksheetControlSnapshot,
   WorksheetRisk,
 } from "./captured-test-delivery.js";
+import { campaignLeadIdentityFromPayload } from "../company-sheets-dispatch/company-sheets-onboarding-read.js";
 import { storedLeadFromNormalizedPayload } from "./onboarding-note-bridge.js";
 import { loadStoredWorkflowDiscovery } from "./onboarding-ghl-bindings.js";
 
@@ -67,7 +68,10 @@ export async function loadCapturedTestWorld(
   const canary = boundTab(destination?.tabContracts.find((contract) => contract.role === "canary"));
   const approved = client.onboardingTestWorksheet;
   const discovery = await loadStoredWorkflowDiscovery(client.clientAccountId, db);
-  const storedEvent = event ? toEvent(event) : null;
+  const storedEvent = event ? toEvent(event, await eventDownstream(db, event.id)) : null;
+  const testIdentitySharedWithOtherClient = storedEvent
+    ? await identitySharedWithOtherClient(db, client.clientAccountId, storedEvent)
+    : false;
   const selectedWorkflow = discovery.workflows.find(
     (workflow) => workflow.id === client.ghlDestination?.destinationWorkflowIdGhl
   );
@@ -120,6 +124,7 @@ export async function loadCapturedTestWorld(
       discoveredWorkflows: discovery.workflows,
     },
     storedLead: storedEvent ? storedLeadFromNormalizedPayload(storedEvent) : null,
+    testIdentitySharedWithOtherClient,
     production,
   };
 }
@@ -139,17 +144,20 @@ function boundTab(
   };
 }
 
-function toEvent(event: {
-  id: string;
-  clientAccountIdResolved: string | null;
-  status: string;
-  sourceRouteKey: string | null;
-  enrichmentMetadataJson: unknown;
-  normalizedPayloadJson: unknown;
-  receivedAt: Date;
-  sourceLeadId: string | null;
-  deliveryResultJson: unknown;
-}): StoredSourceEvent {
+function toEvent(
+  event: {
+    id: string;
+    clientAccountIdResolved: string | null;
+    status: string;
+    sourceRouteKey: string | null;
+    enrichmentMetadataJson: unknown;
+    normalizedPayloadJson: unknown;
+    receivedAt: Date;
+    sourceLeadId: string | null;
+    deliveryResultJson: unknown;
+  },
+  downstream: NonNullable<StoredSourceEvent["downstream"]>
+): StoredSourceEvent {
   return {
     id: event.id,
     clientAccountIdResolved: event.clientAccountIdResolved,
@@ -160,7 +168,43 @@ function toEvent(event: {
     receivedAt: event.receivedAt.toISOString(),
     sourceLeadId: event.sourceLeadId,
     deliveryResultJson: event.deliveryResultJson,
+    downstream,
   };
+}
+
+async function eventDownstream(
+  db: PrismaClient,
+  sourceLeadEventId: string
+): Promise<NonNullable<StoredSourceEvent["downstream"]>> {
+  const [inventoryCount, fulfillmentCount, allocationCount, dispatchIntentCount] = await Promise.all([
+    db.leadInventoryItem.count({ where: { sourceLeadEventId } }),
+    db.fulfillmentOutbox.count({ where: { sourceLeadEventId } }),
+    db.leadAllocation.count({ where: { sourceLeadEventId } }),
+    db.companySheetsDispatchIntent.count({ where: { sourceLeadEventId } }),
+  ]);
+  return { inventoryCount, fulfillmentCount, allocationCount, dispatchIntentCount };
+}
+
+async function identitySharedWithOtherClient(
+  db: PrismaClient,
+  clientAccountId: string,
+  event: StoredSourceEvent
+): Promise<boolean> {
+  const contact = campaignLeadIdentityFromPayload(event.normalizedPayloadJson);
+  const email = contact.email.trim().toLowerCase();
+  const phone = contact.phone.trim();
+  if (!email && !phone) return false;
+  const matches = await db.clientOnboardingVerifiedTestIdentity.findFirst({
+    where: {
+      clientAccountId: { not: clientAccountId },
+      OR: [
+        ...(email ? [{ email: { equals: email, mode: "insensitive" as const } }] : []),
+        ...(phone ? [{ phoneE164: phone }] : []),
+      ],
+    },
+    select: { id: true },
+  });
+  return matches != null;
 }
 
 function toApproved(row: {

@@ -134,6 +134,7 @@ test("destination profile, worksheet approval, and activation intent do not enab
         header: [...COMPANY_SHEETS_CANARY_HEADER],
         control: { establishControl: "drive_owner_verified", checkedAt: "2026-10-26T18:00:00.000Z" },
         destinationRevision: 1,
+        historicalDataRows: "empty",
       })
     );
     assert.equal(canary.ok, false);
@@ -151,6 +152,7 @@ test("destination profile, worksheet approval, and activation intent do not enab
         header,
         control: { establishControl: "drive_owner_verified", checkedAt: "2026-10-26T18:00:00.000Z" },
         destinationRevision: 1,
+        historicalDataRows: "empty",
       })
     );
     assert.equal(approved.ok, true);

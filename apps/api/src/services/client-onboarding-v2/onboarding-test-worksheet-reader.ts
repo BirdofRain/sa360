@@ -9,7 +9,10 @@ import { createHash } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 
 import { prisma } from "../../lib/db.js";
-import { isCompanyGoogleSheetsEnabled } from "../../lib/company-google-sheets-env.js";
+import {
+  COMPANY_SHEETS_RECONCILE_ROW_CAP,
+  isCompanyGoogleSheetsEnabled,
+} from "../../lib/company-google-sheets-env.js";
 import { getSpreadsheetMetadata } from "../google-sheets/google-sheets-http-client.js";
 import { getSheetValues, quoteSheetTitle } from "../company-sheets-dispatch/company-sheets-onboarding-read.js";
 import {
@@ -34,6 +37,7 @@ export type OnboardingSheetReread = {
   control: { establishControl: string; checkedAt: string } | null;
   ownerClientAccountId: string;
   destinationRevision: number;
+  historicalDataRows: "empty" | "has_rows" | "truncated";
 };
 
 function sha256(value: string): string {
@@ -96,6 +100,17 @@ export async function readExplicitOnboardingTestWorksheetHeader(
     deps.fetchImpl
   );
   if (!read.ok) return null;
+  const bodyCap = COMPANY_SHEETS_RECONCILE_ROW_CAP + 1;
+  const body = await (deps.getValues ?? getSheetValues)(
+    {
+      spreadsheetId: chosen.spreadsheetId,
+      range: `${quoteSheetTitle(worksheet.title)}!A2:AI${bodyCap}`,
+      accessToken: ready.accessToken,
+    },
+    deps.fetchImpl
+  );
+  if (!body.ok) return null;
+  const historicalDataRows = classifyBody(body.values, bodyCap);
   const control = await establishControl(
     {
       connection: ready.connection,
@@ -120,7 +135,14 @@ export async function readExplicitOnboardingTestWorksheetHeader(
       checkedAt: new Date().toISOString(),
     },
     destinationRevision,
+    historicalDataRows,
   };
+}
+
+function classifyBody(values: string[][], cap: number): "empty" | "has_rows" | "truncated" {
+  if (values.length >= cap) return "truncated";
+  const occupied = values.some((row) => row.some((cell) => cell.trim() !== ""));
+  return occupied ? "has_rows" : "empty";
 }
 
 export function createOnboardingTestWorksheetHeaderReader(
@@ -165,5 +187,6 @@ export async function rereadOnboardingCapturedTestSheet(
     control: header.control,
     ownerClientAccountId: approved.clientAccountId,
     destinationRevision: approved.destinationRevision,
+    historicalDataRows: header.historicalDataRows,
   };
 }

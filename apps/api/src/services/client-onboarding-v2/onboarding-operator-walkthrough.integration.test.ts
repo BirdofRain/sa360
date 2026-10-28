@@ -380,7 +380,7 @@ describe("mocked Alex Gross onboarding operator walkthrough", { skip: !runIntegr
     };
   }
 
-  it("previews, delivers, and refuses an uncertain resend without production side effects", async () => {
+  it("previews without writing and refuses older delivery phrases without production side effects", async () => {
     const summary = await readClientOnboardingSummary(clientId, db, deliveryEnv());
     assert.equal(summary.ok, true);
     if (!summary.ok) return;

@@ -401,7 +401,7 @@ describe("google-only pilot local fixtures", { skip: !runIntegration }, () => {
     assert.equal(book(productionSheet, sheetsFor(productionSheet)).appends.length, 0);
   });
 
-  it("keeps delivery off until the captured-test flag, then appends once to the test spreadsheet only", async () => {
+  it("keeps delivery off until both exact flags, then appends once to the test spreadsheet only", async () => {
     const closed = flags(false);
     assert.equal(isCapturedTestEnabled(closed), false);
     const store = createPrismaCapturedTestStore(db);

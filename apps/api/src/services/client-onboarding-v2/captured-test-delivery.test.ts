@@ -517,7 +517,7 @@ test("a live campaign tab and an uncertain worksheet are refused", async () => {
   assert.equal(blockedWorld.sheets!.campaignRisk.appendStartedAtHeld, true);
 });
 
-test("GHL acknowledgement is required and the downstream warning is present when the send is allowed", async () => {
+test("older delivery phrases make no GHL call whether or not downstream automation is acknowledged", async () => {
   const box = harness();
   const missing = await runCapturedTestDelivery(delivery({ acknowledgeDownstreamAutomation: false }), box.snapshot, box.deps);
   assert.equal(missing.ok, false);
@@ -534,7 +534,7 @@ test("GHL acknowledgement is required and the downstream warning is present when
   assert.equal(box.ghl.calls.length, 0);
 });
 
-test("sheets and GHL attempts stay separate when GHL fails", async () => {
+test("sheets plus GHL is refused before either adapter is called", async () => {
   const ghl = createFakeGhlLocation({ contact: { status: "failed", httpStatus: 422, error: "rejected" } });
   const box = harness({ ghl });
   const result = await runCapturedTestDelivery(delivery(), box.snapshot, box.deps);

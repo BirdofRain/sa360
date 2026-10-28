@@ -130,7 +130,7 @@ const flags = {
   [ONBOARDING_GHL_TEST_ADAPTER_APPROVED_FLAG]: "true",
 } as NodeJS.ProcessEnv;
 
-test("aggregate delivery posts each GHL operation once and keeps Sheets independent", async () => {
+test("sheets plus GHL does not post and does not append", async () => {
   const posts: string[] = [];
   const sheets = createFakeSheetsAppend();
   const steps = createFakeGhlLocation();
@@ -200,7 +200,7 @@ test("a production GHL host is not contacted when the adapter flags are true", a
   assert.equal(outcome.externalCalls.ghl, false);
 });
 
-test("an uncertain aggregate POST cannot be sent again", async () => {
+test("a GHL-only delivery and a repeat phrase make no aggregate POST", async () => {
   const store = createMemoryCapturedTestStore();
   let posts = 0;
   const adapter = createOnboardingGhlTestAdapter({

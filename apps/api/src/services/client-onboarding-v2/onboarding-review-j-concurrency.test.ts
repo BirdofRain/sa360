@@ -418,7 +418,7 @@ test("the mounted test route rereads the worksheet before an append", async () =
   }
 });
 
-test("the mounted test route calls the aggregate GHL owner once", async () => {
+test("the mounted test route refuses Sheets plus GHL before any external call", async () => {
   const prev = process.env.ADMIN_API_KEY;
   process.env.ADMIN_API_KEY = "admin-secret";
   const sheets = createFakeSheetsAppend();

@@ -327,7 +327,7 @@ test("E a matching approved header allows one mock sheets call", async () => {
   assert.equal(sheets.calls.length, 1);
 });
 
-test("F sheets plus GHL calls aggregate deliver once and not the step port", async () => {
+test("F sheets plus GHL is refused before any sheets or GHL call", async () => {
   const sheets = createFakeSheetsAppend();
   const steps = createFakeGhlLocation();
   const deliveries: OnboardingGhlTestDeliveryRequest[] = [];
@@ -382,7 +382,7 @@ test("G an uncertain sheets append does not start GHL", async () => {
   assert.equal(steps.calls.length, 0);
 });
 
-test("H an uncertain GHL delivery blocks a repeat", async () => {
+test("H an uncertain one-shot blocks the repeat phrase and a second one-shot", async () => {
   const steps = createFakeGhlLocation();
   let deliveries = 0;
   const store = createMemoryCapturedTestStore();

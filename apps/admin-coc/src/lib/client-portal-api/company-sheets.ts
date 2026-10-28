@@ -12,7 +12,7 @@ export type PortalCompanySheetsDestination = {
   spreadsheetUrl: string;
   worksheetTitle: string;
   accessStatus: string;
-  writeReadiness: "not_verified";
+  writeReadiness: string;
   deliveryExecution: "disabled";
   liveDeliveryEnabled: false;
   sharing: {

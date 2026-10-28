@@ -43,7 +43,7 @@ export type CompanySheetsDestinationView = {
   controlBasis: "company_created" | "drive_owner_verified" | "approved_shared_drive";
   accessStatus: string;
   accessCheckedAt: string | null;
-  writeReadiness: "not_verified";
+  writeReadiness: string;
   deliveryExecution: "disabled";
   liveDeliveryEnabled: false;
   enabled: false;

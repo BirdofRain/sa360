@@ -13,7 +13,11 @@ import {
   isCompanyGoogleSheetsEnabled,
   isCompanyGoogleSheetsExecutionEnabled,
 } from "../../lib/company-google-sheets-env.js";
-import { exactHeader } from "../company-sheets-delivery/company-sheets-custom-row.js";
+import {
+  COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA,
+  exactHeader,
+  headerFingerprint,
+} from "../company-sheets-delivery/company-sheets-custom-row.js";
 import {
   isCapturedTestEnabled,
   isOnboardingConfigEnabled,
@@ -58,10 +62,87 @@ export type OnboardingGateId = (typeof GATE_IDS)[number];
 
 export type OnboardingGate = {
   id: OnboardingGateId;
+  /** Prerequisites can block first activation. Evidence is reported after activation and cannot. */
+  role: "prerequisite" | "evidence";
   required: boolean;
   satisfied: boolean;
   evidenceIds: string[];
 };
+
+export type BoundCampaignHeaderAssessment = {
+  preset: boolean;
+  headerReady: boolean;
+  customMapMatches: boolean;
+};
+
+/**
+ * Preset tabs are ready only when the bound header equals that schema's header.
+ * Custom tabs are ready only when a published map is bound to this spreadsheet
+ * and worksheet and its header fingerprint equals the bound header.
+ * The bound headerContract is the live dispatch header. This read does not call Google.
+ */
+export function assessBoundCampaignHeader(input: {
+  schemaVersion: string | null | undefined;
+  setupState: string | null | undefined;
+  header: readonly string[] | null;
+  spreadsheetId: string | null;
+  worksheetId: number | null;
+  publishedMap: { spreadsheetId: string; worksheetId: number; headerSnapshot: readonly string[] } | null;
+}): BoundCampaignHeaderAssessment {
+  const bound = input.setupState === "bound" && input.header != null && input.worksheetId != null;
+  const presetHeader = companySheetsCampaignHeader(input.schemaVersion);
+  if (presetHeader) {
+    return {
+      preset: true,
+      headerReady: Boolean(bound && exactHeader(input.header ?? [], presetHeader)),
+      customMapMatches: false,
+    };
+  }
+  const targetBound = Boolean(
+    input.publishedMap &&
+      input.spreadsheetId &&
+      input.spreadsheetId === input.publishedMap.spreadsheetId &&
+      input.worksheetId != null &&
+      input.worksheetId === input.publishedMap.worksheetId
+  );
+  const fingerprintMatches = Boolean(
+    targetBound &&
+      input.header &&
+      input.publishedMap &&
+      headerFingerprint(input.header) === headerFingerprint(input.publishedMap.headerSnapshot)
+  );
+  const custom = input.schemaVersion === COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA;
+  return {
+    preset: false,
+    headerReady: Boolean(custom && bound && fingerprintMatches),
+    customMapMatches: Boolean(custom && fingerprintMatches),
+  };
+}
+
+/**
+ * First activation ignores a production lead receipt. A verified probe is current
+ * only while the bound header is still ready; header drift makes that evidence stale.
+ * Custom execution still requires the custom writer flag. Preset tabs do not.
+ */
+export function sheetsFirstActivationReady(input: {
+  preset: boolean;
+  headerReady: boolean;
+  customWriterEnabled: boolean;
+  writeReadiness: string | null;
+  controlledTestSucceeded: boolean;
+  uncertainJobs: number;
+  controlSelectable: boolean;
+}): boolean {
+  const contractReady = input.preset ? input.headerReady : input.headerReady && input.customWriterEnabled;
+  const permissionCurrent = input.writeReadiness === COMPANY_SHEETS_WRITE_READINESS_VERIFIED && input.headerReady;
+  return (
+    contractReady &&
+    permissionCurrent &&
+    input.controlledTestSucceeded &&
+    input.uncertainJobs === 0 &&
+    input.controlSelectable
+  );
+}
 
 export type OnboardingReadFailure = { ok: false; code: string; statusCode: number };
 
@@ -191,10 +272,6 @@ export async function readClientOnboardingSummary(
   const notesEnabled = profile?.notesEnabled ?? false;
   const notesContractVersion = profile?.notesContractVersion ?? null;
   const header = stringArray(campaign?.headerContract);
-  const expected = campaign ? companySheetsCampaignHeader(campaign.schemaVersion) : null;
-  const headerReady = Boolean(
-    campaign?.setupState === "bound" && expected && header && exactCells(header, [...expected])
-  );
   const publishedMap = destination
     ? await findPublishedColumnMap(db, {
         clientAccountId: client.clientAccountId,
@@ -204,9 +281,25 @@ export async function readClientOnboardingSummary(
       })
     : null;
   const publishedHeader = stringArray(publishedMap?.headerSnapshot);
-  const customMapPublished = Boolean(publishedMap && header && publishedHeader && exactHeader(publishedHeader, header));
+  const headerAssessment = assessBoundCampaignHeader({
+    schemaVersion: campaign?.schemaVersion ?? null,
+    setupState: campaign?.setupState ?? null,
+    header,
+    spreadsheetId: destination?.spreadsheetId ?? null,
+    worksheetId: campaign?.worksheetId ?? null,
+    publishedMap:
+      publishedMap && publishedHeader
+        ? {
+            spreadsheetId: publishedMap.spreadsheetId,
+            worksheetId: publishedMap.worksheetId,
+            headerSnapshot: publishedHeader,
+          }
+        : null,
+  });
   const customMapRequired = Boolean(
-    sheetsSelected && campaign?.setupState === "bound" && header && !headerReady
+    sheetsSelected &&
+      campaign?.setupState === "bound" &&
+      campaign.schemaVersion === COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA
   );
   const writerJobId = findProductionSheetsDelivery({
     jobs: jobs as ProofJob[],
@@ -223,9 +316,9 @@ export async function readClientOnboardingSummary(
     destinationSaved: Boolean(destination),
     controlVerified: destination?.accessStatus === "readable" && Boolean(destination.controlBasis),
     tabBound: campaign?.setupState === "bound" && campaign.worksheetId != null,
-    headerReady,
+    headerReady: headerAssessment.headerReady,
     customMapRequired,
-    customMapPublished,
+    customMapPublished: headerAssessment.customMapMatches,
     writeReadiness: destination?.writeReadiness ?? null,
     writerJobId,
     uncertainJobs,
@@ -346,8 +439,9 @@ function buildGates(input: {
     id: OnboardingGateId,
     required: boolean,
     satisfied: boolean,
-    evidenceIds: string[]
-  ): OnboardingGate => ({ id, required, satisfied, evidenceIds });
+    evidenceIds: string[],
+    role: OnboardingGate["role"] = "prerequisite"
+  ): OnboardingGate => ({ id, role, required, satisfied, evidenceIds });
   return [
     gate("leadcapture_linked", leadcaptureRequired, leadcapture.some((source) => source.proofs.linked.satisfied), ids(leadcapture, (source) => source.proofs.linked.satisfied)),
     gate("leadcapture_observed", leadcaptureRequired, leadcapture.some((source) => source.proofs.observed.satisfied), ids(leadcapture, (source) => source.proofs.observed.satisfied)),
@@ -385,12 +479,12 @@ function buildGates(input: {
     gate(
       "sheets_permission_probe",
       input.sheetsSelected,
-      input.writeReadiness === COMPANY_SHEETS_WRITE_READINESS_VERIFIED,
+      input.writeReadiness === COMPANY_SHEETS_WRITE_READINESS_VERIFIED && input.headerReady,
       input.writeReadiness === COMPANY_SHEETS_WRITE_READINESS_VERIFIED && input.evidence.destinationId
         ? [input.evidence.destinationId]
         : []
     ),
-    gate("sheets_writer_receipt", input.sheetsSelected, Boolean(input.writerJobId), input.writerJobId ? [input.writerJobId] : []),
+    gate("sheets_writer_receipt", false, Boolean(input.writerJobId), input.writerJobId ? [input.writerJobId] : [], "evidence"),
     gate("sheets_no_uncertain_job", input.sheetsSelected, input.uncertainJobs === 0, []),
     gate("ghl_mode_explicit", input.ghlSelected, input.mode !== "unset", []),
     gate("ghl_location_configured", input.ghlSelected && input.mode === "location_api", input.locationIdPresent, []),
@@ -413,10 +507,6 @@ function isProfileGhlMode(
     return value;
   }
   return null;
-}
-
-function exactCells(actual: readonly string[], expected: readonly string[]): boolean {
-  return actual.length === expected.length && expected.every((cell, index) => actual[index] === cell);
 }
 
 function stringList(value: unknown): string[] {

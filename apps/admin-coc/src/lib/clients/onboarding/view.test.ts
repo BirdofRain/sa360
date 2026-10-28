@@ -6,9 +6,12 @@ import {
   ghlProofFromAttempts,
   knownProfileRevision,
   noteEventFromSourceLead,
+  postActivationEvidence,
   requiredGaps,
   selectableStoredLeads,
   sheetDeliveryStates,
+  sheetPrerequisiteRequired,
+  sheetSelectionPrerequisites,
   sheetsMutationGate,
   UNCERTAIN_OUTCOME_LABEL,
 } from "./view.ts";
@@ -144,6 +147,25 @@ test("note preview event keeps answer collections and drops the raw document", (
   assert.equal("rawPayloadJson" in event, false);
   assert.deepEqual(event.answers, { "Primary Reason": "burial" });
   assert.equal(UNCERTAIN_OUTCOME_LABEL, "Outcome uncertain — manual review required");
+});
+
+test("a writer receipt is evidence and a valid custom map stays a Sheets prerequisite", () => {
+  const gates = [
+    { id: "sheets_custom_map_published", required: true, satisfied: true, evidenceIds: ["map_1"] },
+    { id: "sheets_permission_probe", required: true, satisfied: false, evidenceIds: [] },
+    { id: "sheets_writer_receipt", role: "evidence" as const, required: false, satisfied: false, evidenceIds: [] },
+  ];
+  assert.deepEqual(
+    sheetSelectionPrerequisites(gates).map((gate) => gate.id),
+    ["sheets_custom_map_published", "sheets_permission_probe"]
+  );
+  assert.deepEqual(requiredGaps(gates).map((gate) => gate.id), ["sheets_permission_probe"]);
+  assert.deepEqual(postActivationEvidence(gates).map((gate) => gate.id), ["sheets_writer_receipt"]);
+  const validMap = { id: "sheets_custom_map_published", required: false, satisfied: true, evidenceIds: ["map_1"] };
+  assert.equal(sheetPrerequisiteRequired(validMap, true), true);
+  assert.equal(sheetPrerequisiteRequired(validMap, false), false);
+  const presetWithoutMap = { id: "sheets_custom_map_published", required: false, satisfied: false, evidenceIds: [] };
+  assert.equal(sheetPrerequisiteRequired(presetWithoutMap, true), false);
 });
 
 test("profile revision is only a known nonnegative integer", () => {

@@ -30,6 +30,10 @@ import {
   saveExistingSheetsTarget,
   type ExistingWorksheetSnapshot,
 } from "../services/client-onboarding-v2/column-maps.js";
+import {
+  listStoredLeadsForColumnPreview,
+  previewStoredLeadColumnMap,
+} from "../services/client-onboarding-v2/column-map-stored-lead-preview.js";
 
 export type OnboardingConfigRouteOptions = {
   env?: NodeJS.ProcessEnv;
@@ -91,6 +95,18 @@ const columnMapPatchSchema = z
     requestId: z.string().uuid(),
     expectedRevision: z.number().int().nonnegative(),
     assignments: z.array(z.unknown()).max(80),
+    clientAccountId: z.string().optional(),
+  })
+  .strict();
+
+const columnPreviewSchema = z
+  .object({
+    sourceLeadEventId: z.string().trim().min(1).max(80),
+    spreadsheetId: z.string().min(1).max(300),
+    worksheetId: z.number().int().nonnegative(),
+    mapId: z.string().trim().min(1).max(80),
+    basis: z.enum(["draft", "published"]),
+    assignments: z.array(z.unknown()).max(80).optional(),
     clientAccountId: z.string().optional(),
   })
   .strict();
@@ -325,6 +341,42 @@ export const adminClientOnboardingV2ConfigRoutes: FastifyPluginAsync<OnboardingC
     return reply.send({ ok: true, map: saved.map, schemaRebound: saved.schemaRebound, headerRewritten: false, customMapping: true });
   });
 
+  app.get("/clients/:clientAccountId/onboarding/column-map-preview/leads", async (request, reply) => {
+    if (!(await authorizePreview(request, reply, env))) return;
+    const clientAccountId = pathClient(request);
+    const query = request.query as { q?: string; limit?: string; cursor?: string };
+    const limit = query.limit == null || query.limit === "" ? null : Number(query.limit);
+    const listed = await listStoredLeadsForColumnPreview({
+      clientAccountId,
+      query: typeof query.q === "string" ? query.q : null,
+      cursor: typeof query.cursor === "string" ? query.cursor : null,
+      limit,
+    });
+    if (!listed.ok) return reply.status(listed.statusCode).send({ ok: false, error: listed.error, detail: listed.detail });
+    return reply.send(listed);
+  });
+
+  app.post("/clients/:clientAccountId/onboarding/column-map-preview", async (request, reply) => {
+    if (!(await authorizePreview(request, reply, env))) return;
+    const clientAccountId = pathClient(request);
+    const parsed = columnPreviewSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.status(400).send({ ok: false, error: "invalid_body" });
+    if (parsed.data.clientAccountId && parsed.data.clientAccountId !== clientAccountId) {
+      return reply.status(400).send({ ok: false, error: "client_account_mismatch" });
+    }
+    const preview = await previewStoredLeadColumnMap({
+      clientAccountId,
+      sourceLeadEventId: parsed.data.sourceLeadEventId,
+      spreadsheetId: parsed.data.spreadsheetId,
+      worksheetId: parsed.data.worksheetId,
+      mapId: parsed.data.mapId,
+      basis: parsed.data.basis,
+      assignments: parsed.data.assignments,
+    });
+    if (!preview.ok) return reply.status(preview.statusCode).send({ ok: false, error: preview.error, detail: preview.detail });
+    return reply.send(preview);
+  });
+
   app.post("/clients/:clientAccountId/onboarding/column-maps/:mapId/retire", async (request, reply) => {
     if (!(await authorize(request, reply, env))) return;
     const clientAccountId = pathClient(request);
@@ -354,6 +406,20 @@ export const adminClientOnboardingV2ConfigRoutes: FastifyPluginAsync<OnboardingC
     });
   });
 };
+
+async function authorizePreview(request: FastifyRequest, reply: FastifyReply, env: NodeJS.ProcessEnv): Promise<boolean> {
+  if (observerCookie(request)) {
+    await reply.status(403).send({ ok: false, error: "forbidden" });
+    return false;
+  }
+  return authorize(request, reply, env);
+}
+
+function observerCookie(request: FastifyRequest): boolean {
+  const raw = request.headers.cookie;
+  const cookie = Array.isArray(raw) ? raw.join(";") : raw ?? "";
+  return /(?:^|;\s*)sa360_admin_session=observer(?:;|$)/.test(cookie);
+}
 
 async function authorize(request: FastifyRequest, reply: FastifyReply, env: NodeJS.ProcessEnv): Promise<boolean> {
   if (foreignCredential(request)) {

@@ -9,10 +9,12 @@ import {
   browseResolvedOnboardingFolderAction,
   listOnboardingSpreadsheetsAction,
   listOnboardingTestRunsAction,
+  listStoredLeadsForColumnPreviewAction,
   loadOnboardingWorkflowsAction,
   previewOnboardingNoteAction,
   previewOnboardingSpreadsheetAction,
   previewOnboardingStoredLeadAction,
+  previewStoredLeadColumnMapAction,
   probeOnboardingSheetWriteAction,
   publishOnboardingColumnMapAction,
   recordOnboardingActivationIntentAction,
@@ -214,5 +216,7 @@ function liveActions(clientAccountId: string): OnboardingWorkspaceActions {
     createColumnMap: (input) => createOnboardingColumnMapAction(clientAccountId, input),
     updateColumnMap: (mapId, input) => updateOnboardingColumnMapAction(clientAccountId, mapId, input),
     publishColumnMap: (mapId, expectedRevision) => publishOnboardingColumnMapAction(clientAccountId, mapId, expectedRevision),
+    listStoredLeadsForColumnPreview: (input) => listStoredLeadsForColumnPreviewAction(clientAccountId, input),
+    previewStoredLeadColumnMap: (input) => previewStoredLeadColumnMapAction(clientAccountId, input),
   };
 }

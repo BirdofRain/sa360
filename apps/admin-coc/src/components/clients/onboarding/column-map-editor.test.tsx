@@ -11,6 +11,7 @@ import type {
   SheetsTargetSave,
 } from "@/lib/clients/onboarding/types";
 
+import { ColumnMapEditor } from "./column-map-editor";
 import { SheetsCard } from "./integration-cards";
 
 test.afterEach(() => cleanup());
@@ -47,6 +48,7 @@ test("an operator maps an existing tab and a live campaign switch blocks the edi
 
   fireEvent.click(screen.getByRole("button", { name: "Map columns" }));
   assert.ok(await screen.findByTestId("column-map-editor"));
+  assert.equal(screen.queryByTestId("stored-lead-column-preview"), null);
   assert.ok(screen.getByText(/Header fingerprint abc123/));
   assert.ok(screen.getByText(/SYNTHETIC TEST/));
   assert.ok(screen.getByText(/Confirm this suggestion or mark the column unmapped/));
@@ -85,6 +87,175 @@ test("an operator maps an existing tab and a live campaign switch blocks the edi
   const blocked = screen.getByRole("button", { name: "Map columns" }) as HTMLButtonElement;
   assert.equal(blocked.disabled, true);
   assert.ok(screen.getByText("Pause campaign Sheets delivery before changing the target or the column map."));
+});
+
+test("stored lead preview shows draft cells and does not save or send", async () => {
+  const calls: string[] = [];
+  const record = mapRecord();
+  record.assignments = [
+    {
+      sheetHeader: "Notes",
+      columnIndex: 0,
+      formula: false,
+      target: { kind: "v3_column", header: "Notes", sourceField: "notes" },
+      transform: "passthrough",
+      decision: "mapped",
+      explicit: true,
+      code: null,
+    },
+    {
+      sheetHeader: "Primary Concern",
+      columnIndex: 1,
+      formula: false,
+      target: { kind: "v3_column", header: "Primary Concern", sourceField: "primary_concern" },
+      transform: "passthrough",
+      decision: "mapped",
+      explicit: true,
+      code: null,
+    },
+    {
+      sheetHeader: "Running Total",
+      columnIndex: 2,
+      formula: true,
+      target: null,
+      transform: "blank",
+      decision: "unmapped",
+      explicit: true,
+      code: "formula_column_omitted",
+    },
+  ];
+  record.issues = [];
+  record.targets = [
+    { header: "Notes", sourceField: "notes" },
+    { header: "Primary Concern", sourceField: "primary_concern" },
+  ];
+  const actions = mockActions(calls, record);
+  actions.listStoredLeadsForColumnPreview = async () => {
+    calls.push("list");
+    return {
+      ok: true,
+      data: {
+        leads: [
+          {
+            id: "evt_new",
+            receivedAt: "2026-10-26T15:04:00.000Z",
+            sourceProvider: "leadcapture_io",
+            sourceSystem: "leadcapture_io_nextgen",
+            sourceType: "webhook",
+            label: "10/26/2026 · leadcapture_io/leadcapture_io_nextgen · A. L. · a***@example.invalid · ***0100",
+          },
+        ],
+        nextCursor: null,
+      },
+    };
+  };
+  actions.previewStoredLeadColumnMap = async (input) => {
+    calls.push(input.basis);
+    if (input.basis === "draft") {
+      assert.equal(input.assignments?.find((column) => column.sheetHeader === "Notes")?.decision, "unmapped");
+    } else {
+      assert.equal(input.assignments, undefined);
+    }
+    return {
+      ok: true,
+      data: {
+        previewOnly: true,
+        deliveryReady: false,
+        presentAsDeliveryReady: false,
+        googleHeaderIndependentlyReread: false,
+        writes: false,
+        persisted: false,
+        externalCalls: { sheets: false, ghl: false },
+        basis: input.basis,
+        publishedMapUnchanged: true,
+        reasons: ["google_header_not_reread"],
+        map: {
+          id: record.id,
+          status: record.status,
+          revision: record.revision,
+          spreadsheetId: record.spreadsheetId,
+          worksheetId: record.worksheetId,
+          headerFingerprint: record.headerFingerprint,
+          headerFingerprintMatchesBinding: true,
+        },
+        lead: {
+          id: "evt_new",
+          receivedAt: "2026-10-26T15:04:00.000Z",
+          sourceProvider: "leadcapture_io",
+          sourceSystem: "leadcapture_io_nextgen",
+          sourceType: "webhook",
+          label: "10/26/2026 · leadcapture_io/leadcapture_io_nextgen · A. L. · a***@example.invalid · ***0100",
+        },
+        columns: [
+          {
+            columnLetter: "A",
+            position: 1,
+            sheetHeader: "Notes",
+            sourceField: input.basis === "draft" ? null : "notes",
+            sourceHeader: input.basis === "draft" ? null : "Notes",
+            formattedValue: input.basis === "draft" ? "" : "Call after 5",
+            appended: input.basis !== "draft",
+            warnings: input.basis === "draft" ? [{ code: "explicitly_unmapped", message: "Unmapped." }] : [],
+          },
+          {
+            columnLetter: "B",
+            position: 2,
+            sheetHeader: "Primary Concern",
+            sourceField: "primary_concern",
+            sourceHeader: "Primary Concern",
+            formattedValue: "",
+            appended: true,
+            warnings: [{ code: "missing_source_value", message: "Primary Concern has no stored source value." }],
+          },
+          {
+            columnLetter: "C",
+            position: 3,
+            sheetHeader: "Running Total",
+            sourceField: null,
+            sourceHeader: null,
+            formattedValue: "",
+            appended: false,
+            warnings: [{ code: "formula_protected", message: "Formula." }],
+          },
+        ],
+        operatorDecisions: [
+          {
+            code: "primary_concern_not_replaced",
+            message: "Primary Concern is blank. Stored primary_reason was not copied into this column.",
+          },
+        ],
+      },
+    };
+  };
+  render(
+    <ColumnMapEditor
+      record={record}
+      target={null}
+      campaignDispatchEnabled={false}
+      actions={actions}
+      onChange={() => undefined}
+    />
+  );
+  assert.ok(screen.getByText(/Preview only/));
+  assert.equal(screen.queryByRole("button", { name: /send test/i }), null);
+  fireEvent.click(screen.getByRole("button", { name: "Find stored leads" }));
+  fireEvent.click(await screen.findByRole("button", { name: /10\/26\/2026/ }));
+  fireEvent.change(screen.getByRole("combobox", { name: "Map Notes" }), { target: { value: "unmapped" } });
+  fireEvent.click(screen.getByRole("button", { name: "Preview mapped row" }));
+  assert.ok(await screen.findByText(/missing_source_value/));
+  assert.ok(screen.getByText(/Operator decision:/));
+  assert.ok(screen.getByText(/Not delivery-ready/));
+  assert.equal(
+    screen.getAllByText("Primary Concern").some((node) => node.closest("tr")?.getAttribute("data-missing") === "true"),
+    true
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Preview published map" }));
+  assert.ok(await screen.findByText("Call after 5"));
+  assert.equal(calls.includes("list"), true);
+  assert.equal(calls.includes("draft"), true);
+  assert.equal(calls.includes("published"), true);
+  assert.equal(calls.includes("update"), false);
+  assert.equal(calls.includes("publish"), false);
 });
 
 test("mapping controls stay hidden until the column-map actions exist", async () => {

@@ -10,8 +10,15 @@ import type { PrismaClient } from "@prisma/client";
 
 import { prisma } from "../../lib/db.js";
 import { isCompanyGoogleSheetsEnabled } from "../../lib/company-google-sheets-env.js";
-import { getSpreadsheetMetadata } from "../google-sheets/google-sheets-http-client.js";
+import { getSpreadsheetMetadata, getWorksheetGridBounds } from "../google-sheets/google-sheets-http-client.js";
 import { getSheetValues, quoteSheetTitle } from "../company-sheets-dispatch/company-sheets-onboarding-read.js";
+import {
+  classifyExactV3Grid,
+  gridBoundsFrom,
+  gridRange,
+  historicalDataRowsFromProof,
+  type GridBounds,
+} from "./onboarding-test-grid.js";
 import {
   establishControl,
   loadReadyConnection,
@@ -34,6 +41,7 @@ export type OnboardingSheetReread = {
   control: { establishControl: string; checkedAt: string } | null;
   ownerClientAccountId: string;
   destinationRevision: number;
+  historicalDataRows: "empty" | "has_rows" | "truncated" | "unproven";
 };
 
 function sha256(value: string): string {
@@ -96,6 +104,20 @@ export async function readExplicitOnboardingTestWorksheetHeader(
     deps.fetchImpl
   );
   if (!read.ok) return null;
+  const bounds = await gridBoundsFor(worksheet, chosen.spreadsheetId, ready.accessToken, deps);
+  const formula = bounds
+    ? await (deps.getValues ?? getSheetValues)(
+        {
+          spreadsheetId: chosen.spreadsheetId,
+          range: `${quoteSheetTitle(worksheet.title)}!${gridRange(bounds)}`,
+          accessToken: ready.accessToken,
+          valueRenderOption: "FORMULA",
+        },
+        deps.fetchImpl
+      )
+    : null;
+  const proof = classifyExactV3Grid(bounds, formula && formula.ok ? formula.values : null);
+  const historicalDataRows = historicalDataRowsFromProof(proof);
   const control = await establishControl(
     {
       connection: ready.connection,
@@ -120,7 +142,22 @@ export async function readExplicitOnboardingTestWorksheetHeader(
       checkedAt: new Date().toISOString(),
     },
     destinationRevision,
+    historicalDataRows,
   };
+}
+
+async function gridBoundsFor(
+  worksheet: { sheetId: number; rowCount?: number; columnCount?: number },
+  spreadsheetId: string,
+  accessToken: string,
+  deps: HeaderReaderDeps
+): Promise<GridBounds | null> {
+  const declared = gridBoundsFrom(worksheet.rowCount, worksheet.columnCount);
+  if (declared) return declared;
+  const fetched = await getWorksheetGridBounds({ spreadsheetId, accessToken }, deps.fetchImpl);
+  if (!fetched.ok) return null;
+  const match = fetched.worksheets.find((sheet) => sheet.sheetId === worksheet.sheetId);
+  return match ? gridBoundsFrom(match.rowCount, match.columnCount) : null;
 }
 
 export function createOnboardingTestWorksheetHeaderReader(
@@ -165,5 +202,6 @@ export async function rereadOnboardingCapturedTestSheet(
     control: header.control,
     ownerClientAccountId: approved.clientAccountId,
     destinationRevision: approved.destinationRevision,
+    historicalDataRows: header.historicalDataRows,
   };
 }

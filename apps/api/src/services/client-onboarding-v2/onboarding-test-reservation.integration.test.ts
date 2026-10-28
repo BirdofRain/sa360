@@ -11,9 +11,8 @@ import { PrismaClient } from "@prisma/client";
 import { COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3, companySheetsCampaignHeader } from "../../lib/company-google-sheets-env.js";
 import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
 import {
-  CONFIRM_DELIVER,
+  CONFIRM_ONE_GOOGLE_SHEETS_ROW,
   runCapturedTestDelivery,
-  type CapturedTestOutcome,
   type CapturedTestRequest,
   type CapturedTestWorld,
   type SheetsAppendOutcome,
@@ -28,7 +27,7 @@ import { createPrismaCapturedTestStore } from "./onboarding-test-store.js";
 
 const integrationUrlRaw = process.env.SA360_TEST_DATABASE_URL?.trim() || "";
 const runIntegration = Boolean(integrationUrlRaw);
-const EMAIL = "reservation.mock@example.invalid";
+const EMAIL = "reservation-owned@sa360.pilot";
 const PHONE = "+15555550199";
 const header = [...(companySheetsCampaignHeader(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3) ?? [])];
 
@@ -46,10 +45,21 @@ describe("captured test reservation across two Prisma clients", { skip: !runInte
     await leftDb.clientAccount.create({
       data: { clientAccountId: clientId, clientDisplayName: "Reservation Mock", status: "active" },
     });
+    await leftDb.clientOnboardingVerifiedTestIdentity.create({
+      data: {
+        clientAccountId: clientId,
+        email: EMAIL,
+        phoneE164: PHONE,
+        requestId: randomUUID(),
+        actorLabel: "reservation",
+        evidenceJson: { method: "operator_confirmed" },
+      },
+    });
   });
 
   after(async () => {
     if (!leftDb) return;
+    await leftDb.clientOnboardingVerifiedTestIdentity.deleteMany({ where: { clientAccountId: clientId } }).catch(() => undefined);
     await leftDb.clientOnboardingTestRun.deleteMany({ where: { clientAccountId: clientId } }).catch(() => undefined);
     await leftDb.sourceLeadEvent.deleteMany({ where: { id: { in: eventIds } } }).catch(() => undefined);
     await leftDb.clientAccount.deleteMany({ where: { clientAccountId: clientId } }).catch(() => undefined);
@@ -57,147 +67,51 @@ describe("captured test reservation across two Prisma clients", { skip: !runInte
     await rightDb.$disconnect();
   });
 
-  it("lets one sheets reservation and one GHL reservation execute", async () => {
+  it("refuses concurrent forged intake before any sheets reservation", async () => {
     const raceEvent = await createEvent(leftDb, clientId, eventIds);
-    const sheets = heldSheets();
+    const sheets = openSheets();
     const left = createPrismaCapturedTestStore(leftDb);
     const right = createPrismaCapturedTestStore(rightDb);
     const eventsBefore = await leftDb.sourceLeadEvent.count({ where: { clientAccountIdResolved: clientId } });
 
-    const pendingA = deliver(left, sheets.port, undefined, clientId, raceEvent, `req_sheets_a_${suffix}`);
-    const pendingB = deliver(right, sheets.port, undefined, clientId, raceEvent, `req_sheets_b_${suffix}`);
-    const earlySheets = await firstToSettle(pendingA, pendingB);
-    await untilCount(() => sheets.appends, 1);
-    assert.equal(sheets.appends, 1);
-    assert.equal(earlySheets.ok, false);
-    sheets.release();
-    const [first, second] = await Promise.all([pendingA, pendingB]);
-    const executed = [first, second].filter(executedNow);
-    const blocked = [first, second].filter((outcome) => !outcome.ok);
-    assert.equal(executed.length, 1);
-    assert.equal(blocked.length, 1);
-    assert.equal(blocked[0]?.ok, false);
-    if (blocked[0]?.ok !== false) return;
-    assert.ok(blocked[0].error === "repeat_blocked_in_flight" || blocked[0].error === "repeat_of_required");
-    assert.equal(sheets.appends, 1);
-
-    const winner = executed[0];
-    assert.equal(winner?.ok, true);
-    if (!winner?.ok) return;
-    const repeated = await deliver(right, sheets.port, undefined, clientId, raceEvent, winner.run.requestId);
-    assert.equal(repeated.ok, true);
-    if (!repeated.ok) return;
-    assert.equal(repeated.duplicateRequest, true);
-    assert.equal(repeated.externalCallsThisRequest.sheets, false);
-    assert.equal(sheets.appends, 1);
-
-    const sheetsRuns = await leftDb.clientOnboardingTestRun.findMany({
-      where: { clientAccountId: clientId, sourceLeadEventId: raceEvent },
-      include: { attempts: { include: { keys: true } } },
-    });
-    assert.equal(sheetsRuns.length, 1);
-    assert.equal(sheetsRuns[0]?.status, "succeeded");
-    assert.equal(sheetsRuns[0]?.attempts.length, 1);
-    assert.equal(sheetsRuns[0]?.attempts[0]?.destination, "google_sheets");
-    assert.equal(sheetsRuns[0]?.attempts[0]?.externalCallExecuted, true);
-    assert.equal(sheetsRuns[0]?.attempts[0]?.downstreamExecuted, false);
-    assert.ok(sheetsRuns[0]?.attempts[0]?.keys.some((key) => key.idempotencyKey.endsWith(":sheets")));
-    const sheetsAudits = await leftDb.clientOnboardingV2AuditEvent.count({
-      where: { clientAccountId: clientId, sourceLeadEventId: raceEvent, action: "execute" },
-    });
-    assert.equal(sheetsAudits, 1);
-
-    const sharedA = await createEvent(leftDb, clientId, eventIds);
-    const sharedB = await createEvent(leftDb, clientId, eventIds);
-    const separate = openSheets();
-    const [sharedLeft, sharedRight] = await Promise.all([
-      deliver(left, separate.port, undefined, clientId, sharedA, `req_shared_a_${suffix}`),
-      deliver(right, separate.port, undefined, clientId, sharedB, `req_shared_b_${suffix}`),
+    const [first, second] = await Promise.all([
+      deliver(left, sheets.port, undefined, clientId, raceEvent, `req_sheets_a_${suffix}`),
+      deliver(right, sheets.port, undefined, clientId, raceEvent, `req_sheets_b_${suffix}`),
     ]);
-    assert.equal(sharedLeft.ok, true);
-    assert.equal(sharedRight.ok, true);
-    assert.equal(separate.appends, 2);
-    const sharedRuns = await leftDb.clientOnboardingTestRun.count({
-      where: { clientAccountId: clientId, sourceLeadEventId: { in: [sharedA, sharedB] } },
-    });
-    assert.equal(sharedRuns, 2);
+    assert.equal(sheets.appends, 0);
+    assert.equal(first.ok, false);
+    assert.equal(second.ok, false);
+    if (first.ok || second.ok) return;
+    assert.equal(first.error, "quarantine_not_registered");
+    assert.equal(second.error, "quarantine_not_registered");
+    assert.equal(await leftDb.clientOnboardingTestRun.count({ where: { clientAccountId: clientId, sourceLeadEventId: raceEvent } }), 0);
+    assert.equal(await leftDb.companySheetsDeliveryJob.count({ where: { clientAccountId: clientId } }), 0);
 
-    const duplicateA = await createEvent(leftDb, clientId, eventIds);
-    const duplicateB = await createEvent(leftDb, clientId, eventIds);
-    const duplicateSheets = heldSheets();
-    const duplicateRequestId = `req_same_${suffix}`;
-    const duplicateLeft = deliver(left, duplicateSheets.port, undefined, clientId, duplicateA, duplicateRequestId);
-    const duplicateRight = deliver(right, duplicateSheets.port, undefined, clientId, duplicateB, duplicateRequestId);
-    const earlyDuplicate = await firstToSettle(duplicateLeft, duplicateRight);
-    await untilCount(() => duplicateSheets.appends, 1);
-    assert.equal(duplicateSheets.appends, 1);
-    assert.equal(executedNow(earlyDuplicate), false);
-    duplicateSheets.release();
-    const duplicateOutcomes = await Promise.all([duplicateLeft, duplicateRight]);
-    assert.equal(duplicateOutcomes.filter(executedNow).length, 1);
-    assert.equal(duplicateSheets.appends, 1);
-    const duplicateRuns = await leftDb.clientOnboardingTestRun.count({
-      where: { clientAccountId: clientId, requestId: duplicateRequestId },
-    });
-    assert.equal(duplicateRuns, 1);
+    const repeated = await deliver(right, sheets.port, undefined, clientId, raceEvent, `req_sheets_a_${suffix}`);
+    assert.equal(repeated.ok, false);
+    if (repeated.ok) return;
+    assert.equal(repeated.error, "quarantine_not_registered");
+    assert.equal(sheets.appends, 0);
 
     const ghlEvent = await createEvent(leftDb, clientId, eventIds);
     const ghl = heldGhl();
-    const ghlLeft = deliver(left, openSheets().port, ghl.port, clientId, ghlEvent, `req_ghl_a_${suffix}`, ["ghl_location_api"]);
-    const ghlRight = deliver(right, openSheets().port, ghl.port, clientId, ghlEvent, `req_ghl_b_${suffix}`, ["ghl_location_api"]);
-    const earlyGhl = await firstToSettle(ghlLeft, ghlRight);
-    await untilCount(() => ghl.deliveries, 1);
-    assert.equal(ghl.deliveries, 1);
-    assert.equal(earlyGhl.ok, false);
-    ghl.release();
-    const ghlOutcomes = await Promise.all([ghlLeft, ghlRight]);
-    assert.equal(ghlOutcomes.filter(executedNow).length, 1);
-    assert.equal(ghl.deliveries, 1);
+    const ghlLeft = await deliver(left, openSheets().port, ghl.port, clientId, ghlEvent, `req_ghl_a_${suffix}`, ["ghl_location_api"]);
+    const ghlRight = await deliver(right, openSheets().port, ghl.port, clientId, ghlEvent, `req_ghl_b_${suffix}`, ["ghl_location_api"]);
+    assert.equal(ghl.deliveries, 0);
+    assert.equal(ghlLeft.ok, false);
+    assert.equal(ghlRight.ok, false);
+    if (ghlLeft.ok || ghlRight.ok) return;
+    assert.equal(ghlLeft.error, "google_only_pilot_required");
+    assert.equal(ghlRight.error, "google_only_pilot_required");
     const ghlRuns = await rightDb.clientOnboardingTestRun.findMany({
       where: { clientAccountId: clientId, sourceLeadEventId: ghlEvent },
-      include: { attempts: { include: { keys: true } } },
     });
-    assert.equal(ghlRuns.length, 1);
-    assert.equal(ghlRuns[0]?.attempts.length, 1);
-    assert.equal(ghlRuns[0]?.attempts[0]?.destination, "ghl_location_api");
-    assert.equal(ghlRuns[0]?.attempts[0]?.downstreamExecuted, false);
-    assert.equal(ghlRuns[0]?.attempts[0]?.externalCallExecuted, true);
-    const ghlKeys = ghlRuns[0]?.attempts[0]?.keys.map((key) => key.idempotencyKey) ?? [];
-    assert.ok(ghlKeys.some((key) => key.endsWith(":ghl-contact")));
-    assert.ok(ghlKeys.some((key) => key.endsWith(":ghl-workflow")));
-    assert.ok(ghlKeys.some((key) => key.includes(":ghl-note:")));
-    assert.equal(await leftDb.sourceLeadEvent.count({ where: { clientAccountIdResolved: clientId } }), eventsBefore + 5);
+    assert.equal(ghlRuns.length, 0);
+    assert.equal(await leftDb.sourceLeadEvent.count({ where: { clientAccountIdResolved: clientId } }), eventsBefore + 1);
     const account = await rightDb.clientAccount.findUniqueOrThrow({ where: { clientAccountId: clientId } });
     assert.equal(account.status, "active");
   });
 });
-
-function executedNow(outcome: CapturedTestOutcome): boolean {
-  if (!outcome.ok || outcome.duplicateRequest) return false;
-  return outcome.externalCallsThisRequest.sheets || outcome.externalCallsThisRequest.ghl;
-}
-
-async function untilCount(read: () => number, expected: number) {
-  const start = Date.now();
-  while (read() < expected && Date.now() - start < 2000) {
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-}
-
-async function firstToSettle<T>(left: Promise<T>, right: Promise<T>): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      left,
-      right,
-      new Promise<T>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("timed out waiting for the blocked reservation")), 8000);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
 
 async function createEvent(db: PrismaClient, clientId: string, eventIds: string[]): Promise<string> {
   const lead = await db.sourceLeadEvent.create({
@@ -213,8 +127,7 @@ async function createEvent(db: PrismaClient, clientId: string, eventIds: string[
       normalizedPayloadJson: {
         contact: { first_name: "Ada", last_name: "Mock", email: EMAIL, phone_e164: PHONE, state: "VA" },
       },
-      enrichmentMetadataJson: { recordClass: "campaign_lead" },
-      deliveryResultJson: { receipt: "unchanged" },
+      enrichmentMetadataJson: { recordClass: "onboarding_operator_owned_test" },
     },
   });
   eventIds.push(lead.id);
@@ -234,12 +147,20 @@ function deliver(
     env: {
       SA360_CLIENT_ONBOARDING_V2_CONFIG_ENABLED: "true",
       SA360_CLIENT_ONBOARDING_V2_CAPTURED_TEST_ENABLED: "true",
+      SA360_CLIENT_ONBOARDING_GOOGLE_ONLY_PILOT_ENABLED: "true",
     },
     notes: fakeOnboardingLeadNote(),
     store,
     sheets,
     ghlAggregate: ghl,
-    rereadSheet: async (sheet) => sheet,
+    rereadSheet: async (sheet) => ({
+      header: [...sheet.header],
+      headerSha256: sheet.headerSha256,
+      control: sheet.control,
+      ownerClientAccountId: sheet.ownerClientAccountId,
+      destinationRevision: sheet.destinationRevision,
+      historicalDataRows: "empty" as const,
+    }),
     execution: "injected_fakes",
   });
 }
@@ -257,9 +178,9 @@ function requestFor(
     sourceLeadEventId: eventId,
     destinations,
     execute: true,
-    confirmation: CONFIRM_DELIVER,
+    confirmation: CONFIRM_ONE_GOOGLE_SHEETS_ROW,
     acknowledgeDownstreamAutomation: true,
-    isolation: { mode: "verified_test_identity", sheetsContract: "exact_v3_test_worksheet" },
+    isolation: { mode: "isolated_destination", sheetsContract: "exact_v3_test_worksheet" },
     noteOverflow: "refuse",
     repeatOfTestRunId: null,
     actorLabel: "operator",
@@ -273,16 +194,22 @@ function worldFor(clientId: string, eventId: string): CapturedTestWorld {
       id: eventId,
       clientAccountIdResolved: clientId,
       status: "routing_matched",
-      sourceRouteKey: "manual",
-      enrichmentMetadataJson: { recordClass: "campaign_lead" },
+      sourceRouteKey: "operator_owned_test",
+      sourceProvider: "manual_import",
+      sourceSystem: "external_vendor",
+      sourceType: "manual_entry",
+      webhookRequestLogId: null,
+      enrichmentMetadataJson: { recordClass: "onboarding_operator_owned_test" },
       normalizedPayloadJson: {
         contact: { first_name: "Ada", last_name: "Mock", email: EMAIL, phone_e164: PHONE, state: "VA" },
       },
       receivedAt: "2026-10-26T15:00:00.000Z",
       sourceLeadId: null,
-      deliveryResultJson: { receipt: "unchanged" },
+      deliveryResultJson: null,
+      downstream: { inventoryCount: 0, fulfillmentCount: 0, allocationCount: 0, dispatchIntentCount: 0 },
     },
     identities: [{ email: EMAIL, phoneE164: PHONE }],
+    testIdentitySharedWithOtherClient: false,
     sheets: {
       spreadsheetId: `sheet_${clientId}`,
       spreadsheetTitle: "Reservation",
@@ -300,6 +227,18 @@ function worldFor(clientId: string, eventId: string): CapturedTestWorld {
       canaryRisk: { uncertain: false, appendStartedAtHeld: false },
       campaignControl: { establishControl: "drive_owner_verified", checkedAt: "2026-10-26T18:00:00.000Z" },
       destinationRevision: 3,
+      approvedTestWorksheet: {
+        spreadsheetId: `test_${clientId}`,
+        worksheetId: 77,
+        worksheetTitle: "Onboarding Test Leads",
+        schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3,
+        header,
+        headerSha256: "a".repeat(64),
+        destinationRevision: 1,
+        ownerClientAccountId: clientId,
+        control: { establishControl: "drive_owner_verified", checkedAt: "2026-10-26T18:00:00.000Z" },
+      },
+      approvedTestWorksheetRisk: { uncertain: false, appendStartedAtHeld: false },
     },
     ghl: {
       locationId: "loc_mock",
@@ -325,8 +264,8 @@ function worldFor(clientId: string, eventId: string): CapturedTestWorld {
       inventoryCount: 0,
       billingRowCount: 0,
       dispatchIntentCount: 0,
-      eventStatus: "routing_matched",
-      eventDeliveryResult: { receipt: "unchanged" },
+      eventStatus: "received",
+      eventDeliveryResult: null,
       campaignDispatchEnabled: false,
       agedDispatchEnabled: false,
     },
@@ -342,27 +281,6 @@ function openSheets() {
     port: {
       async append(): Promise<SheetsAppendOutcome> {
         appends += 1;
-        return { status: "succeeded", rowsWritten: 1, externalCallExecuted: true };
-      },
-    },
-  };
-}
-
-function heldSheets() {
-  let appends = 0;
-  let release = () => {};
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  return {
-    get appends() {
-      return appends;
-    },
-    release,
-    port: {
-      async append(): Promise<SheetsAppendOutcome> {
-        appends += 1;
-        await gate;
         return { status: "succeeded", rowsWritten: 1, externalCallExecuted: true };
       },
     },

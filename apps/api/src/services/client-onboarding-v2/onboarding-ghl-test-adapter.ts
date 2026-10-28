@@ -431,6 +431,9 @@ export function isReservedProductionDeliveryKey(key: string): boolean {
 }
 
 function prepareDelivery(request: OnboardingGhlTestDeliveryRequest, env: NodeJS.ProcessEnv): PreparedDelivery | Refusal {
+  if (env.SA360_CLIENT_ONBOARDING_GOOGLE_ONLY_PILOT_ENABLED === "true") {
+    return refusal("google_only_pilot_required", "The Google-only pilot does not call GoHighLevel.");
+  }
   if (env[ONBOARDING_GHL_TEST_GLOBAL_FLAG] !== "true") {
     return refusal("global_flag_disabled", `${ONBOARDING_GHL_TEST_GLOBAL_FLAG} must be exactly true.`);
   }

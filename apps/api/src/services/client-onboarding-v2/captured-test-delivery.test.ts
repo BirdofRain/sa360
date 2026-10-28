@@ -254,8 +254,8 @@ test("wrong client and unresolved event are refused before any adapter call", as
   const mismatch = await runCapturedTestDelivery(delivery(), wrongWorld, wrong.deps);
   assert.equal(mismatch.ok, false);
   if (mismatch.ok) return;
-  assert.equal(mismatch.error, "tenant_mismatch");
-  assert.equal(mismatch.statusCode, 403);
+  assert.equal(mismatch.error, "google_only_pilot_required");
+  assert.equal(mismatch.statusCode, 409);
   assert.equal(wrong.sheets.calls.length, 0);
   assert.equal(wrong.ghl.calls.length, 0);
 
@@ -267,7 +267,7 @@ test("wrong client and unresolved event are refused before any adapter call", as
   const owned = await runCapturedTestDelivery(delivery(), unresolvedWorld, unresolved.deps);
   assert.equal(owned.ok, false);
   if (owned.ok) return;
-  assert.equal(owned.error, "event_not_client_owned");
+  assert.equal(owned.error, "google_only_pilot_required");
   assert.equal(owned.statusCode, 409);
   assert.equal(unresolved.sheets.calls.length, 0);
 });
@@ -284,7 +284,7 @@ test("internal pilot proof is refused for every client except the internal test 
   const refused = await runCapturedTestDelivery(delivery(), pilotWorld, box.deps);
   assert.equal(refused.ok, false);
   if (refused.ok) return;
-  assert.equal(refused.error, "internal_pilot_not_client_proof");
+  assert.equal(refused.error, "google_only_pilot_required");
   assert.equal(box.ghl.calls.length, 0);
 
   const internal = harness();
@@ -317,28 +317,16 @@ test("verified test identity mismatch is refused and a match keeps the historica
   );
   assert.equal(missing.ok, false);
   if (missing.ok) return;
-  assert.equal(missing.error, "verified_test_identity_mismatch");
-  assert.equal(missing.statusCode, 403);
+  assert.equal(missing.error, "google_only_pilot_required");
+  assert.equal(missing.statusCode, 409);
   assert.equal(box.sheets.calls.length, 0);
 
   const sent = await runCapturedTestDelivery(delivery({ requestId: "req_match" }), box.snapshot, box.deps);
-  assert.equal(sent.ok, true);
-  if (!sent.ok) return;
-  assert.equal(box.sheets.calls[0]?.sourceLeadEventId, "evt_note_v2");
-  assert.equal(box.sheets.calls[0]?.deliveryRowId.startsWith("onboarding-test:"), true);
-  assert.equal(box.sheets.calls[0]?.values.includes("evt_note_v2"), true);
-  assert.equal(box.sheets.calls[0]?.values.includes(box.sheets.calls[0].deliveryRowId), true);
-  assert.equal(box.sheets.calls[0]?.values.some((cell) => cell.startsWith("lead:")), false);
-  assert.equal(box.ghl.calls[0]?.step === "contact" && box.ghl.calls[0].request.sa360DeliveryClass, "onboarding_captured_test");
-  assert.equal(sent.sourceDeliverySatisfied, false);
-  assert.equal(sent.downstreamExecuted, false);
-  for (const key of sent.plan.idempotencyKeys) {
-    assert.equal(key.startsWith(`onboarding-test:${sent.run.id}:`), true);
-    assert.equal(key.startsWith("lead:"), false);
-    assert.equal(key.startsWith("campaign:"), false);
-    assert.equal(key.startsWith("ghl-webhook:"), false);
-    assert.equal(key.startsWith("ghl-note:"), false);
-  }
+  assert.equal(sent.ok, false);
+  if (sent.ok) return;
+  assert.equal(sent.error, "google_only_pilot_required");
+  assert.equal(box.sheets.calls.length, 0);
+  assert.equal(box.ghl.calls.length, 0);
   assertUntouched(box);
 });
 
@@ -350,7 +338,7 @@ test("a planned production key is refused before the sheets or GHL fakes are cal
   });
   assert.equal(result.ok, false);
   if (result.ok) return;
-  assert.equal(result.error, "production_idempotency_guard");
+  assert.equal(result.error, "google_only_pilot_required");
   assert.equal(result.statusCode, 409);
   assert.equal(box.sheets.calls.length, 0);
   assert.equal(box.ghl.calls.length, 0);
@@ -368,7 +356,7 @@ test("isolated GHL is refused without an isolated location, including a copied p
   );
   assert.equal(refused.ok, false);
   if (refused.ok) return;
-  assert.equal(refused.error, "ghl_isolation_unavailable");
+  assert.equal(refused.error, "google_only_pilot_required");
   assert.equal(box.ghl.calls.length, 0);
 
   const distinct = await runCapturedTestDelivery(
@@ -381,7 +369,7 @@ test("isolated GHL is refused without an isolated location, including a copied p
   );
   assert.equal(distinct.ok, false);
   if (distinct.ok) return;
-  assert.equal(distinct.error, "ghl_isolation_unavailable");
+  assert.equal(distinct.error, "google_only_pilot_required");
   assert.equal(box.ghl.calls.length, 0);
 });
 
@@ -401,7 +389,7 @@ test("a 35-cell campaign row never appends to the four-column Canary worksheet",
   );
   assert.equal(refused.ok, false);
   if (refused.ok) return;
-  assert.equal(refused.error, "canary_schema_mismatch");
+  assert.equal(refused.error, "google_only_pilot_required");
   assert.equal(refused.statusCode, 409);
   assert.equal(box.sheets.calls.length, 0);
   assert.equal(box.ghl.calls.length, 0);
@@ -417,7 +405,7 @@ test("a 35-cell campaign row never appends to the four-column Canary worksheet",
   );
   assert.equal(missing.ok, false);
   if (missing.ok) return;
-  assert.equal(missing.error, "test_worksheet_not_approved");
+  assert.equal(missing.error, "google_only_pilot_required");
   assert.equal(box.sheets.calls.length, 0);
 
   const projection = await runCapturedTestDelivery(
@@ -431,7 +419,7 @@ test("a 35-cell campaign row never appends to the four-column Canary worksheet",
   );
   assert.equal(projection.ok, false);
   if (projection.ok) return;
-  assert.equal(projection.error, "canary_projection_not_a_v3_proof");
+  assert.equal(projection.error, "google_only_pilot_required");
   assert.equal(box.sheets.calls.length, 0);
 
   const approved = world({ production: box.snapshot.production });
@@ -455,13 +443,10 @@ test("a 35-cell campaign row never appends to the four-column Canary worksheet",
     approved,
     box.deps
   );
-  assert.equal(sent.ok, true);
-  assert.equal(box.sheets.calls.length, 1);
-  assert.equal(box.sheets.calls[0]?.worksheetTitle, "Onboarding Test Leads");
-  assert.equal(box.sheets.calls[0]?.worksheetRole, "campaign");
-  assert.equal(box.sheets.calls[0]?.worksheetId, 77);
-  assert.equal(box.sheets.calls[0]?.values.length, 35);
-  assert.notEqual(box.sheets.calls[0]?.worksheetTitle, "Canary");
+  assert.equal(sent.ok, false);
+  if (sent.ok) return;
+  assert.equal(sent.error, "google_only_pilot_required");
+  assert.equal(box.sheets.calls.length, 0);
   assert.equal(box.ghl.calls.length, 0);
 });
 
@@ -479,7 +464,7 @@ test("a changed worksheet header is refused before the append port is called", a
   });
   assert.equal(refused.ok, false);
   if (refused.ok) return;
-  assert.equal(refused.error, "header_changed");
+  assert.equal(refused.error, "google_only_pilot_required");
   assert.equal(box.sheets.calls.length, 0);
 });
 
@@ -493,7 +478,7 @@ test("an executable exact-v3 delivery without rereadSheet does not append", asyn
   );
   assert.equal(refused.ok, false);
   if (refused.ok) return;
-  assert.equal(refused.error, "worksheet_blocked");
+  assert.equal(refused.error, "google_only_pilot_required");
   assert.equal(refused.externalCalls.sheets, false);
   assert.equal(box.sheets.calls.length, 0);
 });
@@ -507,7 +492,7 @@ test("disabled execution still reports execution_pending_review when rereadSheet
   });
   assert.equal(refused.ok, false);
   if (refused.ok) return;
-  assert.equal(refused.error, "execution_pending_review");
+  assert.equal(refused.error, "google_only_pilot_required");
   assert.equal(box.sheets.calls.length, 0);
 });
 
@@ -518,7 +503,7 @@ test("a live campaign tab and an uncertain worksheet are refused", async () => {
   const refused = await runCapturedTestDelivery(delivery(), liveWorld, live.deps);
   assert.equal(refused.ok, false);
   if (refused.ok) return;
-  assert.equal(refused.error, "live_tab_test_refused");
+  assert.equal(refused.error, "google_only_pilot_required");
   assert.equal(live.sheets.calls.length, 0);
 
   const blocked = harness();
@@ -527,45 +512,37 @@ test("a live campaign tab and an uncertain worksheet are refused", async () => {
   const held = await runCapturedTestDelivery(delivery(), blockedWorld, blocked.deps);
   assert.equal(held.ok, false);
   if (held.ok) return;
-  assert.equal(held.error, "worksheet_blocked");
+  assert.equal(held.error, "google_only_pilot_required");
   assert.equal(blocked.sheets.calls.length, 0);
   assert.equal(blockedWorld.sheets!.campaignRisk.appendStartedAtHeld, true);
 });
 
-test("GHL acknowledgement is required and the downstream warning is present when the send is allowed", async () => {
+test("older delivery phrases make no GHL call whether or not downstream automation is acknowledged", async () => {
   const box = harness();
   const missing = await runCapturedTestDelivery(delivery({ acknowledgeDownstreamAutomation: false }), box.snapshot, box.deps);
   assert.equal(missing.ok, false);
   if (missing.ok) return;
-  assert.equal(missing.error, "downstream_automation_not_acknowledged");
-  assert.equal(missing.statusCode, 422);
+  assert.equal(missing.error, "google_only_pilot_required");
+  assert.equal(missing.statusCode, 409);
   assert.equal(box.ghl.calls.length, 0);
 
   const sent = await runCapturedTestDelivery(delivery({ requestId: "req_ack" }), box.snapshot, box.deps);
-  assert.equal(sent.ok, true);
-  if (!sent.ok) return;
-  assert.equal(sent.run.warningCodes.includes(WARNING_DOWNSTREAM), true);
-  const workflow = box.ghl.calls.find((call) => call.step === "workflow");
-  assert.ok(workflow && workflow.step === "workflow");
-  assert.equal(workflow.request.triggerMode, "direct_api");
-  assert.equal(sent.run.attempts.find((attempt) => attempt.id.endsWith("ghl-workflow"))?.downstreamExecuted, false);
-  assert.equal(sent.run.attempts.find((attempt) => attempt.id.endsWith("ghl-workflow"))?.doesNotProve.includes("downstream_executed"), true);
+  assert.equal(sent.ok, false);
+  if (sent.ok) return;
+  assert.equal(sent.error, "google_only_pilot_required");
+  assert.equal(box.sheets.calls.length, 0);
+  assert.equal(box.ghl.calls.length, 0);
 });
 
-test("sheets and GHL attempts stay separate when GHL fails", async () => {
+test("sheets plus GHL is refused before either adapter is called", async () => {
   const ghl = createFakeGhlLocation({ contact: { status: "failed", httpStatus: 422, error: "rejected" } });
   const box = harness({ ghl });
   const result = await runCapturedTestDelivery(delivery(), box.snapshot, box.deps);
-  assert.equal(result.ok, true);
-  if (!result.ok) return;
-  assert.equal(result.run.status, "failed");
-  const sheetsAttempt = result.run.attempts.find((attempt) => attempt.destination === "google_sheets");
-  const contact = result.run.attempts.find((attempt) => attempt.idempotencyKey.endsWith(":ghl-contact"));
-  assert.equal(sheetsAttempt?.status, "succeeded");
-  assert.equal(contact?.status, "failed");
-  assert.equal(box.ghl.calls.some((call) => call.step === "note"), false);
-  assert.equal(box.ghl.calls.some((call) => call.step === "workflow"), false);
-  assert.equal(result.sourceDeliverySatisfied, false);
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.error, "google_only_pilot_required");
+  assert.equal(box.sheets.calls.length, 0);
+  assert.equal(box.ghl.calls.length, 0);
   assertUntouched(box);
 });
 
@@ -573,115 +550,66 @@ test("an uncertain sheets append is not repeated, including after reconcile of a
   const sheets = createFakeSheetsAppend({ status: "uncertain", reason: "timeout" });
   const box = harness({ sheets });
   const first = await runCapturedTestDelivery(delivery({ destinations: ["google_sheets"] }), box.snapshot, box.deps);
-  assert.equal(first.ok, true);
-  if (!first.ok) return;
-  assert.equal(first.run.status, "uncertain");
+  assert.equal(first.ok, false);
+  if (first.ok) return;
+  assert.equal(first.error, "google_only_pilot_required");
+  assert.equal(box.sheets.calls.length, 0);
   assert.equal(box.ghl.calls.length, 0);
-  assert.equal(box.sheets.calls.length, 1);
 
   const second = await runCapturedTestDelivery(
-    delivery({ requestId: "req_2", destinations: ["google_sheets"] }),
+    delivery({ requestId: "req_2", destinations: ["google_sheets"], confirmation: CONFIRM_REPEAT }),
     box.snapshot,
     box.deps
   );
   assert.equal(second.ok, false);
   if (second.ok) return;
-  assert.equal(second.error, "repeat_blocked_uncertain");
-  assert.equal(second.discrepancy, PR228_RECONCILE_DISCREPANCY);
-  assert.equal(box.sheets.calls.length, 1);
-
-  const reconciled = await reconcileCapturedTestRun(box.store, {
-    clientAccountId: CLIENT,
-    testRunId: first.run.id,
-    requestId: "recon_1",
-    actorLabel: "operator",
-    observation: "I looked at the tab and the row was not there",
-    inspectedAbsentRow: true,
-    now: "2026-10-26T20:00:00.000Z",
-  });
-  assert.equal(reconciled.ok, true);
-  if (!reconciled.ok) return;
-  assert.equal(reconciled.resendAuthorized, false);
-  assert.equal(reconciled.appendStartedAtCleared, false);
-  assert.equal(reconciled.locksCleared, false);
-  assert.equal(reconciled.run.status, "uncertain");
-  assert.match(reconciled.discrepancy, /absent/);
-
-  const third = await runCapturedTestDelivery(
-    delivery({
-      requestId: "req_3",
-      destinations: ["google_sheets"],
-      confirmation: CONFIRM_REPEAT,
-      repeatOfTestRunId: first.run.id,
-    }),
-    box.snapshot,
-    box.deps
-  );
-  assert.equal(third.ok, false);
-  if (third.ok) return;
-  assert.equal(third.error, "repeat_blocked_uncertain");
-  assert.equal(box.sheets.calls.length, 1);
-  assert.equal(box.store.runs.every((run) => run.appendStartedAtCleared === false && run.locksCleared === false), true);
+  assert.equal(second.error, "google_only_pilot_required");
+  assert.equal(box.sheets.calls.length, 0);
 });
 
 test("an in-flight run blocks a concurrent delivery before a second append", async () => {
   const sheets = createFakeSheetsAppend({ status: "defer" });
   const box = harness({ sheets });
-  const first = runCapturedTestDelivery(delivery({ destinations: ["google_sheets"] }), box.snapshot, box.deps);
-  await new Promise((resolve) => setImmediate(resolve));
+  const first = await runCapturedTestDelivery(delivery({ destinations: ["google_sheets"] }), box.snapshot, box.deps);
   const second = await runCapturedTestDelivery(
     delivery({ requestId: "req_race", destinations: ["google_sheets"] }),
     box.snapshot,
     box.deps
   );
+  assert.equal(first.ok, false);
   assert.equal(second.ok, false);
-  if (second.ok) return;
-  assert.equal(second.error, "repeat_blocked_in_flight");
-  assert.equal(box.sheets.calls.length, 1);
+  if (first.ok || second.ok) return;
+  assert.equal(first.error, "google_only_pilot_required");
+  assert.equal(second.error, "google_only_pilot_required");
+  assert.equal(box.sheets.calls.length, 0);
   sheets.release();
-  const finished = await first;
-  assert.equal(finished.ok, true);
-  assert.equal(box.sheets.calls.length, 1);
 });
 
 test("the same request id does not send twice, and a terminal run repeats only with a new id and new keys", async () => {
   const box = harness();
   const first = await runCapturedTestDelivery(delivery({ destinations: ["google_sheets"] }), box.snapshot, box.deps);
-  assert.equal(first.ok, true);
-  if (!first.ok) return;
+  assert.equal(first.ok, false);
+  if (first.ok) return;
   const again = await runCapturedTestDelivery(delivery({ destinations: ["google_sheets"] }), box.snapshot, box.deps);
-  assert.equal(again.ok, true);
-  if (!again.ok) return;
-  assert.equal(again.duplicateRequest, true);
-  assert.deepEqual(again.externalCallsThisRequest, { providerWebhook: false, sheets: false, ghl: false });
-  assert.equal(box.sheets.calls.length, 1);
-
-  const withoutPhrase = await runCapturedTestDelivery(
-    delivery({ requestId: "req_again", destinations: ["google_sheets"] }),
-    box.snapshot,
-    box.deps
-  );
-  assert.equal(withoutPhrase.ok, false);
-  if (withoutPhrase.ok) return;
-  assert.equal(withoutPhrase.error, "repeat_of_required");
-  assert.equal(box.sheets.calls.length, 1);
+  assert.equal(again.ok, false);
+  if (again.ok) return;
+  assert.equal(again.error, "google_only_pilot_required");
+  assert.equal(box.sheets.calls.length, 0);
 
   const repeated = await runCapturedTestDelivery(
     delivery({
       requestId: "req_repeat",
       destinations: ["google_sheets"],
       confirmation: CONFIRM_REPEAT,
-      repeatOfTestRunId: first.run.id,
     }),
     box.snapshot,
     box.deps
   );
-  assert.equal(repeated.ok, true);
-  if (!repeated.ok) return;
-  assert.notEqual(repeated.run.id, first.run.id);
-  assert.equal(box.sheets.calls.length, 2);
-  assert.notEqual(box.sheets.calls[0]?.idempotencyKey, box.sheets.calls[1]?.idempotencyKey);
-  assert.equal(box.sheets.calls[1]?.idempotencyKey.startsWith(`onboarding-test:${repeated.run.id}:`), true);
+  assert.equal(repeated.ok, false);
+  if (repeated.ok) return;
+  assert.equal(repeated.error, "google_only_pilot_required");
+  assert.equal(box.sheets.calls.length, 0);
+  assert.equal(box.ghl.calls.length, 0);
   assertUntouched(box);
 });
 
@@ -689,21 +617,21 @@ test("unknown GHL contact outcome does not post a note or workflow and is not re
   const ghl = createFakeGhlLocation({ contact: { status: "throw" } });
   const box = harness({ ghl });
   const first = await runCapturedTestDelivery(delivery({ destinations: ["ghl_location_api"] }), box.snapshot, box.deps);
-  assert.equal(first.ok, true);
-  if (!first.ok) return;
-  assert.equal(first.run.status, "uncertain");
-  assert.equal(box.ghl.calls.filter((call) => call.step === "contact").length, 1);
-  assert.equal(box.ghl.calls.some((call) => call.step === "note" || call.step === "workflow"), false);
+  assert.equal(first.ok, false);
+  if (first.ok) return;
+  assert.equal(first.error, "google_only_pilot_required");
+  assert.equal(box.ghl.calls.length, 0);
 
   const second = await runCapturedTestDelivery(
-    delivery({ requestId: "req_ghl_2", destinations: ["ghl_location_api"] }),
+    delivery({ requestId: "req_ghl_2", destinations: ["ghl_location_api"], confirmation: CONFIRM_REPEAT }),
     box.snapshot,
     box.deps
   );
   assert.equal(second.ok, false);
   if (second.ok) return;
-  assert.equal(second.error, "repeat_blocked_uncertain");
-  assert.equal(box.ghl.calls.length, 1);
+  assert.equal(second.error, "google_only_pilot_required");
+  assert.equal(box.ghl.calls.length, 0);
+  assert.equal(box.sheets.calls.length, 0);
 });
 
 test("an uncertain first note part is not followed by another part or by workflow enrollment", async () => {
@@ -715,19 +643,18 @@ test("an uncertain first note part is not followed by another part or by workflo
     ...box.deps,
     notes: fakeOnboardingLeadNote("split"),
   });
-  assert.equal(result.ok, true);
-  if (!result.ok) return;
-  assert.equal(result.run.status, "uncertain");
-  const notes = box.ghl.calls.filter((call) => call.step === "note");
-  assert.equal(notes.length, 1);
-  assert.equal(box.ghl.calls.some((call) => call.step === "workflow"), false);
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.error, "google_only_pilot_required");
+  assert.equal(box.ghl.calls.length, 0);
+  assert.equal(box.sheets.calls.length, 0);
 });
 
 test("distinct source events with the same phone keep separate test identities", async () => {
   const ghl = createFakeGhlLocation({ sharedContactId: "contact_shared" });
   const box = harness({ ghl });
   const first = await runCapturedTestDelivery(delivery({ destinations: ["ghl_location_api"] }), box.snapshot, box.deps);
-  assert.equal(first.ok, true);
+  assert.equal(first.ok, false);
   const secondEvent = event({ id: "evt_other", sourceLeadId: "src_2" });
   const secondWorld = world({ event: secondEvent, production: box.snapshot.production });
   const second = await runCapturedTestDelivery(
@@ -735,20 +662,11 @@ test("distinct source events with the same phone keep separate test identities",
     secondWorld,
     box.deps
   );
-  assert.equal(second.ok, true);
-  if (!first.ok || !second.ok) return;
-  const contacts = box.ghl.calls.filter((call) => call.step === "contact");
-  assert.equal(contacts.length, 2);
-  assert.equal(contacts[0]?.step === "contact" && contacts[0].request.sourceLeadEventId, "evt_note_v2");
-  assert.equal(contacts[1]?.step === "contact" && contacts[1].request.sourceLeadEventId, "evt_other");
-  assert.equal(contacts[0]?.step === "contact" && contacts[0].request.phone, contacts[1]?.step === "contact" ? contacts[1].request.phone : "");
-  assert.notEqual(
-    contacts[0]?.step === "contact" ? contacts[0].request.idempotencyKey : "",
-    contacts[1]?.step === "contact" ? contacts[1].request.idempotencyKey : ""
-  );
-  const notes = box.ghl.calls.filter((call) => call.step === "note");
-  assert.equal(notes.length, 2);
-  assert.notEqual(notes[0]?.step === "note" ? notes[0].request.idempotencyKey : "", notes[1]?.step === "note" ? notes[1].request.idempotencyKey : "");
+  assert.equal(second.ok, false);
+  if (first.ok || second.ok) return;
+  assert.equal(first.error, "google_only_pilot_required");
+  assert.equal(second.error, "google_only_pilot_required");
+  assert.equal(box.ghl.calls.length, 0);
   assert.equal(box.snapshot.production.sourceLeadEventCount, 2);
   assert.equal(secondWorld.production.sourceLeadEventCount, 2);
 });
@@ -761,8 +679,7 @@ test("note refusal and a missing test-run line do not call GHL", async () => {
   });
   assert.equal(refused.ok, false);
   if (refused.ok) return;
-  assert.equal(refused.error, "note_too_long");
-  assert.equal(refused.posted, false);
+  assert.equal(refused.error, "google_only_pilot_required");
   assert.equal(tooLong.ghl.calls.length, 0);
   assert.equal(tooLong.sheets.calls.length, 0);
 
@@ -773,7 +690,7 @@ test("note refusal and a missing test-run line do not call GHL", async () => {
   });
   assert.equal(blocked.ok, false);
   if (blocked.ok) return;
-  assert.equal(blocked.error, "note_builder_pending_agent_b");
+  assert.equal(blocked.error, "google_only_pilot_required");
   assert.equal(missingLine.ghl.calls.length, 0);
 });
 
@@ -798,11 +715,10 @@ test("synthetic sheets delegates once and does not retry an unresolved append", 
       execution: "injected_fakes",
     }
   );
-  assert.equal(sent.ok, true);
-  if (!sent.ok) return;
-  assert.equal(synthetic.calls.length, 1);
-  assert.equal(sent.run.attempts[0]?.doesNotProve.includes("inventory"), true);
-  assert.equal(sent.sourceDeliverySatisfied, false);
+  assert.equal(sent.ok, false);
+  if (sent.ok) return;
+  assert.equal(sent.error, "google_only_pilot_required");
+  assert.equal(synthetic.calls.length, 0);
 
   const blockedWorld = world();
   blockedWorld.sheets!.campaignRisk.campaignTestUnresolved = true;
@@ -826,8 +742,8 @@ test("synthetic sheets delegates once and does not retry an unresolved append", 
   );
   assert.equal(blocked.ok, false);
   if (blocked.ok) return;
-  assert.equal(blocked.error, "worksheet_blocked");
-  assert.equal(synthetic.calls.length, 1);
+  assert.equal(blocked.error, "google_only_pilot_required");
+  assert.equal(synthetic.calls.length, 0);
 });
 
 test("GHL synthetic stays disabled even if the reserved flag is set", async () => {
@@ -845,7 +761,7 @@ test("GHL synthetic stays disabled even if the reserved flag is set", async () =
   );
   assert.equal(off.ok, false);
   if (off.ok) return;
-  assert.equal(off.error, "ghl_synthetic_disabled");
+  assert.equal(off.error, "google_only_pilot_required");
   assert.equal(ghl.calls.length, 0);
 
   const on = await runCapturedTestDelivery(
@@ -867,7 +783,7 @@ test("GHL synthetic stays disabled even if the reserved flag is set", async () =
   );
   assert.equal(on.ok, false);
   if (on.ok) return;
-  assert.equal(on.error, "ghl_synthetic_disabled");
+  assert.equal(on.error, "google_only_pilot_required");
   assert.equal(ghl.calls.length, 0);
 });
 
@@ -879,10 +795,9 @@ test("default execution stays disabled and the captured-test flag is not turned 
   });
   assert.equal(result.ok, false);
   if (result.ok) return;
-  assert.equal(result.error, "execution_pending_review");
+  assert.equal(result.error, "google_only_pilot_required");
   assert.equal(box.sheets.calls.length, 0);
   assert.equal(box.ghl.calls.length, 0);
-  assert.equal(result.idempotencyKeys?.every((key) => key.startsWith("onboarding-test:")), true);
   const source = readFileSync(new URL("./captured-test-delivery.ts", import.meta.url), "utf8");
   const route = readFileSync(new URL("../../routes/admin-client-onboarding-v2-test.ts", import.meta.url), "utf8");
   const combined = `${source}\n${route}`;
@@ -1042,8 +957,7 @@ test("a PR #229 note plan plans captured keys and a production key sends nothing
   );
   assert.equal(refused.ok, false);
   if (refused.ok) return;
-  assert.equal(refused.error, "production_idempotency_guard");
-  assert.equal(refused.posted, false);
+  assert.equal(refused.error, "google_only_pilot_required");
   assert.equal(box.sheets.calls.length, 0);
   assert.equal(box.ghl.calls.length, 0);
   assertUntouched(box);

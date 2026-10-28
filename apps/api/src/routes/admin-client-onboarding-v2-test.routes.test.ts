@@ -221,11 +221,12 @@ test("a flagged delivery still does not call adapters until execution review, an
     },
   });
   assert.equal(res.statusCode, 409);
-  assert.equal(res.json().error, "execution_pending_review");
+  assert.equal(res.json().error, "google_only_pilot_required");
   assert.equal(sheets.calls.length, 0);
   assert.equal(ghl.calls.length, 0);
   assert.equal(res.json().externalCalls.providerWebhook, false);
-  assert.equal(res.json().idempotencyKeys.every((key: string) => key.startsWith("onboarding-test:")), true);
+  assert.equal(res.json().externalCalls.sheets, false);
+  assert.equal(res.json().externalCalls.ghl, false);
 
   const identity = await app.inject({
     method: "PUT",

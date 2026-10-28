@@ -134,6 +134,7 @@ test("destination profile, worksheet approval, and activation intent do not enab
         header: [...COMPANY_SHEETS_CANARY_HEADER],
         control: { establishControl: "drive_owner_verified", checkedAt: "2026-10-26T18:00:00.000Z" },
         destinationRevision: 1,
+        historicalDataRows: "empty",
       })
     );
     assert.equal(canary.ok, false);
@@ -151,6 +152,7 @@ test("destination profile, worksheet approval, and activation intent do not enab
         header,
         control: { establishControl: "drive_owner_verified", checkedAt: "2026-10-26T18:00:00.000Z" },
         destinationRevision: 1,
+        historicalDataRows: "empty",
       })
     );
     assert.equal(approved.ok, true);
@@ -249,7 +251,7 @@ test("prisma preview persists one sheets attempt and a stale header blocks deliv
     );
     assert.equal(refused.ok, false);
     if (refused.ok) return;
-    assert.equal(refused.error, "header_changed");
+    assert.equal(refused.error, "google_only_pilot_required");
     assert.equal(refused.externalCalls.sheets, false);
     assert.equal(sheets.calls.length, 0);
 
@@ -269,7 +271,7 @@ test("prisma preview persists one sheets attempt and a stale header blocks deliv
     );
     assert.equal(canary.ok, false);
     if (canary.ok) return;
-    assert.equal(canary.error, "canary_projection_not_a_v3_proof");
+    assert.equal(canary.error, "google_only_pilot_required");
     assert.equal(canary.externalCalls.sheets, false);
     assert.equal(sheets.calls.length, 0);
     assert.equal(

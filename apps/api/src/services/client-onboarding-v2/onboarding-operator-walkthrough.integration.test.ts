@@ -380,7 +380,7 @@ describe("mocked Alex Gross onboarding operator walkthrough", { skip: !runIntegr
     };
   }
 
-  it("previews, delivers, and refuses an uncertain resend without production side effects", async () => {
+  it("previews without writing and refuses older delivery phrases without production side effects", async () => {
     const summary = await readClientOnboardingSummary(clientId, db, deliveryEnv());
     assert.equal(summary.ok, true);
     if (!summary.ok) return;
@@ -489,37 +489,12 @@ describe("mocked Alex Gross onboarding operator walkthrough", { skip: !runIntegr
     const beforeIntents = await db.companySheetsDispatchIntent.count({ where: { clientAccountId: clientId } });
     const deliveryRequest = request();
     const sent = await runCapturedTestDelivery(deliveryRequest, world, deps);
-    assert.equal(sent.ok, true);
-    if (!sent.ok) return;
-    assert.equal(sent.run.status, "succeeded");
-    assert.equal(sheet.appends.length, 1);
-    assert.equal(sheet.appends[0]?.title, "Campaign Leads");
-    assert.equal(sheet.appends[0]?.values[0]?.length, 35);
-    assert.equal(sheet.rows.get("Historical Leads")?.length, 0);
-    assert.equal(sheet.rows.get("Daily Stats")?.length, 0);
-    assert.equal(ghlPosts.length, 3);
-    assert.equal(new Set(ghlPosts).size, 3);
-    assert.equal(ghlPosts.some((url) => url.includes("leadconnectorhq.com")), false);
-    const job = await db.companySheetsDeliveryJob.findFirstOrThrow({
-      where: { clientAccountId: clientId, kind: "onboarding_captured_test" },
-    });
-    assert.equal(job.idempotencyKey, `onboarding-test:${sent.run.id}:sheets`);
-    assert.equal(job.worksheetId, 7);
-    assert.equal(job.sourceLeadEventId, eventId);
+    assert.equal(sent.ok, false);
+    if (sent.ok) return;
+    assert.equal(sent.error, "google_only_pilot_required");
+    assert.equal(sheet.appends.length, 0);
+    assert.equal(ghlPosts.length, 0);
     assert.equal(await db.companySheetsDeliveryJob.count({ where: { clientAccountId: clientId, kind: "lead" } }), 0);
-    const attempts = await db.clientOnboardingTestAttempt.findMany({
-      where: { testRunId: sent.run.id },
-      include: { keys: true },
-    });
-    assert.equal(attempts.some((attempt) => attempt.destination === "google_sheets" && attempt.status === "succeeded"), true);
-    const ghlAttempt = attempts.find((attempt) => attempt.destination === "ghl_location_api");
-    assert.ok(ghlAttempt);
-    assert.equal(ghlAttempt?.status, "succeeded");
-    assert.equal(attempts.every((attempt) => attempt.downstreamExecuted === false), true);
-    const keyValues = attempts.flatMap((attempt) => attempt.keys.map((key) => key.idempotencyKey));
-    assert.ok(keyValues.includes(`onboarding-test:${sent.run.id}:ghl-contact`));
-    assert.ok(keyValues.some((key) => key.startsWith(`onboarding-test:${sent.run.id}:ghl-note:`)));
-    assert.ok(keyValues.includes(`onboarding-test:${sent.run.id}:ghl-workflow`));
     const destination = await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId: clientId } });
     assert.equal(destination.campaignDispatchEnabled, false);
     assert.equal(destination.agedDispatchEnabled, false);
@@ -537,40 +512,22 @@ describe("mocked Alex Gross onboarding operator walkthrough", { skip: !runIntegr
     assert.equal(await db.sourceLeadEvent.count({ where: { clientAccountIdResolved: clientId } }), 1);
 
     const duplicate = await runCapturedTestDelivery(deliveryRequest, world, deps);
-    assert.equal(duplicate.ok, true);
-    if (!duplicate.ok) return;
-    assert.equal(duplicate.duplicateRequest, true);
-    assert.equal(sheet.appends.length, 1);
-    assert.equal(ghlPosts.length, 3);
+    assert.equal(duplicate.ok, false);
+    if (duplicate.ok) return;
+    assert.equal(duplicate.error, "google_only_pilot_required");
+    assert.equal(sheet.appends.length, 0);
+    assert.equal(ghlPosts.length, 0);
 
-    ghlThrow = true;
-    const uncertain = await runCapturedTestDelivery(
-      request({
-        destinations: ["ghl_location_api"],
-        confirmation: CONFIRM_REPEAT,
-        repeatOfTestRunId: sent.run.id,
-      }),
+    const repeated = await runCapturedTestDelivery(
+      request({ confirmation: CONFIRM_REPEAT, destinations: ["google_sheets"] }),
       world,
       deps
     );
-    assert.equal(uncertain.ok, true);
-    if (!uncertain.ok) return;
-    assert.equal(uncertain.run.status, "uncertain");
-    assert.equal(ghlPosts.length, 4);
-    assert.equal(sheet.appends.length, 1);
-    const blocked = await runCapturedTestDelivery(
-      request({
-        destinations: ["ghl_location_api"],
-        confirmation: CONFIRM_REPEAT,
-        repeatOfTestRunId: uncertain.run.id,
-      }),
-      world,
-      deps
-    );
-    assert.equal(blocked.ok, false);
-    if (blocked.ok) return;
-    assert.equal(blocked.error, "repeat_blocked_uncertain");
-    assert.equal(ghlPosts.length, 4);
+    assert.equal(repeated.ok, false);
+    if (repeated.ok) return;
+    assert.equal(repeated.error, "google_only_pilot_required");
+    assert.equal(sheet.appends.length, 0);
+    assert.equal(ghlPosts.length, 0);
 
     const previousKey = process.env.ADMIN_API_KEY;
     if (!previousKey && !process.env.SA360_ADMIN_KEY) process.env.ADMIN_API_KEY = "walkthrough-admin-key";

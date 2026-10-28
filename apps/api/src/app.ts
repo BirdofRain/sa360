@@ -66,6 +66,7 @@ import { adminSupportTicketRoutes } from "./routes/admin-support-tickets.js";
 import { adminClientOnboardingV2ReadRoutes } from "./routes/admin-client-onboarding-v2-read.js";
 import { adminClientOnboardingV2GhlRoutes } from "./routes/admin-client-onboarding-v2-ghl.js";
 import { adminClientOnboardingV2TestRoutes } from "./routes/admin-client-onboarding-v2-test.js";
+import { adminClientOnboardingGoogleOnlyPreflightRoutes } from "./routes/admin-client-onboarding-google-only-preflight.js";
 import { adminClientOnboardingV2ConfigRoutes } from "./routes/admin-client-onboarding-v2-config.js";
 import { onboardingGhlRouteDeps } from "./services/client-onboarding-v2/onboarding-ghl-bindings.js";
 import { createPrismaCapturedTestStore } from "./services/client-onboarding-v2/onboarding-test-store.js";
@@ -165,6 +166,7 @@ export async function buildApp() {
     prefix: "/admin/v1",
     readWorksheetHeader: createOnboardingTestWorksheetHeaderReader(),
   });
+  await app.register(adminClientOnboardingGoogleOnlyPreflightRoutes, { prefix: "/admin/v1" });
   await app.register(adminClientOnboardingV2TestRoutes, {
     prefix: "/admin/v1",
     store: createPrismaCapturedTestStore(),

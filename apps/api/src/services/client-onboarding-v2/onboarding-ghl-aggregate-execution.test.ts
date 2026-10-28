@@ -130,7 +130,7 @@ const flags = {
   [ONBOARDING_GHL_TEST_ADAPTER_APPROVED_FLAG]: "true",
 } as NodeJS.ProcessEnv;
 
-test("aggregate delivery posts each GHL operation once and keeps Sheets independent", async () => {
+test("sheets plus GHL does not post and does not append", async () => {
   const posts: string[] = [];
   const sheets = createFakeSheetsAppend();
   const steps = createFakeGhlLocation();
@@ -167,28 +167,12 @@ test("aggregate delivery posts each GHL operation once and keeps Sheets independ
       destinationRevision: sheet.destinationRevision,
     }),
   });
-  assert.equal(outcome.ok, true);
-  if (!outcome.ok) return;
+  assert.equal(outcome.ok, false);
+  if (outcome.ok) return;
+  assert.equal(outcome.error, "google_only_pilot_required");
   assert.equal(steps.calls.length, 0);
-  assert.equal(posts.length, 3);
-  assert.equal(new Set(posts).size, 3);
-  assert.equal(sheets.calls.length, 1);
-  assert.equal(sheets.calls[0]?.kind, "onboarding_captured_test");
-  assert.equal(sheets.calls[0]?.values.length, 35);
-  const preview = outcome.run.previewJson as { sheet?: { values?: string[] }; noteBody?: string; qaEvidence?: { fullQaCompletenessAsserted?: boolean } };
-  assert.equal(preview.sheet?.values?.length, 35);
-  assert.match(preview.noteBody ?? "", /Primary Reason/);
-  assert.match(preview.noteBody ?? "", /Beneficiary/);
-  assert.equal(typeof preview.qaEvidence?.fullQaCompletenessAsserted, "boolean");
-  const ghlAttempts = outcome.run.attempts.filter((attempt) => attempt.destination === "ghl_location_api");
-  assert.ok(ghlAttempts.some((attempt) => attempt.proves.includes("contact_upserted")));
-  assert.ok(ghlAttempts.some((attempt) => attempt.proves.includes("note_persisted")));
-  assert.ok(ghlAttempts.some((attempt) => attempt.proves.includes("workflow_enrolled")));
-  assert.equal(ghlAttempts.every((attempt) => attempt.downstreamExecuted === false), true);
-  assert.equal(ghlAttempts.some((attempt) => attempt.proves.includes("downstream_executed")), false);
-  assert.equal(outcome.run.status, "succeeded");
-  assert.equal(outcome.production.inventoryCount, 0);
-  assert.equal(outcome.production.dispatchIntentCount, 0);
+  assert.equal(posts.length, 0);
+  assert.equal(sheets.calls.length, 0);
 });
 
 test("a production GHL host is not contacted when the adapter flags are true", async () => {
@@ -210,14 +194,13 @@ test("a production GHL host is not contacted when the adapter flags are true", a
     execution: "injected_fakes",
   });
   assert.equal(fetched, 0);
-  assert.equal(outcome.ok, true);
-  if (!outcome.ok) return;
-  assert.equal(outcome.externalCallsThisRequest.ghl, false);
-  assert.equal(outcome.run.attempts.some((attempt) => attempt.externalCallExecuted), false);
-  assert.equal(outcome.run.status, "failed");
+  assert.equal(outcome.ok, false);
+  if (outcome.ok) return;
+  assert.equal(outcome.error, "google_only_pilot_required");
+  assert.equal(outcome.externalCalls.ghl, false);
 });
 
-test("an uncertain aggregate POST cannot be sent again", async () => {
+test("a GHL-only delivery and a repeat phrase make no aggregate POST", async () => {
   const store = createMemoryCapturedTestStore();
   let posts = 0;
   const adapter = createOnboardingGhlTestAdapter({
@@ -241,22 +224,21 @@ test("an uncertain aggregate POST cannot be sent again", async () => {
     world(),
     deps
   );
-  assert.equal(first.ok, true);
-  if (!first.ok) return;
-  assert.equal(first.run.status, "uncertain");
-  assert.equal(posts, 1);
+  assert.equal(first.ok, false);
+  if (first.ok) return;
+  assert.equal(first.error, "google_only_pilot_required");
+  assert.equal(posts, 0);
   const again = await runCapturedTestDelivery(
     request({
       requestId: "44444444-4444-4444-8444-444444444444",
       destinations: ["ghl_location_api"],
       confirmation: CONFIRM_REPEAT,
-      repeatOfTestRunId: first.run.id,
     }),
     world(),
     deps
   );
   assert.equal(again.ok, false);
   if (again.ok) return;
-  assert.equal(again.error, "repeat_blocked_uncertain");
-  assert.equal(posts, 1);
+  assert.equal(again.error, "google_only_pilot_required");
+  assert.equal(posts, 0);
 });

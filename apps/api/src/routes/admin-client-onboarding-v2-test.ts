@@ -7,6 +7,7 @@ import { CLIENT_PORTAL_KEY_HEADER } from "../lib/client-portal-auth.js";
 import { WORKSPACE_KEY_HEADER } from "../lib/workspace-auth.js";
 import {
   CAPTURED_TEST_BLOCKED_ON,
+  googleOnlyPilotExecutionGate,
   isCapturedTestEnabled,
   isOnboardingConfigEnabled,
   reconcileCapturedTestRun,
@@ -65,7 +66,7 @@ export const adminClientOnboardingV2TestRoutes: FastifyPluginAsync<CapturedTestR
     const clientAccountId = pathClient(request);
     const parsed = parseRunBody(request.body, clientAccountId, actorLabel(request));
     if (!parsed.ok) return reply.status(parsed.statusCode).send({ ok: false, error: parsed.error });
-    const flag = flagForKind(parsed.request.kind, env);
+    const flag = flagForKind(parsed.request, env);
     if (flag) return reply.status(flag.statusCode).send(flag.body);
     const world = await load(opts.loadWorld, clientAccountId, parsed.request.sourceLeadEventId ?? null);
     const outcome = await runCapturedTestDelivery(parsed.request, world, {
@@ -206,28 +207,17 @@ function actorLabel(request: FastifyRequest): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function flagForKind(kind: TestRunKind, env: NodeJS.ProcessEnv): { statusCode: number; body: Record<string, unknown> } | null {
-  if ((kind === "preview" || kind === "captured_event_replay") && !isOnboardingConfigEnabled(env)) {
-    return {
-      statusCode: 404,
-      body: {
-        ok: false,
-        error: "onboarding_config_disabled",
-        externalCalls: { providerWebhook: false, sheets: false, ghl: false },
-      },
-    };
-  }
-  if ((kind === "captured_event_delivery" || kind === "synthetic_delivery") && !isCapturedTestEnabled(env)) {
-    return {
-      statusCode: 404,
-      body: {
-        ok: false,
-        error: "captured_test_disabled",
-        externalCalls: { providerWebhook: false, sheets: false, ghl: false },
-      },
-    };
-  }
-  return null;
+function flagForKind(request: CapturedTestRequest, env: NodeJS.ProcessEnv): { statusCode: number; body: Record<string, unknown> } | null {
+  const gate = googleOnlyPilotExecutionGate(request, env);
+  if (!gate) return null;
+  return {
+    statusCode: gate.statusCode,
+    body: {
+      ok: false,
+      error: gate.error,
+      externalCalls: { providerWebhook: false, sheets: false, ghl: false },
+    },
+  };
 }
 
 async function load(

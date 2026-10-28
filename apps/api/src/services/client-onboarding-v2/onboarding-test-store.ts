@@ -7,7 +7,9 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 
 import { prisma } from "../../lib/db.js";
+import { assertGoogleOnlyReservation } from "./google-only-quarantine.js";
 import {
+  CONFIRM_ONE_GOOGLE_SHEETS_ROW,
   priorDeliveryBlock,
   type AttemptStatus,
   type CapturedTestAudit,
@@ -128,6 +130,12 @@ export function createPrismaCapturedTestStore(db: PrismaClient = prisma): Captur
               discrepancy: block.discrepancy,
               existing: null,
             };
+          }
+          if (blockInput.confirmation === CONFIRM_ONE_GOOGLE_SHEETS_ROW) {
+            const quarantine = await assertGoogleOnlyReservation(tx, blockInput.clientAccountId, blockInput.sourceLeadEventId);
+            if (!quarantine.ok) {
+              return { ok: false as const, statusCode: 409, error: quarantine.error, existing: null };
+            }
           }
           await insertRun(tx, run, audit, ready.sheet);
           return { ok: true as const };
@@ -397,6 +405,7 @@ function requestSnapshot(run: StoredTestRun, sheet: PlannedSheet | null): Prisma
     requestId: run.requestId,
     kind: run.kind,
     fingerprint: run.fingerprint,
+    confirmation: run.fingerprint.split("|").at(-1) ?? "",
     destinations: run.destinations,
     isolationMode: run.isolationMode,
     sheetsContract: sheet?.sheetsContract ?? null,

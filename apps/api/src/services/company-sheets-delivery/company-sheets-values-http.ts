@@ -59,10 +59,11 @@ async function readBody(response: Response): Promise<{ ok: true; json: unknown }
 }
 
 export async function getSheetValues(
-  input: { spreadsheetId: string; range: string; accessToken: string },
+  input: { spreadsheetId: string; range: string; accessToken: string; valueRenderOption?: "FORMULA" },
   fetchImpl: FetchLike = fetch
 ): Promise<{ ok: true; values: string[][] } | { ok: false; reason: GoogleSheetsHttpFailure }> {
-  const url = `${GOOGLE_SHEETS_SPREADSHEETS_URL}/${encodeURIComponent(input.spreadsheetId)}/values/${encodeURIComponent(input.range)}`;
+  const render = input.valueRenderOption === "FORMULA" ? "?valueRenderOption=FORMULA" : "";
+  const url = `${GOOGLE_SHEETS_SPREADSHEETS_URL}/${encodeURIComponent(input.spreadsheetId)}/values/${encodeURIComponent(input.range)}${render}`;
   let response: Response;
   try {
     response = await boundedFetch(fetchImpl, url, {

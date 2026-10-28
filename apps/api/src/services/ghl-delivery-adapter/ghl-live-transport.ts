@@ -318,8 +318,31 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function isRetriableStatus(status: number): boolean {
-  return status === 429 || (status >= 500 && status < 600);
+function isWriteMethod(method: string): boolean {
+  const normalized = method.trim().toUpperCase();
+  return normalized !== "GET" && normalized !== "HEAD";
+}
+
+/**
+ * A 429 is a rejection, so one retry is safe.
+ * A timeout or 5xx on a write can mean the first request still landed.
+ * Those writes are not retried. Idempotent reads may retry a 5xx or a transport error.
+ */
+export function shouldRetryGhlLiveAttempt(input: {
+  method: string;
+  attempt: number;
+  maxAttempts: number;
+  allowRetry: boolean;
+  status?: number;
+  transportError?: boolean;
+}): boolean {
+  if (!input.allowRetry || input.attempt >= input.maxAttempts) return false;
+  const write = isWriteMethod(input.method);
+  if (input.transportError) return !write;
+  const status = input.status ?? 0;
+  if (status === 429) return true;
+  if (status >= 500 && status < 600) return !write;
+  return false;
 }
 
 export async function ghlLiveJson(
@@ -392,7 +415,16 @@ export async function ghlLiveJson(
 
       const redactedResponse = redactGhlPayload(json ?? { raw: text.slice(0, 500) });
 
-      if (!res.ok && allowRetry && isRetriableStatus(res.status) && attempt < maxAttempts) {
+      if (
+        !res.ok &&
+        shouldRetryGhlLiveAttempt({
+          method,
+          attempt,
+          maxAttempts,
+          allowRetry,
+          status: res.status,
+        })
+      ) {
         await sleep(400 * attempt);
         continue;
       }
@@ -416,7 +448,15 @@ export async function ghlLiveJson(
         authMode: auth.authMode,
       };
     } catch (err) {
-      if (attempt < maxAttempts && allowRetry) {
+      if (
+        shouldRetryGhlLiveAttempt({
+          method,
+          attempt,
+          maxAttempts,
+          allowRetry,
+          transportError: true,
+        })
+      ) {
         await sleep(400 * attempt);
         continue;
       }

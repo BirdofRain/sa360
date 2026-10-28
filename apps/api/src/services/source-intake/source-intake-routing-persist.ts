@@ -15,6 +15,10 @@ import {
 import { hasDeliverableIdentity } from "./source-enrichment.service.js";
 import type { SourceLeadRoutingResult } from "./source-intake.types.js";
 import { persistLeadProofFromPayload } from "../lead-proof/lead-proof-ingest.service.js";
+import {
+  buildGhlInboundWorkflowPayload,
+  deliverGhlInboundWebhookFromIntake,
+} from "../ghl-outbound/ghl-inbound-workflow-delivery.js";
 
 /**
  * Shared source-intake routing + duplicate-risk + enrichment persistence.
@@ -22,7 +26,9 @@ import { persistLeadProofFromPayload } from "../lead-proof/lead-proof-ingest.ser
  * Used by both the LeadCapture.io and Facebook Lead Ads intake services so every source
  * flows through the identical existing pipeline: runRoutingDryRun (which persists the
  * RoutingDryRunDecision + lifecycle events), duplicate-risk evaluation, source enrichment,
- * and the SourceLeadEvent status transition. No GHL delivery is performed here.
+ * and the SourceLeadEvent status transition. Sheets scheduling stays inside the
+ * lead transaction. GHL inbound-webhook delivery runs only after that commit,
+ * behind its own flag, and a failure there does not roll the lead back.
  */
 export async function persistRoutingAndDuplicate(
   sourceEventId: string,
@@ -174,6 +180,25 @@ export async function persistRoutingAndDuplicate(
       error: err instanceof Error ? err.message : String(err),
     });
   }
+
+  await deliverGhlInboundWebhookFromIntake({
+    sourceLeadEventId: sourceEventId,
+    status,
+    clientAccountId: dryRun.destinationClientAccountId ?? null,
+    resolvedAt: now,
+    payload: buildGhlInboundWorkflowPayload({
+      sourceLeadEventId: sourceEventId,
+      clientAccountId: dryRun.destinationClientAccountId ?? "",
+      receivedAt,
+      contact: {
+        firstName: normalizedWithEnrichment.contact.first_name,
+        lastName: normalizedWithEnrichment.contact.last_name,
+        email: normalizedWithEnrichment.contact.email,
+        phone: normalizedWithEnrichment.contact.phone_e164 ?? normalizedWithEnrichment.contact.phone,
+      },
+      campaignId: normalizedWithEnrichment.attribution?.campaign_id,
+    }),
+  });
 
   return { routing, duplicateRiskJson: duplicateRisk, status, normalizedWithEnrichment };
 }

@@ -405,6 +405,7 @@ function requestSnapshot(run: StoredTestRun, sheet: PlannedSheet | null): Prisma
     requestId: run.requestId,
     kind: run.kind,
     fingerprint: run.fingerprint,
+    confirmation: run.fingerprint.split("|").at(-1) ?? "",
     destinations: run.destinations,
     isolationMode: run.isolationMode,
     sheetsContract: sheet?.sheetsContract ?? null,

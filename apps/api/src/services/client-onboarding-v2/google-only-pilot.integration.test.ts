@@ -401,7 +401,7 @@ describe("google-only pilot local fixtures", { skip: !runIntegration }, () => {
     assert.equal(book(productionSheet, sheetsFor(productionSheet)).appends.length, 0);
   });
 
-  it("keeps delivery off until both exact flags, then appends once to the test spreadsheet only", async () => {
+  it("keeps delivery off for unset flags and for a current intake shape when both flags are on", async () => {
     const closed = flags(false);
     assert.equal(isCapturedTestEnabled(closed), false);
     const store = createPrismaCapturedTestStore(db);
@@ -459,20 +459,13 @@ describe("google-only pilot local fixtures", { skip: !runIntegration }, () => {
         ghlAggregate: { async deliver() { ghlCalls.push("open"); throw new Error("ghl"); } },
       }
     );
-    assert.equal(sent.ok, true, sent.ok ? "" : `${sent.error} ${sent.detail ?? ""}`);
-    if (!sent.ok) return;
+    assert.equal(sent.ok, false);
+    if (sent.ok) return;
+    assert.equal(sent.error, "quarantine_not_registered");
     const testBook = book(testSheet, sheetsFor(testSheet));
-    assert.equal(
-      testBook.appends.length,
-      1,
-      JSON.stringify({ status: sent.run.status, attempts: sent.run.attempts, books: [...books.keys()] })
-    );
-    assert.equal(testBook.appends.length, 1);
-    assert.equal(testBook.appends[0]?.[0]?.length, 35);
-    assert.equal(testBook.appends[0]?.[0]?.[31]?.startsWith("onboarding-test:"), true);
+    assert.equal(testBook.appends.length, 0);
     assert.equal(book(productionSheet, sheetsFor(productionSheet)).appends.length, 0);
     assert.equal(ghlCalls.length, 0);
-    assert.equal(sent.externalCalls.providerWebhook, false);
     const duplicate = await runCapturedTestDelivery(
       {
         requestId,
@@ -487,10 +480,10 @@ describe("google-only pilot local fixtures", { skip: !runIntegration }, () => {
       world,
       { env: open, store, sheets: port, execution: "injected_fakes" }
     );
-    assert.equal(duplicate.ok, true);
-    if (!duplicate.ok) return;
-    assert.equal(duplicate.duplicateRequest, true);
-    assert.equal(testBook.appends.length, 1);
+    assert.equal(duplicate.ok, false);
+    if (duplicate.ok) return;
+    assert.equal(duplicate.error, "quarantine_not_registered");
+    assert.equal(testBook.appends.length, 0);
     const customerWorld = await loadCapturedTestWorld(clientId, customerEventId, db);
     const customerOnly = await runCapturedTestDelivery(
       {
@@ -508,8 +501,8 @@ describe("google-only pilot local fixtures", { skip: !runIntegration }, () => {
     );
     assert.equal(customerOnly.ok, false);
     if (customerOnly.ok) return;
-    assert.equal(customerOnly.error, "event_not_operator_owned");
-    assert.equal(testBook.appends.length, 1);
+    assert.equal(customerOnly.error, "quarantine_not_registered");
+    assert.equal(testBook.appends.length, 0);
     const customer = await runCapturedTestDelivery(
       {
         requestId: randomUUID(),
@@ -534,7 +527,7 @@ describe("google-only pilot local fixtures", { skip: !runIntegration }, () => {
     assert.equal(customer.ok, false);
     if (customer.ok) return;
     assert.equal(customer.error, "google_only_pilot_required");
-    assert.equal(testBook.appends.length, 1);
+    assert.equal(testBook.appends.length, 0);
     assert.equal(ghlCalls.length, 0);
     const destination = await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId: clientId } });
     assert.equal(destination.spreadsheetId, productionSheet);
@@ -544,12 +537,8 @@ describe("google-only pilot local fixtures", { skip: !runIntegration }, () => {
     assert.equal(await db.leadInventoryItem.count({ where: { sourceLeadEventId: operatorEventId } }), 0);
     assert.equal(await db.fulfillmentOutbox.count({ where: { sourceLeadEventId: operatorEventId } }), 0);
     assert.equal(await db.companySheetsDispatchIntent.count({ where: { clientAccountId: clientId } }), 0);
-    const job = await db.companySheetsDeliveryJob.findFirstOrThrow({
-      where: { clientAccountId: clientId, kind: "onboarding_captured_test" },
-    });
-    assert.equal(job.spreadsheetId, testSheet);
-    assert.equal(job.idempotencyKey.startsWith("lead:"), false);
-    assert.equal(job.idempotencyKey.startsWith("campaign:"), false);
+    assert.equal(await db.companySheetsDeliveryJob.count({ where: { clientAccountId: clientId, kind: "onboarding_captured_test" } }), 0);
+    assert.equal(await db.clientOnboardingTestRun.count({ where: { clientAccountId: clientId, kind: "captured_event_delivery" } }), 0);
     const preflight = await readGoogleOnlyPilotPreflight(clientId, db, 8_000);
     const decision = decideGoogleOnlyPilot(preflight);
     assert.equal(decision.append, "no_go");

@@ -13,7 +13,6 @@ import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
 import {
   CONFIRM_ONE_GOOGLE_SHEETS_ROW,
   runCapturedTestDelivery,
-  type CapturedTestOutcome,
   type CapturedTestRequest,
   type CapturedTestWorld,
   type SheetsAppendOutcome,
@@ -68,89 +67,31 @@ describe("captured test reservation across two Prisma clients", { skip: !runInte
     await rightDb.$disconnect();
   });
 
-  it("lets one sheets reservation and one GHL reservation execute", async () => {
+  it("refuses concurrent forged intake before any sheets reservation", async () => {
     const raceEvent = await createEvent(leftDb, clientId, eventIds);
-    const sheets = heldSheets();
+    const sheets = openSheets();
     const left = createPrismaCapturedTestStore(leftDb);
     const right = createPrismaCapturedTestStore(rightDb);
     const eventsBefore = await leftDb.sourceLeadEvent.count({ where: { clientAccountIdResolved: clientId } });
 
-    const pendingA = deliver(left, sheets.port, undefined, clientId, raceEvent, `req_sheets_a_${suffix}`);
-    const pendingB = deliver(right, sheets.port, undefined, clientId, raceEvent, `req_sheets_b_${suffix}`);
-    const earlySheets = await firstToSettle(pendingA, pendingB);
-    await untilCount(() => sheets.appends, 1);
-    assert.equal(sheets.appends, 1);
-    assert.equal(earlySheets.ok, false);
-    sheets.release();
-    const [first, second] = await Promise.all([pendingA, pendingB]);
-    const executed = [first, second].filter(executedNow);
-    const blocked = [first, second].filter((outcome) => !outcome.ok);
-    assert.equal(executed.length, 1);
-    assert.equal(blocked.length, 1);
-    assert.equal(blocked[0]?.ok, false);
-    if (blocked[0]?.ok !== false) return;
-    assert.ok(blocked[0].error === "repeat_blocked_in_flight" || blocked[0].error === "repeat_of_required");
-    assert.equal(sheets.appends, 1);
-
-    const winner = executed[0];
-    assert.equal(winner?.ok, true);
-    if (!winner?.ok) return;
-    const repeated = await deliver(right, sheets.port, undefined, clientId, raceEvent, winner.run.requestId);
-    assert.equal(repeated.ok, true);
-    if (!repeated.ok) return;
-    assert.equal(repeated.duplicateRequest, true);
-    assert.equal(repeated.externalCallsThisRequest.sheets, false);
-    assert.equal(sheets.appends, 1);
-
-    const sheetsRuns = await leftDb.clientOnboardingTestRun.findMany({
-      where: { clientAccountId: clientId, sourceLeadEventId: raceEvent },
-      include: { attempts: { include: { keys: true } } },
-    });
-    assert.equal(sheetsRuns.length, 1);
-    assert.equal(sheetsRuns[0]?.status, "succeeded");
-    assert.equal(sheetsRuns[0]?.attempts.length, 1);
-    assert.equal(sheetsRuns[0]?.attempts[0]?.destination, "google_sheets");
-    assert.equal(sheetsRuns[0]?.attempts[0]?.externalCallExecuted, true);
-    assert.equal(sheetsRuns[0]?.attempts[0]?.downstreamExecuted, false);
-    assert.ok(sheetsRuns[0]?.attempts[0]?.keys.some((key) => key.idempotencyKey.endsWith(":sheets")));
-    const sheetsAudits = await leftDb.clientOnboardingV2AuditEvent.count({
-      where: { clientAccountId: clientId, sourceLeadEventId: raceEvent, action: "execute" },
-    });
-    assert.equal(sheetsAudits, 1);
-
-    const sharedA = await createEvent(leftDb, clientId, eventIds);
-    const sharedB = await createEvent(leftDb, clientId, eventIds);
-    const separate = openSheets();
-    const [sharedLeft, sharedRight] = await Promise.all([
-      deliver(left, separate.port, undefined, clientId, sharedA, `req_shared_a_${suffix}`),
-      deliver(right, separate.port, undefined, clientId, sharedB, `req_shared_b_${suffix}`),
+    const [first, second] = await Promise.all([
+      deliver(left, sheets.port, undefined, clientId, raceEvent, `req_sheets_a_${suffix}`),
+      deliver(right, sheets.port, undefined, clientId, raceEvent, `req_sheets_b_${suffix}`),
     ]);
-    assert.equal(sharedLeft.ok, true);
-    assert.equal(sharedRight.ok, true);
-    assert.equal(separate.appends, 2);
-    const sharedRuns = await leftDb.clientOnboardingTestRun.count({
-      where: { clientAccountId: clientId, sourceLeadEventId: { in: [sharedA, sharedB] } },
-    });
-    assert.equal(sharedRuns, 2);
+    assert.equal(sheets.appends, 0);
+    assert.equal(first.ok, false);
+    assert.equal(second.ok, false);
+    if (first.ok || second.ok) return;
+    assert.equal(first.error, "quarantine_not_registered");
+    assert.equal(second.error, "quarantine_not_registered");
+    assert.equal(await leftDb.clientOnboardingTestRun.count({ where: { clientAccountId: clientId, sourceLeadEventId: raceEvent } }), 0);
+    assert.equal(await leftDb.companySheetsDeliveryJob.count({ where: { clientAccountId: clientId } }), 0);
 
-    const duplicateA = await createEvent(leftDb, clientId, eventIds);
-    const duplicateB = await createEvent(leftDb, clientId, eventIds);
-    const duplicateSheets = heldSheets();
-    const duplicateRequestId = `req_same_${suffix}`;
-    const duplicateLeft = deliver(left, duplicateSheets.port, undefined, clientId, duplicateA, duplicateRequestId);
-    const duplicateRight = deliver(right, duplicateSheets.port, undefined, clientId, duplicateB, duplicateRequestId);
-    const earlyDuplicate = await firstToSettle(duplicateLeft, duplicateRight);
-    await untilCount(() => duplicateSheets.appends, 1);
-    assert.equal(duplicateSheets.appends, 1);
-    assert.equal(executedNow(earlyDuplicate), false);
-    duplicateSheets.release();
-    const duplicateOutcomes = await Promise.all([duplicateLeft, duplicateRight]);
-    assert.equal(duplicateOutcomes.filter(executedNow).length, 1);
-    assert.equal(duplicateSheets.appends, 1);
-    const duplicateRuns = await leftDb.clientOnboardingTestRun.count({
-      where: { clientAccountId: clientId, requestId: duplicateRequestId },
-    });
-    assert.equal(duplicateRuns, 1);
+    const repeated = await deliver(right, sheets.port, undefined, clientId, raceEvent, `req_sheets_a_${suffix}`);
+    assert.equal(repeated.ok, false);
+    if (repeated.ok) return;
+    assert.equal(repeated.error, "quarantine_not_registered");
+    assert.equal(sheets.appends, 0);
 
     const ghlEvent = await createEvent(leftDb, clientId, eventIds);
     const ghl = heldGhl();
@@ -166,38 +107,11 @@ describe("captured test reservation across two Prisma clients", { skip: !runInte
       where: { clientAccountId: clientId, sourceLeadEventId: ghlEvent },
     });
     assert.equal(ghlRuns.length, 0);
-    assert.equal(await leftDb.sourceLeadEvent.count({ where: { clientAccountIdResolved: clientId } }), eventsBefore + 5);
+    assert.equal(await leftDb.sourceLeadEvent.count({ where: { clientAccountIdResolved: clientId } }), eventsBefore + 1);
     const account = await rightDb.clientAccount.findUniqueOrThrow({ where: { clientAccountId: clientId } });
     assert.equal(account.status, "active");
   });
 });
-
-function executedNow(outcome: CapturedTestOutcome): boolean {
-  if (!outcome.ok || outcome.duplicateRequest) return false;
-  return outcome.externalCallsThisRequest.sheets || outcome.externalCallsThisRequest.ghl;
-}
-
-async function untilCount(read: () => number, expected: number) {
-  const start = Date.now();
-  while (read() < expected && Date.now() - start < 2000) {
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-}
-
-async function firstToSettle<T>(left: Promise<T>, right: Promise<T>): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      left,
-      right,
-      new Promise<T>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("timed out waiting for the blocked reservation")), 8000);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
 
 async function createEvent(db: PrismaClient, clientId: string, eventIds: string[]): Promise<string> {
   const lead = await db.sourceLeadEvent.create({
@@ -367,27 +281,6 @@ function openSheets() {
     port: {
       async append(): Promise<SheetsAppendOutcome> {
         appends += 1;
-        return { status: "succeeded", rowsWritten: 1, externalCallExecuted: true };
-      },
-    },
-  };
-}
-
-function heldSheets() {
-  let appends = 0;
-  let release = () => {};
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  return {
-    get appends() {
-      return appends;
-    },
-    release,
-    port: {
-      async append(): Promise<SheetsAppendOutcome> {
-        appends += 1;
-        await gate;
         return { status: "succeeded", rowsWritten: 1, externalCallExecuted: true };
       },
     },

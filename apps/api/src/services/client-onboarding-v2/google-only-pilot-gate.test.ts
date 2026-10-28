@@ -127,7 +127,7 @@ test("the pilot flag enables only on the exact string true", () => {
   assert.equal(isGoogleOnlyPilotEnabled({ SA360_CLIENT_ONBOARDING_GOOGLE_ONLY_PILOT_ENABLED: "true" }), true);
 });
 
-test("only both flags and the one-shot Google request can reach the sheets writer", async () => {
+test("no flag combination lets a current intake shape reach the sheets writer", async () => {
   for (const [captured, pilot] of matrix) {
     for (const [phraseName, confirmation] of phrases) {
       for (const [destinationName, destinationList] of destinations) {
@@ -148,16 +148,13 @@ test("only both flags and the one-shot Google request can reach the sheets write
             historicalDataRows: "empty" as const,
           }),
         });
-        const authorized = captured && pilot && phraseName === "one-shot" && destinationName === "sheets";
-        if (!authorized) {
-          assert.equal(outcome.ok, false, `${captured}/${pilot} ${phraseName} ${destinationName}`);
-          assert.equal(sheets.calls.length, 0, `${captured}/${pilot} ${phraseName} ${destinationName}`);
-          assert.equal(ghl.calls.length, 0, `${captured}/${pilot} ${phraseName} ${destinationName}`);
-        } else {
-          assert.equal(outcome.ok, true, outcome.ok ? "" : outcome.error);
-          assert.equal(sheets.calls.length, 1);
-          assert.equal(ghl.calls.length, 0);
-        }
+        const label = `${captured}/${pilot} ${phraseName} ${destinationName}`;
+        assert.equal(outcome.ok, false, label);
+        if (outcome.ok) continue;
+        const exclusive = captured && pilot && phraseName === "one-shot" && destinationName === "sheets";
+        assert.equal(outcome.error, exclusive ? "quarantine_not_registered" : captured ? "google_only_pilot_required" : "captured_test_disabled", label);
+        assert.equal(sheets.calls.length, 0, label);
+        assert.equal(ghl.calls.length, 0, label);
       }
     }
   }
@@ -192,7 +189,9 @@ test("synthetic delivery and a changed replay phrase make no external call", asy
       historicalDataRows: "empty" as const,
     }),
   });
-  assert.equal(first.ok, true);
+  assert.equal(first.ok, false);
+  if (first.ok) return;
+  assert.equal(first.error, "quarantine_not_registered");
   const replay = await runCapturedTestDelivery({ ...firstRequest, confirmation: CONFIRM_DELIVER }, world(), {
     env,
     store,
@@ -201,8 +200,8 @@ test("synthetic delivery and a changed replay phrase make no external call", asy
   });
   assert.equal(replay.ok, false);
   if (replay.ok) return;
-  assert.equal(replay.error, "revision_conflict");
-  assert.equal(sheets.calls.length, 1);
+  assert.equal(replay.error, "google_only_pilot_required");
+  assert.equal(sheets.calls.length, 0);
 });
 
 test("a mounted HTTP call uses the same gate", async () => {

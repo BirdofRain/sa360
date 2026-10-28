@@ -38,6 +38,7 @@ import {
 import { findPublishedColumnMap } from "../client-onboarding-v2/column-maps.js";
 import { loadAuthorizedAgedDeliverySet } from "./company-sheets-aged-authority.js";
 import { getSpreadsheetMetadata, getWorksheetGridBounds } from "../google-sheets/google-sheets-http-client.js";
+import { authorizeGoogleOnlyAppend } from "../client-onboarding-v2/google-only-quarantine.js";
 import { classifyExactV3Grid, gridBoundsFrom, gridRange, type GridProof } from "../client-onboarding-v2/onboarding-test-grid.js";
 import { getCompanyDriveFile } from "../company-google/company-google-drive-http.js";
 import { getValidCompanyGoogleAccessToken } from "../company-google/company-google-access-token.service.js";
@@ -92,7 +93,8 @@ export type CompanySheetsDeliveryDeps = CompanySheetsDeps & {
   controlledCampaignTest?: boolean;
   /**
    * Executes one onboarding_captured_test job while the global execution flag
-   * stays off. It does not execute lead, aged, canary, or campaign_test jobs.
+   * stays off. It does not authorize that job and does not execute lead, aged,
+   * canary, or campaign_test jobs.
    */
   controlledOnboardingCapturedTest?: boolean;
 };
@@ -856,6 +858,10 @@ export async function executeCompanySheetsDeliveryJob(
   if (!current) return fail("job_not_found", 404);
   if (current.status === "uncertain") return fail("uncertain", 409);
   if (current.status === "succeeded") return fail("already_succeeded", 409);
+  if (current.kind === ONBOARDING_CAPTURED_TEST_KIND) {
+    const reserved = await reservedOnboardingExecution(db, env, current);
+    if (!reserved.ok) return fail(reserved.error, reserved.error === "tenant_mismatch" ? 403 : 409);
+  }
   if (current.status === "running") {
     const withinLease = current.startedAt != null && current.startedAt >= stale;
     if (withinLease) return fail("already_running", 409);
@@ -1354,6 +1360,11 @@ async function inspectSheetHeader(
   return { ok: true, action: "present", sampleRow: second ?? [] };
 }
 
+/**
+ * Formula-aware exact-v3 proof. Approval-time emptiness is not reused.
+ * Google does not give SA360 an atomic worksheet lock; CompanySheetsWorksheetLock
+ * only serializes SA360 jobs. An external editor can still write after this read.
+ */
 async function onboardingGridProof(
   job: CompanySheetsDeliveryJob,
   worksheet: { title: string; rowCount?: number; columnCount?: number },
@@ -1876,6 +1887,23 @@ function appendUncertainty(job: CompanySheetsDeliveryJob): "timeout" | "unknown"
   return "unknown";
 }
 
+async function reservedOnboardingExecution(
+  db: PrismaClient,
+  env: NodeJS.ProcessEnv,
+  job: CompanySheetsDeliveryJob
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const testRunId = /^onboarding-test:([^\s:]+):sheets$/.exec(job.idempotencyKey)?.[1];
+  if (!testRunId || !job.sourceLeadEventId) return { ok: false, error: "test_run_not_reserved" };
+  return authorizeGoogleOnlyAppend(db, env, {
+    clientAccountId: job.clientAccountId,
+    sourceLeadEventId: job.sourceLeadEventId,
+    testRunId,
+    spreadsheetId: job.spreadsheetId,
+    worksheetId: job.worksheetId,
+    idempotencyKey: job.idempotencyKey,
+  });
+}
+
 async function onboardingCapturedTestDrift(
   db: PrismaClient,
   job: CompanySheetsDeliveryJob
@@ -2039,6 +2067,15 @@ export async function enqueueOnboardingCapturedTestJob(
   const connection = await findCompanyGoogleConnection(db);
   if (!connection || connection.status !== "connected") return refused("google_not_connected", 409);
   if (destination && destination.companyConnectionId !== connection.id) return refused("company_connection_changed");
+  const reserved = await authorizeGoogleOnlyAppend(db, env, {
+    clientAccountId,
+    sourceLeadEventId: request.sourceLeadEventId,
+    testRunId: request.testRunId,
+    spreadsheetId: approved.spreadsheetId,
+    worksheetId: approved.worksheetId,
+    idempotencyKey: key,
+  });
+  if (!reserved.ok) return refused(reserved.error, reserved.error === "tenant_mismatch" ? 403 : 409);
   const existing = await db.companySheetsDeliveryJob.findUnique({ where: { idempotencyKey: key } });
   if (existing) {
     if (

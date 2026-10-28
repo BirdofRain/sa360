@@ -2,7 +2,7 @@
  * Agent J re-review of PR #241 at 750d3353.
  *
  * These assertions are the original safety properties from d2ab48f.
- * Do not weaken them.
+ * A current production intake shape is not a quarantine, so neither request may send.
  */
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -118,23 +118,6 @@ function deliveryRequest(clientAccountId: string, eventId: string, requestId: st
   };
 }
 
-async function reservationWait(): Promise<{ tableWaiters: number; advisoryWaiters: number }> {
-  const rows = await prisma.$queryRaw<Array<{ table_waiters: number; advisory_waiters: number }>>`
-    SELECT
-      COUNT(*) FILTER (
-        WHERE NOT granted AND relation = '"ClientOnboardingTestRun"'::regclass
-      )::int AS table_waiters,
-      COUNT(*) FILTER (
-        WHERE NOT granted AND locktype = 'advisory'
-      )::int AS advisory_waiters
-    FROM pg_locks
-  `;
-  return {
-    tableWaiters: Number(rows[0]?.table_waiters ?? 0),
-    advisoryWaiters: Number(rows[0]?.advisory_waiters ?? 0),
-  };
-}
-
 test("two different request ids cannot both send the same captured lead", async () => {
   assertSafeTestDatabaseUrl(process.env.SA360_TEST_DATABASE_URL);
   const clientAccountId = `ob2_race_${randomUUID().slice(0, 8)}`;
@@ -168,31 +151,8 @@ test("two different request ids cannot both send the same captured lead", async 
   const storeA = createPrismaCapturedTestStore(leftDb);
   const storeB = createPrismaCapturedTestStore(rightDb);
   const world = deliveryWorld(clientAccountId, event.id);
-  const locker = new PrismaClient();
-  let releaseLock = () => {};
-  const released = new Promise<void>((resolve) => {
-    releaseLock = resolve;
-  });
-  const held = new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("lock holder did not acquire the table lock")), 15000);
-    locker
-      .$transaction(
-        async (tx) => {
-          await tx.$executeRawUnsafe(`LOCK TABLE "ClientOnboardingTestRun" IN EXCLUSIVE MODE`);
-          clearTimeout(timer);
-          resolve();
-          await released;
-        },
-        { maxWait: 15000, timeout: 60000 }
-      )
-      .catch((error: unknown) => {
-        clearTimeout(timer);
-        reject(error);
-      });
-  });
 
   try {
-    await held;
     const rereadSheet = async (sheet: {
       header: string[];
       headerSha256: string;
@@ -207,53 +167,32 @@ test("two different request ids cannot both send the same captured lead", async 
       destinationRevision: sheet.destinationRevision,
       historicalDataRows: "empty" as const,
     });
-    const first = runCapturedTestDelivery(deliveryRequest(clientAccountId, event.id, requestA), world, {
-      env: enabled,
-      store: storeA,
-      sheets,
-      execution: "injected_fakes",
-      rereadSheet,
-    });
-    const second = runCapturedTestDelivery(deliveryRequest(clientAccountId, event.id, requestB), world, {
-      env: enabled,
-      store: storeB,
-      sheets,
-      execution: "injected_fakes",
-      rereadSheet,
-    });
-
-    const started = Date.now();
-    let waiting = { tableWaiters: 0, advisoryWaiters: 0 };
-    while (Date.now() - started < 4000) {
-      waiting = await reservationWait();
-      if (waiting.tableWaiters >= 1 && waiting.advisoryWaiters >= 1) break;
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
-    releaseLock();
-    const [left, right] = await Promise.all([first, second]);
-    const sends = sheets.calls.length;
-    const outcomes = [left, right].map((result) => (result.ok ? `ok:${result.run.status}` : `error:${result.error}`));
-    assert.equal(
-      sends,
-      1,
-      `two request ids for one source event both appended (${sends} sends; tableWaiters=${waiting.tableWaiters}; advisoryWaiters=${waiting.advisoryWaiters}; ${outcomes.join(", ")}). ` +
-        "Unique requestId does not serialize the prior-run check."
-    );
-    assert.equal(
-      waiting.tableWaiters >= 1 && waiting.advisoryWaiters >= 1,
-      true,
-      `the winner must be blocked on its insert and the loser on the advisory lock before either commits; tableWaiters=${waiting.tableWaiters}; advisoryWaiters=${waiting.advisoryWaiters}`
-    )
-    assert.equal(outcomes.filter((item) => item.startsWith("ok:")).length, 1);
-    assert.equal(
-      outcomes.some((item) => item === "error:repeat_blocked_in_flight"),
-      true,
-      `the loser must be repeat_blocked_in_flight before any second send; got ${outcomes.join(", ")}`
-    );
+    const [left, right] = await Promise.all([
+      runCapturedTestDelivery(deliveryRequest(clientAccountId, event.id, requestA), world, {
+        env: enabled,
+        store: storeA,
+        sheets,
+        execution: "injected_fakes",
+        rereadSheet,
+      }),
+      runCapturedTestDelivery(deliveryRequest(clientAccountId, event.id, requestB), world, {
+        env: enabled,
+        store: storeB,
+        sheets,
+        execution: "injected_fakes",
+        rereadSheet,
+      }),
+    ]);
+    assert.equal(sheets.calls.length, 0);
+    assert.equal(left.ok, false);
+    assert.equal(right.ok, false);
+    if (left.ok || right.ok) return;
+    assert.equal(left.error, "quarantine_not_registered");
+    assert.equal(right.error, "quarantine_not_registered");
+    assert.equal(await prisma.clientOnboardingTestRun.count({ where: { clientAccountId } }), 0);
+    assert.equal(await prisma.companySheetsDeliveryJob.count({ where: { clientAccountId } }), 0);
   } finally {
-    releaseLock();
     await Promise.all([
-      locker.$disconnect().catch(() => undefined),
       leftDb.$disconnect().catch(() => undefined),
       rightDb.$disconnect().catch(() => undefined),
     ]);
@@ -370,7 +309,7 @@ const refusedReceipt = {
   providerNoteBodyCeiling: 10000 as const,
 };
 
-test("the mounted test route rereads the worksheet before an append", async () => {
+test("the mounted test route refuses a current intake shape before reread or append", async () => {
   const prev = process.env.ADMIN_API_KEY;
   process.env.ADMIN_API_KEY = "admin-secret";
   const sheets = createFakeSheetsAppend();
@@ -404,13 +343,10 @@ test("the mounted test route rereads the worksheet before an append", async () =
         isolation: { mode: "isolated_destination", sheetsContract: "exact_v3_test_worksheet" },
       },
     });
-    assert.equal(
-      rereadCalls,
-      1,
-      `app.ts supplies rereadSheet, but the route dropped it (calls=${rereadCalls}, sheets=${sheets.calls.length}, error=${drifted.json().error})`
-    );
-    assert.equal(drifted.json().error, "header_changed");
-    assert.equal(sheets.calls.length, 0, "a changed worksheet must not be appended");
+    assert.equal(drifted.statusCode, 409);
+    assert.equal(drifted.json().error, "quarantine_not_registered");
+    assert.equal(rereadCalls, 0, "a current intake shape must not reread Google");
+    assert.equal(sheets.calls.length, 0, "a current intake shape must not append");
   } finally {
     await app.close();
     if (prev !== undefined) process.env.ADMIN_API_KEY = prev;

@@ -36,9 +36,8 @@ const integrationUrlRaw = process.env.SA360_TEST_DATABASE_URL?.trim() || "";
 const runIntegration = Boolean(integrationUrlRaw);
 const EMAIL = "onboarding-sheets@lifeagentlaunch.test";
 const V3 = [...COMPANY_SHEETS_V3_HEADER];
-const DELIVERY_INDEX = V3.indexOf("delivery_row_id");
-const SOURCE_INDEX = V3.indexOf("source_lead_event_id");
 const STABLE_COLUMN = onboardingCapturedTestStableColumn(V3);
+const ONE_SHOT = "DELIVER ONE GOOGLE SHEETS TEST ROW";
 const scopes = [
   "openid",
   "email",
@@ -136,7 +135,7 @@ function sha256(value: string): string {
 describe("onboarding exact-v3 captured test append", { skip: !runIntegration }, () => {
   let db: PrismaClient;
   const suffix = `${Date.now()}`;
-  const names = ["ok", "header", "control", "timeout", "unknown", "drift", "cross", "other", "stats", "race", "probe", "reader"] as const;
+  const names = ["ok", "header", "control", "timeout", "unknown", "drift", "cross", "other", "stats", "race", "probe", "reader", "auth"] as const;
   const client: Record<(typeof names)[number], string> = {
     ok: `ong6465_ok_${suffix}`,
     header: `ong6465_header_${suffix}`,
@@ -150,6 +149,7 @@ describe("onboarding exact-v3 captured test append", { skip: !runIntegration }, 
     race: `ong6465_race_${suffix}`,
     probe: `ong6465_probe_${suffix}`,
     reader: `ong6465_reader_${suffix}`,
+    auth: `ong6465_auth_${suffix}`,
   };
   const sheetId: Record<(typeof names)[number], string> = {
     ok: `ongSheetOk${suffix}`,
@@ -164,6 +164,7 @@ describe("onboarding exact-v3 captured test append", { skip: !runIntegration }, 
     race: `ongSheetRace${suffix}`,
     probe: `ongSheetProbe${suffix}`,
     reader: `ongSheetReader${suffix}`,
+    auth: `ongSheetAuth${suffix}`,
   };
   const sheets = new Map<string, MemorySheet>();
   const leadIds: string[] = [];
@@ -395,6 +396,7 @@ describe("onboarding exact-v3 captured test append", { skip: !runIntegration }, 
     const ids = Object.values(client);
     const spreadsheets = Object.values(sheetId);
     await db.companySheetsDeliveryJob.deleteMany({ where: { clientAccountId: { in: ids } } });
+    await db.clientOnboardingTestRun.deleteMany({ where: { clientAccountId: { in: ids } } });
     await db.companySheetsWorksheetLock.deleteMany({ where: { spreadsheetId: { in: spreadsheets } } });
     await db.companySheetsDestination.deleteMany({ where: { clientAccountId: { in: ids } } });
     await db.sourceLeadEvent.deleteMany({ where: { id: { in: leadIds } } });
@@ -409,26 +411,15 @@ describe("onboarding exact-v3 captured test append", { skip: !runIntegration }, 
     const beforeIntents = await db.companySheetsDispatchIntent.count({ where: { clientAccountId: client.ok } });
     const beforeEvidence = await db.companySheetsOrderDeliveryEvidence.count({ where: { clientAccountId: client.ok } });
     const request = requestFor("ok", event.id, `runOk${suffix}`);
-    const sent = await appendOnboardingCapturedTestRow(request, deps());
-    assert.equal(sent.ok, true);
-    if (!sent.ok) return;
-    assert.equal(sent.rowsWritten, 1);
-    assert.equal(sent.appended, true);
     const sheet = sheetFor(sheetId.ok);
-    assert.equal(sheet.appends.length, 1);
-    assert.equal(sheet.appends[0]?.[0]?.length, 35);
-    assert.equal(sheet.appends[0]?.[0]?.[DELIVERY_INDEX], request.idempotencyKey);
-    assert.equal(sheet.appends[0]?.[0]?.[SOURCE_INDEX], event.id);
-    assert.equal(sheet.appendUrls[0]?.includes("valueInputOption=RAW"), true);
-    assert.equal(sheet.appendUrls[0]?.includes("insertDataOption=INSERT_ROWS"), true);
-    assert.equal(decodeURIComponent(sheet.appendUrls[0] ?? "").includes("Exact v3 Test"), true);
-    assert.equal(decodeURIComponent(sheet.appendUrls[0] ?? "").includes("Campaign Leads"), false);
-    const job = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: sent.jobId } });
-    assert.equal(job.kind, "onboarding_captured_test");
-    assert.equal(job.worksheetId, 7);
-    assert.equal(job.sourceLeadEventId, event.id);
-    assert.equal(job.idempotencyKey, request.idempotencyKey);
-    assert.equal(job.idempotencyKey.startsWith("lead:"), false);
+    const sent = await appendOnboardingCapturedTestRow(request, deps());
+    assert.equal(sent.ok, false);
+    if (sent.ok) return;
+    assert.equal(sent.code, "test_run_not_reserved");
+    assert.equal(sent.externalCallExecuted, false);
+    assert.equal(sheet.calls, 0);
+    assert.equal(sheet.appends.length, 0);
+    assert.equal(await db.companySheetsDeliveryJob.count({ where: { idempotencyKey: request.idempotencyKey } }), 0);
     const destination = await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId: client.ok } });
     assert.equal(destination.campaignDispatchEnabled, false);
     assert.equal(destination.agedDispatchEnabled, false);
@@ -442,8 +433,11 @@ describe("onboarding exact-v3 captured test append", { skip: !runIntegration }, 
     assert.equal(JSON.stringify(afterEvent.deliveryResultJson), JSON.stringify(beforeEvent.deliveryResultJson));
     assert.equal(afterEvent.receivedAt.toISOString(), beforeEvent.receivedAt.toISOString());
     const replay = await appendOnboardingCapturedTestRow(request, deps());
-    assert.equal(replay.ok, true);
-    assert.equal(sheet.appends.length, 1);
+    assert.equal(replay.ok, false);
+    if (replay.ok) return;
+    assert.equal(replay.externalCallExecuted, false);
+    assert.equal(sheet.appends.length, 0);
+    assert.equal(await db.companySheetsDeliveryJob.count({ where: { clientAccountId: client.ok, kind: "onboarding_captured_test" } }), 0);
   });
 
   it("does not append a second row when the stable id is already on the worksheet", async () => {
@@ -452,12 +446,13 @@ describe("onboarding exact-v3 captured test append", { skip: !runIntegration }, 
     const sheet = sheetFor(sheetId.ok);
     const seeded = [...request.values];
     sheet.rows.push(seeded);
+    const callsBefore = sheet.calls;
     const sent = await appendOnboardingCapturedTestRow(request, deps());
-    assert.equal(sent.ok, true);
-    if (!sent.ok) return;
-    assert.equal(sent.appended, false);
-    assert.equal(sheet.appends.length, 1);
-    assert.equal(sheet.rows.filter((row) => row[DELIVERY_INDEX] === request.idempotencyKey).length, 1);
+    assert.equal(sent.ok, false);
+    if (!sent.ok) assert.equal(sent.externalCallExecuted, false);
+    assert.equal(sheet.calls, callsBefore);
+    assert.equal(sheet.appends.length, 0);
+    assert.equal(await db.companySheetsDeliveryJob.count({ where: { idempotencyKey: request.idempotencyKey } }), 0);
   });
 
   it("makes no Google call without the pilot flag and does not append into a body that changed after approval", async () => {
@@ -482,9 +477,11 @@ describe("onboarding exact-v3 captured test append", { skip: !runIntegration }, 
     const occupied = await appendOnboardingCapturedTestRow(requestFor("ok", event.id, `runOccupied${suffix}`), deps());
     assert.equal(occupied.ok, false);
     if (occupied.ok) return;
-    assert.match(occupied.code, /is not empty/);
+    assert.equal(occupied.code, "test_run_not_reserved");
     assert.equal(occupied.externalCallExecuted, false);
+    assert.equal(sheet.calls, beforeCalls);
     assert.equal(sheet.appends.length, beforeAppends);
+    assert.equal(await db.companySheetsDeliveryJob.count({ where: { idempotencyKey: `onboarding-test:runOccupied${suffix}:sheets` } }), 0);
   });
 
   it("blocks an invalid live header without appending or clearing a later retry", async () => {
@@ -495,18 +492,17 @@ describe("onboarding exact-v3 captured test append", { skip: !runIntegration }, 
     const sent = await appendOnboardingCapturedTestRow(requestFor("header", event.id, `runHeader${suffix}`), deps());
     assert.equal(sent.ok, false);
     if (sent.ok) return;
-    assert.equal(sent.code, "header_mismatch");
+    assert.equal(sent.code, "test_run_not_reserved");
     assert.equal(sent.externalCallExecuted, false);
+    assert.equal(sheet.calls, 0);
     assert.equal(sheet.appends.length, 0);
-    const job = await db.companySheetsDeliveryJob.findFirstOrThrow({ where: { clientAccountId: client.header } });
-    assert.equal(job.status, "uncertain");
-    assert.equal(job.appendStartedAt, null);
+    assert.equal(await db.companySheetsDeliveryJob.count({ where: { clientAccountId: client.header } }), 0);
     const again = await appendOnboardingCapturedTestRow(requestFor("header", event.id, `runHeader2${suffix}`), deps());
     assert.equal(again.ok, false);
     if (again.ok) return;
-    assert.equal(again.code, "worksheet_blocked");
+    assert.equal(again.externalCallExecuted, false);
     assert.equal(sheet.appends.length, 0);
-    assert.equal((await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: job.id } })).appendStartedAt, null);
+    assert.equal(await db.companySheetsDeliveryJob.count({ where: { clientAccountId: client.header } }), 0);
   });
 
   it("does not write a 35-cell row onto a Canary identity", async () => {
@@ -556,20 +552,41 @@ describe("onboarding exact-v3 captured test append", { skip: !runIntegration }, 
     assert.equal(sheetFor(sheetId.other).appends.length, 0);
     const own = await createLead(client.cross);
     const prepared = await enqueueOnboardingCapturedTestJob(requestFor("cross", own.id, `runOwn${suffix}`), deps());
-    assert.equal(prepared.ok, true);
-    if (!prepared.ok) return;
-    await db.companySheetsDeliveryJob.update({
-      where: { id: prepared.job.id },
-      data: { spreadsheetId: sheetId.other, clientAccountId: client.cross },
+    assert.equal(prepared.ok, false);
+    if (prepared.ok) return;
+    assert.equal(prepared.externalCallExecuted, false);
+    assert.equal(await db.companySheetsDeliveryJob.count({ where: { clientAccountId: client.cross } }), 0);
+    const forged = await db.companySheetsDeliveryJob.create({
+      data: {
+        kind: "onboarding_captured_test",
+        status: "queued",
+        clientAccountId: client.cross,
+        companyConnectionId: connectionId,
+        spreadsheetId: sheetId.cross,
+        spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${sheetId.cross}`,
+        worksheetId: 7,
+        worksheetTitle: "Exact v3 Test",
+        controlBasis: "drive_owner_verified",
+        destinationUpdatedAt: new Date(),
+        headerContract: V3,
+        schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3,
+        destinationRevision: 3,
+        sourceLeadEventId: own.id,
+        idempotencyKey: `onboarding-test:runOwn${suffix}:sheets`,
+        rowsTotal: 1,
+      },
     });
-    const executed = await executeCompanySheetsDeliveryJob(prepared.job.id, {
+    const executed = await executeCompanySheetsDeliveryJob(forged.id, {
       ...deps(),
       controlledOnboardingCapturedTest: true,
     });
     assert.equal(executed.ok, false);
+    if (executed.ok) return;
+    assert.equal(executed.code, "test_run_not_reserved");
+    assert.equal(sheetFor(sheetId.cross).calls, 0);
     assert.equal(sheetFor(sheetId.other).appends.length, 0);
-    const job = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: prepared.job.id } });
-    assert.equal(job.status, "uncertain");
+    const job = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: forged.id } });
+    assert.equal(job.status, "queued");
     assert.equal(job.appendStartedAt, null);
   });
 
@@ -580,12 +597,11 @@ describe("onboarding exact-v3 captured test append", { skip: !runIntegration }, 
       const sent = await appendOnboardingCapturedTestRow(requestFor("control", event.id, `runControl${suffix}`), deps());
       assert.equal(sent.ok, false);
       if (sent.ok) return;
-      assert.equal(sent.code, "not_company_controlled");
+      assert.equal(sent.code, "test_run_not_reserved");
       assert.equal(sent.externalCallExecuted, false);
+      assert.equal(sheetFor(sheetId.control).calls, 0);
       assert.equal(sheetFor(sheetId.control).appends.length, 0);
-      const job = await db.companySheetsDeliveryJob.findFirstOrThrow({ where: { clientAccountId: client.control } });
-      assert.equal(job.status, "retryable");
-      assert.equal(job.appendStartedAt, null);
+      assert.equal(await db.companySheetsDeliveryJob.count({ where: { clientAccountId: client.control } }), 0);
       const destination = await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId: client.control } });
       assert.equal(destination.campaignDispatchEnabled, false);
     } finally {
@@ -596,35 +612,55 @@ describe("onboarding exact-v3 captured test append", { skip: !runIntegration }, 
   it("holds an unknown timeout and does not append again", async () => {
     const event = await createLead(client.timeout);
     const sheet = sheetFor(sheetId.timeout);
-    sheet.failAppend = "throw-before-write";
     const request = requestFor("timeout", event.id, `runTimeout${suffix}`);
     const sent = await appendOnboardingCapturedTestRow(request, deps());
     assert.equal(sent.ok, false);
     if (sent.ok) return;
-    assert.equal(sent.code, "uncertain");
-    assert.equal(sent.uncertainReason, "timeout");
-    assert.equal(sent.externalCallExecuted, true);
-    assert.equal(sheet.appends.length, 1);
-    assert.equal(sheet.rows.length, 0);
-    const job = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: sent.jobId } });
-    assert.ok(job.appendStartedAt);
-    const lock = await db.companySheetsWorksheetLock.findUniqueOrThrow({
-      where: { spreadsheetId_worksheetId: { spreadsheetId: sheetId.timeout, worksheetId: 7 } },
+    assert.equal(sent.externalCallExecuted, false);
+    assert.equal(sheet.calls, 0);
+    assert.equal(sheet.appends.length, 0);
+    const started = new Date("2026-10-27T18:00:00.000Z");
+    const job = await db.companySheetsDeliveryJob.create({
+      data: {
+        kind: "onboarding_captured_test",
+        status: "uncertain",
+        clientAccountId: client.timeout,
+        companyConnectionId: connectionId,
+        spreadsheetId: sheetId.timeout,
+        spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${sheetId.timeout}`,
+        worksheetId: 7,
+        worksheetTitle: "Exact v3 Test",
+        controlBasis: "drive_owner_verified",
+        destinationUpdatedAt: new Date(),
+        headerContract: V3,
+        schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3,
+        destinationRevision: 3,
+        sourceLeadEventId: event.id,
+        idempotencyKey: request.idempotencyKey,
+        rowsTotal: 1,
+        appendStartedAt: started,
+        uncertainReason: "append_outcome_unknown",
+      },
     });
-    assert.equal(lock.ownerJobId, job.id);
-    sheet.failAppend = null;
-    const again = await appendOnboardingCapturedTestRow(request, deps());
+    await db.companySheetsWorksheetLock.create({
+      data: { spreadsheetId: sheetId.timeout, worksheetId: 7, ownerJobId: job.id, lockedAt: started },
+    });
+    const again = await executeCompanySheetsDeliveryJob(job.id, { ...deps(), controlledOnboardingCapturedTest: true });
     assert.equal(again.ok, false);
     if (again.ok) return;
     assert.equal(again.code, "uncertain");
-    assert.equal(sheet.appends.length, 1);
+    assert.equal(sheet.calls, 0);
     const released = await releaseCompanySheetsDeliveryHold(job.id, COMPANY_SHEETS_RELEASE_HOLD_PHRASE, deps({ env: testEnv(true) }));
     assert.equal(released.ok, false);
     if (released.ok) return;
     assert.equal(released.code, "append_outcome_unresolved");
     const after = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: job.id } });
-    assert.equal(after.appendStartedAt?.toISOString(), job.appendStartedAt?.toISOString());
+    assert.equal(after.appendStartedAt?.toISOString(), started.toISOString());
     assert.equal(after.status, "uncertain");
+    const lock = await db.companySheetsWorksheetLock.findUniqueOrThrow({
+      where: { spreadsheetId_worksheetId: { spreadsheetId: sheetId.timeout, worksheetId: 7 } },
+    });
+    assert.equal(lock.ownerJobId, job.id);
     const worldAfter = await loadCapturedTestWorld(client.timeout, event.id, db);
     assert.equal(worldAfter.sheets?.approvedTestWorksheetRisk?.uncertain, true);
   });
@@ -632,44 +668,31 @@ describe("onboarding exact-v3 captured test append", { skip: !runIntegration }, 
   it("keeps a single row when the append result cannot be reread", async () => {
     const event = await createLead(client.unknown);
     const sheet = sheetFor(sheetId.unknown);
-    sheet.failAppend = "throw-after-write-blind";
     const request = requestFor("unknown", event.id, `runUnknown${suffix}`);
     const sent = await appendOnboardingCapturedTestRow(request, deps());
     assert.equal(sent.ok, false);
     if (sent.ok) return;
-    assert.equal(sent.code, "uncertain");
-    assert.equal(sent.uncertainReason, "unknown");
-    assert.equal(sheet.appends.length, 1);
-    assert.equal(sheet.rows.filter((row) => row[DELIVERY_INDEX] === request.idempotencyKey).length, 1);
-    sheet.failAppend = null;
+    assert.equal(sent.externalCallExecuted, false);
+    assert.equal(sheet.calls, 0);
+    assert.equal(sheet.appends.length, 0);
     const again = await appendOnboardingCapturedTestRow(requestFor("unknown", event.id, `runUnknown2${suffix}`), deps());
     assert.equal(again.ok, false);
     if (again.ok) return;
-    assert.equal(again.code, "worksheet_blocked");
-    assert.equal(sheet.appends.length, 1);
+    assert.equal(again.externalCallExecuted, false);
+    assert.equal(sheet.appends.length, 0);
+    assert.equal(await db.companySheetsDeliveryJob.count({ where: { clientAccountId: client.unknown } }), 0);
   });
 
   it("does not append after the approved worksheet revision changes", async () => {
     const event = await createLead(client.drift);
     const prepared = await enqueueOnboardingCapturedTestJob(requestFor("drift", event.id, `runDrift${suffix}`), deps());
-    assert.equal(prepared.ok, true);
-    if (!prepared.ok) return;
-    await db.clientOnboardingTestWorksheet.update({
-      where: { clientAccountId: client.drift },
-      data: { destinationRevision: 4 },
-    });
-    const executed = await executeCompanySheetsDeliveryJob(prepared.job.id, {
-      ...deps(),
-      controlledOnboardingCapturedTest: true,
-    });
-    assert.equal(executed.ok, false);
-    if (executed.ok) return;
-    assert.equal(executed.code, "onboarding_test_destination_changed");
+    assert.equal(prepared.ok, false);
+    if (prepared.ok) return;
+    assert.equal(prepared.code, "test_run_not_reserved");
+    assert.equal(prepared.externalCallExecuted, false);
     assert.equal(sheetFor(sheetId.drift).calls, 0);
     assert.equal(sheetFor(sheetId.drift).appends.length, 0);
-    const job = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: prepared.job.id } });
-    assert.equal(job.status, "uncertain");
-    assert.equal(job.appendStartedAt, null);
+    assert.equal(await db.companySheetsDeliveryJob.count({ where: { clientAccountId: client.drift } }), 0);
     const destination = await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId: client.drift } });
     assert.equal(destination.worksheetId, 0);
     assert.equal(destination.campaignDispatchEnabled, false);
@@ -677,13 +700,27 @@ describe("onboarding exact-v3 captured test append", { skip: !runIntegration }, 
 
   it("blocks a stats tab before any append", async () => {
     const event = await createLead(client.stats);
+    const sheet = sheetFor(sheetId.stats);
     world.stats = true;
     try {
       const sent = await appendOnboardingCapturedTestRow(requestFor("stats", event.id, `runStats${suffix}`), deps());
       assert.equal(sent.ok, false);
       if (sent.ok) return;
-      assert.equal(sent.code, "test_worksheet_not_approved");
-      assert.equal(sheetFor(sheetId.stats).appends.length, 0);
+      assert.equal(sent.code, "test_run_not_reserved");
+      assert.equal(sent.externalCallExecuted, false);
+      assert.equal(sheet.calls, 0);
+      assert.equal(sheet.appends.length, 0);
+      const titled = await appendOnboardingCapturedTestRow(
+        requestFor("stats", event.id, `runStatsTitle${suffix}`, { worksheetTitle: "Daily Stats" }),
+        deps()
+      );
+      assert.equal(titled.ok, false);
+      if (titled.ok) return;
+      assert.equal(titled.code, "test_worksheet_not_approved");
+      assert.equal(titled.externalCallExecuted, false);
+      assert.equal(sheet.calls, 0);
+      assert.equal(sheet.appends.length, 0);
+      assert.equal(await db.companySheetsDeliveryJob.count({ where: { clientAccountId: client.stats } }), 0);
     } finally {
       world.stats = false;
     }
@@ -692,25 +729,19 @@ describe("onboarding exact-v3 captured test append", { skip: !runIntegration }, 
   it("serializes two appends of the same key to one row", async () => {
     const event = await createLead(client.race);
     const sheet = sheetFor(sheetId.race);
-    let release: () => void = () => undefined;
-    sheet.holdAppend = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const entered = new Promise<void>((resolve) => {
-      sheet.onAppendEntered = resolve;
-    });
     const request = requestFor("race", event.id, `runRace${suffix}`);
-    const first = appendOnboardingCapturedTestRow(request, deps());
-    await entered;
-    const second = await appendOnboardingCapturedTestRow(request, deps());
-    release();
-    const winner = await first;
-    assert.equal(winner.ok, true);
+    const [first, second] = await Promise.all([
+      appendOnboardingCapturedTestRow(request, deps()),
+      appendOnboardingCapturedTestRow(request, deps()),
+    ]);
+    assert.equal(first.ok, false);
     assert.equal(second.ok, false);
-    if (second.ok) return;
-    assert.equal(second.code, "uncertain");
-    assert.equal(sheet.appends.length, 1);
-    assert.equal(sheet.rows.filter((row) => row[DELIVERY_INDEX] === request.idempotencyKey).length, 1);
+    if (first.ok || second.ok) return;
+    assert.equal(first.externalCallExecuted, false);
+    assert.equal(second.externalCallExecuted, false);
+    assert.equal(sheet.calls, 0);
+    assert.equal(sheet.appends.length, 0);
+    assert.equal(await db.companySheetsDeliveryJob.count({ where: { idempotencyKey: request.idempotencyKey } }), 0);
   });
 
   it("verifies write readiness only after canEdit is true on the bound campaign tab", async () => {
@@ -794,6 +825,7 @@ describe("onboarding exact-v3 captured test append", { skip: !runIntegration }, 
     const port = createOnboardingCapturedTestSheetsAppend(deps());
     const readerSheet = sheetFor(sheetId.reader);
     const readerBefore = readerSheet.appends.length;
+    const callsBefore = readerSheet.calls;
     const refusedEvent = await createLead(client.reader);
     const refused = await port.append(
       portRequest(requestFor("reader", refusedEvent.id, `portRefuse${suffix}`, { worksheetTitle: "Daily Stats" }))
@@ -804,75 +836,220 @@ describe("onboarding exact-v3 captured test append", { skip: !runIntegration }, 
     assert.equal(readerSheet.appends.length, readerBefore);
 
     const event = await createLead(client.reader);
-    const seededRequest = requestFor("reader", event.id, `portSeed${suffix}`);
-    readerSheet.rows.push([...seededRequest.values]);
-    const seeded = await port.append(portRequest(seededRequest));
-    assert.equal(seeded.status, "succeeded", seeded.status === "failed" ? seeded.error : seeded.status);
-    if (seeded.status !== "succeeded") return;
-    assert.equal(seeded.externalCallExecuted, false);
-
-    readerSheet.rows = [];
-    const createdRequest = requestFor("reader", event.id, `portNew${suffix}`);
-    const created = await port.append(portRequest(createdRequest));
-    assert.equal(created.status, "succeeded");
-    if (created.status !== "succeeded") return;
-    assert.equal(created.externalCallExecuted, true);
-    assert.equal(created.rowsWritten, 1);
-    const afterCreate = readerSheet.appends.length;
-    const replay = await port.append(portRequest(createdRequest));
-    assert.equal(replay.status, "succeeded");
-    if (replay.status !== "succeeded") return;
+    const created = await port.append(portRequest(requestFor("reader", event.id, `portNew${suffix}`)));
+    assert.equal(created.status, "failed");
+    if (created.status !== "failed") return;
+    assert.equal(created.externalCallExecuted, false);
+    assert.equal(readerSheet.appends.length, readerBefore);
+    assert.equal(readerSheet.calls, callsBefore);
+    const replay = await port.append(portRequest(requestFor("reader", event.id, `portNew${suffix}`)));
+    assert.equal(replay.status, "failed");
+    if (replay.status !== "failed") return;
     assert.equal(replay.externalCallExecuted, false);
-    assert.equal(readerSheet.appends.length, afterCreate);
-
-    readerSheet.rows = [];
-    readerSheet.failAppend = "throw-before-write";
-    const timeoutEvent = await createLead(client.reader);
-    const timeoutRequest = requestFor("reader", timeoutEvent.id, `portTimeout${suffix}`);
-    const timeout = await port.append(portRequest(timeoutRequest));
-    assert.equal(timeout.status, "uncertain");
-    if (timeout.status !== "uncertain") return;
-    assert.equal(timeout.externalCallExecuted, true);
-    assert.equal(timeout.reason, "timeout");
-    assert.ok(timeout.appendStartedAt);
-    const timeoutJob = await db.companySheetsDeliveryJob.findFirstOrThrow({
-      where: { idempotencyKey: timeoutRequest.idempotencyKey },
-    });
-    assert.equal(timeoutJob.appendStartedAt?.toISOString(), timeout.appendStartedAt);
-    const lock = await db.companySheetsWorksheetLock.findUniqueOrThrow({
-      where: { spreadsheetId_worksheetId: { spreadsheetId: sheetId.reader, worksheetId: 7 } },
-    });
-    assert.equal(lock.ownerJobId, timeoutJob.id);
-    const timeoutAgain = await port.append(portRequest(timeoutRequest));
-    assert.equal(timeoutAgain.status, "uncertain");
-    if (timeoutAgain.status !== "uncertain") return;
-    assert.equal(timeoutAgain.externalCallExecuted, true);
-    const timeoutHeld = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: timeoutJob.id } });
-    assert.equal(timeoutHeld.status, "uncertain");
-    assert.equal(timeoutHeld.appendStartedAt?.toISOString(), timeoutJob.appendStartedAt?.toISOString());
-
-    const probeSheet = sheetFor(sheetId.probe);
-    probeSheet.failAppend = "throw-after-write-blind";
-    const unknownEvent = await createLead(client.probe);
-    const unknownRequest = requestFor("probe", unknownEvent.id, `portUnknown${suffix}`);
-    const unknown = await port.append(portRequest(unknownRequest));
-    assert.equal(unknown.status, "uncertain");
-    if (unknown.status !== "uncertain") return;
-    assert.equal(unknown.reason, "unknown");
-    assert.equal(unknown.externalCallExecuted, true);
-    assert.ok(unknown.appendStartedAt);
-    const unknownJob = await db.companySheetsDeliveryJob.findFirstOrThrow({
-      where: { idempotencyKey: unknownRequest.idempotencyKey },
-    });
-    assert.equal(unknownJob.status, "uncertain");
-    assert.equal(unknownJob.appendStartedAt?.toISOString(), unknown.appendStartedAt);
-    probeSheet.failAppend = null;
-    const unknownAgain = await port.append(portRequest(requestFor("probe", unknownEvent.id, `portUnknown2${suffix}`)));
-    assert.equal(unknownAgain.status, "failed");
-    if (unknownAgain.status !== "failed") return;
-    assert.equal(unknownAgain.externalCallExecuted, false);
-    assert.equal(unknownAgain.error, "worksheet_blocked");
+    assert.equal(await db.companySheetsDeliveryJob.count({ where: { idempotencyKey: `onboarding-test:portNew${suffix}:sheets` } }), 0);
   });
+
+  it("refuses a caller-built append unless a persisted run survives the quarantine checks", async () => {
+    const isolated = `ongSheetIsolated${suffix}`;
+    await db.clientOnboardingTestWorksheet.update({
+      where: { clientAccountId: client.auth },
+      data: { spreadsheetId: isolated },
+    });
+    const event = await createLead(client.auth);
+    const sheet = sheetFor(isolated);
+    const production = sheetFor(sheetId.auth);
+    const bare = requestFor("auth", event.id, `runBare${suffix}`, { spreadsheetId: isolated });
+    const directAppend = await appendOnboardingCapturedTestRow(bare, deps());
+    const directEnqueue = await enqueueOnboardingCapturedTestJob(
+      requestFor("auth", event.id, `runEnqueue${suffix}`, { spreadsheetId: isolated }),
+      deps()
+    );
+    assert.equal(directAppend.ok, false);
+    assert.equal(directEnqueue.ok, false);
+    if (directAppend.ok || directEnqueue.ok) return;
+    assert.equal(directAppend.code, "test_run_not_reserved");
+    assert.equal(directEnqueue.code, "test_run_not_reserved");
+    assert.equal(directAppend.externalCallExecuted, false);
+    assert.equal(directEnqueue.externalCallExecuted, false);
+
+    const reservedId = `runReserved${suffix}`;
+    await reserveExclusiveRun({
+      id: reservedId,
+      clientAccountId: client.auth,
+      sourceLeadEventId: event.id,
+      spreadsheetId: isolated,
+    });
+    const forged = await appendOnboardingCapturedTestRow(
+      requestFor("auth", event.id, reservedId, { spreadsheetId: isolated }),
+      deps()
+    );
+    assert.equal(forged.ok, false);
+    if (forged.ok) return;
+    assert.equal(forged.code, "quarantine_not_registered");
+    assert.equal(forged.externalCallExecuted, false);
+    const forgedJob = await db.companySheetsDeliveryJob.create({
+      data: {
+        kind: "onboarding_captured_test",
+        status: "queued",
+        clientAccountId: client.auth,
+        companyConnectionId: connectionId,
+        spreadsheetId: isolated,
+        spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${isolated}`,
+        worksheetId: 7,
+        worksheetTitle: "Exact v3 Test",
+        controlBasis: "drive_owner_verified",
+        destinationUpdatedAt: new Date(),
+        headerContract: V3,
+        schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3,
+        destinationRevision: 3,
+        sourceLeadEventId: event.id,
+        idempotencyKey: `onboarding-test:${reservedId}:sheets`,
+        rowsTotal: 1,
+      },
+    });
+    const executed = await executeCompanySheetsDeliveryJob(forgedJob.id, {
+      ...deps(),
+      controlledOnboardingCapturedTest: true,
+    });
+    assert.equal(executed.ok, false);
+    if (executed.ok) return;
+    assert.equal(executed.code, "quarantine_not_registered");
+    const storedJob = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: forgedJob.id } });
+    assert.equal(storedJob.status, "queued");
+    assert.equal(storedJob.appendStartedAt, null);
+
+    const mismatched = await enqueueOnboardingCapturedTestJob(
+      requestFor("auth", event.id, `runMismatch${suffix}`, { spreadsheetId: isolated }),
+      deps()
+    );
+    assert.equal(mismatched.ok, false);
+    if (mismatched.ok) return;
+    assert.equal(mismatched.code, "test_run_not_reserved");
+
+    const foreignId = `runForeign${suffix}`;
+    await reserveExclusiveRun({
+      id: foreignId,
+      clientAccountId: client.other,
+      sourceLeadEventId: event.id,
+      spreadsheetId: isolated,
+    });
+    const foreign = await appendOnboardingCapturedTestRow(
+      requestFor("auth", event.id, foreignId, { spreadsheetId: isolated }),
+      deps()
+    );
+    assert.equal(foreign.ok, false);
+    if (foreign.ok) return;
+    assert.equal(foreign.code, "tenant_mismatch");
+    assert.equal(foreign.statusCode, 403);
+
+    const movedId = `runMoved${suffix}`;
+    await reserveExclusiveRun({
+      id: movedId,
+      clientAccountId: client.auth,
+      sourceLeadEventId: event.id,
+      spreadsheetId: sheetId.auth,
+    });
+    const moved = await enqueueOnboardingCapturedTestJob(
+      requestFor("auth", event.id, movedId, { spreadsheetId: isolated }),
+      deps()
+    );
+    assert.equal(moved.ok, false);
+    if (moved.ok) return;
+    assert.equal(moved.code, "test_worksheet_not_approved");
+
+    const uncertainEvent = await createLead(client.auth);
+    const uncertainCurrent = `runUncertainCurrent${suffix}`;
+    await reserveExclusiveRun({
+      id: `runUncertainPrior${suffix}`,
+      clientAccountId: client.auth,
+      sourceLeadEventId: uncertainEvent.id,
+      spreadsheetId: isolated,
+      status: "uncertain",
+    });
+    await reserveExclusiveRun({
+      id: uncertainCurrent,
+      clientAccountId: client.auth,
+      sourceLeadEventId: uncertainEvent.id,
+      spreadsheetId: isolated,
+    });
+    const uncertain = await enqueueOnboardingCapturedTestJob(
+      requestFor("auth", uncertainEvent.id, uncertainCurrent, { spreadsheetId: isolated }),
+      deps()
+    );
+    assert.equal(uncertain.ok, false);
+    if (uncertain.ok) return;
+    assert.equal(uncertain.code, "repeat_blocked_uncertain");
+
+    const usedEvent = await createLead(client.auth);
+    const usedCurrent = `runUsedCurrent${suffix}`;
+    await reserveExclusiveRun({
+      id: `runUsedPrior${suffix}`,
+      clientAccountId: client.auth,
+      sourceLeadEventId: usedEvent.id,
+      spreadsheetId: isolated,
+      status: "succeeded",
+    });
+    await reserveExclusiveRun({
+      id: usedCurrent,
+      clientAccountId: client.auth,
+      sourceLeadEventId: usedEvent.id,
+      spreadsheetId: isolated,
+    });
+    const used = await appendOnboardingCapturedTestRow(
+      requestFor("auth", usedEvent.id, usedCurrent, { spreadsheetId: isolated }),
+      deps()
+    );
+    assert.equal(used.ok, false);
+    if (used.ok) return;
+    assert.equal(used.code, "one_test_already_used");
+    assert.equal(sheet.calls, 0);
+    assert.equal(sheet.appends.length, 0);
+    assert.equal(production.calls, 0);
+    assert.equal(production.appends.length, 0);
+    assert.equal(
+      await db.companySheetsDeliveryJob.count({
+        where: { clientAccountId: client.auth, kind: "onboarding_captured_test" },
+      }),
+      1
+    );
+  });
+
+  async function reserveExclusiveRun(input: {
+    id: string;
+    clientAccountId: string;
+    sourceLeadEventId: string;
+    spreadsheetId: string;
+    status?: string;
+  }) {
+    await db.clientOnboardingTestRun.create({
+      data: {
+        id: input.id,
+        clientAccountId: input.clientAccountId,
+        kind: "captured_event_delivery",
+        sourceLeadEventId: input.sourceLeadEventId,
+        destinations: ["google_sheets"],
+        isolationMode: "isolated_destination",
+        sheetsContract: "exact_v3_test_worksheet",
+        requestId: `req_${input.id}`,
+        status: input.status ?? "executing",
+        warningCodes: [],
+        requestSnapshot: {
+          requestId: `req_${input.id}`,
+          kind: "captured_event_delivery",
+          fingerprint: `isolated|${ONE_SHOT}`,
+          confirmation: ONE_SHOT,
+          destinations: ["google_sheets"],
+          isolationMode: "isolated_destination",
+          sheetsContract: "exact_v3_test_worksheet",
+          sheet: {
+            spreadsheetId: input.spreadsheetId,
+            worksheetId: 7,
+            sheetsContract: "exact_v3_test_worksheet",
+          },
+        },
+      },
+    });
+  }
 });
 
 function portRequest(request: OnboardingCapturedTestAppendRequest): SheetsAppendRequest {

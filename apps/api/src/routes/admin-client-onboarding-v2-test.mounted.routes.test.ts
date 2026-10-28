@@ -218,11 +218,11 @@ async function post(opts: CapturedTestRouteOptions, body: Record<string, unknown
   }
 }
 
-test("A missing rereadSheet blocks the mounted sheets route", async () => {
+test("A a current intake shape never reaches a missing reread", async () => {
   const sheets = createFakeSheetsAppend();
   const res = await post({ env: enabled, sheets }, payload({ requestId: "req_missing_reread" }));
   assert.equal(res.statusCode, 409);
-  assert.equal(res.json().error, "worksheet_blocked");
+  assert.equal(res.json().error, "quarantine_not_registered");
   assert.equal(sheets.calls.length, 0);
   assert.equal(res.json().externalCalls.sheets, false);
 });
@@ -234,11 +234,11 @@ test("B a null reread blocks before the sheets port", async () => {
     payload({ requestId: "req_null_reread" })
   );
   assert.equal(res.statusCode, 409);
-  assert.equal(res.json().error, "header_changed");
+  assert.equal(res.json().error, "quarantine_not_registered");
   assert.equal(sheets.calls.length, 0);
 });
 
-test("C a changed header blocks before the sheets port", async () => {
+test("C a changed header is not reached for a current intake shape", async () => {
   const sheets = createFakeSheetsAppend();
   const res = await post(
     {
@@ -249,7 +249,7 @@ test("C a changed header blocks before the sheets port", async () => {
     payload({ requestId: "req_changed_header" })
   );
   assert.equal(res.statusCode, 409);
-  assert.equal(res.json().error, "header_changed");
+  assert.equal(res.json().error, "quarantine_not_registered");
   assert.equal(sheets.calls.length, 0);
 });
 
@@ -264,7 +264,7 @@ test("a stale revision, control mismatch, or throwing reread blocks before the s
     payload({ requestId: "req_revision" })
   );
   assert.equal(revision.statusCode, 409);
-  assert.equal(revision.json().error, "header_changed");
+  assert.equal(revision.json().error, "quarantine_not_registered");
   assert.equal(revisionSheets.calls.length, 0);
 
   const controlSheets = createFakeSheetsAppend();
@@ -280,7 +280,7 @@ test("a stale revision, control mismatch, or throwing reread blocks before the s
     payload({ requestId: "req_control" })
   );
   assert.equal(control.statusCode, 409);
-  assert.equal(control.json().error, "header_changed");
+  assert.equal(control.json().error, "quarantine_not_registered");
   assert.equal(controlSheets.calls.length, 0);
 
   const throwingSheets = createFakeSheetsAppend();
@@ -295,7 +295,7 @@ test("a stale revision, control mismatch, or throwing reread blocks before the s
     payload({ requestId: "req_throw" })
   );
   assert.equal(thrown.statusCode, 409);
-  assert.equal(thrown.json().error, "worksheet_blocked");
+  assert.equal(thrown.json().error, "quarantine_not_registered");
   assert.equal(throwingSheets.calls.length, 0);
 });
 
@@ -310,21 +310,20 @@ test("D the wrong worksheet owner blocks before the sheets port", async () => {
     payload({ requestId: "req_owner" })
   );
   assert.equal(res.statusCode, 409);
-  assert.equal(res.json().error, "header_changed");
+  assert.equal(res.json().error, "quarantine_not_registered");
   assert.equal(sheets.calls.length, 0);
 });
 
-test("E a matching approved header allows one mock sheets call", async () => {
+test("E a matching approved header still does not call sheets for a current intake shape", async () => {
   const sheets = createFakeSheetsAppend();
   const res = await post(
     { env: enabled, sheets, rereadSheet: async (sheet) => echo(sheet) },
     payload({ requestId: "req_match" })
   );
-  assert.equal(res.statusCode, 200);
-  assert.equal(res.json().status, "succeeded");
-  assert.equal(res.json().externalCalls.sheets, true);
-  assert.equal(res.json().downstreamExecuted, false);
-  assert.equal(sheets.calls.length, 1);
+  assert.equal(res.statusCode, 409);
+  assert.equal(res.json().error, "quarantine_not_registered");
+  assert.equal(res.json().externalCalls.sheets, false);
+  assert.equal(sheets.calls.length, 0);
 });
 
 test("F sheets plus GHL is refused before any sheets or GHL call", async () => {
@@ -374,10 +373,10 @@ test("G an uncertain sheets append does not start GHL", async () => {
     },
     payload({ requestId: "req_uncertain_sheets", destinations: ["google_sheets"] })
   );
-  assert.equal(res.statusCode, 200);
-  assert.equal(res.json().status, "uncertain");
+  assert.equal(res.statusCode, 409);
+  assert.equal(res.json().error, "quarantine_not_registered");
   assert.equal(res.json().externalCalls.ghl, false);
-  assert.equal(sheets.calls.length, 1);
+  assert.equal(sheets.calls.length, 0);
   assert.equal(deliveries, 0);
   assert.equal(steps.calls.length, 0);
 });
@@ -413,8 +412,8 @@ test("H an uncertain one-shot blocks the repeat phrase and a second one-shot", a
       headers: { [HEADER]: "admin-secret" },
       payload: payload({ requestId: "req_ghl_uncertain", destinations: ["google_sheets"] }),
     });
-    assert.equal(first.statusCode, 200);
-    assert.equal(first.json().status, "uncertain");
+    assert.equal(first.statusCode, 409);
+    assert.equal(first.json().error, "quarantine_not_registered");
     assert.equal(deliveries, 0);
     assert.equal(steps.calls.length, 0);
     const second = await app.inject({
@@ -439,7 +438,7 @@ test("H an uncertain one-shot blocks the repeat phrase and a second one-shot", a
       payload: payload({ requestId: "req_second_one_shot" }),
     });
     assert.equal(third.statusCode, 409);
-    assert.equal(third.json().error, "repeat_blocked_uncertain");
+    assert.equal(third.json().error, "quarantine_not_registered");
     assert.equal(deliveries, 0);
   } finally {
     await app.close();

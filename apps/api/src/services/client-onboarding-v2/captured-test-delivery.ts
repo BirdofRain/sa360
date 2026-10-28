@@ -2092,7 +2092,12 @@ function requireGoogleOnlyPilot(
       detail: "the approved worksheet must be a different spreadsheet from the saved production file",
     });
   }
-  if (recordClassOf(event) !== ONBOARDING_OPERATOR_OWNED_TEST_CLASS || !operatorOwnedIntake(event)) {
+  if (!operatorOwnedIntake(event)) {
+    return failure(409, "quarantine_not_registered", {
+      detail: "no durable quarantine authorization is registered for this event",
+    });
+  }
+  if (recordClassOf(event) !== ONBOARDING_OPERATOR_OWNED_TEST_CLASS) {
     return failure(409, "event_not_operator_owned", {
       detail: "a recordClass label is not operator-owned provenance",
     });

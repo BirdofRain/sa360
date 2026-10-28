@@ -63,6 +63,19 @@ export function classifyExactV3Grid(bounds: GridBounds | null, formulaValues: st
   if (header.length !== 35) {
     return { state: "unproven", detail: "the exact v3 header is not 35 columns" };
   }
+  if (bounds.columnCount < header.length) {
+    return { state: "occupied", detail: "header is not the exact 35-cell v3 header" };
+  }
+  const headerRow = formulaValues[0];
+  if (!headerRow || headerRow.length < header.length) {
+    return { state: "occupied", detail: "header is not the exact 35-cell v3 header" };
+  }
+  for (let column = 0; column < header.length; column += 1) {
+    const cell = headerRow[column];
+    if (typeof cell !== "string" || cell.trim() === "" || cell !== header[column]) {
+      return { state: "occupied", detail: "header is not the exact 35-cell v3 header" };
+    }
+  }
   for (let rowIndex = 0; rowIndex < formulaValues.length; rowIndex += 1) {
     if (rowIndex + 1 > bounds.rowCount) {
       return { state: "unproven", detail: "formula read returned a row outside the declared grid" };
@@ -73,12 +86,7 @@ export function classifyExactV3Grid(bounds: GridBounds | null, formulaValues: st
         return { state: "unproven", detail: "formula read returned a column outside the declared grid" };
       }
       const cell = row[column] ?? "";
-      if (rowIndex === 0 && column < header.length) {
-        if (cell !== "" && cell !== header[column]) {
-          return { state: "occupied", detail: "header is not the exact 35-cell v3 header" };
-        }
-        continue;
-      }
+      if (rowIndex === 0 && column < header.length) continue;
       if (cell.trim() !== "" || cell.includes("=")) {
         return { state: "occupied", detail: `cell ${columnLetters(column)}${rowIndex + 1} is not empty` };
       }

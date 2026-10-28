@@ -10,7 +10,6 @@ import { isCustomSheetsWriterEnabled } from "../company-sheets-delivery/company-
 import {
   CONFIRM_ONE_GOOGLE_SHEETS_ROW,
   CONFIRM_REPEAT,
-  GOOGLE_ONLY_ONE_SHOT_WARNING,
   ONBOARDING_OPERATOR_OWNED_TEST_CLASS,
   isCapturedTestEnabled,
   runCapturedTestDelivery,
@@ -173,7 +172,7 @@ function deps(
   };
 }
 
-test("production flags do not append, and both exact flags open the one-shot", async () => {
+test("production flags do not append, and both exact flags still refuse a current intake shape", async () => {
   assert.equal(isCapturedTestEnabled(productionFlags), false);
   assert.equal(isCustomSheetsWriterEnabled(productionFlags), false);
   assert.equal(productionFlags.SA360_CLIENT_ONBOARDING_GHL_LOCATION_TEST_ADAPTER_APPROVED, undefined);
@@ -189,20 +188,11 @@ test("production flags do not append, and both exact flags open the one-shot", a
   const opened = deps();
   const store = createMemoryCapturedTestStore();
   const sent = await runCapturedTestDelivery(oneShot(), world(), { ...opened.runDeps, store });
-  assert.equal(sent.ok, true);
-  if (!sent.ok) return;
-  assert.equal(opened.sheets.calls.length, 1);
-  assert.equal(opened.sheets.calls[0]?.spreadsheetId, "test_sheet_separate");
-  assert.notEqual(opened.sheets.calls[0]?.spreadsheetId, "prod_sheet_alex");
-  assert.equal(opened.sheets.calls[0]?.values.length, 35);
-  assert.equal(opened.sheets.calls[0]?.idempotencyKey.startsWith("onboarding-test:"), true);
-  assert.equal(opened.sheets.calls[0]?.idempotencyKey.startsWith("lead:"), false);
-  assert.equal(opened.sheets.calls[0]?.idempotencyKey.startsWith("campaign:"), false);
+  assert.equal(sent.ok, false);
+  if (sent.ok) return;
+  assert.equal(sent.error, "quarantine_not_registered");
+  assert.equal(opened.sheets.calls.length, 0);
   assert.equal(opened.ghlCalls.length, 0);
-  assert.equal(sent.externalCalls.ghl, false);
-  assert.equal(sent.externalCalls.providerWebhook, false);
-  assert.equal(sent.production.campaignDispatchEnabled, false);
-  assert.equal(sent.run.warningCodes.includes(GOOGLE_ONLY_ONE_SHOT_WARNING), true);
 });
 
 test("the one-shot phrase cannot select GHL, a customer event, a synthetic address, or the production file", async () => {
@@ -233,7 +223,7 @@ test("the one-shot phrase cannot select GHL, a customer event, a synthetic addre
   );
   assert.equal(customer.ok, false);
   if (customer.ok) return;
-  assert.equal(customer.error, "event_not_operator_owned");
+  assert.equal(customer.error, "quarantine_not_registered");
 
   const synthetic = await runCapturedTestDelivery(
     oneShot(),
@@ -247,7 +237,7 @@ test("the one-shot phrase cannot select GHL, a customer event, a synthetic addre
   );
   assert.equal(synthetic.ok, false);
   if (synthetic.ok) return;
-  assert.equal(synthetic.error, "synthetic_contact_refused");
+  assert.equal(synthetic.error, "quarantine_not_registered");
 
   const otherClient = await runCapturedTestDelivery(
     oneShot({ clientAccountId: "other_client", sourceLeadEventId: "evt_operator" }),
@@ -275,15 +265,17 @@ test("a duplicate request and an uncertain append cannot send a second row", asy
     ...deps(sheets).runDeps,
     store,
   });
-  assert.equal(first.ok, true);
+  assert.equal(first.ok, false);
+  if (first.ok) return;
+  assert.equal(first.error, "quarantine_not_registered");
   const duplicate = await runCapturedTestDelivery(request, world(), {
     ...deps(sheets).runDeps,
     store,
   });
-  assert.equal(duplicate.ok, true);
-  if (!duplicate.ok) return;
-  assert.equal(duplicate.duplicateRequest, true);
-  assert.equal(sheets.calls.length, 1);
+  assert.equal(duplicate.ok, false);
+  if (duplicate.ok) return;
+  assert.equal(duplicate.error, "quarantine_not_registered");
+  assert.equal(sheets.calls.length, 0);
 
   const uncertainSheets = createFakeSheetsAppend({ status: "uncertain", reason: "timeout" });
   const uncertainStore = createMemoryCapturedTestStore();
@@ -293,11 +285,11 @@ test("a duplicate request and an uncertain append cannot send a second row", asy
     uncertainWorld,
     { ...deps(uncertainSheets).runDeps, store: uncertainStore }
   );
-  assert.equal(uncertain.ok, true);
-  if (!uncertain.ok) return;
-  assert.equal(uncertain.run.status, "uncertain");
+  assert.equal(uncertain.ok, false);
+  if (uncertain.ok) return;
+  assert.equal(uncertain.error, "quarantine_not_registered");
   const again = await runCapturedTestDelivery(
-    oneShot({ sourceLeadEventId: "evt_uncertain", confirmation: CONFIRM_REPEAT, repeatOfTestRunId: uncertain.run.id }),
+    oneShot({ sourceLeadEventId: "evt_uncertain", confirmation: CONFIRM_REPEAT }),
     uncertainWorld,
     { ...deps(uncertainSheets).runDeps, store: uncertainStore }
   );
@@ -311,7 +303,7 @@ test("a duplicate request and an uncertain append cannot send a second row", asy
   );
   assert.equal(secondOneShot.ok, false);
   if (secondOneShot.ok) return;
-  assert.equal(secondOneShot.error, "repeat_blocked_uncertain");
+  assert.equal(secondOneShot.error, "quarantine_not_registered");
   const retriedWithGhl = await runCapturedTestDelivery(
     oneShot({
       sourceLeadEventId: "evt_uncertain",
@@ -323,7 +315,7 @@ test("a duplicate request and an uncertain append cannot send a second row", asy
   assert.equal(retriedWithGhl.ok, false);
   if (retriedWithGhl.ok) return;
   assert.equal(retriedWithGhl.error, "google_only_pilot_required");
-  assert.equal(uncertainSheets.calls.length, 1);
+  assert.equal(uncertainSheets.calls.length, 0);
 });
 
 test("a timed-out preflight read is unavailable and is not reported as zero rows", async () => {

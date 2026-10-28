@@ -45,6 +45,10 @@ function event(overrides: Partial<StoredSourceEvent> = {}): StoredSourceEvent {
     clientAccountIdResolved: CLIENT,
     status: "received",
     sourceRouteKey: "operator_owned_test",
+    sourceProvider: "manual_import",
+    sourceSystem: "external_vendor",
+    sourceType: "manual_entry",
+    webhookRequestLogId: null,
     enrichmentMetadataJson: { recordClass: ONBOARDING_OPERATOR_OWNED_TEST_CLASS, inventoryTracked: false },
     normalizedPayloadJson: {
       contact: { first_name: "Operator", last_name: "Owned", email: OPERATOR_EMAIL, phone_e164: "+15551230000", state: "VA" },
@@ -132,7 +136,14 @@ function oneShot(overrides: Partial<CapturedTestRequest> = {}): CapturedTestRequ
   };
 }
 
-function deps(sheets = createFakeSheetsAppend(), env: NodeJS.ProcessEnv = { ...productionFlags, SA360_CLIENT_ONBOARDING_V2_CAPTURED_TEST_ENABLED: "true" }) {
+function deps(
+  sheets = createFakeSheetsAppend(),
+  env: NodeJS.ProcessEnv = {
+    ...productionFlags,
+    SA360_CLIENT_ONBOARDING_V2_CAPTURED_TEST_ENABLED: "true",
+    SA360_CLIENT_ONBOARDING_GOOGLE_ONLY_PILOT_ENABLED: "true",
+  }
+) {
   const ghlCalls: string[] = [];
   return {
     sheets,
@@ -140,7 +151,7 @@ function deps(sheets = createFakeSheetsAppend(), env: NodeJS.ProcessEnv = { ...p
     store: createMemoryCapturedTestStore(),
     runDeps: {
       env,
-      store: undefined as never,
+      store: createMemoryCapturedTestStore(),
       sheets,
       execution: "injected_fakes" as const,
       newId: () => randomUUID(),
@@ -162,7 +173,7 @@ function deps(sheets = createFakeSheetsAppend(), env: NodeJS.ProcessEnv = { ...p
   };
 }
 
-test("production flags do not append, and only the captured-test flag opens the one-shot", async () => {
+test("production flags do not append, and both exact flags open the one-shot", async () => {
   assert.equal(isCapturedTestEnabled(productionFlags), false);
   assert.equal(isCustomSheetsWriterEnabled(productionFlags), false);
   assert.equal(productionFlags.SA360_CLIENT_ONBOARDING_GHL_LOCATION_TEST_ADAPTER_APPROVED, undefined);
@@ -205,7 +216,7 @@ test("the one-shot phrase cannot select GHL, a customer event, a synthetic addre
   );
   assert.equal(ghl.ok, false);
   if (ghl.ok) return;
-  assert.equal(ghl.error, "ghl_destination_not_allowed");
+  assert.equal(ghl.error, "google_only_pilot_required");
   assert.equal(box.sheets.calls.length, 0);
   assert.equal(box.ghlCalls.length, 0);
 
@@ -292,7 +303,15 @@ test("a duplicate request and an uncertain append cannot send a second row", asy
   );
   assert.equal(again.ok, false);
   if (again.ok) return;
-  assert.equal(again.error, "repeat_blocked_uncertain");
+  assert.equal(again.error, "google_only_pilot_required");
+  const secondOneShot = await runCapturedTestDelivery(
+    oneShot({ sourceLeadEventId: "evt_uncertain" }),
+    uncertainWorld,
+    { ...deps(uncertainSheets).runDeps, store: uncertainStore }
+  );
+  assert.equal(secondOneShot.ok, false);
+  if (secondOneShot.ok) return;
+  assert.equal(secondOneShot.error, "repeat_blocked_uncertain");
   const retriedWithGhl = await runCapturedTestDelivery(
     oneShot({
       sourceLeadEventId: "evt_uncertain",
@@ -303,7 +322,7 @@ test("a duplicate request and an uncertain append cannot send a second row", asy
   );
   assert.equal(retriedWithGhl.ok, false);
   if (retriedWithGhl.ok) return;
-  assert.equal(retriedWithGhl.error, "repeat_blocked_uncertain");
+  assert.equal(retriedWithGhl.error, "google_only_pilot_required");
   assert.equal(uncertainSheets.calls.length, 1);
 });
 
@@ -324,6 +343,8 @@ test("a timed-out preflight read is unavailable and is not reported as zero rows
     heldAppends: unavailable,
     unresolvedJobs: unavailable,
     grants: unavailable,
+    identityConflicts: unavailable,
+    quarantine: unavailable,
     dispatch: unavailable,
   });
   assert.equal(decision.append, "no_go");

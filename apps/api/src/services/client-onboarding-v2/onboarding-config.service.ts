@@ -37,7 +37,7 @@ export type WorksheetHeaderRead = {
   control: { establishControl: string; checkedAt: string };
   destinationRevision: number;
   /** empty is the only value that can be approved. A failed body read must not use this field. */
-  historicalDataRows: "empty" | "has_rows" | "truncated";
+  historicalDataRows: "empty" | "has_rows" | "truncated" | "unproven";
 };
 
 export async function saveOnboardingDestinationProfile(
@@ -231,11 +231,14 @@ export async function approveExactV3TestWorksheet(
     return { ok: false, statusCode: 409, error: "test_worksheet_not_approved" };
   }
   if (header.historicalDataRows !== "empty") {
+    const incomplete = header.historicalDataRows === "truncated" || header.historicalDataRows === "unproven";
     return {
       ok: false,
       statusCode: 409,
       error: "test_worksheet_not_approved",
-      detail: "the test worksheet body must be empty. A truncated or failed read is not empty",
+      detail: incomplete
+        ? "the worksheet body was not proven empty. An incomplete or failed read is not empty"
+        : "the test worksheet body must be empty. A truncated or failed read is not empty",
     };
   }
   if (client.companySheetsDestination && header.spreadsheetId === client.companySheetsDestination.spreadsheetId) {

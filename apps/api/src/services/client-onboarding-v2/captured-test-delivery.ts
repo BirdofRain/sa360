@@ -17,6 +17,7 @@ import type {
   OnboardingGhlTestDeliveryReceipt,
   OnboardingGhlTestDeliveryRequest,
 } from "./onboarding-ghl-test-adapter.js";
+import { operatorOwnedIntake } from "./google-only-quarantine.js";
 import {
   buildOnboardingGhlAggregateRequest,
   projectOnboardingGhlReceipt,
@@ -45,6 +46,7 @@ export const CONFIRM_DELIVER = "DELIVER CAPTURED TEST LEAD";
 export const CONFIRM_REPEAT = "REPEAT CAPTURED TEST LEAD";
 /** One Sheets append. This phrase cannot select a GHL destination. */
 export const CONFIRM_ONE_GOOGLE_SHEETS_ROW = "DELIVER ONE GOOGLE SHEETS TEST ROW";
+export const GOOGLE_ONLY_PILOT_FLAG = "SA360_CLIENT_ONBOARDING_GOOGLE_ONLY_PILOT_ENABLED";
 /** Enrichment recordClass for a future operator-owned test event. Not a customer lead. */
 export const ONBOARDING_OPERATOR_OWNED_TEST_CLASS = "onboarding_operator_owned_test";
 /** Stored on a one-shot run so a later request cannot append again. */
@@ -113,6 +115,10 @@ export type StoredSourceEvent = {
   clientAccountIdResolved: string | null;
   status: string;
   sourceRouteKey: string | null;
+  sourceProvider?: string | null;
+  sourceSystem?: string | null;
+  sourceType?: string | null;
+  webhookRequestLogId?: string | null;
   enrichmentMetadataJson: unknown;
   normalizedPayloadJson: unknown;
   receivedAt: string;
@@ -684,13 +690,14 @@ export type CapturedTestDeps = {
     control: WorksheetControlSnapshot | null;
     ownerClientAccountId: string;
     destinationRevision: number;
-    historicalDataRows?: "empty" | "has_rows" | "truncated";
+    historicalDataRows?: "empty" | "has_rows" | "truncated" | "unproven";
   } | null>;
 };
 
 type Flags = {
   config: boolean;
   captured: boolean;
+  googleOnlyPilot: boolean;
   ghlSynthetic: boolean;
 };
 
@@ -700,6 +707,38 @@ export function isOnboardingConfigEnabled(env: NodeJS.ProcessEnv = process.env):
 
 export function isCapturedTestEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.SA360_CLIENT_ONBOARDING_V2_CAPTURED_TEST_ENABLED === "true";
+}
+
+export function isGoogleOnlyPilotEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env[GOOGLE_ONLY_PILOT_FLAG] === "true";
+}
+
+/** The only execution shape this release can authorize. Older phrases are not included. */
+export function exclusiveGoogleOnlyRequest(input: {
+  kind: TestRunKind;
+  confirmation?: string | null;
+  destinations: readonly TestDestination[];
+  isolation?: { mode?: string | null; sheetsContract?: string | null } | null;
+}): boolean {
+  return (
+    input.kind === "captured_event_delivery" &&
+    input.confirmation === CONFIRM_ONE_GOOGLE_SHEETS_ROW &&
+    input.destinations.length === 1 &&
+    input.destinations[0] === "google_sheets" &&
+    input.isolation?.mode === "isolated_destination" &&
+    input.isolation.sheetsContract === "exact_v3_test_worksheet"
+  );
+}
+
+/**
+ * Mounted HTTP routes and runCapturedTestDelivery both use this gate.
+ * Previews stay on the config flag. Execution needs both exact flags and the one-shot shape.
+ */
+export function googleOnlyPilotExecutionGate(
+  input: CapturedTestRequest,
+  env: NodeJS.ProcessEnv = process.env
+): { statusCode: number; error: string } | null {
+  return executionGate(input, readFlags(env));
 }
 
 export function isGhlSyntheticEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -868,7 +907,7 @@ export function planCapturedTestDelivery(
   const flags = readFlags(deps.env ?? process.env);
   const shape = validateShape(input);
   if (shape) return failure(shape.statusCode, shape.error);
-  const flagError = flagGate(input.kind, flags);
+  const flagError = executionGate(input, flags);
   if (flagError) return failure(flagError.statusCode, flagError.error, { blockedOn: CAPTURED_TEST_BLOCKED_ON });
   if (!world.clientFound) return failure(404, "client_not_found");
   if (!RUN_ID.test(deps.testRunId)) return failure(400, "invalid_confirmation", { detail: "test run id must be a uuid" });
@@ -2053,9 +2092,9 @@ function requireGoogleOnlyPilot(
       detail: "the approved worksheet must be a different spreadsheet from the saved production file",
     });
   }
-  if (recordClassOf(event) !== ONBOARDING_OPERATOR_OWNED_TEST_CLASS) {
+  if (recordClassOf(event) !== ONBOARDING_OPERATOR_OWNED_TEST_CLASS || !operatorOwnedIntake(event)) {
     return failure(409, "event_not_operator_owned", {
-      detail: "the source event is not an operator-owned test record",
+      detail: "a recordClass label is not operator-owned provenance",
     });
   }
   if (event.deliveryResultJson != null) {
@@ -2195,12 +2234,15 @@ function validateShape(input: CapturedTestRequest): { statusCode: number; error:
   return null;
 }
 
-function flagGate(kind: TestRunKind, flags: Flags): { statusCode: number; error: string } | null {
-  if (kind === "preview" || kind === "captured_event_replay") {
+function executionGate(input: CapturedTestRequest, flags: Flags): { statusCode: number; error: string } | null {
+  if (input.kind === "preview" || input.kind === "captured_event_replay") {
     if (!flags.config) return { statusCode: 404, error: "onboarding_config_disabled" };
     return null;
   }
   if (!flags.captured) return { statusCode: 404, error: "captured_test_disabled" };
+  if (!flags.googleOnlyPilot || !exclusiveGoogleOnlyRequest(input)) {
+    return { statusCode: 409, error: "google_only_pilot_required" };
+  }
   return null;
 }
 
@@ -2208,6 +2250,7 @@ function readFlags(env: NodeJS.ProcessEnv): Flags {
   return {
     config: isOnboardingConfigEnabled(env),
     captured: isCapturedTestEnabled(env),
+    googleOnlyPilot: isGoogleOnlyPilotEnabled(env),
     ghlSynthetic: isGhlSyntheticEnabled(env),
   };
 }

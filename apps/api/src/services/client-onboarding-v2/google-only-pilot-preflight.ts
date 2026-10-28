@@ -8,6 +8,7 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 
 import { prisma } from "../../lib/db.js";
 import { COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3 } from "../../lib/company-google-sheets-env.js";
+import { countIdentityConflicts } from "./google-only-quarantine.js";
 
 const GRANT_TABLES = [
   "ClientOnboardingTestWorksheet",
@@ -26,7 +27,8 @@ const SELECTABLE_CONTROL = new Set(["company_created", "drive_owner_verified", "
 
 export type ReadEvidence<T> =
   | { state: "read"; value: T }
-  | { state: "unavailable"; reason: string };
+  | { state: "unavailable"; reason: string }
+  | { state: "unverified"; reason: string };
 
 export type GoogleOnlyPilotPreflight = {
   clientAccountId: string;
@@ -42,7 +44,9 @@ export type GoogleOnlyPilotPreflight = {
   locks: ReadEvidence<Array<{ spreadsheetId: string; worksheetId: number; ownerJobId: string | null }>>;
   heldAppends: ReadEvidence<Array<{ id: string; status: string; spreadsheetId: string; worksheetId: number }>>;
   unresolvedJobs: ReadEvidence<Array<{ id: string; status: string; kind: string; spreadsheetId: string }>>;
-  grants: ReadEvidence<Array<{ tableName: string; canSelect: boolean }>>;
+  grants: ReadEvidence<Array<{ tableName: string; canSelect: boolean; role: "sa360_app" }>>;
+  identityConflicts: ReadEvidence<{ verifiedIdentityConflicts: number; storedLeadConflicts: number }>;
+  quarantine: ReadEvidence<{ labeledEventCount: number; customerIntakeLabeledCount: number; eligibleEventCount: 0 }>;
   dispatch: ReadEvidence<{
     spreadsheetId: string;
     campaignWorksheetTitle: string | null;
@@ -166,20 +170,23 @@ export async function readGoogleOnlyPilotPreflight(
       },
       select: { id: true, status: true, kind: true, spreadsheetId: true },
     }), timeoutMs);
-  const grants = await readEvidence("grants", async () => {
-    const rows = await db.$queryRaw<Array<{ table_name: string; can_select: boolean }>>(Prisma.sql`
-      SELECT c.relname AS table_name,
-             has_table_privilege(current_user, c.oid, 'SELECT') AS can_select
-      FROM pg_class c
-      JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE n.nspname = 'public'
-        AND c.relkind = 'r'
-        AND c.relname IN (${Prisma.join([...GRANT_TABLES])})
-    `);
-    return GRANT_TABLES.map((tableName) => ({
-      tableName,
-      canSelect: rows.some((row) => row.table_name === tableName && row.can_select === true),
-    }));
+  const grants = await readSa360AppGrants(db, timeoutMs);
+  const identityConflicts = await readEvidence("identityConflicts", () => countIdentityConflicts(db, clientAccountId), timeoutMs);
+  const quarantine = await readEvidence("quarantine", async () => {
+    const events = await db.sourceLeadEvent.findMany({
+      where: { clientAccountIdResolved: clientAccountId },
+      select: { enrichmentMetadataJson: true, sourceProvider: true, sourceType: true, webhookRequestLogId: true },
+    });
+    let labeledEventCount = 0;
+    let customerIntakeLabeledCount = 0;
+    for (const event of events) {
+      if (recordClassOf(event.enrichmentMetadataJson) !== "onboarding_operator_owned_test") continue;
+      labeledEventCount += 1;
+      if (event.sourceProvider !== "manual_import" || event.sourceType !== "manual_entry" || event.webhookRequestLogId) {
+        customerIntakeLabeledCount += 1;
+      }
+    }
+    return { labeledEventCount, customerIntakeLabeledCount, eligibleEventCount: 0 as const };
   }, timeoutMs);
   return {
     clientAccountId,
@@ -190,8 +197,49 @@ export async function readGoogleOnlyPilotPreflight(
     heldAppends,
     unresolvedJobs,
     grants,
+    identityConflicts,
+    quarantine,
     dispatch,
   };
+}
+
+async function readSa360AppGrants(db: PrismaClient, timeoutMs: number): Promise<GoogleOnlyPilotPreflight["grants"]> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const rows = await Promise.race([
+      db.$queryRaw<Array<{ table_name: string; can_select: boolean }>>(Prisma.sql`
+        SELECT c.relname AS table_name,
+               has_table_privilege('sa360_app', c.oid, 'SELECT') AS can_select
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+          AND c.relkind = 'r'
+          AND c.relname IN (${Prisma.join([...GRANT_TABLES])})
+      `),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("timeout:grants")), timeoutMs);
+      }),
+    ]);
+    return {
+      state: "read",
+      value: GRANT_TABLES.map((tableName) => ({
+        tableName,
+        role: "sa360_app" as const,
+        canSelect: rows.some((row) => row.table_name === tableName && row.can_select === true),
+      })),
+    };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "grant query failed";
+    return { state: "unverified", reason: `sa360_app select grants are unverified: ${reason}` };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function recordClassOf(value: unknown): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+  const recordClass = (value as { recordClass?: unknown }).recordClass;
+  return typeof recordClass === "string" ? recordClass : "";
 }
 
 /**
@@ -213,12 +261,17 @@ export function decideGoogleOnlyPilot(report: GoogleOnlyPilotPreflight): {
       ["heldAppends", report.heldAppends],
       ["unresolvedJobs", report.unresolvedJobs],
       ["grants", report.grants],
+      ["identityConflicts", report.identityConflicts],
+      ["quarantine", report.quarantine],
       ["dispatch", report.dispatch],
     ] as const
-  ).filter((entry) => entry[1].state === "unavailable");
+  ).filter((entry) => entry[1].state === "unavailable" || entry[1].state === "unverified");
   if (unavailable.length > 0) {
     reasons.push(
-      ...unavailable.map(([label, evidence]) => `${label} unavailable (${evidence.state === "unavailable" ? evidence.reason : label}); this is not an empty result`)
+      ...unavailable.map(([label, evidence]) => {
+        const reason = evidence.state === "unavailable" || evidence.state === "unverified" ? evidence.reason : "not read";
+        return `${label} ${evidence.state} (${reason}); this is not an empty result`;
+      })
     );
     return { setup: "no_go", append: "no_go", reasons };
   }
@@ -260,7 +313,13 @@ export function decideGoogleOnlyPilot(report: GoogleOnlyPilotPreflight): {
     reasons.push("in-flight or uncertain test run");
   }
   if (report.grants.state === "read" && report.grants.value.some((grant) => !grant.canSelect)) {
-    reasons.push("company database select grant is missing");
+    reasons.push("sa360_app select grant is missing");
+  }
+  if (report.quarantine.state === "read") {
+    reasons.push("no dedicated operator-owned quarantine event is eligible");
+  }
+  if (report.identityConflicts.state === "read" && (report.identityConflicts.value.verifiedIdentityConflicts > 0 || report.identityConflicts.value.storedLeadConflicts > 0)) {
+    reasons.push("test identity collides with another client");
   }
   const blocking = reasons.filter((reason) => reason !== "external append stays no-go");
   return {

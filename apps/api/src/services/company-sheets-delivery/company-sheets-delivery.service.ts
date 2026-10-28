@@ -37,7 +37,8 @@ import {
 } from "./company-sheets-custom-row.js";
 import { findPublishedColumnMap } from "../client-onboarding-v2/column-maps.js";
 import { loadAuthorizedAgedDeliverySet } from "./company-sheets-aged-authority.js";
-import { getSpreadsheetMetadata } from "../google-sheets/google-sheets-http-client.js";
+import { getSpreadsheetMetadata, getWorksheetGridBounds } from "../google-sheets/google-sheets-http-client.js";
+import { classifyExactV3Grid, gridBoundsFrom, gridRange, type GridProof } from "../client-onboarding-v2/onboarding-test-grid.js";
 import { getCompanyDriveFile } from "../company-google/company-google-drive-http.js";
 import { getValidCompanyGoogleAccessToken } from "../company-google/company-google-access-token.service.js";
 import {
@@ -1193,6 +1194,14 @@ async function runJob(
       if (lost) return lost;
       return { ok: true, status: "succeeded", rowsWritten, appended };
     }
+    if (job.kind === ONBOARDING_CAPTURED_TEST_KIND) {
+      const proof = await onboardingGridProof(job, worksheet, token.accessToken, deps);
+      if (proof.state !== "empty") {
+        const lost = await finishOwned(db, job, claimToken, "retryable", { lastError: proof.detail });
+        if (lost) return lost;
+        return fail("worksheet_blocked", 409);
+      }
+    }
     let values = pending.map((row) => rawRow(rowValues(row.valuesJson)));
     if (prependHeader) {
       const again = await inspectSheetHeader(job, title, header, token.accessToken, deps);
@@ -1343,6 +1352,36 @@ async function inspectSheetHeader(
   if (blankRow(first) && !blankRow(second)) return { ok: false, reason: "header_conflict" };
   if (!sameHeader(first ?? [], header)) return { ok: false, reason: "header_mismatch" };
   return { ok: true, action: "present", sampleRow: second ?? [] };
+}
+
+async function onboardingGridProof(
+  job: CompanySheetsDeliveryJob,
+  worksheet: { title: string; rowCount?: number; columnCount?: number },
+  accessToken: string,
+  deps: CompanySheetsDeliveryDeps
+): Promise<GridProof> {
+  let bounds = gridBoundsFrom(worksheet.rowCount, worksheet.columnCount);
+  if (!bounds) {
+    const fetched = await getWorksheetGridBounds(
+      { spreadsheetId: job.spreadsheetId, accessToken },
+      deps.fetchImpl
+    );
+    if (fetched.ok) {
+      const match = fetched.worksheets.find((sheet) => sheet.sheetId === job.worksheetId);
+      bounds = match ? gridBoundsFrom(match.rowCount, match.columnCount) : null;
+    }
+  }
+  if (!bounds) return classifyExactV3Grid(null, null);
+  const read = await (deps.getValues ?? getSheetValues)(
+    {
+      spreadsheetId: job.spreadsheetId,
+      range: `${quoteSheetTitle(worksheet.title)}!${gridRange(bounds)}`,
+      accessToken,
+      valueRenderOption: "FORMULA",
+    },
+    deps.fetchImpl
+  );
+  return classifyExactV3Grid(bounds, read.ok ? read.values : null);
 }
 
 function headerInspectionStatus(reason: string): "uncertain" | "retryable" {
@@ -2093,6 +2132,13 @@ export async function appendOnboardingCapturedTestRow(
   request: OnboardingCapturedTestAppendRequest,
   deps: CompanySheetsDeliveryDeps = {}
 ): Promise<OnboardingCapturedTestAppendResult> {
+  const env = deps.env ?? process.env;
+  if (
+    env.SA360_CLIENT_ONBOARDING_V2_CAPTURED_TEST_ENABLED !== "true" ||
+    env.SA360_CLIENT_ONBOARDING_GOOGLE_ONLY_PILOT_ENABLED !== "true"
+  ) {
+    return refused("google_only_pilot_required", 409);
+  }
   const db = deps.db ?? prisma;
   const before = await db.companySheetsDestination.findUnique({ where: { clientAccountId: request.clientAccountId.trim() } });
   const beforeSwitches = switchSnapshot(before);

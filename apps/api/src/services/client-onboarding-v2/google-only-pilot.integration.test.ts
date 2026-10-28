@@ -64,6 +64,9 @@ class MemoryBook {
     if (decoded.includes("!A2:AI")) {
       return json(200, { values: [...grid.body, ...this.rows] });
     }
+    if (decoded.includes("valueRenderOption=FORMULA") && decoded.includes("!A1:")) {
+      return json(200, { values: [grid.header, ...grid.body, ...this.rows] });
+    }
     const column = decoded.match(/!([A-Z]+)1:\1/);
     if (column) {
       const index = columnIndex(column[1] ?? "A");
@@ -137,9 +140,13 @@ describe("google-only pilot local fixtures", { skip: !runIntegration }, () => {
       SA360_COMPANY_GOOGLE_SHEETS_DISPATCH_ENABLED: "true",
     };
     delete env.SA360_CLIENT_ONBOARDING_V2_CAPTURED_TEST_ENABLED;
+    delete env.SA360_CLIENT_ONBOARDING_GOOGLE_ONLY_PILOT_ENABLED;
     delete env.SA360_CLIENT_ONBOARDING_V2_CUSTOM_WRITER_ENABLED;
     delete env.SA360_CLIENT_ONBOARDING_GHL_LOCATION_TEST_ADAPTER_APPROVED;
-    if (captured) env.SA360_CLIENT_ONBOARDING_V2_CAPTURED_TEST_ENABLED = "true";
+    if (captured) {
+      env.SA360_CLIENT_ONBOARDING_V2_CAPTURED_TEST_ENABLED = "true";
+      env.SA360_CLIENT_ONBOARDING_GOOGLE_ONLY_PILOT_ENABLED = "true";
+    }
     return env;
   }
 
@@ -174,13 +181,13 @@ describe("google-only pilot local fixtures", { skip: !runIntegration }, () => {
           worksheets:
             input.spreadsheetId === productionSheet
               ? [
-                  { sheetId: 15, title: "VET Web Form", index: 0, hidden: false, sheetType: "GRID" as const },
-                  { sheetId: 3, title: "Campaign Leads", index: 1, hidden: false, sheetType: "GRID" as const },
-                  { sheetId: 8, title: "Empty v3 Same File", index: 2, hidden: false, sheetType: "GRID" as const },
+                  { sheetId: 15, title: "VET Web Form", index: 0, hidden: false, sheetType: "GRID" as const, rowCount: 1000, columnCount: 36 },
+                  { sheetId: 3, title: "Campaign Leads", index: 1, hidden: false, sheetType: "GRID" as const, rowCount: 1000, columnCount: 36 },
+                  { sheetId: 8, title: "Empty v3 Same File", index: 2, hidden: false, sheetType: "GRID" as const, rowCount: 1000, columnCount: 36 },
                 ]
               : input.spreadsheetId === dirtySheet
-                ? [{ sheetId: 1, title: "Dirty Test", index: 0, hidden: false, sheetType: "GRID" as const }]
-                : [{ sheetId: 77, title: "Onboarding Test Leads", index: 0, hidden: false, sheetType: "GRID" as const }],
+                ? [{ sheetId: 1, title: "Dirty Test", index: 0, hidden: false, sheetType: "GRID" as const, rowCount: 1000, columnCount: 36 }]
+                : [{ sheetId: 77, title: "Onboarding Test Leads", index: 0, hidden: false, sheetType: "GRID" as const, rowCount: 1000, columnCount: 36 }],
         },
       }),
       getDriveFile: async (input: { fileId: string }) => ({
@@ -526,7 +533,7 @@ describe("google-only pilot local fixtures", { skip: !runIntegration }, () => {
     );
     assert.equal(customer.ok, false);
     if (customer.ok) return;
-    assert.equal(customer.error, "ghl_destination_not_allowed");
+    assert.equal(customer.error, "google_only_pilot_required");
     assert.equal(testBook.appends.length, 1);
     assert.equal(ghlCalls.length, 0);
     const destination = await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId: clientId } });
@@ -548,7 +555,11 @@ describe("google-only pilot local fixtures", { skip: !runIntegration }, () => {
     assert.equal(decision.append, "no_go");
     assert.equal(preflight.worksheet.state, "read");
     assert.equal(preflight.dispatch.state, "read");
-    assert.equal(preflight.grants.state, "read");
+    assert.ok(preflight.grants.state === "read" || preflight.grants.state === "unverified");
+    if (preflight.grants.state === "unverified") {
+      assert.match(preflight.grants.reason, /sa360_app/);
+      assert.equal(decision.setup, "no_go");
+    }
     if (preflight.dispatch.state === "read") {
       assert.equal(preflight.dispatch.value?.campaignDispatchEnabled, false);
       assert.equal(preflight.dispatch.value?.campaignWorksheetTitle, "VET Web Form");

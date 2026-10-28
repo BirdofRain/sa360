@@ -33,7 +33,7 @@ Row 1 must be these 35 cells, exact text and order, from `COMPANY_SHEETS_V3_HEAD
 Also required:
 
 - Sheet type `GRID`.
-- Body range `A2:AI5001` empty. Any non-empty cell in those 35 columns is `has_rows`. A read of 5001 rows is `truncated`. A failed body read is not empty. Approval returns `test_worksheet_not_approved` for all three. Cells past column AI are not scanned.
+- The whole declared grid, not `A2:AI5001`, must be proven empty beyond the 35 header cells. The reader asks Google for `gridProperties.rowCount` and `columnCount`, then reads that rectangle with `valueRenderOption=FORMULA`. A formula whose displayed value is blank, including `=""`, is occupied. Row 5002 and column AJ are inside the proof when the grid declares them. A grid taller than 5002 rows or wider than column AZ (52 columns), a missing dimension, or a failed formula read is `unproven`. Approval refuses `unproven`, `truncated`, and `has_rows`. An incomplete scan is never treated as empty.
 - Spreadsheet id different from the saved `CompanySheetsDestination.spreadsheetId`. VET Web Form and Campaign Leads fail this check even when Campaign Leads already has the exact-v3 header.
 - Control basis `company_created`, `drive_owner_verified`, or `approved_shared_drive`. Stats titles and the Canary header are refused.
 - Approved storage, when used, is `COMPANY_GOOGLE_APPROVED_SHARED_DRIVE_ID` together with `COMPANY_GOOGLE_APPROVED_PARENT_FOLDER_ID`. The API process reads those values. This draft does not set them.
@@ -54,28 +54,30 @@ The captured-test send requires an existing client-owned `SourceLeadEvent`. None
 | B. An isolated test source that cannot create inventory, fulfillment, billing, or delivery | No such source exists for `alex_gross`. |
 | C. `submitCompanySheetsCampaignPilot` or the custom-writer sample | The pilot is fixed to the internal test client unless `allowTestClient` is set, requires dispatch to be armed, creates a campaign dispatch intent, and uses `sheets-pilot@example.invalid`. Captured delivery returns `internal_pilot_not_client_proof` for any other client. `sendCompanySheetsCampaignTestRow` does not create a `SourceLeadEvent`. `synthetic@example.invalid` is a sample address, not a stored lead. |
 
-This draft does not add an intake route. The smallest later change is an admin-only reservation that inserts one `SourceLeadEvent` with `enrichmentMetadataJson.recordClass` `onboarding_operator_owned_test`, contact equal to a `ClientOnboardingVerifiedTestIdentity` already stored for that client, `deliveryResultJson` null, and zero inventory, fulfillment, allocation, and dispatch-intent rows. It must not call Google, GoHighLevel, or Zapier, and it must not arm dispatch. Local tests insert that row directly in `sa360_test`. They do not submit a form.
+This draft does not add an intake route and does not create a production `SourceLeadEvent`. `recordClass` `onboarding_operator_owned_test` is a label. It is not a quarantine. The current one-shot also requires `sourceProvider` `manual_import`, `sourceSystem` `external_vendor`, `sourceType` `manual_entry`, no `webhookRequestLogId`, and a route key other than `leadcapture_form`. A customer event with a forged label is refused. Local fixtures may insert that marked row in `sa360_test` only.
 
 `saveVerifiedTestIdentity` stores `evidenceJson.method` `operator_confirmed`. That is an attestation. It is not proof of mailbox or phone ownership. A human still confirms the identity. The one-shot phrase refuses `.invalid`, `@example.com`, `synthetic@example.invalid`, `synthetic-preview@example.invalid`, and `sheets-pilot@example.invalid`.
 
-Exclusivity is checked against other clients' `ClientOnboardingVerifiedTestIdentity` rows, matched on email or phone. An event for another client is refused as `tenant_mismatch` before that check. The check does not scan every other client's customer leads. The human confirmation in step 4 covers that gap.
+Exclusivity is checked against other clients' `ClientOnboardingVerifiedTestIdentity` rows and against other clients' `SourceLeadEvent` contact email and phone. A match, or a check that was not read, refuses the send. The reservation transaction repeats the identity, provenance, and downstream-count checks before inserting the run.
 
 ## 4. Code in this draft
 
-- `approveExactV3TestWorksheet` refuses a non-empty or unreadable body and refuses the saved production spreadsheet id.
-- The worksheet reader classifies `A2:AI5001` as `empty`, `has_rows`, or `truncated`. A failed body read returns null.
-- `DELIVER ONE GOOGLE SHEETS TEST ROW` is an additional confirmation. `DELIVER CAPTURED TEST LEAD` is unchanged.
-- The one-shot phrase requires destinations exactly `["google_sheets"]`, isolation `isolated_destination` plus `exact_v3_test_worksheet`, both dispatch switches off, an approved spreadsheet different from the production file, record class `onboarding_operator_owned_test`, a null delivery result, identity match, `testIdentitySharedWithOtherClient === false`, a non-synthetic email, and downstream counts that were read and are all zero.
+- `approveExactV3TestWorksheet` refuses a non-empty, truncated, or unproven body and refuses the saved production spreadsheet id.
+- The worksheet reader uses grid dimensions and a formula-aware full-body read. `empty` is the only proof that the body is empty. A failed or oversized read is `unproven`, not empty.
+- Execution requires both `SA360_CLIENT_ONBOARDING_V2_CAPTURED_TEST_ENABLED` and `SA360_CLIENT_ONBOARDING_GOOGLE_ONLY_PILOT_ENABLED` to be the exact string `true`. Either flag alone, or any other value, does not authorize an external call. The gate runs in `planCapturedTestDelivery` and on the mounted test-run route before the world is loaded.
+- `DELIVER ONE GOOGLE SHEETS TEST ROW` with destinations exactly `["google_sheets"]`, isolation `isolated_destination`, and `sheetsContract` `exact_v3_test_worksheet` is the only executing shape. `DELIVER CAPTURED TEST LEAD`, `REPEAT CAPTURED TEST LEAD`, GoHighLevel-only, Sheets plus GoHighLevel, and `synthetic_delivery` return `google_only_pilot_required` and make no external call. The older planner remains in source and is not authorized by this flag pair.
+- A direct `appendOnboardingCapturedTestRow` call also requires both flags. While the new flag is exact `true`, the GoHighLevel test adapter refuses before fetch. Replaying a stored request id with a different confirmation returns `revision_conflict` and does not start another external call.
+- The one-shot phrase also requires both dispatch switches off, an approved spreadsheet different from the production file, operator-owned provenance (not only the record class), a null delivery result, identity match, `testIdentitySharedWithOtherClient === false`, a non-synthetic email, and downstream counts that were read and are all zero.
 - A successful one-shot records warning `google_only_one_shot`. A later overlapping send returns `one_test_already_used`. An uncertain or in-flight prior returns `repeat_blocked_uncertain` or `repeat_blocked_in_flight` before that phrase can select another destination.
 - The planned sheet sets `bodyMustBeEmpty`. A reread that is not `empty` returns `worksheet_blocked` and does not append.
-- `readGoogleOnlyPilotPreflight` is a library. It has no HTTP route. Timeout or throw is `unavailable`, never an empty list.
+- `GET /admin/v1/clients/:clientAccountId/onboarding/google-only-pilot/preflight` is read-only. It accepts only the client id in the path. It requires the Admin API key and rejects portal, workspace, portal-assertion, and observer credentials. A failed or timed-out read is `unavailable` or `unverified`, never an empty success. Table grants are `has_table_privilege('sa360_app', ...)`. The response has no SQL, credentials, emails, or phones. It performs no writes and no Google or GoHighLevel request. `decideGoogleOnlyPilot` still returns `append: "no_go"`.
 - The Admin C.O.C. delivery button stays disabled. No Prisma migration. No flag default change.
 
 ## 5. Missing database evidence
 
 Production Postgres was not queried. This agent has no DigitalOcean or private-network SQL tool. The available tool namespaces are Datadog, Supabase, Vercel, Figma, Gmail, and Cursor cloud diagnostics. None of them is the SA360 production database. The documented production read path is an authorized App Platform console session. It was not opened.
 
-`readGoogleOnlyPilotPreflight` is the local shape of that future read. A timeout is `state: "unavailable"`. `decideGoogleOnlyPilot` then returns setup `no_go` and does not describe the unread tables as empty. Grants are `has_table_privilege(..., 'SELECT')` on the onboarding, lock, job, destination, event, and inventory tables. A missing privilege is no-go, not unavailable.
+`readGoogleOnlyPilotPreflight` is the local shape of that future read. A timeout is `state: "unavailable"`. `decideGoogleOnlyPilot` then returns setup `no_go` and does not describe the unread tables as empty. Grants are `has_table_privilege('sa360_app', ..., 'SELECT')` on the onboarding, lock, job, destination, event, and inventory tables. A missing privilege or a grant read that cannot be performed is `unverified`, and the decision is no-go. It is not an empty grant list.
 
 Unread for `alex_gross`, and not assumed empty:
 
@@ -99,7 +101,9 @@ With onboarding read and config enabled, Company Sheets enabled with execution a
 - captured delivery returns `captured_test_disabled`
 - the mock records zero Google calls and zero GHL calls
 
-With only the captured-test flag set inside the test process:
+With only the captured-test flag set, and with only the new pilot flag set, every executing phrase returns `google_only_pilot_required` and the mock records zero Google calls and zero GoHighLevel calls.
+
+With both flags set to the exact string `true` inside the test process, and only for `DELIVER ONE GOOGLE SHEETS TEST ROW` with destinations exactly `["google_sheets"]`:
 
 - the approved separate spreadsheet receives one 35-cell append
 - the idempotency key starts with `onboarding-test:` and is not `lead:` or `campaign:`
@@ -107,7 +111,7 @@ With only the captured-test flag set inside the test process:
 - GHL is not called
 - the saved destination id, VET Web Form binding, dispatch switches, cutoff, inventory, fulfillment, and dispatch intents stay unchanged
 - the same request id does not append again
-- an uncertain append stays one call; a second send returns `repeat_blocked_uncertain` even if the retry adds `ghl_location_api`
+- an uncertain append stays one call; a second one-shot returns `repeat_blocked_uncertain`. A retry that adds `ghl_location_api`, or that uses `REPEAT CAPTURED TEST LEAD`, returns `google_only_pilot_required` and does not call Google again
 - a customer `recordClass`, a synthetic address, another client's event, and the production spreadsheet id are refused before a call
 - Campaign Leads, an empty tab in the production file, and a separate occupied file are refused at approval
 
@@ -124,9 +128,9 @@ isolation.mode: isolated_destination
 isolation.sheetsContract: exact_v3_test_worksheet
 ```
 
-`ghl_location_api` and `ghl_inbound_webhook` return `ghl_destination_not_allowed` for that phrase. The existing button stays disabled and must not be enabled. `DELIVER CAPTURED TEST LEAD` remains able to name GHL when the captured-test flag is on. Do not use that phrase for this pilot, and do not turn the flag on in production as part of this draft.
+`ghl_location_api` and `ghl_inbound_webhook` are not an authorized shape. They return `google_only_pilot_required` before a destination-specific error. The existing button stays disabled and must not be enabled. `DELIVER CAPTURED TEST LEAD` and `REPEAT CAPTURED TEST LEAD` stay in source and cannot execute under this flag pair.
 
-The captured-test flag is shared by both phrases. A human authorizes the flag only for the single one-shot request, after the worksheet and the operator-owned event exist.
+A human authorizes both flags only for the single one-shot request, after the worksheet and the operator-owned event exist. Do not turn either flag on in production as part of this draft.
 
 Operations, and whether they write:
 
@@ -167,3 +171,62 @@ The separate-spreadsheet approval path is implemented and covered by local tests
 **NO-GO.**
 
 No production flag is changed. No live test run is created. No Google append is authorized. An uncertain result blocks every later send, including a retry that adds GoHighLevel.
+
+## 11. Approval-time and execution-time emptiness
+
+Approval calls `classifyExactV3Grid` and refuses anything other than `empty`. The writer does not trust that approval. `executeCompanySheetsDeliveryJob` takes `CompanySheetsWorksheetLock`, reconciles a row that already contains the stable `delivery_row_id`, and, for an `onboarding_captured_test` job that still has a pending row, reads the grid and formula values again before `appendStartedAt` and before `values.append`. A non-empty or unproven proof finishes the job retryable with `worksheet_blocked` and does not append.
+
+SA360 jobs for one worksheet are serialized by that lock. A second SA360 append either sees the first row during reconcile or waits and then refuses the occupied body. An editor outside SA360 can still write between the formula read and `values.append`. The lock does not cover that Google-side gap. Grid dimensions can also grow between the metadata read and the values read; a values row or column outside the declared grid is `unproven`, not empty. Approval-time emptiness is not execution-time emptiness.
+
+## 12. Operator-owned event quarantine design
+
+This is the design for the next change. This draft does not implement the creator, does not add a migration, and does not insert a production `SourceLeadEvent`.
+
+A metadata `recordClass` is not a quarantine. The future record is its own table, owned by a later Auth/Account migration, not a customer `SourceLeadEvent`.
+
+Creation:
+
+- Admin C.O.C. API key only. Observer, portal, and workspace credentials are rejected.
+- The operator identity is a `ClientOnboardingVerifiedTestIdentity` already stored for that one client. The contact must match it and must not match another client's verified identity or another client's stored lead email or phone.
+- One durable source event id, unique per client, created by this admin reservation. It is not a LeadCapture replay and it has no `webhookRequestLogId`.
+- Provenance is an explicit column that customer intake cannot set: provider `manual_import`, system `external_vendor`, type `manual_entry`, route key other than `leadcapture_form`.
+- `deliveryResultJson` stays null. Inventory, fulfillment, allocation, dispatch intent, and verification-approval audit counts are zero. The reservation transaction re-reads those counts and the identity collisions before commit.
+- No campaign or aged dispatch, no provider webhook, no Zapier, no GoHighLevel, no billing, and no automatic retry. The row is not evidence of genuine customer intake.
+
+Enforcement belongs at every side-effect entrypoint, not only at creation. Each of these must refuse the quarantine id: inventory registration, allocation, fulfillment outbox, verification-approval audit, company-sheets dispatch intent creation, provider webhook dispatch, Zapier and GoHighLevel delivery, and the campaign and aged dispatch planners.
+
+Future files and tables, not part of this pull request:
+
+- Prisma migration and model for the quarantine table. Auth/Account lane. Suggested columns: id, clientAccountId, sourceEventId unique, provenance, contact email and phone, verifiedIdentityId, createdByActor, deliveryResultJson null, createdAt.
+- Admin route and service that insert only that table.
+- Guards in the inventory, fulfillment, allocation, billing audit, dispatch-intent, webhook, Zapier, GoHighLevel, campaign, and aged entrypoints.
+- Tests for cross-client identity collision, a forged customer label, a non-zero downstream count inside the reservation transaction, and a refused call at each entrypoint.
+- Tables read by those checks: `ClientOnboardingVerifiedTestIdentity`, `SourceLeadEvent`, `LeadInventoryItem`, `FulfillmentOutbox`, `LeadAllocation`, `CompanySheetsDispatchIntent`, `LeadVerificationApprovalAuditEvent`.
+
+## 13. Preflight route contract
+
+`GET /admin/v1/clients/:clientAccountId/onboarding/google-only-pilot/preflight`
+
+- Authority: `x-sa360-admin-key` via `verifyAdminApiKey`. Missing key is 401.
+- Rejected before verify: `x-sa360-client-portal-key`, portal assertion, `x-sa360-workspace-key`, and cookie `sa360_admin_session=observer`. Status 403. The path is not on the observer allowlist.
+- Input: the path client id only. Empty, longer than 120 characters, or containing whitespace or quotes is 400. No request body and no SQL.
+- Tenant: the report's client id must equal the path id, or the response is 403 `tenant_mismatch`.
+- Reports: approved test worksheet presence, schema, control, and whether it is the same spreadsheet as the saved destination; verified identity presence and evidence method strings; conflict counts; prior run count, one-shot consumption, and uncertain or executing runs; worksheet locks with worksheet id, owner job id, and held; held `appendStartedAt` and unresolved job ids; both dispatch switches and both cutoffs; quarantine eligibility. Eligible count is 0 in this release because no dedicated quarantine table exists.
+- Read failure is `unavailable`. A grant or production read that cannot be performed is `unverified`. Neither is an empty list. Grants use `has_table_privilege('sa360_app', c.oid, 'SELECT')`.
+- Response excludes credentials, emails, phones, payloads, and spreadsheet titles. `writes` is false. `externalCalls.sheets` and `externalCalls.ghl` are false. `decision.append` is `no_go`.
+
+## 14. Published column-map preview follow-up
+
+The production mapping workflow is unchanged: browse the approved folder, select an authorized spreadsheet, choose a worksheet, read columns in their stored order, suggest and edit mappings, save a draft, and publish. Publishing does not call Google and does not rewrite historical rows or formulas. Changing the target or the published map while campaign delivery is active returns "Pause campaign Sheets delivery before changing the target or the column map."
+
+Follow-up, not implemented here: "Preview selected stored lead through the published custom column map, read-only." Show the exact field-to-column value, a blank mapping, and missing source data. Do not append a row to preview a mapping. Do not use the isolated 35-column test writer for that preview.
+
+## 15. Review and merge decisions
+
+| Question | Result |
+| --- | --- |
+| Agent J re-review of this draft | **GO**, after the local tests in this change pass. The draft is not an approval to append. |
+| Merge while production flags stay unset | **NO-GO** until that re-review. Enabling the existing captured-test flag alone does not authorize execution. The new flag also defaults unset. |
+| Pilot setup and an external append | **NO-GO**. There is no quarantine creator, no human-created empty file, and no authorized production read. `decision.append` remains `no_go`. |
+
+Residual: when the new pilot flag is unset, the separately reviewed GoHighLevel loopback adapter can still post if its own flags are set. That path is not an authorized pilot route. The captured-test service never reaches it under this flag pair, and the adapter refuses when the pilot flag is exact `true`. An editor outside SA360 can still change the Google grid between the post-lock formula read and `values.append`.

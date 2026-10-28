@@ -19,6 +19,8 @@ import {
 } from "../../lib/company-google-sheets-env.js";
 import {
   CONFIRM_DELIVER,
+  CONFIRM_ONE_GOOGLE_SHEETS_ROW,
+  ONBOARDING_OPERATOR_OWNED_TEST_CLASS,
   runCapturedTestDelivery,
   sha256Text,
   type CapturedTestRequest,
@@ -33,23 +35,31 @@ const headerSha256 = sha256Text(JSON.stringify(header));
 const enabled = {
   SA360_CLIENT_ONBOARDING_V2_CONFIG_ENABLED: "true",
   SA360_CLIENT_ONBOARDING_V2_CAPTURED_TEST_ENABLED: "true",
+  SA360_CLIENT_ONBOARDING_GOOGLE_ONLY_PILOT_ENABLED: "true",
 } as NodeJS.ProcessEnv;
+const RACE_EMAIL = "operator-owned@sa360.pilot";
 
 function deliveryWorld(clientAccountId: string, eventId: string): CapturedTestWorld {
   return {
     clientFound: true,
-    event: {
-      id: eventId,
-      clientAccountIdResolved: clientAccountId,
-      status: "routing_matched",
-      sourceRouteKey: "leadcapture_form",
-      enrichmentMetadataJson: {},
-      normalizedPayloadJson: { contact: { email: "ada@example.invalid", phone_e164: "+15555550100" } },
-      receivedAt: "2026-10-26T15:00:00.000Z",
-      sourceLeadId: "src_review_j",
-      deliveryResultJson: null,
-    },
-    identities: [],
+      event: {
+        id: eventId,
+        clientAccountIdResolved: clientAccountId,
+        status: "received",
+        sourceRouteKey: "operator_owned_test",
+        sourceProvider: "manual_import",
+        sourceSystem: "external_vendor",
+        sourceType: "manual_entry",
+        webhookRequestLogId: null,
+        enrichmentMetadataJson: { recordClass: ONBOARDING_OPERATOR_OWNED_TEST_CLASS },
+        normalizedPayloadJson: { contact: { email: RACE_EMAIL, phone_e164: "+15551230000" } },
+        receivedAt: "2026-10-26T15:00:00.000Z",
+        sourceLeadId: "src_review_j",
+        deliveryResultJson: null,
+        downstream: { inventoryCount: 0, fulfillmentCount: 0, allocationCount: 0, dispatchIntentCount: 0 },
+      },
+      identities: [{ email: RACE_EMAIL, phoneE164: "+15551230000" }],
+      testIdentitySharedWithOtherClient: false,
     sheets: {
       spreadsheetId: "sheet_client",
       spreadsheetTitle: "Client",
@@ -102,7 +112,7 @@ function deliveryRequest(clientAccountId: string, eventId: string, requestId: st
     sourceLeadEventId: eventId,
     destinations: ["google_sheets"],
     execute: true,
-    confirmation: CONFIRM_DELIVER,
+    confirmation: CONFIRM_ONE_GOOGLE_SHEETS_ROW,
     isolation: { mode: "isolated_destination", sheetsContract: "exact_v3_test_worksheet" },
     actorLabel: "review-j",
   };
@@ -133,11 +143,23 @@ test("two different request ids cannot both send the same captured lead", async 
   await prisma.clientAccount.create({ data: { clientAccountId, clientDisplayName: "Race Client" } });
   const event = await prisma.sourceLeadEvent.create({
     data: {
-      sourceProvider: "leadcapture_io",
-      sourceSystem: "leadcapture_io_nextgen",
-      sourceType: "webhook",
+      sourceProvider: "manual_import",
+      sourceSystem: "external_vendor",
+      sourceType: "manual_entry",
       rawPayloadJson: { fixture: "review-j-race" },
+      normalizedPayloadJson: { contact: { email: RACE_EMAIL, phone_e164: "+15551230000" } },
+      enrichmentMetadataJson: { recordClass: ONBOARDING_OPERATOR_OWNED_TEST_CLASS },
       clientAccountIdResolved: clientAccountId,
+    },
+  });
+  await prisma.clientOnboardingVerifiedTestIdentity.create({
+    data: {
+      clientAccountId,
+      email: RACE_EMAIL,
+      phoneE164: "+15551230000",
+      requestId: randomUUID(),
+      actorLabel: "review-j",
+      evidenceJson: { method: "operator_confirmed" },
     },
   });
   const sheets = createFakeSheetsAppend();
@@ -183,6 +205,7 @@ test("two different request ids cannot both send the same captured lead", async 
       control: sheet.control,
       ownerClientAccountId: sheet.ownerClientAccountId,
       destinationRevision: sheet.destinationRevision,
+      historicalDataRows: "empty" as const,
     });
     const first = runCapturedTestDelivery(deliveryRequest(clientAccountId, event.id, requestA), world, {
       env: enabled,
@@ -234,6 +257,7 @@ test("two different request ids cannot both send the same captured lead", async 
       leftDb.$disconnect().catch(() => undefined),
       rightDb.$disconnect().catch(() => undefined),
     ]);
+    await prisma.clientOnboardingVerifiedTestIdentity.deleteMany({ where: { clientAccountId } }).catch(() => undefined);
     await prisma.clientOnboardingTestRun.deleteMany({ where: { clientAccountId } }).catch(() => undefined);
     await prisma.sourceLeadEvent.deleteMany({ where: { id: event.id } }).catch(() => undefined);
     await prisma.clientAccount.deleteMany({ where: { clientAccountId } }).catch(() => undefined);
@@ -247,16 +271,22 @@ function routeWorld(): CapturedTestWorld {
         id: "evt_note_v2",
         clientAccountIdResolved: "client_a",
         status: "routing_matched",
-        sourceRouteKey: "leadcapture_form",
-        enrichmentMetadataJson: {},
+        sourceRouteKey: "operator_owned_test",
+        sourceProvider: "manual_import",
+        sourceSystem: "external_vendor",
+        sourceType: "manual_entry",
+        webhookRequestLogId: null,
+        enrichmentMetadataJson: { recordClass: ONBOARDING_OPERATOR_OWNED_TEST_CLASS },
         normalizedPayloadJson: {
-          contact: { email: "ada@example.invalid", phone_e164: "+15555550100" },
+          contact: { email: RACE_EMAIL, phone_e164: "+15551230000" },
         },
         receivedAt: "2026-10-26T15:00:00.000Z",
         sourceLeadId: null,
         deliveryResultJson: null,
+        downstream: { inventoryCount: 0, fulfillmentCount: 0, allocationCount: 0, dispatchIntentCount: 0 },
       },
-      identities: [{ email: "ada@example.invalid", phoneE164: null }],
+      identities: [{ email: RACE_EMAIL, phoneE164: "+15551230000" }],
+      testIdentitySharedWithOtherClient: false,
       sheets: {
         spreadsheetId: "sheet_client",
         spreadsheetTitle: null,
@@ -274,6 +304,18 @@ function routeWorld(): CapturedTestWorld {
         canaryRisk: { uncertain: false, appendStartedAtHeld: false },
         campaignControl: { establishControl: "drive_owner_verified", checkedAt: "2026-10-26T18:00:00.000Z" },
         destinationRevision: 2,
+        approvedTestWorksheet: {
+          spreadsheetId: "sheet_isolated",
+          worksheetId: 77,
+          worksheetTitle: "Onboarding Test Leads",
+          schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3,
+          header,
+          headerSha256,
+          destinationRevision: 4,
+          ownerClientAccountId: "client_a",
+          control: { establishControl: "company_created", checkedAt: "2026-10-26T18:00:00.000Z" },
+        },
+        approvedTestWorksheetRisk: { uncertain: false, appendStartedAtHeld: false },
       },
       ghl: {
         locationId: "loc_prod",
@@ -358,8 +400,8 @@ test("the mounted test route rereads the worksheet before an append", async () =
         sourceLeadEventId: "evt_note_v2",
         destinations: ["google_sheets"],
         execute: true,
-        confirmation: CONFIRM_DELIVER,
-        isolation: { mode: "verified_test_identity", sheetsContract: "exact_v3_test_worksheet" },
+        confirmation: CONFIRM_ONE_GOOGLE_SHEETS_ROW,
+        isolation: { mode: "isolated_destination", sheetsContract: "exact_v3_test_worksheet" },
       },
     });
     assert.equal(
@@ -420,13 +462,9 @@ test("the mounted test route calls the aggregate GHL owner once", async () => {
         isolation: { mode: "verified_test_identity", sheetsContract: "exact_v3_test_worksheet" },
       },
     });
-    assert.notEqual(
-      ghl.json().error,
-      "execution_pending_review",
-      "dropping ghlAggregate makes a Sheets+GHL delivery look unwired"
-    );
-    assert.equal(ghlDeliveries, 1, "app.ts supplies one GHL deliver owner, but the route never calls it");
-    assert.equal(sheets.calls.filter((call) => call.kind === "onboarding_captured_test").length <= 1, true);
+    assert.equal(ghl.json().error, "google_only_pilot_required");
+    assert.equal(ghlDeliveries, 0, "Sheets+GHL is not an authorized Google-only pilot call");
+    assert.equal(sheets.calls.length, 0);
   } finally {
     await app.close();
     if (prev !== undefined) process.env.ADMIN_API_KEY = prev;

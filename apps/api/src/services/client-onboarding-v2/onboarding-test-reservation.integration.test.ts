@@ -11,7 +11,7 @@ import { PrismaClient } from "@prisma/client";
 import { COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3, companySheetsCampaignHeader } from "../../lib/company-google-sheets-env.js";
 import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
 import {
-  CONFIRM_DELIVER,
+  CONFIRM_ONE_GOOGLE_SHEETS_ROW,
   runCapturedTestDelivery,
   type CapturedTestOutcome,
   type CapturedTestRequest,
@@ -28,7 +28,7 @@ import { createPrismaCapturedTestStore } from "./onboarding-test-store.js";
 
 const integrationUrlRaw = process.env.SA360_TEST_DATABASE_URL?.trim() || "";
 const runIntegration = Boolean(integrationUrlRaw);
-const EMAIL = "reservation.mock@example.invalid";
+const EMAIL = "reservation-owned@sa360.pilot";
 const PHONE = "+15555550199";
 const header = [...(companySheetsCampaignHeader(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3) ?? [])];
 
@@ -46,10 +46,21 @@ describe("captured test reservation across two Prisma clients", { skip: !runInte
     await leftDb.clientAccount.create({
       data: { clientAccountId: clientId, clientDisplayName: "Reservation Mock", status: "active" },
     });
+    await leftDb.clientOnboardingVerifiedTestIdentity.create({
+      data: {
+        clientAccountId: clientId,
+        email: EMAIL,
+        phoneE164: PHONE,
+        requestId: randomUUID(),
+        actorLabel: "reservation",
+        evidenceJson: { method: "operator_confirmed" },
+      },
+    });
   });
 
   after(async () => {
     if (!leftDb) return;
+    await leftDb.clientOnboardingVerifiedTestIdentity.deleteMany({ where: { clientAccountId: clientId } }).catch(() => undefined);
     await leftDb.clientOnboardingTestRun.deleteMany({ where: { clientAccountId: clientId } }).catch(() => undefined);
     await leftDb.sourceLeadEvent.deleteMany({ where: { id: { in: eventIds } } }).catch(() => undefined);
     await leftDb.clientAccount.deleteMany({ where: { clientAccountId: clientId } }).catch(() => undefined);
@@ -143,29 +154,18 @@ describe("captured test reservation across two Prisma clients", { skip: !runInte
 
     const ghlEvent = await createEvent(leftDb, clientId, eventIds);
     const ghl = heldGhl();
-    const ghlLeft = deliver(left, openSheets().port, ghl.port, clientId, ghlEvent, `req_ghl_a_${suffix}`, ["ghl_location_api"]);
-    const ghlRight = deliver(right, openSheets().port, ghl.port, clientId, ghlEvent, `req_ghl_b_${suffix}`, ["ghl_location_api"]);
-    const earlyGhl = await firstToSettle(ghlLeft, ghlRight);
-    await untilCount(() => ghl.deliveries, 1);
-    assert.equal(ghl.deliveries, 1);
-    assert.equal(earlyGhl.ok, false);
-    ghl.release();
-    const ghlOutcomes = await Promise.all([ghlLeft, ghlRight]);
-    assert.equal(ghlOutcomes.filter(executedNow).length, 1);
-    assert.equal(ghl.deliveries, 1);
+    const ghlLeft = await deliver(left, openSheets().port, ghl.port, clientId, ghlEvent, `req_ghl_a_${suffix}`, ["ghl_location_api"]);
+    const ghlRight = await deliver(right, openSheets().port, ghl.port, clientId, ghlEvent, `req_ghl_b_${suffix}`, ["ghl_location_api"]);
+    assert.equal(ghl.deliveries, 0);
+    assert.equal(ghlLeft.ok, false);
+    assert.equal(ghlRight.ok, false);
+    if (ghlLeft.ok || ghlRight.ok) return;
+    assert.equal(ghlLeft.error, "google_only_pilot_required");
+    assert.equal(ghlRight.error, "google_only_pilot_required");
     const ghlRuns = await rightDb.clientOnboardingTestRun.findMany({
       where: { clientAccountId: clientId, sourceLeadEventId: ghlEvent },
-      include: { attempts: { include: { keys: true } } },
     });
-    assert.equal(ghlRuns.length, 1);
-    assert.equal(ghlRuns[0]?.attempts.length, 1);
-    assert.equal(ghlRuns[0]?.attempts[0]?.destination, "ghl_location_api");
-    assert.equal(ghlRuns[0]?.attempts[0]?.downstreamExecuted, false);
-    assert.equal(ghlRuns[0]?.attempts[0]?.externalCallExecuted, true);
-    const ghlKeys = ghlRuns[0]?.attempts[0]?.keys.map((key) => key.idempotencyKey) ?? [];
-    assert.ok(ghlKeys.some((key) => key.endsWith(":ghl-contact")));
-    assert.ok(ghlKeys.some((key) => key.endsWith(":ghl-workflow")));
-    assert.ok(ghlKeys.some((key) => key.includes(":ghl-note:")));
+    assert.equal(ghlRuns.length, 0);
     assert.equal(await leftDb.sourceLeadEvent.count({ where: { clientAccountIdResolved: clientId } }), eventsBefore + 5);
     const account = await rightDb.clientAccount.findUniqueOrThrow({ where: { clientAccountId: clientId } });
     assert.equal(account.status, "active");
@@ -213,8 +213,7 @@ async function createEvent(db: PrismaClient, clientId: string, eventIds: string[
       normalizedPayloadJson: {
         contact: { first_name: "Ada", last_name: "Mock", email: EMAIL, phone_e164: PHONE, state: "VA" },
       },
-      enrichmentMetadataJson: { recordClass: "campaign_lead" },
-      deliveryResultJson: { receipt: "unchanged" },
+      enrichmentMetadataJson: { recordClass: "onboarding_operator_owned_test" },
     },
   });
   eventIds.push(lead.id);
@@ -234,12 +233,20 @@ function deliver(
     env: {
       SA360_CLIENT_ONBOARDING_V2_CONFIG_ENABLED: "true",
       SA360_CLIENT_ONBOARDING_V2_CAPTURED_TEST_ENABLED: "true",
+      SA360_CLIENT_ONBOARDING_GOOGLE_ONLY_PILOT_ENABLED: "true",
     },
     notes: fakeOnboardingLeadNote(),
     store,
     sheets,
     ghlAggregate: ghl,
-    rereadSheet: async (sheet) => sheet,
+    rereadSheet: async (sheet) => ({
+      header: [...sheet.header],
+      headerSha256: sheet.headerSha256,
+      control: sheet.control,
+      ownerClientAccountId: sheet.ownerClientAccountId,
+      destinationRevision: sheet.destinationRevision,
+      historicalDataRows: "empty" as const,
+    }),
     execution: "injected_fakes",
   });
 }
@@ -257,9 +264,9 @@ function requestFor(
     sourceLeadEventId: eventId,
     destinations,
     execute: true,
-    confirmation: CONFIRM_DELIVER,
+    confirmation: CONFIRM_ONE_GOOGLE_SHEETS_ROW,
     acknowledgeDownstreamAutomation: true,
-    isolation: { mode: "verified_test_identity", sheetsContract: "exact_v3_test_worksheet" },
+    isolation: { mode: "isolated_destination", sheetsContract: "exact_v3_test_worksheet" },
     noteOverflow: "refuse",
     repeatOfTestRunId: null,
     actorLabel: "operator",
@@ -273,16 +280,22 @@ function worldFor(clientId: string, eventId: string): CapturedTestWorld {
       id: eventId,
       clientAccountIdResolved: clientId,
       status: "routing_matched",
-      sourceRouteKey: "manual",
-      enrichmentMetadataJson: { recordClass: "campaign_lead" },
+      sourceRouteKey: "operator_owned_test",
+      sourceProvider: "manual_import",
+      sourceSystem: "external_vendor",
+      sourceType: "manual_entry",
+      webhookRequestLogId: null,
+      enrichmentMetadataJson: { recordClass: "onboarding_operator_owned_test" },
       normalizedPayloadJson: {
         contact: { first_name: "Ada", last_name: "Mock", email: EMAIL, phone_e164: PHONE, state: "VA" },
       },
       receivedAt: "2026-10-26T15:00:00.000Z",
       sourceLeadId: null,
-      deliveryResultJson: { receipt: "unchanged" },
+      deliveryResultJson: null,
+      downstream: { inventoryCount: 0, fulfillmentCount: 0, allocationCount: 0, dispatchIntentCount: 0 },
     },
     identities: [{ email: EMAIL, phoneE164: PHONE }],
+    testIdentitySharedWithOtherClient: false,
     sheets: {
       spreadsheetId: `sheet_${clientId}`,
       spreadsheetTitle: "Reservation",
@@ -300,6 +313,18 @@ function worldFor(clientId: string, eventId: string): CapturedTestWorld {
       canaryRisk: { uncertain: false, appendStartedAtHeld: false },
       campaignControl: { establishControl: "drive_owner_verified", checkedAt: "2026-10-26T18:00:00.000Z" },
       destinationRevision: 3,
+      approvedTestWorksheet: {
+        spreadsheetId: `test_${clientId}`,
+        worksheetId: 77,
+        worksheetTitle: "Onboarding Test Leads",
+        schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3,
+        header,
+        headerSha256: "a".repeat(64),
+        destinationRevision: 1,
+        ownerClientAccountId: clientId,
+        control: { establishControl: "drive_owner_verified", checkedAt: "2026-10-26T18:00:00.000Z" },
+      },
+      approvedTestWorksheetRisk: { uncertain: false, appendStartedAtHeld: false },
     },
     ghl: {
       locationId: "loc_mock",
@@ -325,8 +350,8 @@ function worldFor(clientId: string, eventId: string): CapturedTestWorld {
       inventoryCount: 0,
       billingRowCount: 0,
       dispatchIntentCount: 0,
-      eventStatus: "routing_matched",
-      eventDeliveryResult: { receipt: "unchanged" },
+      eventStatus: "received",
+      eventDeliveryResult: null,
       campaignDispatchEnabled: false,
       agedDispatchEnabled: false,
     },

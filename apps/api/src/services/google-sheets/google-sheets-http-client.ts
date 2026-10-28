@@ -20,6 +20,9 @@ export type GoogleSheetsWorksheet = {
   index: number;
   hidden: boolean;
   sheetType: string;
+  /** Present when the metadata response included gridProperties. */
+  rowCount?: number;
+  columnCount?: number;
 };
 
 export type GoogleSpreadsheetMetadata = {
@@ -82,6 +85,9 @@ function parseWorksheet(value: unknown): GoogleSheetsWorksheet | null {
   if (typeof sheetId !== "number" || !Number.isInteger(sheetId) || sheetId < 0) return null;
   if (!title) return null;
   if (typeof index !== "number" || !Number.isInteger(index) || index < 0) return null;
+  const grid = asRecord(properties.gridProperties);
+  const rowCount = integerGridSize(grid?.rowCount);
+  const columnCount = integerGridSize(grid?.columnCount);
   return {
     sheetId,
     title,
@@ -90,7 +96,13 @@ function parseWorksheet(value: unknown): GoogleSheetsWorksheet | null {
     sheetType: typeof properties.sheetType === "string" && properties.sheetType.trim()
       ? properties.sheetType.trim()
       : "GRID",
+    ...(rowCount == null ? {} : { rowCount }),
+    ...(columnCount == null ? {} : { columnCount }),
   };
+}
+
+function integerGridSize(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : null;
 }
 
 export function parseSpreadsheetMetadata(
@@ -156,6 +168,43 @@ export async function getSpreadsheetMetadata(
   const metadata = parseSpreadsheetMetadata(parsed.json, input.spreadsheetId);
   if (!metadata) return { ok: false, reason: "malformed_response" };
   return { ok: true, metadata };
+}
+
+const GRID_BOUND_FIELDS = "sheets.properties(sheetId,gridProperties(rowCount,columnCount))";
+
+/** Reads declared grid size only. It does not read cell values and does not write. */
+export async function getWorksheetGridBounds(
+  input: { spreadsheetId: string; accessToken: string },
+  fetchImpl: FetchLike = fetch
+): Promise<
+  { ok: true; worksheets: Array<{ sheetId: number; rowCount: number; columnCount: number }> } | { ok: false; reason: GoogleSheetsHttpFailure }
+> {
+  const url = `${GOOGLE_SHEETS_SPREADSHEETS_URL}/${encodeURIComponent(input.spreadsheetId)}?fields=${encodeURIComponent(GRID_BOUND_FIELDS)}`;
+  assertSheetsApiUrl(url);
+  let response: Response;
+  try {
+    response = await boundedFetch(fetchImpl, url, {
+      method: "GET",
+      headers: { Accept: "application/json", Authorization: `Bearer ${input.accessToken}` },
+    });
+  } catch {
+    return { ok: false, reason: "network_error" };
+  }
+  const parsed = await readJson(response);
+  if (!parsed.ok) return parsed;
+  if (!response.ok) return { ok: false, reason: classifySheetsFailure(response.status) };
+  const record = asRecord(parsed.json);
+  const sheets = Array.isArray(record?.sheets) ? record.sheets : [];
+  const worksheets = sheets.flatMap((sheet) => {
+    const properties = asRecord(asRecord(sheet)?.properties);
+    const grid = asRecord(properties?.gridProperties);
+    const sheetId = properties?.sheetId;
+    const rowCount = integerGridSize(grid?.rowCount);
+    const columnCount = integerGridSize(grid?.columnCount);
+    if (typeof sheetId !== "number" || rowCount == null || columnCount == null) return [];
+    return [{ sheetId, rowCount, columnCount }];
+  });
+  return { ok: true, worksheets };
 }
 
 export async function createSpreadsheet(

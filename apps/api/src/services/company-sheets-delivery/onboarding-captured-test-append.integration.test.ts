@@ -93,6 +93,9 @@ class MemorySheet {
       }
       return json(200, {});
     }
+    if (decoded.includes("valueRenderOption=FORMULA")) {
+      return json(200, { values: [this.headerFor(decoded), ...this.rows] });
+    }
     if (decoded.includes("A1:ZZ")) {
       const header = this.headerFor(decoded);
       const width = decoded.includes("A1:ZZ2") ? 2 : 1;
@@ -185,6 +188,8 @@ describe("onboarding exact-v3 captured test append", { skip: !runIntegration }, 
       ...process.env,
       SA360_COMPANY_GOOGLE_SHEETS_ENABLED: "true",
       SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED: execution ? "true" : "false",
+      SA360_CLIENT_ONBOARDING_V2_CAPTURED_TEST_ENABLED: "true",
+      SA360_CLIENT_ONBOARDING_GOOGLE_ONLY_PILOT_ENABLED: "true",
     };
   }
 
@@ -214,13 +219,15 @@ describe("onboarding exact-v3 captured test append", { skip: !runIntegration }, 
           title: "Onboarding",
           spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${input.spreadsheetId}`,
           worksheets: [
-            { sheetId: 0, title: "Campaign Leads", index: 0, hidden: false, sheetType: "GRID" as const },
+            { sheetId: 0, title: "Campaign Leads", index: 0, hidden: false, sheetType: "GRID" as const, rowCount: 1000, columnCount: 35 },
             {
               sheetId: 7,
               title: world.stats ? "Daily Stats" : "Exact v3 Test",
               index: 1,
               hidden: false,
               sheetType: "GRID" as const,
+              rowCount: 1000,
+              columnCount: 35,
             },
           ],
         },
@@ -451,6 +458,33 @@ describe("onboarding exact-v3 captured test append", { skip: !runIntegration }, 
     assert.equal(sent.appended, false);
     assert.equal(sheet.appends.length, 1);
     assert.equal(sheet.rows.filter((row) => row[DELIVERY_INDEX] === request.idempotencyKey).length, 1);
+  });
+
+  it("makes no Google call without the pilot flag and does not append into a body that changed after approval", async () => {
+    const sheet = sheetFor(sheetId.ok);
+    const beforeAppends = sheet.appends.length;
+    const beforeCalls = sheet.calls;
+    const closedEvent = await createLead(client.ok);
+    const closedEnv = testEnv();
+    delete closedEnv.SA360_CLIENT_ONBOARDING_GOOGLE_ONLY_PILOT_ENABLED;
+    const closed = await appendOnboardingCapturedTestRow(requestFor("ok", closedEvent.id, `runClosed${suffix}`), {
+      ...deps(),
+      env: closedEnv,
+    });
+    assert.equal(closed.ok, false);
+    if (closed.ok) return;
+    assert.equal(closed.code, "google_only_pilot_required");
+    assert.equal(closed.externalCallExecuted, false);
+    assert.equal(sheet.appends.length, beforeAppends);
+    assert.equal(sheet.calls, beforeCalls);
+
+    const event = await createLead(client.ok);
+    const occupied = await appendOnboardingCapturedTestRow(requestFor("ok", event.id, `runOccupied${suffix}`), deps());
+    assert.equal(occupied.ok, false);
+    if (occupied.ok) return;
+    assert.match(occupied.code, /is not empty/);
+    assert.equal(occupied.externalCallExecuted, false);
+    assert.equal(sheet.appends.length, beforeAppends);
   });
 
   it("blocks an invalid live header without appending or clearing a later retry", async () => {
@@ -777,6 +811,7 @@ describe("onboarding exact-v3 captured test append", { skip: !runIntegration }, 
     if (seeded.status !== "succeeded") return;
     assert.equal(seeded.externalCallExecuted, false);
 
+    readerSheet.rows = [];
     const createdRequest = requestFor("reader", event.id, `portNew${suffix}`);
     const created = await port.append(portRequest(createdRequest));
     assert.equal(created.status, "succeeded");
@@ -790,6 +825,7 @@ describe("onboarding exact-v3 captured test append", { skip: !runIntegration }, 
     assert.equal(replay.externalCallExecuted, false);
     assert.equal(readerSheet.appends.length, afterCreate);
 
+    readerSheet.rows = [];
     readerSheet.failAppend = "throw-before-write";
     const timeoutEvent = await createLead(client.reader);
     const timeoutRequest = requestFor("reader", timeoutEvent.id, `portTimeout${suffix}`);

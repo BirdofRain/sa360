@@ -15,6 +15,7 @@ import type {
   WorksheetRisk,
 } from "./captured-test-delivery.js";
 import { campaignLeadIdentityFromPayload } from "../company-sheets-dispatch/company-sheets-onboarding-read.js";
+import { sourceLeadOwnedByOtherClient } from "./google-only-quarantine.js";
 import { storedLeadFromNormalizedPayload } from "./onboarding-note-bridge.js";
 import { loadStoredWorkflowDiscovery } from "./onboarding-ghl-bindings.js";
 
@@ -150,6 +151,10 @@ function toEvent(
     clientAccountIdResolved: string | null;
     status: string;
     sourceRouteKey: string | null;
+    sourceProvider: string;
+    sourceSystem: string;
+    sourceType: string;
+    webhookRequestLogId: string | null;
     enrichmentMetadataJson: unknown;
     normalizedPayloadJson: unknown;
     receivedAt: Date;
@@ -163,6 +168,10 @@ function toEvent(
     clientAccountIdResolved: event.clientAccountIdResolved,
     status: event.status,
     sourceRouteKey: event.sourceRouteKey,
+    sourceProvider: event.sourceProvider,
+    sourceSystem: event.sourceSystem,
+    sourceType: event.sourceType,
+    webhookRequestLogId: event.webhookRequestLogId,
     enrichmentMetadataJson: event.enrichmentMetadataJson,
     normalizedPayloadJson: event.normalizedPayloadJson,
     receivedAt: event.receivedAt.toISOString(),
@@ -204,7 +213,8 @@ async function identitySharedWithOtherClient(
     },
     select: { id: true },
   });
-  return matches != null;
+  if (matches) return true;
+  return sourceLeadOwnedByOtherClient(db, clientAccountId, email, phone);
 }
 
 function toApproved(row: {

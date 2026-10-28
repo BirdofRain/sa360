@@ -8,11 +8,7 @@
 import { createHash } from "node:crypto";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { COMPANY_SHEETS_V3_HEADER } from "@sa360/shared";
-import {
-  COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA,
-  exactHeader,
-  isCustomSheetsWriterEnabled,
-} from "../company-sheets-delivery/company-sheets-custom-row.js";
+import { isCustomSheetsWriterEnabled } from "../company-sheets-delivery/company-sheets-custom-row.js";
 import { findPublishedColumnMap } from "./column-maps.js";
 
 import { prisma } from "../../lib/db.js";
@@ -21,7 +17,7 @@ import {
   COMPANY_SHEETS_CANARY_SCHEMA_VERSION,
   COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3,
 } from "../../lib/company-google-sheets-env.js";
-import { readClientOnboardingSummary } from "./readiness.js";
+import { assessBoundCampaignHeader, readClientOnboardingSummary, sheetsFirstActivationReady } from "./readiness.js";
 
 const CONFIRMATION = "ACTIVATE CLIENT ONBOARDING DESTINATION";
 const SELECTABLE_CONTROL = new Set(["company_created", "drive_owner_verified", "approved_shared_drive"]);
@@ -356,7 +352,8 @@ async function sheetsIntentReady(clientAccountId: string, db: PrismaClient): Pro
   });
   if (!destination) return false;
   const campaign = destination.tabContracts.find((contract) => contract.role === "campaign");
-  const header = Array.isArray(campaign?.headerContract) ? (campaign?.headerContract as string[]) : [];
+  const rawHeader = campaign?.headerContract;
+  const header = Array.isArray(rawHeader) && rawHeader.every((cell) => typeof cell === "string") ? rawHeader : null;
   const published =
     campaign?.worksheetId == null
       ? null
@@ -366,17 +363,24 @@ async function sheetsIntentReady(clientAccountId: string, db: PrismaClient): Pro
           worksheetId: campaign.worksheetId,
           sourceFunnelId: null,
         });
-  const publishedHeader = Array.isArray(published?.headerSnapshot)
-    ? published.headerSnapshot.filter((cell): cell is string => typeof cell === "string")
-    : [];
-  const customReady =
-    isCustomSheetsWriterEnabled(process.env) &&
-    campaign?.setupState === "bound" &&
-    campaign.schemaVersion === COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA &&
-    published != null &&
-    exactHeader(publishedHeader, header);
-  const bound = (campaign?.setupState === "bound" && exactV3(header)) || customReady;
-  const probe = destination.writeReadiness === "verified";
+  const snapshot = published?.headerSnapshot;
+  const publishedHeader =
+    Array.isArray(snapshot) && snapshot.every((cell) => typeof cell === "string") ? snapshot : null;
+  const assessment = assessBoundCampaignHeader({
+    schemaVersion: campaign?.schemaVersion ?? null,
+    setupState: campaign?.setupState ?? null,
+    header,
+    spreadsheetId: destination.spreadsheetId,
+    worksheetId: campaign?.worksheetId ?? null,
+    publishedMap:
+      published && publishedHeader
+        ? {
+            spreadsheetId: published.spreadsheetId,
+            worksheetId: published.worksheetId,
+            headerSnapshot: publishedHeader,
+          }
+        : null,
+  });
   const synthetic = await db.companySheetsDeliveryJob.findFirst({
     where: {
       clientAccountId,
@@ -398,7 +402,15 @@ async function sheetsIntentReady(clientAccountId: string, db: PrismaClient): Pro
   const uncertain = await db.companySheetsDeliveryJob.count({
     where: { clientAccountId, status: "uncertain" },
   });
-  return Boolean(bound && probe && (synthetic || captured) && uncertain === 0 && SELECTABLE_CONTROL.has(destination.controlBasis));
+  return sheetsFirstActivationReady({
+    preset: assessment.preset,
+    headerReady: assessment.headerReady,
+    customWriterEnabled: isCustomSheetsWriterEnabled(process.env),
+    writeReadiness: destination.writeReadiness,
+    controlledTestSucceeded: Boolean(synthetic || captured),
+    uncertainJobs: uncertain,
+    controlSelectable: SELECTABLE_CONTROL.has(destination.controlBasis),
+  });
 }
 
 async function ghlIntentReady(

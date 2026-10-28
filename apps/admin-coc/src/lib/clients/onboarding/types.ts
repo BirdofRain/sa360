@@ -43,6 +43,8 @@ export type OnboardingSourceProof = {
 
 export type OnboardingGate = {
   id: string;
+  /** Absent on older summaries. A writer receipt is evidence even when this field is omitted. */
+  role?: "prerequisite" | "evidence";
   required: boolean;
   satisfied: boolean;
   evidenceIds: string[];

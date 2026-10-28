@@ -193,8 +193,39 @@ export function clientSwitchLine(
   return `Client campaign switch: ${campaign}. Aged dispatch: ${aged}. Global infrastructure: ${global}. This workspace does not change those switches.`;
 }
 
+const SHEET_PREREQUISITE_IDS = new Set([
+  "sheets_destination_saved",
+  "sheets_control_verified",
+  "sheets_tab_explicitly_bound",
+  "sheets_header_dispatch_ready",
+  "sheets_custom_map_published",
+  "sheets_permission_probe",
+  "sheets_no_uncertain_job",
+]);
+
 export function requiredGaps(gates: readonly OnboardingGate[]): OnboardingGate[] {
   return gates.filter((gate) => gate.required && !gate.satisfied);
+}
+
+/** Sheet gates that apply once the destination profile selects Sheets. A writer receipt is not one of them. */
+export function sheetSelectionPrerequisites(gates: readonly OnboardingGate[]): OnboardingGate[] {
+  return gates.filter((gate) => SHEET_PREREQUISITE_IDS.has(gate.id));
+}
+
+/**
+ * Checking Sheets makes the sheet gates prerequisites immediately.
+ * A custom map is one of those prerequisites when it is already required or when a published map already matches.
+ */
+export function sheetPrerequisiteRequired(gate: OnboardingGate, sheetsChecked: boolean): boolean {
+  if (gate.required) return true;
+  if (!sheetsChecked || !SHEET_PREREQUISITE_IDS.has(gate.id)) return false;
+  if (gate.id === "sheets_custom_map_published") return gate.satisfied;
+  return true;
+}
+
+/** Production receipt evidence. A missing receipt is visible here and is not a first-activation blocker. */
+export function postActivationEvidence(gates: readonly OnboardingGate[]): OnboardingGate[] {
+  return gates.filter((gate) => gate.role === "evidence" || gate.id === "sheets_writer_receipt");
 }
 
 export function ghlProofFromAttempts(

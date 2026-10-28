@@ -125,9 +125,17 @@ function destinationRow(headerContract: string[]) {
   };
 }
 
-function createDb(options: { client?: ReturnType<typeof clientRow> | null; headerContract?: string[] } = {}) {
+function createDb(
+  options: {
+    client?: object | null;
+    headerContract?: string[];
+    publishedMap?: { spreadsheetId: string; worksheetId: number; headerSnapshot: string[] } | null;
+  } = {}
+) {
   const calls: Call[] = [];
-  const client = options.client === undefined ? clientRow(options.headerContract) : options.client;
+  const client = (options.client === undefined ? clientRow(options.headerContract) : options.client) as
+    | (ReturnType<typeof clientRow> & { clientAccountId: string })
+    | null;
   const destination = client?.companySheetsDestination ?? null;
   const note = (model: string, op: string, args: unknown) => {
     calls.push({ model, op, args });
@@ -193,9 +201,22 @@ function createDb(options: { client?: ReturnType<typeof clientRow> | null; heade
       create: refuse("companySheetsDispatchIntent", "create"),
     },
     clientSheetColumnMap: {
-      findFirst: async (args: unknown) => {
+      findFirst: async (args: { where?: { spreadsheetId?: string; worksheetId?: number; status?: string } }) => {
         note("clientSheetColumnMap", "findFirst", args);
-        return null;
+        const map = options.publishedMap;
+        if (!map) return null;
+        const where = args.where ?? {};
+        if (where.spreadsheetId && where.spreadsheetId !== map.spreadsheetId) return null;
+        if (where.worksheetId != null && where.worksheetId !== map.worksheetId) return null;
+        if (where.status && where.status !== "published") return null;
+        return {
+          id: "map_fixture",
+          spreadsheetId: map.spreadsheetId,
+          worksheetId: map.worksheetId,
+          headerSnapshot: map.headerSnapshot,
+          status: "published",
+          sourceScope: "shared",
+        };
       },
       create: refuse("clientSheetColumnMap", "create"),
       update: refuse("clientSheetColumnMap", "update"),
@@ -459,9 +480,21 @@ test("summary reports stored dispatch state and distinct source proofs without w
     assert.equal(body.sources[0].proofs.routingMatched.satisfied, false);
     assert.equal(body.sources[0].proofs.delivery.satisfied, false);
     const probe = body.gates.find((gate: { id: string }) => gate.id === "sheets_permission_probe");
+    const headerGate = body.gates.find((gate: { id: string }) => gate.id === "sheets_header_dispatch_ready");
+    const customMap = body.gates.find((gate: { id: string }) => gate.id === "sheets_custom_map_published");
+    const receipt = body.gates.find((gate: { id: string; role?: string }) => gate.id === "sheets_writer_receipt");
     assert.equal(probe.required, true);
     assert.equal(probe.satisfied, false);
+    assert.equal(probe.role, "prerequisite");
+    assert.equal(headerGate.required, true);
+    assert.equal(headerGate.satisfied, true);
+    assert.equal(customMap.required, false);
+    assert.equal(customMap.satisfied, false);
+    assert.equal(receipt.required, false);
+    assert.equal(receipt.satisfied, false);
+    assert.equal(receipt.role, "evidence");
     assert.equal(body.blockers.includes("sheets_permission_probe"), true);
+    assert.equal(body.blockers.includes("sheets_writer_receipt"), false);
     assert.equal(body.blockers.includes("leadcapture_routing_matched"), true);
     assert.equal(calls.some((call) => call.op === "update" || call.op === "create"), false);
 
@@ -473,6 +506,155 @@ test("summary reports stored dispatch state and distinct source proofs without w
     assert.equal(proof.statusCode, 200);
     assert.equal(proof.json().sources[0].proofs.linked.satisfied, true);
     assert.equal(calls.some((call) => call.model === "sourceLeadEvent" && call.op === "create"), false);
+  } finally {
+    await app.close();
+    if (previous === undefined) delete process.env.ADMIN_API_KEY;
+    else process.env.ADMIN_API_KEY = previous;
+  }
+});
+
+function profileSheetsClient(input: {
+  schemaVersion: string;
+  header: string[];
+  writeReadiness: string;
+  sheetsSelected: boolean;
+}) {
+  const base = clientRow(input.header);
+  return {
+    ...base,
+    onboardingSetup: {
+      status: "submitted",
+      revision: 2,
+      setupDataJson: { destinationChoice: "ghl", sourceProvider: "other" },
+    },
+    onboardingDestinationProfile: {
+      revision: 3,
+      sheetsSelected: input.sheetsSelected,
+      ghlMode: "unset",
+      notesEnabled: false,
+      notesContractVersion: null,
+    },
+    companySheetsDestination: {
+      ...base.companySheetsDestination,
+      writeReadiness: input.writeReadiness,
+      tabContracts: [
+        {
+          id: "tab_campaign",
+          role: "campaign",
+          setupState: "bound",
+          worksheetId: 0,
+          worksheetTitle: "VET Web Form",
+          schemaVersion: input.schemaVersion,
+          headerContract: input.header,
+        },
+      ],
+    },
+  };
+}
+
+test("selecting Sheets on the destination profile reports a valid custom map and ignores a missing receipt", async () => {
+  const previous = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = ADMIN_KEY;
+  const header = ["Date", "Lead Type", "Client Name"];
+  const { db } = createDb({
+    client: profileSheetsClient({
+      schemaVersion: "company_sheets_campaign_custom_v1",
+      header,
+      writeReadiness: "verified",
+      sheetsSelected: true,
+    }),
+    publishedMap: { spreadsheetId: SPREADSHEET, worksheetId: 0, headerSnapshot: header },
+  });
+  const app = await buildApp({ db });
+  try {
+    const response = await app.inject({
+      method: "GET",
+      url: `/admin/v1/clients/${CLIENT}/onboarding`,
+      headers: adminHeaders(),
+    });
+    assert.equal(response.statusCode, 200);
+    const body = response.json();
+    assert.equal(body.destinationProfile.sheetsSelected, true);
+    assert.equal(body.sheets.writeReadiness, "verified");
+    const gate = (id: string) => body.gates.find((item: { id: string }) => item.id === id);
+    assert.equal(gate("sheets_header_dispatch_ready").required, true);
+    assert.equal(gate("sheets_header_dispatch_ready").satisfied, true);
+    assert.equal(gate("sheets_custom_map_published").required, true);
+    assert.equal(gate("sheets_custom_map_published").satisfied, true);
+    assert.equal(gate("sheets_permission_probe").required, true);
+    assert.equal(gate("sheets_permission_probe").satisfied, true);
+    assert.equal(gate("sheets_writer_receipt").required, false);
+    assert.equal(gate("sheets_writer_receipt").role, "evidence");
+    assert.equal(gate("sheets_writer_receipt").satisfied, false);
+    assert.equal(body.blockers.includes("sheets_custom_map_published"), false);
+    assert.equal(body.blockers.includes("sheets_header_dispatch_ready"), false);
+    assert.equal(body.blockers.includes("sheets_permission_probe"), false);
+    assert.equal(body.blockers.includes("sheets_writer_receipt"), false);
+
+    const hidden = createDb({
+      client: profileSheetsClient({
+        schemaVersion: "company_sheets_campaign_custom_v1",
+        header,
+        writeReadiness: "verified",
+        sheetsSelected: false,
+      }),
+      publishedMap: { spreadsheetId: SPREADSHEET, worksheetId: 0, headerSnapshot: header },
+    });
+    const hiddenApp = await buildApp({ db: hidden.db });
+    try {
+      const unselected = await hiddenApp.inject({
+        method: "GET",
+        url: `/admin/v1/clients/${CLIENT}/onboarding`,
+        headers: adminHeaders(),
+      });
+      assert.equal(unselected.statusCode, 200);
+      const unselectedBody = unselected.json();
+      assert.equal(unselectedBody.destinationProfile.sheetsSelected, false);
+      const unselectedMap = unselectedBody.gates.find((item: { id: string }) => item.id === "sheets_custom_map_published");
+      assert.equal(unselectedMap.required, false);
+      assert.equal(unselectedMap.satisfied, true);
+      assert.equal(unselectedBody.blockers.includes("sheets_custom_map_published"), false);
+    } finally {
+      await hiddenApp.close();
+    }
+  } finally {
+    await app.close();
+    if (previous === undefined) delete process.env.ADMIN_API_KEY;
+    else process.env.ADMIN_API_KEY = previous;
+  }
+});
+
+test("header drift makes a verified permission probe stale without hiding the stored readiness", async () => {
+  const previous = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = ADMIN_KEY;
+  const header = ["Date", "Lead Type", "Client Name"];
+  const { db } = createDb({
+    client: profileSheetsClient({
+      schemaVersion: "company_sheets_campaign_custom_v1",
+      header,
+      writeReadiness: "verified",
+      sheetsSelected: true,
+    }),
+    publishedMap: { spreadsheetId: SPREADSHEET, worksheetId: 0, headerSnapshot: ["Date", "Lead Type", "Other"] },
+  });
+  const app = await buildApp({ db });
+  try {
+    const response = await app.inject({
+      method: "GET",
+      url: `/admin/v1/clients/${CLIENT}/onboarding`,
+      headers: adminHeaders(),
+    });
+    assert.equal(response.statusCode, 200);
+    const body = response.json();
+    assert.equal(body.sheets.writeReadiness, "verified");
+    const gate = (id: string) => body.gates.find((item: { id: string }) => item.id === id);
+    assert.equal(gate("sheets_header_dispatch_ready").satisfied, false);
+    assert.equal(gate("sheets_custom_map_published").required, true);
+    assert.equal(gate("sheets_custom_map_published").satisfied, false);
+    assert.equal(gate("sheets_permission_probe").satisfied, false);
+    assert.equal(body.blockers.includes("sheets_permission_probe"), true);
+    assert.equal(body.blockers.includes("sheets_custom_map_published"), true);
+    assert.equal(body.blockers.includes("sheets_writer_receipt"), false);
   } finally {
     await app.close();
     if (previous === undefined) delete process.env.ADMIN_API_KEY;

@@ -6,7 +6,6 @@ import {
   COMPANY_GOOGLE_DRIVE_METADATA_SCOPE,
   COMPANY_GOOGLE_SPREADSHEETS_SCOPE,
   COMPANY_SHEETS_DELIVERY_EXECUTION_DISABLED,
-  COMPANY_SHEETS_WRITE_READINESS_NOT_VERIFIED,
   deriveCompanySheetsControl,
   grantedScopeList,
   isCompanyGoogleSheetsEnabled,
@@ -145,7 +144,8 @@ export type CompanySheetsDestinationView = {
   controlBasis: string;
   accessStatus: string;
   accessCheckedAt: string | null;
-  writeReadiness: "not_verified";
+  /** Stored CompanySheetsDestination.writeReadiness. This view does not replace it. */
+  writeReadiness: string;
   deliveryExecution: "disabled";
   liveDeliveryEnabled: false;
   enabled: false;
@@ -303,7 +303,7 @@ export function presentCompanySheetsDestination(
     controlBasis: row.controlBasis,
     accessStatus: row.accessStatus,
     accessCheckedAt: row.accessCheckedAt?.toISOString() ?? null,
-    writeReadiness: COMPANY_SHEETS_WRITE_READINESS_NOT_VERIFIED,
+    writeReadiness: row.writeReadiness,
     deliveryExecution: COMPANY_SHEETS_DELIVERY_EXECUTION_DISABLED,
     liveDeliveryEnabled: false,
     enabled: false,

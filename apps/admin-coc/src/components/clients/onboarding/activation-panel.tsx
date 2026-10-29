@@ -67,7 +67,7 @@ export function ActivationPanel({
         <StatusMark
           label="GHL ongoing delivery"
           state={ghlDeliveryEnabled === true ? "yes" : ghlDeliveryEnabled === false ? "no" : "unknown"}
-          detail="Independent of Sheets. A GHL test does not change this switch."
+          detail="Independent of Sheets. Enable ongoing GHL delivery is in GHL location and workflow. A GHL test does not change this switch."
         />
         <StatusMark
           label="Client campaign switch"

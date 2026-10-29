@@ -104,12 +104,13 @@ function mappingFact(
   const omitted = [...omissions];
   if (!fieldMapping && !customFields) {
     return {
-      summary: "Field mapping was not returned with this simulation.",
+      summary:
+        "Field mapping was not returned with this simulation. primary_reason is not delivered as Primary Concern. A blank primary_concern is omitted.",
       omissions: [],
     };
   }
   return {
-    summary: `Mapped core fields: ${joined(mapped)}. Omitted: ${joined(omitted)}. Omitted fields are not sent.`,
+    summary: `Mapped core fields: ${joined(mapped)}. Omitted: ${joined(omitted)}. Omitted fields are not sent. primary_reason is not delivered as Primary Concern. A blank primary_concern is omitted.`,
     omissions: omitted,
   };
 }

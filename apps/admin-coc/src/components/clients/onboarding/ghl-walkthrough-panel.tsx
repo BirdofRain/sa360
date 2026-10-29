@@ -12,13 +12,15 @@ import { LIVE_CANARY_CONFIRMATION_TEXT } from "@/lib/ghl-live-canary/types";
 import type { RoutingRuleGhlConfigSaveBody } from "@/lib/ghl-config/types";
 
 import { StatusMark } from "./status-mark";
-import type {
-  GhlWalkthroughActions,
-  GhlWalkthroughConnection,
-  GhlWalkthroughExecution,
-  GhlWalkthroughLocation,
-  GhlWalkthroughPreflight,
-  GhlWalkthroughPreview,
+import {
+  ONGOING_GHL_ENABLE_CONFIRMATION,
+  ONGOING_GHL_PAUSE_CONFIRMATION,
+  type GhlWalkthroughActions,
+  type GhlWalkthroughConnection,
+  type GhlWalkthroughExecution,
+  type GhlWalkthroughLocation,
+  type GhlWalkthroughPreflight,
+  type GhlWalkthroughPreview,
 } from "./ghl-walkthrough-types";
 
 type TriggerMode = "direct_api" | "tag_trigger" | "none";
@@ -70,6 +72,8 @@ export function GhlWalkthroughPanel({
   const [execution, setExecution] = useState<GhlWalkthroughExecution | null>(null);
   const [confirmText, setConfirmText] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [ongoingText, setOngoingText] = useState("");
+  const [ongoingOpen, setOngoingOpen] = useState<"enable" | "pause" | null>(null);
   const [authorizeUrl, setAuthorizeUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
@@ -237,6 +241,25 @@ export function GhlWalkthroughPanel({
     if (ready.ok) setPreflight(ready.preflight);
   }
 
+  const canEnableOngoing =
+    Boolean(savedLocationId) && Boolean(savedWorkflowId) && deliveryEnabled !== true && ongoingText.trim() === ONGOING_GHL_ENABLE_CONFIRMATION;
+  const canPauseOngoing = deliveryEnabled === true && ongoingText.trim() === ONGOING_GHL_PAUSE_CONFIRMATION;
+
+  async function setOngoing(enabled: boolean) {
+    if (enabled ? !canEnableOngoing : !canPauseOngoing) return;
+    setPending(enabled ? "enable" : "pause");
+    setError(null);
+    const result = await actions.setOngoingDelivery(enabled);
+    setPending(null);
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+    setDeliveryEnabled(result.deliveryEnabled);
+    setOngoingOpen(null);
+    setOngoingText("");
+  }
+
   return (
     <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-4" data-testid="ghl-walkthrough">
       <div>
@@ -259,19 +282,20 @@ export function GhlWalkthroughPanel({
           </Link>
           . Page URL or slug, then Associate source, then Confirm association.
         </li>
-        <li>Google Sheets on this page: link the copied spreadsheet and the existing tab.</li>
-        <li>Test console: Preview stored lead, and compare that lead with the worksheet headers.</li>
-        <li>Test console shows the Sheets attempt. It does not enable Sheets.</li>
+        <li>Google Sheets on this page: choose the copied spreadsheet and the existing tab.</li>
+        <li>Map columns, confirm each header, then Publish mapping. primary_reason is not Primary Concern.</li>
+        <li>Test console: Preview stored lead, then send the selected Sheets test. That test does not enable Sheets.</li>
         <li>
           <Link href={`/clients/${encodeURIComponent(clientAccountId)}/google-sheets`} className="text-sky-700 hover:underline">
             Google Sheets
           </Link>
-          . Enable campaign delivery only when the Sheets test looks right.
+          . Enable campaign delivery when the Sheets test looks right. That switch is ongoing Sheets delivery.
         </li>
         <li>Connect a GHL location or select the location already stored here.</li>
         <li>Discover workflows, choose the workflow id and trigger mode, then Save selected workflow.</li>
-        <li>Preview GHL delivery for the same stored lead.</li>
-        <li>Run one GHL test only after typing the confirmation. One attempt is shown below.</li>
+        <li>Preview GHL delivery. Read contact, workflow, omitted fields, and the opportunity effect.</li>
+        <li>Run one GHL test only after typing its confirmation. The test does not enable ongoing delivery.</li>
+        <li>Enable ongoing GHL delivery only after typing its own confirmation. New leads then use this destination.</li>
       </ol>
       <div className="grid gap-2 sm:grid-cols-2">
         <StatusMark
@@ -282,7 +306,7 @@ export function GhlWalkthroughPanel({
         <StatusMark
           label="GHL ongoing delivery"
           state={deliveryWord(deliveryEnabled)}
-          detail="Independent of Sheets. A test on this page does not change this switch."
+          detail="Independent of Sheets. Enable ongoing GHL delivery is the switch. A test does not change it."
         />
       </div>
       <div className="grid gap-2 text-sm sm:grid-cols-2">
@@ -497,7 +521,7 @@ export function GhlWalkthroughPanel({
               </ul>
             ) : null}
             <p className="text-xs text-slate-600">
-              If a blocker says ongoing delivery must be on, leave it off. This test will not turn that switch on.
+              If a blocker says ongoing delivery must be on, use Enable ongoing GHL delivery below. This test will not turn that switch on.
             </p>
           </div>
         ) : null}
@@ -551,6 +575,79 @@ export function GhlWalkthroughPanel({
           <p className="text-sm text-amber-900" role="status">
             {error}
           </p>
+        ) : null}
+      </div>
+
+      <div className="space-y-3 border-t border-slate-200 pt-4">
+        <h3 className="text-sm font-semibold text-slate-900">Ongoing GHL delivery</h3>
+        <p className="text-sm text-slate-600">
+          This writes the saved destination switch through the existing client destination update. It is not a one-lead
+          canary and it does not require a dummy marker. Sheets campaign delivery stays on its own switch. New incoming
+          leads use this destination only after the delivery service plans them.
+        </p>
+        <p className="text-sm text-slate-600">
+          primary_reason is stored as Primary Reason. It is not copied into Primary Concern. A blank primary_concern is
+          omitted and is not described as delivered.
+        </p>
+        {deliveryEnabled === true ? (
+          <Button type="button" variant="outline" disabled={pending !== null} onClick={() => setOngoingOpen("pause")}>
+            Pause ongoing GHL delivery
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            disabled={pending !== null || !savedLocationId || !savedWorkflowId}
+            onClick={() => setOngoingOpen("enable")}
+          >
+            Enable ongoing GHL delivery
+          </Button>
+        )}
+        {!savedLocationId || !savedWorkflowId ? (
+          <p className="text-sm text-amber-900">Save a location and a workflow id before enabling ongoing GHL delivery.</p>
+        ) : null}
+        {ongoingOpen ? (
+          <div className="space-y-2 rounded-lg border border-slate-300 p-3">
+            <p className="text-sm">
+              Type{" "}
+              <span className="font-mono font-semibold">
+                {ongoingOpen === "enable" ? ONGOING_GHL_ENABLE_CONFIRMATION : ONGOING_GHL_PAUSE_CONFIRMATION}
+              </span>{" "}
+              {ongoingOpen === "enable"
+                ? "to turn on ongoing delivery for this client's saved GHL destination."
+                : "to pause ongoing delivery for this client's saved GHL destination."}
+            </p>
+            <Input
+              aria-label="Ongoing GHL confirmation"
+              value={ongoingText}
+              onChange={(event) => setOngoingText(event.target.value)}
+              autoComplete="off"
+            />
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setOngoingOpen(null);
+                  setOngoingText("");
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={pending !== null || (ongoingOpen === "enable" ? !canEnableOngoing : !canPauseOngoing)}
+                onClick={() => void setOngoing(ongoingOpen === "enable")}
+              >
+                {pending === "enable"
+                  ? "Enabling ongoing GHL delivery…"
+                  : pending === "pause"
+                    ? "Pausing ongoing GHL delivery…"
+                    : ongoingOpen === "enable"
+                      ? "Confirm ongoing GHL delivery"
+                      : "Confirm pause GHL delivery"}
+              </Button>
+            </div>
+          </div>
         ) : null}
       </div>
     </section>

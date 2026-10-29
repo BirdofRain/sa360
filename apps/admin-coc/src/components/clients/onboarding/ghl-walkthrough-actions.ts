@@ -1,3 +1,4 @@
+import { patchClientGhlDestinationAction } from "@/app/actions/clients";
 import { discoverGhlLocationConfigAction, saveClientGhlConfigAction } from "@/app/actions/ghl-config";
 import { linkGhlConnectionClientAction, loadGhlConnectionsAction, startGhlOAuthConnectAction } from "@/app/actions/ghl-connections";
 import { executeGhlLiveCanaryAction, loadGhlLiveCanaryPreflightAction } from "@/app/actions/ghl-live-canary";
@@ -7,7 +8,12 @@ import type { GhlPreviewStep } from "@/lib/clients/onboarding/ghl-delivery-previ
 import { formatRoutingDryRunActionError } from "@/lib/routing-dry-run/routing-dry-run-action.util";
 import type { GhlLiveDeliveryRunItem } from "@/lib/ghl-live-canary/types";
 
-import type { GhlWalkthroughActions, GhlWalkthroughConnection, GhlWalkthroughExecution } from "./ghl-walkthrough-types";
+import {
+  ongoingGhlDeliveryPatch,
+  type GhlWalkthroughActions,
+  type GhlWalkthroughConnection,
+  type GhlWalkthroughExecution,
+} from "./ghl-walkthrough-types";
 
 function executionFromRun(
   run: GhlLiveDeliveryRunItem | undefined,
@@ -147,6 +153,11 @@ export function liveGhlWalkthroughActions(clientAccountId: string): GhlWalkthrou
           skippedDuplicate: res.liveRun.status === "skipped_duplicate",
         })!,
       };
+    },
+    setOngoingDelivery: async (enabled) => {
+      const res = await patchClientGhlDestinationAction(clientAccountId, ongoingGhlDeliveryPatch(enabled));
+      if (!res.ok) return { ok: false, error: res.error };
+      return { ok: true, deliveryEnabled: res.item.ghlDestination?.deliveryEnabled ?? enabled };
     },
   };
 }

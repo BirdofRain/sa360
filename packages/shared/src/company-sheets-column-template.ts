@@ -115,14 +115,14 @@ export const COMPANY_SHEETS_V3_COLUMNS: readonly CompanySheetsTemplateColumn[] =
     sourceField: "primary_reason",
     group: "niche",
     systemRequired: false,
-    help: "Stored primary_reason. This is not primary_concern.",
+    help: "Stored primary_reason. This column does not receive primary_concern.",
   },
   {
     header: "Primary Concern",
     sourceField: "primary_concern",
     group: "niche",
     systemRequired: false,
-    help: "Stored primary_concern. A primary reason is not copied into this column.",
+    help: "Stored primary_concern. When that value is blank, delivery uses primary_reason.",
   },
   {
     header: "Beneficiary",

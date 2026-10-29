@@ -132,6 +132,73 @@ test("phone, email, and name aliases stay required after an operator clears them
   assert.equal(blocked.error, "required_field_unmapped");
 });
 
+test("Primary Concern uses primary_reason when primary_concern is blank and keeps an explicit concern", () => {
+  const header = ["Primary Concern"];
+  const mapped = applyOperatorAssignments(header, [], [
+    {
+      sheetHeader: "Primary Concern",
+      decision: "mapped",
+      transform: "passthrough",
+      explicit: true,
+      target: { kind: "v3_column", header: "Primary Concern", sourceField: "primary_concern" },
+    },
+  ]);
+  assert.equal(mapped.ok, true);
+  if (!mapped.ok) return;
+  const lead = {
+    stableRowId: "row-1",
+    clientAccountId: "alex_gross",
+    sourceLeadEventId: "evt-1",
+    receivedAt: "2026-10-29T16:00:00.000Z",
+    sourceLeadId: null,
+    normalizedPayload: {
+      contact: {
+        first_name: "Ada",
+        last_name: "Lovelace",
+        email: "ada@example.invalid",
+        phone_e164: "+15555550100",
+      },
+      routing: {
+        source_intake: {
+          lead_id: "lc-1",
+          source_lead_id_generated: false,
+          submitted_at: "2026-10-29T16:00:00.000Z",
+          sourceAttributes: { primary_reason: "Burial" },
+        },
+      },
+    },
+  };
+  assert.deepEqual(customRowValues(mapped.assignments, lead), ["Burial"]);
+
+  const both = customRowValues(mapped.assignments, {
+    ...lead,
+    normalizedPayload: {
+      ...lead.normalizedPayload,
+      routing: {
+        source_intake: {
+          ...lead.normalizedPayload.routing.source_intake,
+          sourceAttributes: { primary_reason: "Burial", primary_concern: "Family" },
+        },
+      },
+    },
+  });
+  assert.deepEqual(both, ["Family"]);
+
+  const direct = applyOperatorAssignments(header, [], [
+    {
+      sheetHeader: "Primary Concern",
+      decision: "mapped",
+      transform: "passthrough",
+      explicit: true,
+      target: { kind: "v3_column", header: "Primary Concern", sourceField: "primary_reason" },
+    },
+  ]);
+  assert.equal(direct.ok, true);
+  if (!direct.ok) return;
+  assert.equal(direct.assignments[0]?.target?.sourceField, "primary_reason");
+  assert.deepEqual(customRowValues(direct.assignments, lead), ["Burial"]);
+});
+
 test("the header fingerprint changes when cells move and ignores a prefix match", () => {
   assert.equal(headerFingerprint(["Phone", "Email"]), headerFingerprint(["Phone", "Email"]));
   assert.notEqual(headerFingerprint(["Phone", "Email"]), headerFingerprint(["Email", "Phone"]));

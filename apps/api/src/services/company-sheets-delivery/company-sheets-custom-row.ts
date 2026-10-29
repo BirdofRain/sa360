@@ -325,6 +325,9 @@ export function customRowValues(
   return assignments.map((column) => {
     if (column.decision !== "mapped" || !column.target || column.transform === "blank") return "";
     let value = byField.get(column.target.sourceField) ?? "";
+    if (!value.trim() && column.target.sourceField === "primary_concern") {
+      value = byField.get("primary_reason") ?? "";
+    }
     if (column.transform === "trim") value = value.trim();
     if (column.transform === "date_america_new_york") value = formatDateAmericaNewYork(value);
     return value;
@@ -400,6 +403,9 @@ function targetForNormalized(key: string): { target: ColumnTarget; transform: Co
 }
 
 function knownTarget(header: string, sourceField: string): ColumnTarget | null {
+  if (header === "Primary Concern" && sourceField === "primary_reason") {
+    return { kind: "v3_column", header: "Primary Concern", sourceField: "primary_reason" };
+  }
   const match = mappableColumnTargets().find((column) => column.header === header && column.sourceField === sourceField);
   if (!match) return null;
   return { kind: "v3_column", header: match.header, sourceField: match.sourceField };
@@ -446,8 +452,12 @@ function parseOperatorColumn(
   if (normalized === "primary reason" && target.sourceField !== "primary_reason") {
     return { ok: false, statusCode: 422, error: "primary_reason_is_not_primary_concern", detail: "Primary Reason cannot be copied into Primary Concern." };
   }
-  if (normalized === "primary concern" && target.sourceField !== "primary_concern") {
-    return { ok: false, statusCode: 422, error: "primary_reason_is_not_primary_concern", detail: "Primary Concern stays separate from Primary Reason." };
+  if (
+    normalized === "primary concern" &&
+    target.sourceField !== "primary_concern" &&
+    target.sourceField !== "primary_reason"
+  ) {
+    return { ok: false, statusCode: 422, error: "primary_reason_is_not_primary_concern", detail: "Primary Concern accepts primary_concern or primary_reason." };
   }
   if (normalized === "age/dob") {
     const age = target.sourceField === "consumer_age" && transform === "passthrough";

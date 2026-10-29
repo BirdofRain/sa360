@@ -315,20 +315,50 @@ export function publishBlocker(
   return { ok: true };
 }
 
-export function customRowValues(
+export const PRIMARY_CONCERN_FILLED_FROM_REASON = "primary_concern_filled_from_primary_reason";
+export const PRIMARY_CONCERN_OMITTED = "primary_concern_omitted";
+
+/**
+ * Projects a published map onto one lead.
+ * A blank Primary Concern cell is filled from primary_reason and labeled.
+ * A blank pair stays blank and is labeled omitted. A stored primary_concern wins.
+ */
+export function customRowProjection(
   assignments: readonly ColumnAssignment[],
   lead: CampaignSheetLeadInput
-): string[] | null {
+): { values: string[]; warnings: string[] } | null {
   const v3 = companySheetsCampaignRowValues({ ...lead, schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3 });
   if (!v3) return null;
   const byField = new Map(COMPANY_SHEETS_V3_COLUMNS.map((column, index) => [column.sourceField, v3[index] ?? ""]));
-  return assignments.map((column) => {
+  let filledFromReason = false;
+  let omitted = false;
+  const values = assignments.map((column) => {
     if (column.decision !== "mapped" || !column.target || column.transform === "blank") return "";
     let value = byField.get(column.target.sourceField) ?? "";
+    if (column.target.sourceField === "primary_concern" && !value.trim()) {
+      const reason = (byField.get("primary_reason") ?? "").trim();
+      if (reason) {
+        value = reason;
+        filledFromReason = true;
+      } else {
+        omitted = true;
+      }
+    }
     if (column.transform === "trim") value = value.trim();
     if (column.transform === "date_america_new_york") value = formatDateAmericaNewYork(value);
     return value;
   });
+  const warnings: string[] = [];
+  if (filledFromReason) warnings.push(PRIMARY_CONCERN_FILLED_FROM_REASON);
+  if (omitted) warnings.push(PRIMARY_CONCERN_OMITTED);
+  return { values, warnings };
+}
+
+export function customRowValues(
+  assignments: readonly ColumnAssignment[],
+  lead: CampaignSheetLeadInput
+): string[] | null {
+  return customRowProjection(assignments, lead)?.values ?? null;
 }
 
 export function syntheticCustomCampaignLead(input: {

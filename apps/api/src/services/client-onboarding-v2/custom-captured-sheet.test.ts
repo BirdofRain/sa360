@@ -257,12 +257,11 @@ test("preview projects the published 15 headers, including blanks, DOB, and nich
   assert.equal(values[8], "Army");
   assert.equal(values[9], "Married");
   assert.equal(values[10], "250000");
-  assert.equal(values[11], "");
+  assert.equal(values[11], "Burial");
   assert.equal(values[12], "Spouse");
   assert.equal(values[13], "Morning");
   assert.equal(values[14], "");
-  assert.equal(values.includes("Burial"), false);
-  assert.equal(preview.plan.warningCodes.includes("operator_dummy_required"), true);
+  assert.equal(preview.plan.warningCodes.includes("primary_concern_filled_from_primary_reason"), true);
   assert.equal(preview.externalCallsThisRequest.sheets, false);
   assert.equal(sheets.calls.length, 0);
 });
@@ -279,7 +278,7 @@ test("header drift blocks the custom preview before a row is planned", async () 
   assert.equal(preview.error, "header_changed");
 });
 
-test("delivery refuses a non-dummy, a live campaign, and a second row", async () => {
+test("delivery sends a stored client lead while the campaign switch is off", async () => {
   const calls: string[] = [];
   const sheets = createFakeSheetsAppend();
   const store = createMemoryCapturedTestStore();
@@ -290,15 +289,7 @@ test("delivery refuses a non-dummy, a live campaign, and a second row", async ()
     customCampaignSheets: quietPort(calls),
     store,
   };
-  const refused = await runCapturedTestDelivery(deliver(), world(), deps);
-  assert.equal(refused.ok, false);
-  if (refused.ok) return;
-  assert.equal(refused.error, "operator_dummy_required");
-  assert.equal(calls.length, 0);
-  assert.equal(sheets.calls.length, 0);
-
   const liveWorld = world({
-    event: event({ enrichmentMetadataJson: { operatorDummy: true } }),
     sheets: { ...world().sheets!, campaignDispatchEnabled: true },
   });
   const live = await runCapturedTestDelivery(deliver(), liveWorld, deps);
@@ -307,7 +298,7 @@ test("delivery refuses a non-dummy, a live campaign, and a second row", async ()
   assert.equal(live.error, "live_tab_test_refused");
   assert.equal(calls.length, 0);
 
-  const closed = await runCapturedTestDelivery(deliver(), world({ event: event({ enrichmentMetadataJson: { operatorDummy: true } }) }), {
+  const closed = await runCapturedTestDelivery(deliver(), world(), {
     ...deps,
     env: configEnv(false),
     store: createMemoryCapturedTestStore(),
@@ -329,8 +320,17 @@ test("delivery refuses a non-dummy, a live campaign, and a second row", async ()
   assert.equal(pilot.error, "google_only_pilot_required");
   assert.equal(calls.length, 0);
 
-  const dummyWorld = world({ event: event({ enrichmentMetadataJson: { operatorDummy: true } }) });
-  const sent = await runCapturedTestDelivery(deliver(), dummyWorld, deps);
+  const synthetic = await runCapturedTestDelivery(
+    deliver({ sourceLeadEventId: "synthetic-campaign-test" }),
+    world({ event: event({ id: "synthetic-campaign-test", sourceLeadId: "synthetic-campaign-test" }) }),
+    { ...deps, store: createMemoryCapturedTestStore() }
+  );
+  assert.equal(synthetic.ok, false);
+  if (synthetic.ok) return;
+  assert.equal(synthetic.error, "synthetic_campaign_test_refused");
+  assert.equal(calls.length, 0);
+
+  const sent = await runCapturedTestDelivery(deliver(), world(), deps);
   assert.equal(sent.ok, true);
   if (!sent.ok) return;
   assert.equal(sent.run.status, "succeeded");
@@ -343,11 +343,11 @@ test("delivery refuses a non-dummy, a live campaign, and a second row", async ()
   assert.equal(calls.length, 1);
   assert.equal(sheets.calls.length, 0);
 
-  const repeat = await runCapturedTestDelivery(deliver({ confirmation: CONFIRM_REPEAT, repeatOfTestRunId: sent.run.id }), dummyWorld, deps);
+  const repeat = await runCapturedTestDelivery(deliver({ confirmation: CONFIRM_REPEAT, repeatOfTestRunId: sent.run.id }), world(), deps);
   assert.equal(repeat.ok, false);
   if (repeat.ok) return;
   assert.equal(repeat.error, "captured_event_test_already_used");
-  const second = await runCapturedTestDelivery(deliver(), dummyWorld, deps);
+  const second = await runCapturedTestDelivery(deliver(), world(), deps);
   assert.equal(second.ok, false);
   if (second.ok) return;
   assert.equal(second.error, "captured_event_test_already_used");
@@ -402,7 +402,8 @@ test("the mounted route accepts the custom contract and still refuses the google
   assert.equal(preview.statusCode, 200);
   assert.equal(preview.json().preview.sheet.values.length, 15);
   assert.equal(preview.json().preview.sheet.values[6], "04/02/1990");
-  assert.equal(preview.json().preview.sheet.values[11], "");
+  assert.equal(preview.json().preview.sheet.values[11], "Burial");
+  assert.equal(preview.json().warningCodes.includes("primary_concern_filled_from_primary_reason"), true);
   const pilot = await app.inject({
     method: "POST",
     url: `/admin/v1/clients/${CLIENT}/onboarding/test-runs`,

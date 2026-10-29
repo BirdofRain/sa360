@@ -7,7 +7,7 @@
 import {
   applyOperatorAssignments,
   COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA,
-  customRowValues,
+  customRowProjection,
   exactHeader,
   publishBlocker,
   type ColumnAssignment,
@@ -25,12 +25,19 @@ export function capturedEventTestKey(clientAccountId: string, sourceLeadEventId:
  * A confirmed association, a routing match, or an inventory row is not that marker.
  * The synthetic campaign-test identity is a different operation and is refused.
  */
+export function isSyntheticCampaignTestEvent(event: {
+  id: string;
+  sourceLeadId?: string | null;
+}): boolean {
+  return event.id === "synthetic-campaign-test" || event.sourceLeadId === "synthetic-campaign-test";
+}
+
 export function isOperatorCreatedDummyEvent(event: {
   id: string;
   sourceLeadId?: string | null;
   enrichmentMetadataJson: unknown;
 }): boolean {
-  if (event.id === "synthetic-campaign-test" || event.sourceLeadId === "synthetic-campaign-test") return false;
+  if (isSyntheticCampaignTestEvent(event)) return false;
   const enrichment = asRecord(event.enrichmentMetadataJson);
   return enrichment?.operatorDummy === true;
 }
@@ -54,6 +61,7 @@ export type CustomCampaignSheetPlan = {
   deliveryRowId: string;
   sourceLeadEventId: string;
   operatorDummy: boolean;
+  warnings: string[];
   contentKey: string;
 };
 
@@ -92,7 +100,7 @@ export function planCustomCampaignSheet(input: {
   const blocked = publishBlocker(applied.assignments);
   if (!blocked.ok) return { applies: true, ok: false, statusCode: blocked.statusCode, error: blocked.error };
   const deliveryRowId = capturedEventTestKey(input.clientAccountId, input.event.id);
-  const values = customRowValues(applied.assignments, {
+  const projected = customRowProjection(applied.assignments, {
     stableRowId: deliveryRowId,
     clientAccountId: input.clientAccountId,
     sourceLeadEventId: input.event.id,
@@ -100,7 +108,7 @@ export function planCustomCampaignSheet(input: {
     sourceLeadId: input.event.sourceLeadId,
     normalizedPayload: input.event.normalizedPayloadJson,
   });
-  if (!values || values.length !== map.headerSnapshot.length) {
+  if (!projected || projected.values.length !== map.headerSnapshot.length) {
     return { applies: true, ok: false, statusCode: 409, error: "mapping_required" };
   }
   return {
@@ -112,10 +120,11 @@ export function planCustomCampaignSheet(input: {
       worksheetTitle: input.campaign.worksheetTitle,
       schemaVersion: COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA,
       header: [...map.headerSnapshot],
-      values,
+      values: projected.values,
       deliveryRowId,
       sourceLeadEventId: input.event.id,
       operatorDummy: isOperatorCreatedDummyEvent(input.event),
+      warnings: projected.warnings,
       contentKey: `column-map:${map.id}:v${map.mapVersion}`,
     },
   };

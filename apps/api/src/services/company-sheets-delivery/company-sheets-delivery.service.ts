@@ -36,7 +36,7 @@ import {
   columnLabel,
 } from "./company-sheets-custom-row.js";
 import { findPublishedColumnMap } from "../client-onboarding-v2/column-maps.js";
-import { capturedEventTestKey, isOperatorCreatedDummyEvent } from "../client-onboarding-v2/custom-captured-sheet.js";
+import { capturedEventTestKey, isSyntheticCampaignTestEvent } from "../client-onboarding-v2/custom-captured-sheet.js";
 import { loadAuthorizedAgedDeliverySet } from "./company-sheets-aged-authority.js";
 import { getSpreadsheetMetadata, getWorksheetGridBounds } from "../google-sheets/google-sheets-http-client.js";
 import { authorizeGoogleOnlyAppend } from "../client-onboarding-v2/google-only-quarantine.js";
@@ -678,11 +678,11 @@ const QUIET_CAPTURED_EFFECTS: CapturedEventTestEffects = {
 };
 
 /**
- * One captured operator-dummy row through the published custom campaign map.
- * The job kind stays campaign_test so a controlled test can run while global
- * execution is off. It does not use the custom-writer flag, the google-only
- * pilot, or the synthetic campaign-test identity. It does not change switches
- * or the cutoff.
+ * One stored client lead through the published custom campaign map.
+ * The job kind stays campaign_test so the test can run while campaign
+ * delivery is off. It does not use the custom-writer flag or the google-only
+ * pilot. The synthetic campaign-test identity is refused. It does not change
+ * switches or the cutoff.
  */
 export async function sendCompanySheetsCapturedEventTestRow(
   clientAccountId: string,
@@ -711,8 +711,8 @@ export async function sendCompanySheetsCapturedEventTestRow(
   if (!lead || lead.clientAccountIdResolved !== id) {
     return { ...fail("event_not_client_owned", 409), ...QUIET_CAPTURED_EFFECTS };
   }
-  if (!isOperatorCreatedDummyEvent(lead)) {
-    return { ...fail("operator_dummy_required", 409), ...QUIET_CAPTURED_EFFECTS };
+  if (isSyntheticCampaignTestEvent(lead)) {
+    return { ...fail("synthetic_campaign_test_refused", 409), ...QUIET_CAPTURED_EFFECTS };
   }
   const destination = await snapshotDestination(id, db);
   if (!("spreadsheetId" in destination)) return { ...destination, ...QUIET_CAPTURED_EFFECTS };

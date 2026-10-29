@@ -818,7 +818,7 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
     assert.equal(job.contentSha256, null);
   });
 
-  it("appends one operator dummy through the published map without moving the cutoff", async () => {
+  it("appends a stored client lead through the published map without moving the cutoff", async () => {
     const dummyId = `dummy_${suffix}`;
     const plainId = `plain_${suffix}`;
     const capturedEnv = {
@@ -866,20 +866,15 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
       },
     });
     const beforeAppends = appends.filter((item) => item.spreadsheetId === capturedSheet).length;
-    const closed = await sendCompanySheetsCapturedEventTestRow(capturedClient, dummyId, { ...deps(), env: env(false) });
+    const closed = await sendCompanySheetsCapturedEventTestRow(capturedClient, plainId, { ...deps(), env: env(false) });
     assert.equal(closed.ok, false);
     if (closed.ok) return;
     assert.equal(closed.code, "captured_test_disabled");
-    const plain = await sendCompanySheetsCapturedEventTestRow(capturedClient, plainId, captured());
-    assert.equal(plain.ok, false);
-    if (plain.ok) return;
-    assert.equal(plain.code, "operator_dummy_required");
-    assert.equal(plain.externalCallExecuted, false);
     await db.companySheetsDestination.update({
       where: { clientAccountId: capturedClient },
       data: { campaignDispatchEnabled: true },
     });
-    const live = await sendCompanySheetsCapturedEventTestRow(capturedClient, dummyId, captured());
+    const live = await sendCompanySheetsCapturedEventTestRow(capturedClient, plainId, captured());
     await db.companySheetsDestination.update({
       where: { clientAccountId: capturedClient },
       data: { campaignDispatchEnabled: false },
@@ -887,7 +882,8 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
     assert.equal(live.ok, false);
     if (live.ok) return;
     assert.equal(live.code, "delivery_not_paused");
-    const sent = await sendCompanySheetsCapturedEventTestRow(capturedClient, dummyId, captured());
+    assert.equal(live.externalCallExecuted, false);
+    const sent = await sendCompanySheetsCapturedEventTestRow(capturedClient, plainId, captured());
     assert.equal(sent.ok, true);
     if (!sent.ok) return;
     assert.equal(sent.duplicate, false);
@@ -903,19 +899,45 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
     assert.equal(destination.enabled, false);
     assert.equal(destination.campaignDispatchNotBefore?.toISOString(), cutoff.toISOString());
     const job = await db.companySheetsDeliveryJob.findUniqueOrThrow({
-      where: { idempotencyKey: capturedEventTestKey(capturedClient, dummyId) },
+      where: { idempotencyKey: capturedEventTestKey(capturedClient, plainId) },
     });
     assert.equal(job.kind, "campaign_test");
-    assert.equal(job.sourceLeadEventId, dummyId);
+    assert.equal(job.sourceLeadEventId, plainId);
     assert.equal(job.status, "succeeded");
-    assert.equal(await db.leadInventoryItem.count({ where: { sourceLeadEventId: dummyId } }), 0);
-    assert.equal(await db.fulfillmentOutbox.count({ where: { sourceLeadEventId: dummyId } }), 0);
-    const again = await sendCompanySheetsCapturedEventTestRow(capturedClient, dummyId, captured());
+    assert.equal(await db.leadInventoryItem.count({ where: { sourceLeadEventId: plainId } }), 0);
+    assert.equal(await db.fulfillmentOutbox.count({ where: { sourceLeadEventId: plainId } }), 0);
+    const again = await sendCompanySheetsCapturedEventTestRow(capturedClient, plainId, captured());
     assert.equal(again.ok, true);
     if (!again.ok) return;
     assert.equal(again.duplicate, true);
     assert.equal(again.externalCallExecuted, false);
     assert.equal(appends.filter((item) => item.spreadsheetId === capturedSheet).length, beforeAppends + 1);
+    const secondLead = await sendCompanySheetsCapturedEventTestRow(capturedClient, dummyId, captured());
+    assert.equal(secondLead.ok, true);
+    if (!secondLead.ok) return;
+    assert.equal(secondLead.duplicate, false);
+    assert.equal(secondLead.externalCallExecuted, true);
+    assert.equal(appends.filter((item) => item.spreadsheetId === capturedSheet).length, beforeAppends + 2);
+    await db.sourceLeadEvent.create({
+      data: {
+        id: `synthetic_${suffix}`,
+        sourceProvider: "leadcapture_io",
+        sourceSystem: "leadcapture_io_nextgen",
+        sourceType: "webhook",
+        sourceLeadId: "synthetic-campaign-test",
+        clientAccountIdResolved: capturedClient,
+        status: "routing_matched",
+        rawPayloadJson: { fixture: true },
+        normalizedPayloadJson: payload,
+        enrichmentMetadataJson: {},
+        receivedAt: new Date("2026-10-29T01:32:34.966Z"),
+      },
+    });
+    const synthetic = await sendCompanySheetsCapturedEventTestRow(capturedClient, `synthetic_${suffix}`, captured());
+    assert.equal(synthetic.ok, false);
+    if (synthetic.ok) return;
+    assert.equal(synthetic.code, "synthetic_campaign_test_refused");
+    assert.equal(appends.filter((item) => item.spreadsheetId === capturedSheet).length, beforeAppends + 2);
     const store = createPrismaCapturedTestStore(db);
     const runId = randomUUID();
     const saved = await store.insert(

@@ -26,7 +26,7 @@ import {
 import {
   CONFIRM_ONE_CUSTOM_SHEETS_ROW,
   CUSTOM_CAMPAIGN_SHEETS_CONTRACT,
-  isOperatorCreatedDummyEvent,
+  isSyntheticCampaignTestEvent,
   planCustomCampaignSheet,
   type CustomCampaignSheetPlan,
   type PublishedCampaignMapSnapshot,
@@ -1042,7 +1042,7 @@ export function planCapturedTestDelivery(
 
   const sheet = destinations.includes("google_sheets")
     ? planSheet(input, world, event, deps.testRunId)
-    : { sheet: null as PlannedSheet | null, error: null as CapturedTestError | null };
+    : { sheet: null as PlannedSheet | null, error: null as CapturedTestError | null, warnings: [] as string[] };
   if (sheet.error) return sheet.error;
   if (sheet.sheet && input.confirmation === CONFIRM_ONE_GOOGLE_SHEETS_ROW) {
     sheet.sheet.bodyMustBeEmpty = true;
@@ -1061,11 +1061,7 @@ export function planCapturedTestDelivery(
     ...(input.kind === "captured_event_delivery" && input.confirmation === CONFIRM_ONE_CUSTOM_SHEETS_ROW
       ? [CUSTOM_CAPTURED_SHEETS_WARNING]
       : []),
-    ...(sheet.sheet?.sheetsContract === CUSTOM_CAMPAIGN_SHEETS_CONTRACT &&
-    event &&
-    !isOperatorCreatedDummyEvent(event)
-      ? ["operator_dummy_required"]
-      : []),
+    ...(sheet.warnings ?? []),
   ];
 
   const ghl = planGhl(input, world, event, deps.testRunId, notePlan.note);
@@ -1834,7 +1830,7 @@ function requireIsolation(
       if (world.sheets?.campaignDispatchEnabled && input.destinations.includes("google_sheets")) {
         return failure(409, "live_tab_test_refused");
       }
-      if (!isOperatorCreatedDummyEvent(event)) return failure(409, "operator_dummy_required");
+      if (isSyntheticCampaignTestEvent(event)) return failure(409, "synthetic_campaign_test_refused");
     } else {
       if (!identityMatches(event, world.identities)) return failure(403, "verified_test_identity_mismatch");
       if (world.sheets?.campaignDispatchEnabled && input.destinations.includes("google_sheets")) {
@@ -2023,7 +2019,7 @@ function planSheet(
   world: CapturedTestWorld,
   event: StoredSourceEvent | null,
   testRunId: string
-): { sheet: PlannedSheet | null; error: CapturedTestError | null } {
+): { sheet: PlannedSheet | null; error: CapturedTestError | null; warnings?: string[] } {
   const sheets = world.sheets;
   if (!sheets) return { sheet: null, error: failure(409, "worksheet_blocked", { detail: "sheets destination is not saved" }) };
   const contract = input.isolation?.sheetsContract ?? null;
@@ -2058,7 +2054,11 @@ function planSheet(
     });
     if (!planned.applies) return { sheet: null, error: failure(409, "test_worksheet_not_approved") };
     if (!planned.ok) return { sheet: null, error: failure(planned.statusCode, planned.error) };
-    return { sheet: plannedCustomSheet(input, sheets, planned.plan), error: null };
+    return {
+      sheet: plannedCustomSheet(input, sheets, planned.plan),
+      error: null,
+      warnings: planned.plan.warnings,
+    };
   }
 
   const isolated = input.isolation?.mode === "isolated_destination";

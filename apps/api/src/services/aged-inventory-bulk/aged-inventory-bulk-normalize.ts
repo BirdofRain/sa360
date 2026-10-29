@@ -8,6 +8,14 @@ import {
   maskAgedBulkSourceLeadId,
 } from "./aged-inventory-bulk-source-id.js";
 import type { MasterRawRow } from "./aged-inventory-bulk-adapters.js";
+import { adaptMasterRow, assertMasterHeaders } from "./aged-inventory-bulk-adapters.js";
+import {
+  adaptNextGenExportRow,
+  assertNextGenExportHeaders,
+  canonicalizeNextGenLeadNumber,
+  nextGenExportToMasterRaw,
+  type NextGenExportRawRow,
+} from "./aged-inventory-bulk-nextgen-adapter.js";
 import type {
   AgedBulkInternalSource,
   AgedBulkLeadDetailsNiche,
@@ -16,6 +24,7 @@ import type {
   AgedBulkRowDisposition,
   AgedBulkSourceFormat,
 } from "./aged-inventory-bulk.types.js";
+import { AGED_BULK_NEXTGEN_SOURCE_FORMAT } from "./aged-inventory-bulk.types.js";
 
 function splitName(full: string): { first: string; last: string } | null {
   const parts = full.trim().replace(/\s+/g, " ").split(" ");
@@ -67,6 +76,31 @@ function inferSourceFormat(nicheKey: string): AgedBulkSourceFormat {
   return nicheKey === "vet" ? "vet_master_v1" : "trucker_master_v1";
 }
 
+function nonemptyAttribute(value: string | null | undefined): string | undefined {
+  return nonempty(value) ?? undefined;
+}
+
+function nextGenSourceAttributes(raw: NextGenExportRawRow): Record<string, string> {
+  const attributes: Record<string, string> = {};
+  const assign = (key: string, value: string) => {
+    const trimmed = nonempty(value);
+    if (trimmed) attributes[key] = trimmed;
+  };
+  assign("military_status", raw.militaryStatusRaw);
+  assign("branch_of_service", raw.branchOfServiceRaw);
+  assign("marital_status", raw.maritalStatusRaw);
+  assign("desired_coverage", raw.desiredCoverageRaw);
+  assign("beneficiary", raw.beneficiaryRaw);
+  assign("date_of_birth", raw.dateOfBirthRaw);
+  assign("best_time_to_call", raw.bestTimeToCallRaw);
+  assign("primary_reason", raw.primaryReasonRaw);
+  assign("primary_concern", raw.primaryReasonRaw);
+  assign("sex", raw.sexRaw);
+  assign("ip_address", raw.ipAddressRaw);
+  assign("funnel_name", raw.funnelNameRaw);
+  return attributes;
+}
+
 export function buildAgedBulkLeadDetails(
   raw: MasterRawRow,
   nicheKey: string,
@@ -83,7 +117,8 @@ export function buildAgedBulkLeadDetails(
 
 export function buildAgedBulkInternalSource(
   raw: MasterRawRow,
-  nicheKey: string
+  nicheKey: string,
+  sourceFormat?: AgedBulkSourceFormat
 ): AgedBulkInternalSource {
   return {
     leadTypeRaw: raw.leadTypeRaw,
@@ -93,7 +128,7 @@ export function buildAgedBulkInternalSource(
     statusRaw: raw.statusRaw,
     syncedRaw: raw.syncedRaw ?? "",
     rowNumber: raw.rowNumber,
-    sourceFormat: inferSourceFormat(nicheKey),
+    sourceFormat: sourceFormat ?? inferSourceFormat(nicheKey),
   };
 }
 
@@ -111,6 +146,9 @@ export function buildAgedBulkNormalizedPayload(row: AgedBulkNormalizedRow): Reco
     generated_at: row.generatedAt.toISOString(),
     niche_key: row.nicheKey,
     campaign_name: row.campaignName,
+    source_lead_id: row.sourceLeadId,
+    source_funnel_name: row.sourceFunnelName,
+    source_attributes: row.sourceAttributes,
     status_raw: row.statusRaw,
     used_by_present: row.usedByPresent,
     email_issue: row.emailIssue,
@@ -141,10 +179,24 @@ export function mergeAgedBulkRawPayload(
       : input.importRequestId;
   const existingRowNumber =
     typeof prior.rowNumber === "number" ? prior.rowNumber : input.rowNumber;
-  return {
+  const base = {
     ...prior,
     importRequestId: existingRequestId,
     rowNumber: existingRowNumber,
+  };
+  if (input.internalSource.sourceFormat === AGED_BULK_NEXTGEN_SOURCE_FORMAT) {
+    return {
+      ...base,
+      nextgen: {
+        source_format: input.internalSource.sourceFormat,
+        lead_number: input.internalSource.originalSourceLeadId ?? "",
+        source_row_number: input.internalSource.rowNumber,
+        source_row: input.internalSource.sourceColumns ?? {},
+      },
+    };
+  }
+  return {
+    ...base,
     master: {
       lead_type: input.internalSource.leadTypeRaw,
       dob_age_raw: input.internalSource.dobAgeRaw,
@@ -175,12 +227,20 @@ export function normalizeMasterRow(input: {
   nicheKey: string;
   identityIndex: IdentityConflictIndex;
   evaluatedAt?: Date;
+  sourceFormat?: AgedBulkSourceFormat;
+  /** When set (including empty), preserve this vendor ID instead of hashing aged-v1. */
+  sourceLeadIdOverride?: string | null;
+  nameParts?: { first: string; last: string } | null;
 }): AgedBulkNormalizedRow {
   const evaluatedAt = input.evaluatedAt ?? new Date();
   const blockerCodes: string[] = [];
   let disposition: AgedBulkRowDisposition = "accept";
 
-  const name = splitName(input.raw.clientNameRaw);
+  const name = input.nameParts
+    ? input.nameParts.first.trim() && input.nameParts.last.trim()
+      ? { first: input.nameParts.first.trim(), last: input.nameParts.last.trim() }
+      : null
+    : splitName(input.raw.clientNameRaw);
   const dateParsed = parseMasterGeneratedAt(input.raw.dateRaw, evaluatedAt);
   const state = extractUsStateCode(input.raw.stateZipRaw);
   const zip = extractUsZipCode(input.raw.stateZipRaw);
@@ -207,6 +267,9 @@ export function normalizeMasterRow(input: {
   if (!nicheKey) {
     disposition = "reject_niche";
     blockerCodes.push("niche_missing");
+  } else if (input.sourceLeadIdOverride !== undefined && !(input.sourceLeadIdOverride ?? "").trim()) {
+    disposition = "reject_missing_source_lead_id";
+    blockerCodes.push("missing_source_lead_id");
   } else if (!name) {
     disposition = "reject_invalid_name";
     blockerCodes.push("invalid_name");
@@ -226,14 +289,17 @@ export function normalizeMasterRow(input: {
   const isoDate = dateParsed.ok ? dateParsed.isoDate : "1970-01-01";
   const firstName = name?.first ?? "";
   const lastName = name?.last ?? "";
-  const sourceLeadId = buildAgedBulkSourceLeadId({
-    nicheKey: nicheKey || "unknown",
-    phoneE164,
-    email,
-    generatedDateIso: isoDate,
-    firstName,
-    lastName,
-  });
+  const sourceLeadId =
+    input.sourceLeadIdOverride !== undefined
+      ? (input.sourceLeadIdOverride ?? "").trim()
+      : buildAgedBulkSourceLeadId({
+          nicheKey: nicheKey || "unknown",
+          phoneE164,
+          email,
+          generatedDateIso: isoDate,
+          firstName,
+          lastName,
+        });
 
   if (disposition === "accept") {
     if (input.identityIndex.seenSourceIds.has(sourceLeadId)) {
@@ -299,6 +365,8 @@ export function normalizeMasterRow(input: {
     generatedAt,
     nicheKey,
     campaignName: input.raw.campaignName,
+    sourceFunnelName: null,
+    sourceAttributes: {},
     statusRaw: input.raw.statusRaw || null,
     usedByPresent: Boolean(input.raw.usedByRaw.trim()),
     consumerAge: consumerParsed.consumerAge,
@@ -307,10 +375,110 @@ export function normalizeMasterRow(input: {
     beneficiary,
     contact,
     leadDetails,
-    internalSource: buildAgedBulkInternalSource(input.raw, nicheKey),
+    internalSource: buildAgedBulkInternalSource(input.raw, nicheKey, input.sourceFormat),
     disposition,
     blockerCodes,
   };
+}
+
+export function applyNextGenExportOverlay(
+  row: AgedBulkNormalizedRow,
+  raw: NextGenExportRawRow
+): AgedBulkNormalizedRow {
+  const sourceAttributes = nextGenSourceAttributes(raw);
+  const niche: AgedBulkLeadDetailsNiche = { ...row.leadDetails.niche };
+  const military = nonemptyAttribute(raw.militaryStatusRaw);
+  const marital = nonemptyAttribute(raw.maritalStatusRaw);
+  const sex = nonemptyAttribute(raw.sexRaw);
+  const coverage = nonemptyAttribute(raw.desiredCoverageRaw);
+  if (military) niche.military_status = military;
+  if (marital) niche.marital_status = marital;
+  if (sex) niche.sex = sex;
+  if (coverage) niche.desired_coverage = coverage;
+  const funnel = nonempty(raw.funnelNameRaw);
+  return {
+    ...row,
+    sourceFunnelName: funnel,
+    sourceAttributes,
+    leadDetails: {
+      ...row.leadDetails,
+      niche,
+    },
+    internalSource: {
+      ...row.internalSource,
+      sourceFormat: AGED_BULK_NEXTGEN_SOURCE_FORMAT,
+      originalSourceLeadId: canonicalizeNextGenLeadNumber(raw.leadNumberRaw) ?? "",
+      sourceColumns: raw.sourceColumns,
+    },
+  };
+}
+
+export function normalizeNextGenExportRow(input: {
+  raw: NextGenExportRawRow;
+  nicheKey: string;
+  identityIndex: IdentityConflictIndex;
+  evaluatedAt?: Date;
+}): AgedBulkNormalizedRow {
+  const leadNumber = canonicalizeNextGenLeadNumber(input.raw.leadNumberRaw);
+  const row = normalizeMasterRow({
+    raw: nextGenExportToMasterRaw(input.raw),
+    nicheKey: input.nicheKey,
+    identityIndex: input.identityIndex,
+    evaluatedAt: input.evaluatedAt,
+    sourceFormat: AGED_BULK_NEXTGEN_SOURCE_FORMAT,
+    sourceLeadIdOverride: leadNumber ?? "",
+    nameParts: { first: input.raw.firstNameRaw, last: input.raw.lastNameRaw },
+  });
+  return applyNextGenExportOverlay(row, input.raw);
+}
+
+export function assertAgedBulkHeaders(
+  headers: string[],
+  sourceFormat: AgedBulkSourceFormat
+): { ok: true; index: Map<string, number> } | { ok: false; error: string } {
+  if (sourceFormat === AGED_BULK_NEXTGEN_SOURCE_FORMAT) {
+    return assertNextGenExportHeaders(headers);
+  }
+  return assertMasterHeaders(headers, sourceFormat);
+}
+
+export function parseAgedBulkNormalizedRow(input: {
+  rowNumber: number;
+  cols: string[];
+  headers: string[];
+  index: Map<string, number>;
+  sourceFormat: AgedBulkSourceFormat;
+  nicheKey: string;
+  identityIndex: IdentityConflictIndex;
+  evaluatedAt?: Date;
+}): AgedBulkNormalizedRow {
+  if (input.sourceFormat === AGED_BULK_NEXTGEN_SOURCE_FORMAT) {
+    const raw = adaptNextGenExportRow({
+      rowNumber: input.rowNumber,
+      cols: input.cols,
+      index: input.index,
+      headers: input.headers,
+    });
+    return normalizeNextGenExportRow({
+      raw,
+      nicheKey: input.nicheKey,
+      identityIndex: input.identityIndex,
+      evaluatedAt: input.evaluatedAt,
+    });
+  }
+  const raw = adaptMasterRow({
+    rowNumber: input.rowNumber,
+    cols: input.cols,
+    index: input.index,
+    sourceFormat: input.sourceFormat,
+  });
+  return normalizeMasterRow({
+    raw,
+    nicheKey: input.nicheKey,
+    identityIndex: input.identityIndex,
+    evaluatedAt: input.evaluatedAt,
+    sourceFormat: input.sourceFormat,
+  });
 }
 
 export function isAcceptDisposition(d: AgedBulkRowDisposition): boolean {

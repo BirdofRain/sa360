@@ -5,7 +5,7 @@ import {
   GHL_LIVE_NOT_IMPLEMENTED,
   type GhlAdapterMode,
 } from "../../lib/ghl-delivery-adapter-mode.js";
-import { findCampaignRoutingRuleById } from "../../repositories/campaign-routing-rule.repository.js";
+import { resolveDeliveryPlanRule } from "../association-ghl-delivery-source.js";
 import { findDeliveryPlanById } from "../../repositories/lead-delivery-plan.repository.js";
 import { findRoutingDryRunDecisionById } from "../../repositories/routing-dry-run-decision.repository.js";
 import {
@@ -219,8 +219,8 @@ export async function buildAdapterSimulation(
   let rule: CampaignRoutingRule | null = null;
   if (plan.routingDryRunDecisionId) {
     const decision = await findRoutingDryRunDecisionById(plan.routingDryRunDecisionId);
-    if (decision?.matchedRuleId) {
-      rule = await findCampaignRoutingRuleById(decision.matchedRuleId);
+    if (decision) {
+      rule = (await resolveDeliveryPlanRule(decision)).rule;
     }
   }
 

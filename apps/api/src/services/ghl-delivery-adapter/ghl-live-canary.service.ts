@@ -28,6 +28,7 @@ import {
 } from "./ghl-live-canary.present.js";
 import type { GhlAdapterPlanContext } from "./ghl-delivery-adapter.types.js";
 import { buildSourceEnrichmentDeliveryContext } from "../source-intake/source-enrichment.service.js";
+import { persistedCampaignRoutingRuleId } from "../association-ghl-delivery-source.js";
 
 export async function getLiveCanaryPreflightForPlan(planId: string) {
   await warmEffectiveDeliveryAdapterMode();
@@ -88,7 +89,7 @@ export async function executeLiveCanaryForPlan(
   const run = await createGhlLiveDeliveryRun({
     leadDeliveryPlan: { connect: { id: plan.id } },
     routingDryRunDecisionId: plan.routingDryRunDecisionId,
-    campaignRoutingRuleId: ctx.rule?.id ?? null,
+    campaignRoutingRuleId: persistedCampaignRoutingRuleId(ctx.rule),
     masterClientAccountId: plan.masterClientAccountId,
     destinationClientAccountId: plan.destinationClientAccountId,
     destinationSubaccountIdGhl: plan.destinationSubaccountIdGhl,

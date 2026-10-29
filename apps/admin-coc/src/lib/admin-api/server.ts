@@ -1211,6 +1211,20 @@ export async function postAdminClientPortalInvite(
   return parsePortalInviteIssueSuccess(res.data);
 }
 
+export async function postAdminOngoingGhlDelivery(
+  clientAccountId: string,
+  body: { enabled: boolean; confirmLiveDeliveryRisk: true }
+): Promise<{ data: ClientDetailResponse | null; error: string | null }> {
+  const id = clientAccountId.trim();
+  const res = await adminRequestJson<ClientDetailResponse>(
+    "POST",
+    `/admin/v1/clients/${encodeURIComponent(id)}/ghl-ongoing-delivery`,
+    body
+  );
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
 export async function patchAdminClientGhlDestination(
   clientAccountId: string,
   body: Record<string, unknown>

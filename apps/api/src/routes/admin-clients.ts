@@ -47,6 +47,7 @@ import {
   previewClientIdentityRekey,
 } from "../services/client/client-rekey.service.js";
 import { approveSourceIntakeLiveCanaryForClient, approveSourceIntakeClientCutover } from "../services/bulk-import/source-intake-live-canary-approval.service.js";
+import { setOngoingGhlDeliveryActivation } from "../services/ghl-ongoing-activation.service.js";
 import { issuePortalInvite, type PortalInviteServiceDeps } from "../services/portal-invite.service.js";
 import { clientOnboardingSetupPatchSchema } from "../schemas/client-onboarding-setup.schema.js";
 import {
@@ -296,6 +297,29 @@ export async function adminClientsRoutes(
     }
     const item = await getClientAdmin(clientAccountId);
     return reply.send({ ok: true, item });
+  });
+
+  app.post("/clients/:clientAccountId/ghl-ongoing-delivery", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const { clientAccountId } = request.params as { clientAccountId: string };
+    const body = request.body as { enabled?: unknown; confirmLiveDeliveryRisk?: unknown } | null;
+    if (!body || typeof body.enabled !== "boolean") {
+      return reply.status(400).send({ ok: false, error: "enabled must be a boolean." });
+    }
+    const result = await setOngoingGhlDeliveryActivation({
+      clientAccountId,
+      enabled: body.enabled,
+      confirmLiveDeliveryRisk: body.confirmLiveDeliveryRisk === true,
+      actorLabel: "admin_api_key",
+    });
+    if ("notFound" in result) {
+      return reply.status(404).send({ ok: false, error: "Client not found" });
+    }
+    if (!result.ok) {
+      return reply.status(400).send({ ok: false, error: result.error, code: result.code });
+    }
+    const item = await getClientAdmin(clientAccountId);
+    return reply.send({ ok: true, activation: result, item });
   });
 
   app.post(

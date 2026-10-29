@@ -1,6 +1,26 @@
 /**
- * Demo-only direct delivery allowlist (Phase 5C).
- * Canonical Smart Agent 360 Demo destination — override via env for staging tests.
+ * Legacy direct-demo and one-lead canary allowlists.
+ *
+ * Ongoing association delivery and POST /admin/v1/clients/:id/ghl-ongoing-delivery
+ * do not read these variables. Authorization for that path is the saved
+ * ClientGhlDestination (connected, deliveryEnabled, deliveryMode live, cutover,
+ * internal approval) plus the global runtime kill switch.
+ *
+ * SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS and _LOCATION_IDS still gate
+ * direct-demo, approve-delivery, bulk live preflight, and the legacy cutover
+ * action. Unset is not unrestricted: it falls back to the demo client and
+ * location. Leave the production values in place until those legacy paths are
+ * retired. Deleting them would shrink the legacy paths to the demo destination.
+ *
+ * SA360_LIVE_CANARY_ALLOWED_DESTINATIONS is an optional extra filter for the
+ * one-lead direct-demo path. Unset does not authorize anything. Ongoing
+ * delivery ignores it. Profile-mirror writes still use
+ * SA360_GHL_CONFIG_WRITE_ALLOWLIST_*, and fulfillment still uses the LF2
+ * allowlists. Empty config-write and LF2 lists deny those writes.
+ *
+ * Remaining global controls: GHL_DELIVERY_ADAPTER_MAX_MODE,
+ * SA360_GHL_LIVE_CANARY_ALLOWED, the DeliveryRuntimeModeSetting, and the
+ * company Sheets dispatch/execution flags.
  */
 
 export const DIRECT_DEMO_CANONICAL_CLIENT_ACCOUNT_ID = "smart_agent_360_demo";
@@ -122,7 +142,9 @@ export function isDestinationAllowedForLiveCanary(
   if (!client || !location) return { configured: false, allowed: false };
   const allowlist = getLiveCanaryAllowedDestinationPairs();
   if (!allowlist) {
-    return { configured: false, allowed: true };
+    // Unset is not permission. Callers that only block when configured still
+    // keep the legacy one-lead path unchanged. Ongoing delivery does not call this.
+    return { configured: false, allowed: false };
   }
   return {
     configured: true,

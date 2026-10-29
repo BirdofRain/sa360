@@ -15,6 +15,7 @@ import {
   patchAdminClient,
   patchAdminClientSetup,
   patchAdminClientGhlDestination,
+  postAdminOngoingGhlDelivery,
   postAdminClient,
   postAdminClientPortalInvite,
   postAdminClientRekey,
@@ -95,6 +96,22 @@ export async function issuePortalInviteAction(
   await requireAdminCocSession();
   await requireAdminCocAdminSession();
   return postAdminClientPortalInvite(clientAccountId);
+}
+
+export async function setOngoingGhlDeliveryAction(
+  clientAccountId: string,
+  enabled: boolean
+): Promise<ClientActionResult> {
+  await requireAdminCocSession();
+  await requireAdminCocAdminSession();
+  const res = await postAdminOngoingGhlDelivery(clientAccountId, {
+    enabled,
+    confirmLiveDeliveryRisk: true,
+  });
+  if (!res.data?.item || res.error) {
+    return { ok: false, error: res.error ?? "Failed to update ongoing GHL delivery." };
+  }
+  return { ok: true, item: res.data.item };
 }
 
 export async function patchClientGhlDestinationAction(

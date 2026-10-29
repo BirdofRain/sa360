@@ -6,6 +6,7 @@ import { useState, useTransition } from "react";
 
 import {
   patchClientGhlDestinationAction,
+  setOngoingGhlDeliveryAction,
 } from "@/app/actions/clients";
 import {
   startGhlOAuthConnectAction,
@@ -36,6 +37,8 @@ export function ClientGhlDestinationSection({
   const [error, setError] = useState<string | null>(null);
   const [oauthPending, startOauth] = useTransition();
   const [savePending, startSave] = useTransition();
+  const [ongoingPending, startOngoing] = useTransition();
+  const [ongoingConfirmed, setOngoingConfirmed] = useState(false);
 
   const dest = client.ghlDestination;
   const readiness = client.destinationReadiness;
@@ -54,6 +57,35 @@ export function ClientGhlDestinationSection({
         return;
       }
       window.location.href = res.authorizeUrl;
+    });
+  }
+
+  const fieldMap = dest?.sourceAttributeFieldMapJson;
+  const fieldMapEmpty =
+    !fieldMap ||
+    typeof fieldMap !== "object" ||
+    Array.isArray(fieldMap) ||
+    Object.keys(fieldMap as Record<string, unknown>).length === 0;
+  const ongoingActive = Boolean(
+    dest &&
+      dest.deliveryEnabled &&
+      dest.deliveryMode === "live" &&
+      dest.clientCutoverApproved &&
+      dest.internalApprovalStatus === "approved" &&
+      dest.ghlConnectionStatus === "connected"
+  );
+
+  function setOngoing(enabled: boolean) {
+    setError(null);
+    startOngoing(async () => {
+      const result = await setOngoingGhlDeliveryAction(client.clientAccountId, enabled);
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      setOngoingConfirmed(false);
+      onUpdated(result.item);
+      router.refresh();
     });
   }
 
@@ -130,6 +162,65 @@ export function ClientGhlDestinationSection({
               </dd>
             </div>
           </dl>
+          <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+            <p className="font-medium text-slate-900">
+              Ongoing GHL delivery is {ongoingActive ? "on" : "off"} for this location.
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              New confirmed parent-URL leads deliver here after this switch is on and the global
+              runtime allows live writes. A test send stays available before activation. This does
+              not edit an environment allowlist or move the Sheets cutoff.
+            </p>
+            {!dest?.destinationWorkflowIdGhl ? (
+              <p className="mt-2 text-xs text-amber-800">Select a workflow before enabling ongoing delivery.</p>
+            ) : null}
+            {dest?.opportunityCreationEnabled &&
+            (!dest.destinationPipelineIdGhl || !dest.destinationPipelineStageIdGhl) ? (
+              <p className="mt-2 text-xs text-amber-800">
+                Select a pipeline and stage before enabling ongoing delivery.
+              </p>
+            ) : null}
+            {fieldMapEmpty ? (
+              <p className="mt-2 text-xs text-amber-800">
+                No GHL field ids are saved. Niche answers, including primary_reason, are omitted
+                from GHL until a field is mapped. Sheets can still place primary_reason in Primary
+                Concern when that cell would otherwise be blank.
+              </p>
+            ) : null}
+            <label className="mt-3 flex items-start gap-2 text-xs text-slate-700">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={ongoingConfirmed}
+                onChange={(event) => setOngoingConfirmed(event.target.checked)}
+                disabled={pending || ongoingPending}
+              />
+              I understand this changes ongoing delivery for this client only and does not send the
+              leads already stored.
+            </label>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {ongoingActive ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={pending || ongoingPending || !ongoingConfirmed}
+                  onClick={() => setOngoing(false)}
+                >
+                  Pause ongoing GHL delivery
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={pending || ongoingPending || !ongoingConfirmed}
+                  onClick={() => setOngoing(true)}
+                >
+                  Enable ongoing GHL delivery
+                </Button>
+              )}
+            </div>
+          </div>
           <div className="flex flex-wrap gap-2">
             <Link
               href={buildClientDeliveryConfigHref({

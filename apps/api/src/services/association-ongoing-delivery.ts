@@ -8,8 +8,10 @@
 
 import type { LeadDeliveryPlan, LeadDeliveryPlanStep } from "@prisma/client";
 import { prisma } from "../lib/db.js";
+import { lifecycleEventSchema, type LifecycleEventSchema } from "../schemas/lifecycle-event.schema.js";
+import { attachSourceAttributesToLifecyclePayload } from "./source-intake/source-enrichment-pipeline.service.js";
+import type { SourceAttributes, UnmappedSourceField } from "./source-intake/source-enrichment.types.js";
 import { logger } from "../lib/logger.js";
-import type { LifecycleEventSchema } from "../schemas/lifecycle-event.schema.js";
 import { findClientAccountById } from "../repositories/client-account.repository.js";
 import { findGhlLocationConnectionByLocationId } from "../repositories/ghl-location-connection.repository.js";
 import {
@@ -79,6 +81,7 @@ export type AssociationDeliveryDeps = {
   findPlan: (decisionId: string) => Promise<PlanFacts | null>;
   createPlan: (decisionId: string) => Promise<{ ok: true; plan: PlanFacts } | { ok: false; reason: string }>;
   findRun: (planId: string) => Promise<RunFacts | null>;
+  loadLifecyclePayload?: (decisionId: string) => Promise<LifecycleEventSchema | undefined>;
   execute: (input: {
     planId: string;
     mode: "ongoing_association" | "paused_location_test";
@@ -278,12 +281,14 @@ export async function executeSelectedGhlDeliveryTest(
   if (!(await deps.runtimeCanExecute())) {
     return { ...quiet("adapter_mode_inactive", facts), statusCode: 409 };
   }
+  const lifecyclePayload = deps.loadLifecyclePayload ? await deps.loadLifecyclePayload(decisionId) : undefined;
   const result = await deliverLoadedPlan(
     {
       mode: "paused_location_test",
       confirmation: DELIVER_ONE_GHL_TEST,
       decisionId,
       facts,
+      lifecyclePayload,
     },
     deps
   );
@@ -326,6 +331,7 @@ function realAssociationDeliveryDeps(): AssociationDeliveryDeps {
       if ("blocked" in created) return { ok: false, reason: created.blocked };
       return { ok: false, reason: "plan_required" };
     },
+    loadLifecyclePayload: loadStoredLifecyclePayload,
     findRun: async (planId) => {
       const run = await findLatestGhlLiveDeliveryRunForPlan(planId);
       if (!run) return null;
@@ -354,6 +360,28 @@ function realAssociationDeliveryDeps(): AssociationDeliveryDeps {
       return recorded;
     },
   };
+}
+
+async function loadStoredLifecyclePayload(decisionId: string): Promise<LifecycleEventSchema | undefined> {
+  const event = await prisma.sourceLeadEvent.findFirst({
+    where: { routingDryRunDecisionId: decisionId },
+    orderBy: { receivedAt: "desc" },
+  });
+  if (!event) return undefined;
+  const parsed = lifecycleEventSchema.safeParse(event.normalizedPayloadJson);
+  if (!parsed.success) return undefined;
+  const enrichment = asRecord(event.enrichmentMetadataJson);
+  const attributes = asRecord(enrichment?.sourceAttributes);
+  if (!attributes) return parsed.data;
+  const unmapped = Array.isArray(enrichment?.unmappedSourceFields)
+    ? (enrichment.unmappedSourceFields as UnmappedSourceField[])
+    : [];
+  return attachSourceAttributesToLifecyclePayload(parsed.data, attributes as SourceAttributes, unmapped);
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
 }
 
 async function loadDestinationFacts(clientAccountId: string): Promise<DestinationFacts | null> {

@@ -102,6 +102,8 @@ function actions(overrides: Partial<GhlWalkthroughActions> = {}): GhlWalkthrough
     linkLocation: async () => ({ ok: true }),
     startConnect: async () => ({ ok: true, authorizeUrl: "https://example.test/connect" }),
     discover: async () => ({ ok: true, discovery: discovery() }),
+    saveFieldMap: async () => ({ ok: true, deliveryEnabled: false }),
+    loadLeadAttributes: async () => ({ ok: true, sourceAttributes: {} }),
     saveWorkflow: async () => ({
       ok: true,
       deliveryEnabled: false,
@@ -443,4 +445,67 @@ test("ongoing GHL activation is a separate confirmation and lists omitted fields
   assert.equal(phrase, "ENABLE ONGOING GHL DELIVERY");
   assert.equal(markState(container, "GHL ongoing delivery"), "yes");
   assert.equal(markState(container, "Sheets campaign delivery"), "no");
+});
+
+test("field ids are saved without enabling delivery, and blank values stay separate from missing mappings", async () => {
+  const FIELD_ID = "ghl_field_primary_reason";
+  let saved: Record<string, { ghlFieldKey: string }> | null = null;
+  let deliveryFlagSent = false;
+  render(
+    <GhlWalkthroughPanel
+      clientAccountId="client_sam"
+      leads={[lead()]}
+      location={location()}
+      connections={[connection()]}
+      sheetsCampaignEnabled={false}
+      actions={actions({
+        discover: async () => ({
+          ok: true,
+          discovery: {
+            ...discovery(),
+            customFields: [
+              {
+                id: FIELD_ID,
+                name: "Primary Reason",
+                key: "contact.primary_reason",
+                fieldKey: "contact.primary_reason",
+                dataType: "TEXT",
+              },
+              {
+                id: "ghl_field_beneficiary",
+                name: "Beneficiary",
+                key: "contact.beneficiary",
+                fieldKey: "contact.beneficiary",
+                dataType: "TEXT",
+              },
+            ],
+          },
+        }),
+        saveFieldMap: async (input) => {
+          saved = input.sourceAttributeFieldMapJson;
+          deliveryFlagSent = "deliveryEnabled" in input;
+          return { ok: true, deliveryEnabled: false };
+        },
+        loadLeadAttributes: async () => ({
+          ok: true,
+          sourceAttributes: { primary_reason: "Family", age: "64", beneficiary: null },
+        }),
+      })}
+    />
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Discover workflows" }));
+  const select = (await screen.findByLabelText("GHL field for primary_reason")) as HTMLSelectElement;
+  fireEvent.change(select, { target: { value: FIELD_ID } });
+  fireEvent.change(screen.getByLabelText("GHL field for beneficiary"), { target: { value: "ghl_field_beneficiary" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save field ids" }));
+  await waitFor(() => assert.equal(saved?.primary_reason?.ghlFieldKey, FIELD_ID));
+  assert.equal(deliveryFlagSent, false);
+  fireEvent.click(screen.getByRole("button", { name: "Review this lead's field values" }));
+  const coverage = await screen.findByTestId("ghl-field-coverage");
+  const text = coverage.textContent ?? "";
+  const mappings = text.split("Missing source values:")[0] ?? "";
+  assert.match(text, /primary_reason → ghl_field_primary_reason/);
+  assert.match(mappings, /Missing mappings: age \(64\)/);
+  assert.doesNotMatch(mappings, /beneficiary/);
+  assert.match(text, /Missing source values: beneficiary → ghl_field_beneficiary/);
 });

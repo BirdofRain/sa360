@@ -11,6 +11,7 @@ export type GhlWalkthroughLocation = {
   opportunityCreationEnabled: boolean | null;
   pipelineId: string | null;
   stageId: string | null;
+  sourceAttributeFieldMapJson?: unknown;
 };
 
 export type GhlWalkthroughConnection = {
@@ -45,6 +46,7 @@ export type GhlWalkthroughExecution = {
   externalCallExecuted: boolean;
   errors: string[];
   skippedDuplicate: boolean;
+  outcome?: "skipped" | "executed" | "held";
 };
 
 export type GhlWalkthroughActions = {
@@ -54,6 +56,13 @@ export type GhlWalkthroughActions = {
   discover: (
     locationId: string
   ) => Promise<{ ok: true; discovery: GhlLocationConfigDiscoveryResponse } | { ok: false; error: string }>;
+  saveFieldMap: (input: {
+    locationId: string;
+    sourceAttributeFieldMapJson: Record<string, { ghlFieldKey: string; requirement: "optional" }>;
+  }) => Promise<{ ok: true; deliveryEnabled: boolean | null } | { ok: false; error: string }>;
+  loadLeadAttributes: (
+    sourceLeadEventId: string
+  ) => Promise<{ ok: true; sourceAttributes: Record<string, string | null> } | { ok: false; error: string }>;
   saveWorkflow: (
     body: RoutingRuleGhlConfigSaveBody
   ) => Promise<

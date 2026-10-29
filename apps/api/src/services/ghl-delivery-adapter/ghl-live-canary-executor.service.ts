@@ -579,6 +579,7 @@ export async function executeLiveCanaryGhlSteps(
         requestRedactedJson: {
           mappableKeys: stampPlan.mappableKeys,
           unmappedKeys: stampPlan.unmappedKeys,
+          missingSourceKeys: stampPlan.missingSourceKeys,
           skippedKeys: stampPlan.skippedKeys,
           fieldCount: payload.apiPayload.length,
         } as Prisma.InputJsonValue,
@@ -600,11 +601,17 @@ export async function executeLiveCanaryGhlSteps(
         externalId: null,
         errorCode: null,
         errorSummary: "No mapped source attributes to stamp.",
-        warnings: stampPlan.unmappedKeys.length
-          ? [`Unmapped source attributes: ${stampPlan.unmappedKeys.join(", ")}`]
-          : [],
+        warnings: [
+          ...(stampPlan.unmappedKeys.length
+            ? [`Missing mappings: ${stampPlan.unmappedKeys.join(", ")}`]
+            : []),
+          ...(stampPlan.missingSourceKeys.length
+            ? [`Missing source values: ${stampPlan.missingSourceKeys.join(", ")}`]
+            : []),
+        ],
         requestRedactedJson: {
           unmappedKeys: stampPlan.unmappedKeys,
+          missingSourceKeys: stampPlan.missingSourceKeys,
           skippedKeys: stampPlan.skippedKeys,
         } as Prisma.InputJsonValue,
         responseRedactedJson: { externalCallExecuted: false } as Prisma.InputJsonValue,

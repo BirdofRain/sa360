@@ -27,6 +27,8 @@ export type GhlDeliveryPreviewFacts = {
   opportunity: string;
   persistedSimulation: string;
   ongoingDeliveryChanged: false;
+  missingMappings: string[];
+  missingSourceValues: string[];
 };
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -89,28 +91,32 @@ function workflowFact(
 function mappingFact(
   item: GhlPreviewStep | undefined,
   fieldMapping: GhlPreviewFieldMapping | null
-): { summary: string; omissions: string[] } {
-  const omissions = new Set<string>([
+): { summary: string; omissions: string[]; missingMappings: string[]; missingSourceValues: string[] } {
+  const missingMappings = [
     ...(fieldMapping?.coreRequiredMissing ?? []),
     ...(fieldMapping?.optionalMissing ?? []),
-  ]);
+  ];
+  const missingSourceValues: string[] = [];
   const customFields = record(record(item?.requestPreviewJson)?.customFields);
   if (customFields) {
     for (const [key, value] of Object.entries(customFields)) {
-      if (value === null || value === "") omissions.add(key);
+      if (value === null || value === "") missingSourceValues.push(key);
     }
   }
   const mapped = fieldMapping?.coreRequiredMapped ?? [];
-  const omitted = [...omissions];
   if (!fieldMapping && !customFields) {
     return {
       summary: "Field mapping was not returned with this simulation.",
       omissions: [],
+      missingMappings: [],
+      missingSourceValues: [],
     };
   }
   return {
-    summary: `Mapped core fields: ${joined(mapped)}. Omitted: ${joined(omitted)}. Omitted fields are not sent.`,
-    omissions: omitted,
+    summary: `Mapped core fields: ${joined(mapped)}. Missing mappings: ${joined(missingMappings)}. Missing source values: ${joined(missingSourceValues)}. Omitted fields are not sent.`,
+    omissions: [...missingMappings, ...missingSourceValues],
+    missingMappings,
+    missingSourceValues,
   };
 }
 
@@ -146,6 +152,8 @@ export function describeGhlDeliveryPreview(input: {
     ),
     fieldMapping: mapping.summary,
     omissions: mapping.omissions,
+    missingMappings: mapping.missingMappings,
+    missingSourceValues: mapping.missingSourceValues,
     opportunity: opportunityFact(step(input.steps, "create_or_update_opportunity"), input.opportunityCreationEnabled ?? null),
     persistedSimulation: input.adapterRunId
       ? `Persisted simulation ${input.adapterRunId}. No GHL write was made.`

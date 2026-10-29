@@ -156,6 +156,55 @@ test("a GHL failure is recorded without throwing, and an uncertain run is not se
   assert.equal(executes, 0);
 });
 
+test("a selected test does not send an event that already has a GHL delivery record", async () => {
+  let executes = 0;
+  const gate = deps({
+    findRun: async () => ({
+      id: "run_done",
+      status: "succeeded",
+      stepRuns: [{ errorCode: null, responseRedactedJson: { externalCallExecuted: true } }],
+    }),
+    execute: async () => {
+      executes += 1;
+      return { held: false, status: "succeeded", runId: "run_2", externalCallExecuted: true, errors: [] };
+    },
+  });
+  const held = await executeSelectedGhlDeliveryTest(
+    { clientAccountId: CLIENT, planId: "plan_1", confirmation: DELIVER_ONE_GHL_TEST },
+    gate
+  );
+  assert.equal(held.outcome, "held");
+  assert.equal(held.externalCallExecuted, false);
+  assert.equal(executes, 0);
+});
+
+test("a selected test loads the stored lead and does not turn ongoing delivery on", async () => {
+  let seen: { mode: string; lifecycle: boolean; confirmation: string | null } | null = null;
+  const gate = deps({
+    loadDestination: async () => facts({ deliveryEnabled: false, deliveryMode: "shadow", clientCutoverApproved: false }),
+    loadLifecyclePayload: async () => ({ schema_version: "sa360.lifecycle.v1" }) as never,
+    execute: async (input) => {
+      seen = {
+        mode: input.mode,
+        lifecycle: Boolean(input.lifecyclePayload),
+        confirmation: input.confirmation,
+      };
+      return { held: false, status: "succeeded", runId: "run_test", externalCallExecuted: true, errors: [] };
+    },
+  });
+  const sent = await executeSelectedGhlDeliveryTest(
+    { clientAccountId: CLIENT, planId: "plan_1", confirmation: DELIVER_ONE_GHL_TEST },
+    gate
+  );
+  assert.equal(sent.outcome, "executed");
+  assert.deepEqual(seen, {
+    mode: "paused_location_test",
+    lifecycle: true,
+    confirmation: DELIVER_ONE_GHL_TEST,
+  });
+  assert.equal(gate.calls.includes("create"), false);
+});
+
 test("a selected test can run before ongoing delivery is enabled and does not require the env allowlist", async () => {
   const gate = deps({ loadDestination: async () => facts({ deliveryEnabled: false, deliveryMode: "shadow" }) });
   const refused = await executeSelectedGhlDeliveryTest(

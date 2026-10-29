@@ -99,6 +99,7 @@ function projectGhlLocation(config: ClientDeliveryConfigResponse): GhlWalkthroug
     opportunityCreationEnabled: destination?.opportunityCreationEnabled ?? null,
     pipelineId: destination?.destinationPipelineIdGhl ?? null,
     stageId: destination?.destinationPipelineStageIdGhl ?? null,
+    sourceAttributeFieldMapJson: destination?.sourceAttributeFieldMapJson ?? null,
   };
 }
 

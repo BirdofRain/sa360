@@ -1,7 +1,11 @@
 import { discoverGhlLocationConfigAction, saveClientGhlConfigAction } from "@/app/actions/ghl-config";
 import { linkGhlConnectionClientAction, loadGhlConnectionsAction, startGhlOAuthConnectAction } from "@/app/actions/ghl-connections";
 import { loadGhlLiveCanaryPreflightAction } from "@/app/actions/ghl-live-canary";
-import { activateOngoingGhlDeliveryAction, testSelectedGhlDeliveryAction } from "@/app/actions/ghl-ongoing-delivery";
+import {
+  activateOngoingGhlDeliveryAction,
+  loadStoredLeadSourceAttributesAction,
+  testSelectedGhlDeliveryAction,
+} from "@/app/actions/ghl-ongoing-delivery";
 import { simulateGhlAdapterAction } from "@/app/actions/ghl-adapter";
 import { generateDeliveryPlanAction } from "@/app/actions/routing-dry-run";
 import type { GhlPreviewStep } from "@/lib/clients/onboarding/ghl-delivery-preview";
@@ -56,6 +60,15 @@ export function liveGhlWalkthroughActions(clientAccountId: string): GhlWalkthrou
       return { ok: true, authorizeUrl: res.authorizeUrl };
     },
     discover: async (locationId) => discoverGhlLocationConfigAction(locationId, true),
+    saveFieldMap: async (input) => {
+      const res = await saveClientGhlConfigAction(clientAccountId, {
+        locationId: input.locationId,
+        sourceAttributeFieldMapJson: input.sourceAttributeFieldMapJson,
+      });
+      if (!res.ok) return { ok: false, error: res.error };
+      return { ok: true, deliveryEnabled: res.ghlDestination?.deliveryEnabled ?? null };
+    },
+    loadLeadAttributes: async (sourceLeadEventId) => loadStoredLeadSourceAttributesAction(sourceLeadEventId),
     saveWorkflow: async (body) => {
       const res = await saveClientGhlConfigAction(clientAccountId, body);
       if (!res.ok) return { ok: false, error: res.error };

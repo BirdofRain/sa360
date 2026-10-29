@@ -35,6 +35,8 @@ import {
 } from "../services/ghl-config-discovery/client-ghl-config.service.js";
 import { getClientCutoverReadiness } from "../services/client-cutover-readiness.service.js";
 import { routingRuleGhlConfigBodySchema } from "../schemas/ghl-config.schema.js";
+import { activateOngoingGhlDelivery } from "../services/activate-ongoing-ghl.js";
+import { executeSelectedGhlDeliveryTest } from "../services/association-ongoing-delivery.js";
 import { patchRoutingRuleDeliveryConfig } from "../services/routing-rule-delivery-config.service.js";
 import { routingRuleDeliveryConfigPatchSchema } from "../schemas/delivery-readiness.schema.js";
 import {
@@ -390,6 +392,45 @@ export async function adminClientsRoutes(
     return reply.send({ ok: true, ...result });
   });
 
+  app.post("/clients/:clientAccountId/ghl-destination/activate-ongoing", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const { clientAccountId } = request.params as { clientAccountId: string };
+    const body = asRecord(request.body);
+    const result = await activateOngoingGhlDelivery({
+      clientAccountId,
+      requestId: stringField(body, "requestId"),
+      confirmation: stringField(body, "confirmation"),
+      actorLabel: stringField(body, "actorLabel") || null,
+    });
+    if (!result.ok) return reply.status(result.statusCode).send({ ok: false, error: result.error });
+    return reply.send(result);
+  });
+
+  app.post("/clients/:clientAccountId/ghl-destination/test-delivery", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const { clientAccountId } = request.params as { clientAccountId: string };
+    const body = asRecord(request.body);
+    const result = await executeSelectedGhlDeliveryTest({
+      clientAccountId,
+      planId: stringField(body, "planId"),
+      confirmation: stringField(body, "confirmation"),
+    });
+    return reply.status(result.statusCode).send({
+      ok: result.statusCode < 400,
+      outcome: result.outcome,
+      reason: result.reason,
+      runId: result.runId,
+      status: result.status,
+      externalCallExecuted: result.externalCallExecuted,
+      contactIdGhl: result.contactIdGhl,
+      opportunityIdGhl: result.opportunityIdGhl,
+      workflowStarted: result.workflowStarted,
+      omittedCoreFields: result.omittedCoreFields,
+      omittedOptionalFields: result.omittedOptionalFields,
+      ...(result.statusCode >= 400 ? { error: result.reason } : {}),
+    });
+  });
+
   app.get("/routing/rules", async (request, reply) => {
     if (!(await requireAdmin(request, reply))) return;
     const parsed = routingRulesAdminListQuerySchema.safeParse(request.query);
@@ -520,4 +561,14 @@ export async function adminClientsRoutes(
     }
     return reply.send({ ok: true, item: result.item });
   });
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function stringField(body: Record<string, unknown> | null, key: string): string {
+  const value = body?.[key];
+  return typeof value === "string" ? value : "";
 }

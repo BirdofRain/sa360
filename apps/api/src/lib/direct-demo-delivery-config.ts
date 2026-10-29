@@ -1,6 +1,15 @@
 /**
- * Demo-only direct delivery allowlist (Phase 5C).
- * Canonical Smart Agent 360 Demo destination — override via env for staging tests.
+ * Legacy direct-delivery and live-canary env lists.
+ *
+ * SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS and
+ * SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS still constrain the older
+ * approve-delivery and bulk paths. When either is empty, that path keeps the
+ * canonical demo pair. An empty list is not unrestricted.
+ *
+ * SA360_LIVE_CANARY_ALLOWED_DESTINATIONS is obsolete for onboarding. An empty
+ * or unset value authorizes nobody. A destination activated on the client
+ * record does not also have to appear in this list. Ongoing association
+ * delivery does not read either list.
  */
 
 export const DIRECT_DEMO_CANONICAL_CLIENT_ACCOUNT_ID = "smart_agent_360_demo";
@@ -122,7 +131,7 @@ export function isDestinationAllowedForLiveCanary(
   if (!client || !location) return { configured: false, allowed: false };
   const allowlist = getLiveCanaryAllowedDestinationPairs();
   if (!allowlist) {
-    return { configured: false, allowed: true };
+    return { configured: false, allowed: false };
   }
   return {
     configured: true,

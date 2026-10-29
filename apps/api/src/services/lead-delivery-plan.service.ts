@@ -21,6 +21,7 @@ import {
   findDeliveryPlanByRoutingDecisionId,
   replaceDeliveryPlanForDecision,
 } from "../repositories/lead-delivery-plan.repository.js";
+import { findLatestGhlLiveDeliveryRunForPlan } from "../repositories/ghl-live-delivery-run.repository.js";
 import { getDuplicateRiskForRoutingDecision } from "./lead-identity/lead-identity-correlation.service.js";
 import type { DuplicateRiskResult } from "./lead-identity/lead-identity.types.js";
 import {
@@ -907,6 +908,11 @@ export async function generateDirectCanaryDeliveryPlanForDecision(
 > {
   const decision = await findRoutingDryRunDecisionById(routingDryRunDecisionId.trim());
   if (!decision) return { notFound: true };
+  const existingPlan = await findDeliveryPlanByRoutingDecisionId(decision.id);
+  if (existingPlan) {
+    const liveRun = await findLatestGhlLiveDeliveryRunForPlan(existingPlan.id);
+    if (liveRun) return { plan: existingPlan };
+  }
   const blocked = await blockedCompanySheetsPilotPlan(decision);
   if (blocked) return blocked;
 

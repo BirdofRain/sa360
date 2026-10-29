@@ -16,6 +16,7 @@ export type ClientGhlDestinationDto = {
   requiredFieldsInstalled: boolean;
   defaultAssignedUserIdGhl: string | null;
   destinationWorkflowIdGhl: string | null;
+  workflowTriggerMode: string | null;
   destinationPipelineIdGhl: string | null;
   destinationPipelineStageIdGhl: string | null;
   pipelineStageContactingIdGhl: string | null;
@@ -99,6 +100,7 @@ export function presentClientGhlDestination(
     requiredFieldsInstalled: dest.requiredFieldsInstalled,
     defaultAssignedUserIdGhl: dest.defaultAssignedUserIdGhl,
     destinationWorkflowIdGhl: dest.destinationWorkflowIdGhl,
+    workflowTriggerMode: dest.workflowTriggerMode,
     destinationPipelineIdGhl: dest.destinationPipelineIdGhl,
     destinationPipelineStageIdGhl: dest.destinationPipelineStageIdGhl,
     pipelineStageContactingIdGhl: dest.pipelineStageContactingIdGhl,

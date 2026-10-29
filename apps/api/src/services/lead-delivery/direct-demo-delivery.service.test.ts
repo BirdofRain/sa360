@@ -627,14 +627,43 @@ test("runDirectDemoDelivery live_canary blocks when adapter simulation fails", a
   else delete process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS;
 });
 
-test("runDirectDemoDelivery live_canary blocks non-allowlisted destination", async () => {
+test("runDirectDemoDelivery live_canary blocks an unactivated destination that is not listed", async () => {
   const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
   const prevAllowlist = process.env[LIVE_CANARY_DESTINATION_ALLOWLIST_ENV];
   armLiveCanaryAdapterEnv();
-  process.env[LIVE_CANARY_DESTINATION_ALLOWLIST_ENV] =
-    `${DIRECT_DEMO_CANONICAL_CLIENT_ACCOUNT_ID}:${DIRECT_DEMO_CANONICAL_LOCATION_ID}`;
+  delete process.env[LIVE_CANARY_DESTINATION_ALLOWLIST_ENV];
+  const approved = approvedDestinationClient("other_client", "other_location");
+  const unactivated = {
+    ...approved,
+    ghlDestination: { ...approved.ghlDestination, deliveryEnabled: false, deliveryMode: "shadow" },
+  };
 
   const result = await runDirectDemoDelivery(
+    directDemoInput(payloadWithPlanRefs(loadFixturePayload("livebaddest"), { planId: "plan_other" }), {
+      mode: "live_canary",
+      confirmLiveDeliveryRisk: true,
+      operatorConfirmationText: LIVE_CANARY_CONFIRMATION_TEXT,
+    }),
+    {
+      ...referencedPlanDeps({
+        planId: "plan_other",
+        destClient: "other_client",
+        destLocation: "other_location",
+        clientRecord: unactivated,
+      }),
+      getDuplicateRiskForRoutingDecision: async () => null,
+      findCampaignRoutingRuleById: async () => null,
+    }
+  );
+
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(result.blockers.includes("destination not in live canary allowlist"));
+  }
+
+  process.env[LIVE_CANARY_DESTINATION_ALLOWLIST_ENV] =
+    `${DIRECT_DEMO_CANONICAL_CLIENT_ACCOUNT_ID}:${DIRECT_DEMO_CANONICAL_LOCATION_ID}`;
+  const activated = await runDirectDemoDelivery(
     directDemoInput(payloadWithPlanRefs(loadFixturePayload("livebaddest"), { planId: "plan_other" }), {
       mode: "live_canary",
       confirmLiveDeliveryRisk: true,
@@ -648,13 +677,46 @@ test("runDirectDemoDelivery live_canary blocks non-allowlisted destination", asy
       }),
       getDuplicateRiskForRoutingDecision: async () => null,
       findCampaignRoutingRuleById: async () => null,
+      runGhlAdapterSimulationForPlan: async () =>
+        ({
+          ok: true,
+          adapterRun: { id: "adapter_other", summary: "sim ok", status: "simulated" },
+          validation: {},
+          safetyMessage: "safe",
+          adapterMode: "live_canary",
+          blockedReason: null,
+        }) as never,
+      getLiveCanaryPreflightForPlan: async () => ({
+        preflight: {
+          canExecute: true,
+          blockers: [],
+          warnings: [],
+          adapterMode: "live_canary",
+          idempotencyKey: "idem_other",
+          lastAdapterSimulationRunId: "adapter_other",
+          lastAdapterSimulationStatus: "simulated",
+          lastAdapterSimulationMode: "simulate",
+          lastAdapterSimulationPassed: true,
+          lastAdapterSimulationDetail: "ok",
+          lastLiveRunStatus: null,
+          duplicateRiskLevel: "none",
+          duplicateBlocksLive: false,
+          readinessCanDeliverLive: true,
+        },
+        safetyMessage: "safe",
+        adapterMode: "live_canary",
+      }),
+      executeLiveCanaryForPlan: async () =>
+        ({
+          ok: true,
+          liveRun: { id: "live_other", status: "succeeded", summary: "ok", warnings: [], stepRuns: [] },
+          externalCallExecuted: true,
+          contactIdGhl: "contact_other",
+          opportunityIdGhl: null,
+        }) as never,
     }
   );
-
-  assert.equal(result.ok, false);
-  if (!result.ok) {
-    assert.ok(result.blockers.includes("destination not in live canary allowlist"));
-  }
+  assert.equal(activated.ok, true);
 
   if (prevMode !== undefined) process.env.GHL_DELIVERY_ADAPTER_MODE = prevMode;
   else delete process.env.GHL_DELIVERY_ADAPTER_MODE;

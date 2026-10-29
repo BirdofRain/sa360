@@ -13,9 +13,8 @@ import {
   warmEffectiveDeliveryAdapterMode,
   type ResolvedDeliveryRuntimeMode,
 } from "../delivery-runtime-mode.service.js";
-import {
-  isDestinationAllowedForLiveCanary,
-} from "../../lib/direct-demo-delivery-config.js";
+import { isDestinationAllowedForLiveCanary } from "../../lib/direct-demo-delivery-config.js";
+import { isPersistedLiveDestination } from "../ghl-destination-authorization.js";
 import { findCampaignRoutingRuleById } from "../../repositories/campaign-routing-rule.repository.js";
 import { findClientAccountById } from "../../repositories/client-account.repository.js";
 import { findRoutingDryRunDecisionById } from "../../repositories/routing-dry-run-decision.repository.js";
@@ -527,12 +526,15 @@ async function evaluateLiveCanaryDestinationApproval(input: {
     }
   }
 
-  const allowlist = isDestinationAllowedForLiveCanary(
-    input.destinationClientAccountId,
-    input.destinationSubaccountIdGhl
-  );
-  if (allowlist.configured && !allowlist.allowed) {
-    blockers.push("destination not in live canary allowlist");
+  const persisted = isPersistedLiveDestination(destination ?? null, input.destinationSubaccountIdGhl);
+  if (!persisted) {
+    const allowlist = isDestinationAllowedForLiveCanary(
+      input.destinationClientAccountId,
+      input.destinationSubaccountIdGhl
+    );
+    if (!allowlist.allowed) {
+      blockers.push("destination not in live canary allowlist");
+    }
   }
 
   if (input.duplicateRisk?.blocksLiveDelivery) {

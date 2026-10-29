@@ -78,6 +78,7 @@ test("only an observed stored event can be selected", () => {
   const [lead] = selectableStoredLeads([source]);
   assert.equal(lead?.sourceLeadEventId, "evt_alex");
   assert.equal(lead?.identity, "go.example.com/alex");
+  assert.equal(lead?.routingDryRunDecisionId, null);
 });
 
 test("sheet states do not collapse saved, bound, permission, and delivery", () => {

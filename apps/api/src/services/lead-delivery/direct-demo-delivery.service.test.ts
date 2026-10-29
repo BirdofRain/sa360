@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { LIVE_CANARY_CONFIRMATION_TEXT } from "../../lib/ghl-delivery-adapter-mode.js";
+import { GHL_SINGLE_PLAN_CANARY_ID_ENV } from "../../lib/ghl-single-plan-canary.js";
 import {
   DIRECT_DEMO_CANONICAL_CLIENT_ACCOUNT_ID,
   DIRECT_DEMO_CANONICAL_LOCATION_ID,
@@ -1319,4 +1320,22 @@ test("runDirectDemoDelivery live_canary partial success returns ok=false not ful
   else delete process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS;
   if (prevL !== undefined) process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS = prevL;
   else delete process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS;
+});
+
+test("direct-demo live is closed while a single-plan canary pin is set", async () => {
+  const prev = process.env[GHL_SINGLE_PLAN_CANARY_ID_ENV];
+  process.env[GHL_SINGLE_PLAN_CANARY_ID_ENV] = "plan_pinned";
+  const result = await runDirectDemoDelivery(
+    directDemoInput(loadFixturePayload("pin"), {
+      mode: "live_canary",
+      confirmLiveDeliveryRisk: true,
+      operatorConfirmationText: LIVE_CANARY_CONFIRMATION_TEXT,
+    })
+  );
+  if (prev !== undefined) process.env[GHL_SINGLE_PLAN_CANARY_ID_ENV] = prev;
+  else delete process.env[GHL_SINGLE_PLAN_CANARY_ID_ENV];
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.error, "delivery_blocked");
+  assert.equal(result.externalCallExecuted, false);
+  assert.ok(result.blockers.some((item) => item.includes("SA360_GHL_SINGLE_PLAN_CANARY_ID")));
 });

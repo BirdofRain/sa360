@@ -80,6 +80,7 @@ function bulkImportErrorStatus(code: string): number {
     code === "mapping_confirmation_required" ||
     code === "all_simulations_failed" ||
     code === "live_canary_preflight_failed" ||
+    code === "single_plan_canary_pin" ||
     code === "initial_canary_guard_failed" ||
     code === "queue_enqueue_failed"
   ) {

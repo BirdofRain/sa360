@@ -16,6 +16,10 @@ import {
 import {
   isDestinationAllowedForLiveCanary,
 } from "../../lib/direct-demo-delivery-config.js";
+import {
+  getGhlSinglePlanCanaryId,
+  GHL_SINGLE_PLAN_CANARY_OTHER_PATH,
+} from "../../lib/ghl-single-plan-canary.js";
 import { findCampaignRoutingRuleById } from "../../repositories/campaign-routing-rule.repository.js";
 import { findClientAccountById } from "../../repositories/client-account.repository.js";
 import { findRoutingDryRunDecisionById } from "../../repositories/routing-dry-run-decision.repository.js";
@@ -551,6 +555,23 @@ export async function runDirectDemoDelivery(
 ): Promise<DirectDemoDeliveryResult> {
   const mode = input.mode;
   const warnings: string[] = [];
+  if (mode === "live_canary" && getGhlSinglePlanCanaryId()) {
+    return failure({
+      error: "delivery_blocked",
+      reason: GHL_SINGLE_PLAN_CANARY_OTHER_PATH,
+      mode,
+      matched: false,
+      destinationClientAccountId: null,
+      destinationSubaccountIdGhl: null,
+      routingDryRunDecisionId: null,
+      deliveryPlanId: null,
+      adapterRunId: null,
+      liveRunId: null,
+      blockers: [GHL_SINGLE_PLAN_CANARY_OTHER_PATH],
+      warnings,
+      nextAction: "Use POST /admin/v1/delivery-plans/:id/ghl-live/canary for the pinned plan.",
+    });
+  }
   const runDryRun = deps.runRoutingDryRun ?? runRoutingDryRun;
   const generatePlan =
     deps.generateDirectCanaryDeliveryPlanForDecision ??

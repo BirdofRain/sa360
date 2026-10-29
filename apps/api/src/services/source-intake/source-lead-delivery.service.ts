@@ -16,6 +16,10 @@ import { findDeliveryPlanByRoutingDecisionId } from "../../repositories/lead-del
 import { extractRoutingAttributionFromPayload } from "../../lib/routing-attribution-extract.js";
 import { generateDirectCanaryDeliveryPlanForDecision } from "../lead-delivery-plan.service.js";
 import { isCompanySheetsInternalPilotLead } from "../company-sheets-dispatch/company-sheets-pilot-isolation.js";
+import {
+  getGhlSinglePlanCanaryId,
+  GHL_SINGLE_PLAN_CANARY_OTHER_PATH,
+} from "../../lib/ghl-single-plan-canary.js";
 
 export type ApproveSourceLeadDeliveryInput = {
   sourceLeadEventId: string;
@@ -183,6 +187,14 @@ export async function approveSourceLeadDelivery(
   }
 
   if (input.mode === "live_canary") {
+    if (getGhlSinglePlanCanaryId()) {
+      return {
+        ok: false,
+        error: "single_plan_canary_pin",
+        reason: GHL_SINGLE_PLAN_CANARY_OTHER_PATH,
+        sourceLeadEventId: event.id,
+      };
+    }
     let deliveryMode: string | null = null;
     if (event.routingRuleIdResolved) {
       const rule = await findCampaignRoutingRuleById(event.routingRuleIdResolved);

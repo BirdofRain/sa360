@@ -18,6 +18,11 @@ import {
   isAdapterSimulationPassedForLiveCanary,
 } from "../../repositories/ghl-live-delivery-run.repository.js";
 import { assertLiveDeliveryAllowed, LiveDeliveryNotAllowedError } from "../delivery-guard.js";
+import {
+  applySinglePlanCanaryArmingException,
+  GHL_SINGLE_PLAN_CANARY_MISMATCH,
+  ghlSinglePlanCanaryDecision,
+} from "../../lib/ghl-single-plan-canary.js";
 import { ruleToReadinessInput } from "../delivery-readiness-admin.present.js";
 import { getDuplicateRiskForRoutingDecision } from "../lead-identity/lead-identity-correlation.service.js";
 import { findClientAccountById } from "../../repositories/client-account.repository.js";
@@ -214,6 +219,16 @@ export async function evaluateLiveCanaryPreflight(
   const ctx = await loadLiveCanaryContext(plan);
   const blockers: string[] = [];
   const warnings: string[] = [];
+  const pin = ghlSinglePlanCanaryDecision(plan.id);
+  if (pin.pinned && !pin.allowed) {
+    blockers.push(GHL_SINGLE_PLAN_CANARY_MISMATCH);
+  }
+  const singlePlanException = pin.pinned && pin.allowed;
+  if (singlePlanException) {
+    warnings.push(
+      "Single-plan canary pin is active. Destination delivery flags were not changed."
+    );
+  }
 
   const runtime = await warmEffectiveDeliveryAdapterMode();
   const adapterMode = getGhlDeliveryAdapterMode();
@@ -245,8 +260,11 @@ export async function evaluateLiveCanaryPreflight(
   let readinessCanDeliverLive = false;
   if (ctx.rule) {
     try {
+      const readinessInput = ruleToReadinessInput(ctx.rule, ctx.destinationFieldMapping);
       assertLiveDeliveryAllowed(
-        ruleToReadinessInput(ctx.rule, ctx.destinationFieldMapping),
+        singlePlanException
+          ? applySinglePlanCanaryArmingException(readinessInput)
+          : readinessInput,
         {
           duplicateRisk: ctx.duplicateRisk,
         }

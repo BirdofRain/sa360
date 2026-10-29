@@ -11,6 +11,10 @@ import {
   classifyThrownGhlExecutionError,
 } from "./ghl-outcome-classifier.service.js";
 import { buildLf2GhlAdapterContext } from "./lf2-ghl-plan-context.service.js";
+import {
+  getGhlSinglePlanCanaryId,
+  GHL_SINGLE_PLAN_CANARY_OTHER_PATH,
+} from "../../lib/ghl-single-plan-canary.js";
 
 function asClientGhlDestination(value: unknown): ClientGhlDestination | null {
   if (!value || typeof value !== "object") return null;
@@ -18,6 +22,14 @@ function asClientGhlDestination(value: unknown): ClientGhlDestination | null {
 }
 
 async function deliverLiveGhl(input: ExecutionAdapterDeliverLiveInput): Promise<DeliveryExecutionResult> {
+  if (getGhlSinglePlanCanaryId()) {
+    return {
+      status: "terminal_pre_send_failure",
+      errorCode: "single_plan_canary_pin",
+      errorSummary: GHL_SINGLE_PLAN_CANARY_OTHER_PATH,
+      externalCallExecuted: false,
+    };
+  }
   const destination = asClientGhlDestination(input.destinationConfig);
   if (!destination) {
     return {

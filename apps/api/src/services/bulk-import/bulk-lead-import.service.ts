@@ -80,6 +80,10 @@ import {
 } from "./bulk-import-wizard-progression.service.js";
 import { repairSimulationOnlySourceLeadEvent } from "./bulk-import-simulation.service.js";
 import { BulkImportApprovalError } from "./bulk-import-approval.error.js";
+import {
+  getGhlSinglePlanCanaryId,
+  GHL_SINGLE_PLAN_CANARY_OTHER_PATH,
+} from "../../lib/ghl-single-plan-canary.js";
 import { runBulkImportLiveCanaryPreflightForBatch } from "./bulk-import-live-canary-preflight.service.js";
 import {
   isBulkImportInitialCanaryDemoOnlyEnabled,
@@ -758,6 +762,14 @@ export async function approveBulkImportDelivery(
     mode?: "simulate" | "live_canary";
   }
 ) {
+  if ((input.mode ?? "live_canary") === "live_canary" && getGhlSinglePlanCanaryId()) {
+    throw new BulkImportApprovalError(
+      "single_plan_canary_pin",
+      [GHL_SINGLE_PLAN_CANARY_OTHER_PATH],
+      GHL_SINGLE_PLAN_CANARY_OTHER_PATH
+    );
+  }
+
   const { BULK_IMPORT_APPROVE_DELIVERY_CONFIRMATION } = await import("@sa360/shared");
   if (input.operatorConfirmationText.trim() !== BULK_IMPORT_APPROVE_DELIVERY_CONFIRMATION) {
     throw new Error("confirmation_required");

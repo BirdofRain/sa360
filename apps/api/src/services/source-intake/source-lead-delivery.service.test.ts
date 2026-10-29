@@ -7,6 +7,7 @@ import {
   type SourceLeadDeliveryDeps,
 } from "./source-lead-delivery.service.js";
 import { SOURCE_LEAD_APPROVE_DELIVERY_CONFIRMATION } from "./source-intake.types.js";
+import { GHL_SINGLE_PLAN_CANARY_ID_ENV } from "../../lib/ghl-single-plan-canary.js";
 import {
   DIRECT_DEMO_CANONICAL_CLIENT_ACCOUNT_ID,
   DIRECT_DEMO_CANONICAL_LOCATION_ID,
@@ -340,6 +341,35 @@ test("requeue keeps an association lead routing_matched without a campaign rule"
   const updates: UpdateCall[] = [];
   const result = await requeueSourceLeadEvent(event.id, buildDeps(event, null, updates));
   assert.deepEqual(result, { ok: true, status: "routing_matched" });
+});
+
+test("live approve-delivery refuses while a single-plan canary pin is set", async () => {
+  const prev = process.env[GHL_SINGLE_PLAN_CANARY_ID_ENV];
+  process.env[GHL_SINGLE_PLAN_CANARY_ID_ENV] = "plan_pinned";
+  const event = fakeEvent({ routingDryRunDecisionId: "dec_assoc" });
+  const updates: UpdateCall[] = [];
+  let ran = false;
+  const result = await approveSourceLeadDelivery(
+    {
+      sourceLeadEventId: event.id,
+      mode: "live_canary",
+      operatorConfirmationText: SOURCE_LEAD_APPROVE_DELIVERY_CONFIRMATION,
+      confirmLiveDeliveryRisk: true,
+    },
+    {
+      ...buildDeps(event, RUNTIME_MODE_BLOCK, updates),
+      runDirectDemoDelivery: (async () => {
+        ran = true;
+        return RUNTIME_MODE_BLOCK;
+      }) as SourceLeadDeliveryDeps["runDirectDemoDelivery"],
+    }
+  );
+  if (prev !== undefined) process.env[GHL_SINGLE_PLAN_CANARY_ID_ENV] = prev;
+  else delete process.env[GHL_SINGLE_PLAN_CANARY_ID_ENV];
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.error, "single_plan_canary_pin");
+  assert.equal(ran, false);
+  assert.equal(updates.length, 0);
 });
 
 test("requeue returns not_found for missing lead", async () => {

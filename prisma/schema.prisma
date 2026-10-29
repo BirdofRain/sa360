@@ -3654,7 +3654,8 @@ model ClientOnboardingTestWorksheet {
 /// kind: preview | captured_event_replay | captured_event_delivery | synthetic_delivery.
 /// status: previewed | executing | succeeded | failed | uncertain | note_too_long.
 /// isolationMode: verified_test_identity | isolated_destination.
-/// sheetsContract: exact_v3_test_worksheet | canary_v1_projection.
+/// sheetsContract column: exact_v3_test_worksheet | canary_v1_projection | null.
+/// A custom campaign test stores null in the column. requestSnapshot records custom_campaign_map.
 /// repeatOfTestRunId is a deferred restrict foreign key in SQL.
 model ClientOnboardingTestRun {
   id                      String                       @id @default(cuid())

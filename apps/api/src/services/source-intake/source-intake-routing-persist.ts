@@ -15,16 +15,17 @@ import {
 import { hasDeliverableIdentity } from "./source-enrichment.service.js";
 import type { SourceLeadRoutingResult } from "./source-intake.types.js";
 import { persistLeadProofFromPayload } from "../lead-proof/lead-proof-ingest.service.js";
+import { deliverConfirmedAssociationIfActivated } from "../association-ongoing-delivery.js";
 
 /**
  * Shared source-intake routing + duplicate-risk + enrichment persistence.
  *
- * Used by both the LeadCapture.io and Facebook Lead Ads intake services so every source
- * flows through the identical existing pipeline: runRoutingDryRun (which persists the
- * RoutingDryRunDecision + lifecycle events), duplicate-risk evaluation, source enrichment,
- * and the SourceLeadEvent status transition. No GHL delivery plan is created
- * here and no GHL request is sent. Plan creation stays on an explicit
- * delivery-plan or approve-delivery action.
+ * Used by LeadCapture.io and Facebook Lead Ads intake so every source flows
+ * through the same pipeline: runRoutingDryRun, duplicate-risk evaluation,
+ * source enrichment, and the SourceLeadEvent status transition. A confirmed
+ * parent-URL association with an activated GHL destination then records one
+ * ongoing delivery. An unactivated destination is left alone. A GHL failure
+ * does not roll back the lead or the Sheets intent.
  */
 export async function persistRoutingAndDuplicate(
   sourceEventId: string,
@@ -158,6 +159,20 @@ export async function persistRoutingAndDuplicate(
       tx
     );
   });
+
+  try {
+    await deliverConfirmedAssociationIfActivated({
+      sourceLeadEventId: sourceEventId,
+      status,
+      routing,
+      lifecyclePayload: normalizedWithEnrichment,
+    });
+  } catch (err) {
+    logger.warn("association_ghl.ongoing_failed", {
+      sourceLeadEventId: sourceEventId,
+      errorName: err instanceof Error ? err.name : "Error",
+    });
+  }
 
   try {
     const proofResult = await persistLeadProofFromPayload(normalizedWithEnrichment, {

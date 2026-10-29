@@ -15,6 +15,7 @@ import type {
   WorksheetRisk,
 } from "./captured-test-delivery.js";
 import { campaignLeadIdentityFromPayload } from "../company-sheets-dispatch/company-sheets-onboarding-read.js";
+import { findPublishedColumnMap } from "./column-maps.js";
 import { sourceLeadOwnedByOtherClient } from "./google-only-quarantine.js";
 import { storedLeadFromNormalizedPayload } from "./onboarding-note-bridge.js";
 import { loadStoredWorkflowDiscovery } from "./onboarding-ghl-bindings.js";
@@ -68,6 +69,15 @@ export async function loadCapturedTestWorld(
   const campaign = boundTab(destination?.tabContracts.find((contract) => contract.role === "campaign"));
   const canary = boundTab(destination?.tabContracts.find((contract) => contract.role === "canary"));
   const approved = client.onboardingTestWorksheet;
+  const publishedMap =
+    destination && campaign
+      ? await findPublishedColumnMap(db, {
+          clientAccountId: client.clientAccountId,
+          spreadsheetId: destination.spreadsheetId,
+          worksheetId: campaign.worksheetId,
+          sourceFunnelId: null,
+        })
+      : null;
   const discovery = await loadStoredWorkflowDiscovery(client.clientAccountId, db);
   const storedEvent = event ? toEvent(event, await eventDownstream(db, event.id)) : null;
   const testIdentitySharedWithOtherClient = storedEvent
@@ -108,6 +118,16 @@ export async function loadCapturedTestWorld(
           canaryRisk: jobRisk(jobs, canary?.worksheetId ?? null),
           campaignControl: controlFromDestination(destination.controlBasis, destination.accessCheckedAt ?? destination.updatedAt),
           destinationRevision: destination.destinationRevision,
+          publishedCampaignMap: publishedMap
+            ? {
+                id: publishedMap.id,
+                mapVersion: publishedMap.mapVersion,
+                spreadsheetId: publishedMap.spreadsheetId,
+                worksheetId: publishedMap.worksheetId,
+                headerSnapshot: stringList(publishedMap.headerSnapshot),
+                assignments: publishedMap.assignments,
+              }
+            : null,
           approvedTestWorksheet: approved ? toApproved(approved) : null,
           approvedTestWorksheetRisk: mergeRisk(
             attemptRisk(attempts, approved?.spreadsheetId ?? null, approved?.worksheetId ?? null),

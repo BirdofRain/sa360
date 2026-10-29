@@ -13,6 +13,7 @@ import {
   campaignLeadIdentityFromPayload,
   companySheetsCampaignRowValues,
 } from "../company-sheets-dispatch/company-sheets-onboarding-read.js";
+import { COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA } from "../company-sheets-delivery/company-sheets-custom-row.js";
 import type {
   OnboardingGhlTestDeliveryReceipt,
   OnboardingGhlTestDeliveryRequest,
@@ -22,6 +23,16 @@ import {
   buildOnboardingGhlAggregateRequest,
   projectOnboardingGhlReceipt,
 } from "./onboarding-ghl-aggregate-execution.js";
+import {
+  CONFIRM_ONE_CUSTOM_SHEETS_ROW,
+  CUSTOM_CAMPAIGN_SHEETS_CONTRACT,
+  isSyntheticCampaignTestEvent,
+  planCustomCampaignSheet,
+  type CustomCampaignSheetPlan,
+  type PublishedCampaignMapSnapshot,
+} from "./custom-captured-sheet.js";
+
+export { CONFIRM_ONE_CUSTOM_SHEETS_ROW, CUSTOM_CAMPAIGN_SHEETS_CONTRACT };
 
 /**
  * Captured-lead delivery planner and orchestrator.
@@ -51,6 +62,8 @@ export const GOOGLE_ONLY_PILOT_FLAG = "SA360_CLIENT_ONBOARDING_GOOGLE_ONLY_PILOT
 export const ONBOARDING_OPERATOR_OWNED_TEST_CLASS = "onboarding_operator_owned_test";
 /** Stored on a one-shot run so a later request cannot append again. */
 export const GOOGLE_ONLY_ONE_SHOT_WARNING = "google_only_one_shot";
+/** Stored on a custom-tab captured test so REPEAT cannot append a second row. */
+export const CUSTOM_CAPTURED_SHEETS_WARNING = "custom_captured_sheets_test";
 export const WARNING_DOWNSTREAM = "ghl_workflow_may_start_downstream_automation";
 export const PR228_RECONCILE_DISCREPANCY =
   "PR #228 reconcile treats operator inspection as enough to authorize a new captured delivery. An absent sheet row or an unknown GHL POST is not proof the first request cannot commit later. This module records the inspection, does not clear appendStartedAt or the worksheet lock, and keeps repeat_blocked_uncertain.";
@@ -79,7 +92,7 @@ export type TestRunKind =
 
 export type TestDestination = "google_sheets" | "ghl_location_api" | "ghl_inbound_webhook";
 export type IsolationMode = "verified_test_identity" | "isolated_destination";
-export type SheetsContract = "exact_v3_test_worksheet" | "canary_v1_projection";
+export type SheetsContract = "exact_v3_test_worksheet" | "canary_v1_projection" | typeof CUSTOM_CAMPAIGN_SHEETS_CONTRACT;
 
 const SELECTABLE_CONTROL = new Set(["company_created", "drive_owner_verified", "approved_shared_drive"]);
 const EXACT_V3_HEADER = [...(companySheetsCampaignHeader(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3) ?? [])];
@@ -189,6 +202,8 @@ export type SheetsTargetSnapshot = {
   destinationRevision?: number;
   /** One approved ClientOnboardingTestWorksheet. Absent until an operator records it. */
   approvedTestWorksheet?: ApprovedExactV3Worksheet | null;
+  /** Published shared map for the bound custom campaign tab. Absent for preset tabs. */
+  publishedCampaignMap?: PublishedCampaignMapSnapshot | null;
   approvedTestWorksheetRisk?: WorksheetRisk;
 };
 
@@ -365,6 +380,23 @@ export type SheetsAppendOutcome =
  */
 export type CapturedTestSheetsAppendPort = {
   append(request: SheetsAppendRequest): Promise<SheetsAppendOutcome>;
+};
+
+/** Bound custom-tab test. Separate from the exact-v3 one-shot append port. */
+export type CustomCapturedSheetEffects = {
+  inventoryAffected: boolean;
+  billingAffected: boolean;
+  deliveryEnabled: boolean;
+  cutoffChanged: boolean;
+  duplicate: boolean;
+};
+
+export type CustomCapturedCampaignSheetsPort = {
+  send(input: { clientAccountId: string; sourceLeadEventId: string }): Promise<{
+    status: "succeeded" | "failed" | "uncertain";
+    externalCallExecuted: boolean;
+    error?: string;
+  } & CustomCapturedSheetEffects>;
 };
 
 export type GhlContactRequest = {
@@ -648,6 +680,7 @@ export type CapturedTestSuccess = {
   resendAuthorized: false;
   appendStartedAtCleared: false;
   locksCleared: false;
+  effects?: CustomCapturedSheetEffects | null;
 };
 
 export type CapturedTestOutcome = CapturedTestError | CapturedTestSuccess;
@@ -672,6 +705,8 @@ export type CapturedTestDeps = {
     deliver(request: OnboardingGhlTestDeliveryRequest): Promise<OnboardingGhlTestDeliveryReceipt>;
   };
   syntheticSheets?: SyntheticSheetsTestPort;
+  /** Appends one captured event through the bound custom campaign writer. */
+  customCampaignSheets?: CustomCapturedCampaignSheetsPort;
   /** Route default. Unit tests pass injected_fakes with the ports above. */
   execution?: "disabled_pending_review" | "injected_fakes";
   priors?: StoredTestRun[];
@@ -732,7 +767,9 @@ export function exclusiveGoogleOnlyRequest(input: {
 
 /**
  * Mounted HTTP routes and runCapturedTestDelivery both use this gate.
- * Previews stay on the config flag. Execution needs both exact flags and the one-shot shape.
+ * Previews stay on the config flag. The exact-v3 one-shot still needs the
+ * pilot flag. A custom campaign captured test needs the captured-test flag
+ * and does not use the pilot flag.
  */
 export function googleOnlyPilotExecutionGate(
   input: CapturedTestRequest,
@@ -880,6 +917,17 @@ export function priorDeliveryBlock(
   if (relevant.some((run) => run.warningCodes.includes(GOOGLE_ONLY_ONE_SHOT_WARNING))) {
     return { statusCode: 409, error: "one_test_already_used" };
   }
+  const customConfirmation = input.confirmation === CONFIRM_ONE_CUSTOM_SHEETS_ROW;
+  const customSucceeded = relevant.some((run) => run.status === "succeeded" && isCustomCapturedRun(run));
+  if (customConfirmation || customSucceeded) {
+    if (relevant.some((run) => run.status === "succeeded")) {
+      return { statusCode: 409, error: "captured_event_test_already_used" };
+    }
+    if (customConfirmation) {
+      if (input.repeatOfTestRunId) return { statusCode: 400, error: "invalid_confirmation" };
+      return null;
+    }
+  }
   const terminal = relevant
     .filter((run) => run.status === "succeeded" || run.status === "failed" || run.status === "note_too_long")
     .slice()
@@ -994,7 +1042,7 @@ export function planCapturedTestDelivery(
 
   const sheet = destinations.includes("google_sheets")
     ? planSheet(input, world, event, deps.testRunId)
-    : { sheet: null as PlannedSheet | null, error: null as CapturedTestError | null };
+    : { sheet: null as PlannedSheet | null, error: null as CapturedTestError | null, warnings: [] as string[] };
   if (sheet.error) return sheet.error;
   if (sheet.sheet && input.confirmation === CONFIRM_ONE_GOOGLE_SHEETS_ROW) {
     sheet.sheet.bodyMustBeEmpty = true;
@@ -1010,6 +1058,10 @@ export function planCapturedTestDelivery(
     ...(input.kind === "captured_event_delivery" && input.confirmation === CONFIRM_ONE_GOOGLE_SHEETS_ROW
       ? [GOOGLE_ONLY_ONE_SHOT_WARNING]
       : []),
+    ...(input.kind === "captured_event_delivery" && input.confirmation === CONFIRM_ONE_CUSTOM_SHEETS_ROW
+      ? [CUSTOM_CAPTURED_SHEETS_WARNING]
+      : []),
+    ...(sheet.warnings ?? []),
   ];
 
   const ghl = planGhl(input, world, event, deps.testRunId, notePlan.note);
@@ -1143,7 +1195,7 @@ export async function runCapturedTestDelivery(
     status: executed.status,
     attempts: executed.attempts,
   };
-  return success(stored, plan, world, store, true, executed.calls);
+  return success(stored, plan, world, store, true, executed.calls, [], executed.effects ?? null);
 }
 
 export async function reconcileCapturedTestRun(
@@ -1347,16 +1399,30 @@ async function executeAttempts(
   input: CapturedTestRequest,
   world: CapturedTestWorld,
   deps: CapturedTestDeps
-): Promise<{ status: RunStatus; attempts: StoredAttempt[]; calls: ExternalCallReport }> {
+): Promise<{
+  status: RunStatus;
+  attempts: StoredAttempt[];
+  calls: ExternalCallReport;
+  effects: CustomCapturedSheetEffects | null;
+}> {
   const attempts: StoredAttempt[] = [];
   const calls: ExternalCallReport = { providerWebhook: false, sheets: false, ghl: false };
   let sheetsUncertain = false;
+  let effects: CustomCapturedSheetEffects | null = null;
 
   if (plan.sheet && plan.destinations.includes("google_sheets")) {
-    const outcome = await callSheets(plan, deps.sheets);
-    if (outcome.externalCallExecuted) calls.sheets = true;
-    if (outcome.status === "uncertain") sheetsUncertain = true;
-    attempts.push(sheetAttempt(plan, outcome));
+    if (plan.sheet.sheetsContract === CUSTOM_CAMPAIGN_SHEETS_CONTRACT) {
+      const custom = await callCustomSheets(plan, deps.customCampaignSheets);
+      effects = custom.effects;
+      if (custom.outcome.externalCallExecuted) calls.sheets = true;
+      if (custom.outcome.status === "uncertain") sheetsUncertain = true;
+      attempts.push(sheetAttempt(plan, custom.outcome));
+    } else {
+      const outcome = await callSheets(plan, deps.sheets);
+      if (outcome.externalCallExecuted) calls.sheets = true;
+      if (outcome.status === "uncertain") sheetsUncertain = true;
+      attempts.push(sheetAttempt(plan, outcome));
+    }
   }
 
   if (plan.webhook) {
@@ -1374,18 +1440,18 @@ async function executeAttempts(
   }
 
   if (!plan.ghl || !plan.destinations.includes("ghl_location_api")) {
-    return { status: rollup(attempts), attempts, calls };
+    return { status: rollup(attempts), attempts, calls, effects };
   }
   if (sheetsUncertain) {
     attempts.push(notExecutedGhl(plan, "sheets outcome is uncertain; GHL was not started"));
-    return { status: "uncertain", attempts, calls };
+    return { status: "uncertain", attempts, calls, effects };
   }
 
   if (deps.ghlAggregate) {
     const aggregate = await executeGhlAggregate(plan, input, world, deps);
     if (aggregate.callsGhl) calls.ghl = true;
     attempts.push(...aggregate.attempts);
-    return { status: rollup(attempts), attempts, calls };
+    return { status: rollup(attempts), attempts, calls, effects };
   }
 
   const contactOutcome = await callGhl(() => deps.ghl!.upsertContact(plan.ghl!.contact));
@@ -1403,7 +1469,7 @@ async function executeAttempts(
     detail: contactId ? null : contactOutcome.error ?? "contact id missing after POST",
   });
   if (!contactId || contactOutcome.status !== "succeeded") {
-    return { status: rollup(attempts), attempts, calls };
+    return { status: rollup(attempts), attempts, calls, effects };
   }
 
   let notesStopped = false;
@@ -1431,7 +1497,7 @@ async function executeAttempts(
     if (status !== "succeeded") notesStopped = true;
   }
   if (notesStopped || !(plan.note?.parts.length)) {
-    return { status: rollup(attempts), attempts, calls };
+    return { status: rollup(attempts), attempts, calls, effects };
   }
 
   const workflow = await callGhl(() =>
@@ -1457,7 +1523,7 @@ async function executeAttempts(
     downstreamExecuted: false,
     detail: workflow.error,
   });
-  return { status: rollup(attempts), attempts, calls };
+  return { status: rollup(attempts), attempts, calls, effects };
 }
 
 async function callSheets(
@@ -1501,6 +1567,77 @@ async function callSheets(
       externalCallExecuted: true,
       reason: "unknown",
       appendStartedAt: new Date().toISOString(),
+    };
+  }
+}
+
+async function callCustomSheets(
+  plan: CapturedTestPlan,
+  port: CustomCapturedCampaignSheetsPort | undefined
+): Promise<{ outcome: SheetsAppendOutcome; effects: CustomCapturedSheetEffects }> {
+  const quiet: CustomCapturedSheetEffects = {
+    inventoryAffected: false,
+    billingAffected: false,
+    deliveryEnabled: false,
+    cutoffChanged: false,
+    duplicate: false,
+  };
+  if (!port || !plan.sourceLeadEventId) {
+    return {
+      outcome: { status: "failed", externalCallExecuted: false, error: "execution_pending_review" },
+      effects: quiet,
+    };
+  }
+  try {
+    const result = await port.send({
+      clientAccountId: plan.clientAccountId,
+      sourceLeadEventId: plan.sourceLeadEventId,
+    });
+    const effects: CustomCapturedSheetEffects = {
+      inventoryAffected: result.inventoryAffected,
+      billingAffected: result.billingAffected,
+      deliveryEnabled: result.deliveryEnabled,
+      cutoffChanged: result.cutoffChanged,
+      duplicate: result.duplicate,
+    };
+    if (result.status === "succeeded") {
+      return {
+        outcome: {
+          status: "succeeded",
+          rowsWritten: result.duplicate ? 0 : 1,
+          externalCallExecuted: result.externalCallExecuted,
+        },
+        effects,
+      };
+    }
+    if (result.status === "uncertain") {
+      return {
+        outcome: {
+          status: "uncertain",
+          externalCallExecuted: result.externalCallExecuted,
+          reason: "unknown",
+          appendStartedAt: new Date().toISOString(),
+        },
+        effects,
+      };
+    }
+    return {
+      outcome: {
+        status: "failed",
+        externalCallExecuted: result.externalCallExecuted,
+        error: result.error ?? "failed",
+      },
+      effects,
+    };
+  } catch {
+    return {
+      outcome: {
+        status: "uncertain",
+        externalCallExecuted: true,
+        reason: "unknown",
+        appendStartedAt: new Date().toISOString(),
+      },
+      effects: quiet,
     };
   }
 }
@@ -1640,7 +1777,11 @@ async function executeGhlAggregate(
 }
 
 function portsReady(plan: CapturedTestPlan, deps: CapturedTestDeps): boolean {
-  if (plan.destinations.includes("google_sheets") && !deps.sheets) return false;
+  if (plan.destinations.includes("google_sheets")) {
+    if (plan.sheet?.sheetsContract === CUSTOM_CAMPAIGN_SHEETS_CONTRACT) {
+      if (!deps.customCampaignSheets) return false;
+    } else if (!deps.sheets) return false;
+  }
   if (plan.destinations.includes("ghl_location_api") && !deps.ghl && !deps.ghlAggregate) return false;
   return true;
 }
@@ -1684,9 +1825,17 @@ function requireIsolation(
     });
   }
   if (mode === "verified_test_identity") {
-    if (!identityMatches(event, world.identities)) return failure(403, "verified_test_identity_mismatch");
-    if (world.sheets?.campaignDispatchEnabled && input.destinations.includes("google_sheets")) {
-      return failure(409, "live_tab_test_refused");
+    const custom = input.isolation?.sheetsContract === CUSTOM_CAMPAIGN_SHEETS_CONTRACT;
+    if (custom) {
+      if (world.sheets?.campaignDispatchEnabled && input.destinations.includes("google_sheets")) {
+        return failure(409, "live_tab_test_refused");
+      }
+      if (isSyntheticCampaignTestEvent(event)) return failure(409, "synthetic_campaign_test_refused");
+    } else {
+      if (!identityMatches(event, world.identities)) return failure(403, "verified_test_identity_mismatch");
+      if (world.sheets?.campaignDispatchEnabled && input.destinations.includes("google_sheets")) {
+        return failure(409, "live_tab_test_refused");
+      }
     }
   }
   if (input.destinations.includes("google_sheets") && !input.isolation?.sheetsContract) {
@@ -1838,12 +1987,39 @@ function buildNotePlan(
   };
 }
 
+function plannedCustomSheet(
+  input: CapturedTestRequest,
+  sheets: SheetsTargetSnapshot,
+  plan: CustomCampaignSheetPlan
+): PlannedSheet {
+  return {
+    spreadsheetId: plan.spreadsheetId,
+    worksheetId: plan.worksheetId,
+    worksheetTitle: plan.worksheetTitle,
+    worksheetRole: "campaign",
+    schemaVersion: plan.schemaVersion,
+    header: plan.header,
+    headerSha256: sha256Text(JSON.stringify(plan.header)),
+    control: sheets.campaignControl ?? null,
+    ownerClientAccountId: input.clientAccountId,
+    destinationRevision: sheets.destinationRevision ?? 1,
+    productionCampaignBind: true,
+    sheetsContract: CUSTOM_CAMPAIGN_SHEETS_CONTRACT,
+    deliveryRowId: plan.deliveryRowId,
+    sourceLeadEventId: plan.sourceLeadEventId,
+    values: plan.values,
+    valuesSha256: sha256Text(JSON.stringify(plan.values)),
+    kind: "onboarding_captured_test",
+    headerCompatible: true,
+  };
+}
+
 function planSheet(
   input: CapturedTestRequest,
   world: CapturedTestWorld,
   event: StoredSourceEvent | null,
   testRunId: string
-): { sheet: PlannedSheet | null; error: CapturedTestError | null } {
+): { sheet: PlannedSheet | null; error: CapturedTestError | null; warnings?: string[] } {
   const sheets = world.sheets;
   if (!sheets) return { sheet: null, error: failure(409, "worksheet_blocked", { detail: "sheets destination is not saved" }) };
   const contract = input.isolation?.sheetsContract ?? null;
@@ -1854,6 +2030,35 @@ function planSheet(
       return { sheet: null, error: failure(409, "canary_projection_not_a_v3_proof") };
     }
     return { sheet: planCanaryProjection(input, sheets, event, testRunId), error: null };
+  }
+
+  const customBound = sheets.campaign?.schemaVersion === COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA;
+  if (contract === CUSTOM_CAMPAIGN_SHEETS_CONTRACT || (customBound && contract == null && !delivering)) {
+    if (delivering && input.confirmation !== CONFIRM_ONE_CUSTOM_SHEETS_ROW) {
+      return { sheet: null, error: failure(400, "invalid_confirmation") };
+    }
+    const planned = planCustomCampaignSheet({
+      clientAccountId: input.clientAccountId,
+      spreadsheetId: sheets.spreadsheetId,
+      campaign: sheets.campaign,
+      publishedMap: sheets.publishedCampaignMap ?? null,
+      event: event
+        ? {
+            id: event.id,
+            sourceLeadId: event.sourceLeadId,
+            receivedAt: event.receivedAt,
+            normalizedPayloadJson: event.normalizedPayloadJson,
+            enrichmentMetadataJson: event.enrichmentMetadataJson,
+          }
+        : null,
+    });
+    if (!planned.applies) return { sheet: null, error: failure(409, "test_worksheet_not_approved") };
+    if (!planned.ok) return { sheet: null, error: failure(planned.statusCode, planned.error) };
+    return {
+      sheet: plannedCustomSheet(input, sheets, planned.plan),
+      error: null,
+      warnings: planned.plan.warnings,
+    };
   }
 
   const isolated = input.isolation?.mode === "isolated_destination";
@@ -2239,12 +2444,45 @@ function validateShape(input: CapturedTestRequest): { statusCode: number; error:
   return null;
 }
 
+function customCampaignSheetsShape(input: {
+  kind: TestRunKind;
+  destinations: readonly TestDestination[];
+  isolation?: { mode?: string | null; sheetsContract?: string | null } | null;
+}): boolean {
+  return (
+    input.kind === "captured_event_delivery" &&
+    input.destinations.length === 1 &&
+    input.destinations[0] === "google_sheets" &&
+    input.isolation?.mode === "verified_test_identity" &&
+    input.isolation.sheetsContract === CUSTOM_CAMPAIGN_SHEETS_CONTRACT
+  );
+}
+
+function exclusiveCustomCampaignRequest(input: {
+  kind: TestRunKind;
+  confirmation?: string | null;
+  destinations: readonly TestDestination[];
+  isolation?: { mode?: string | null; sheetsContract?: string | null } | null;
+}): boolean {
+  return customCampaignSheetsShape(input) && input.confirmation === CONFIRM_ONE_CUSTOM_SHEETS_ROW;
+}
+
+function isCustomCapturedRun(run: StoredTestRun): boolean {
+  return (
+    run.warningCodes.includes(CUSTOM_CAPTURED_SHEETS_WARNING) ||
+    run.sheetPlan?.sheetsContract === CUSTOM_CAMPAIGN_SHEETS_CONTRACT
+  );
+}
+
 function executionGate(input: CapturedTestRequest, flags: Flags): { statusCode: number; error: string } | null {
   if (input.kind === "preview" || input.kind === "captured_event_replay") {
     if (!flags.config) return { statusCode: 404, error: "onboarding_config_disabled" };
     return null;
   }
   if (!flags.captured) return { statusCode: 404, error: "captured_test_disabled" };
+  if (exclusiveCustomCampaignRequest(input)) return null;
+  // REPEAT of a custom captured row is duplicate protection. It does not use the google-only pilot.
+  if (customCampaignSheetsShape(input) && input.confirmation === CONFIRM_REPEAT) return null;
   if (!flags.googleOnlyPilot || !exclusiveGoogleOnlyRequest(input)) {
     return { statusCode: 409, error: "google_only_pilot_required" };
   }
@@ -2408,7 +2646,8 @@ function success(
   store: CapturedTestStore,
   persisted: boolean,
   calls: ExternalCallReport,
-  extraBlocked: string[] = []
+  extraBlocked: string[] = [],
+  effects: CustomCapturedSheetEffects | null = null
 ): CapturedTestSuccess {
   return {
     ok: true,
@@ -2427,6 +2666,7 @@ function success(
     resendAuthorized: false,
     appendStartedAtCleared: false,
     locksCleared: false,
+    effects,
   };
 }
 

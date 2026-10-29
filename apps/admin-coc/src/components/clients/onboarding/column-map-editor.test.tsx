@@ -281,6 +281,7 @@ function mockActions(calls: string[], record: ColumnMapRecord): OnboardingWorksp
     previewNote: async () => ({ ok: false, error: "invalid_body", status: 400 }),
     saveTestIdentity: async () => ({ ok: false, error: "invalid_body", status: 400 }),
     previewStoredLead: async () => ({ ok: false, error: "invalid_body", status: 400 }),
+    deliverCapturedSheetsTest: async () => ({ ok: false, error: "invalid_body", status: 400 }),
     recordActivationIntent: async () => ({ ok: false, error: "invalid_body", status: 400 }),
     saveSheetsTarget: async () => {
       calls.push("target");

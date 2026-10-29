@@ -5,6 +5,7 @@ import {
   applyOperatorAssignments,
   columnLabel,
   customAppendSegments,
+  customRowProjection,
   customRowValues,
   exactHeader,
   formatDateAmericaNewYork,
@@ -130,6 +131,69 @@ test("phone, email, and name aliases stay required after an operator clears them
   assert.equal(blocked.ok, false);
   if (blocked.ok) return;
   assert.equal(blocked.error, "required_field_unmapped");
+});
+
+test("a blank Primary Concern is filled from primary_reason and labeled", () => {
+  const assignment = {
+    sheetHeader: "Primary Concern",
+    columnIndex: 0,
+    formula: false,
+    target: { kind: "v3_column" as const, header: "Primary Concern", sourceField: "primary_concern" },
+    transform: "passthrough" as const,
+    decision: "mapped" as const,
+    explicit: true,
+    code: null,
+  };
+  const lead = {
+    stableRowId: "row_1",
+    clientAccountId: "client_a",
+    sourceLeadEventId: "evt_1",
+    receivedAt: "2026-10-29T01:32:34.966Z",
+    sourceLeadId: "lead_1",
+    normalizedPayload: {
+      contact: {
+        first_name: "Sample",
+        last_name: "Lead",
+        email: "sample.lead@example.invalid",
+        phone: "5550100199",
+        state: "TX",
+      },
+      routing: {
+        source_intake: {
+          submitted_at: "2026-10-29T01:32:34.966Z",
+          sourceAttributes: { primary_reason: "Burial" },
+        },
+      },
+    },
+  };
+  const filled = customRowProjection([assignment], lead);
+  assert.deepEqual(filled?.values, ["Burial"]);
+  assert.deepEqual(filled?.warnings, ["primary_concern_filled_from_primary_reason"]);
+
+  const kept = customRowProjection([assignment], {
+    ...lead,
+    normalizedPayload: {
+      contact: lead.normalizedPayload.contact,
+      routing: {
+        source_intake: {
+          submitted_at: "2026-10-29T01:32:34.966Z",
+          sourceAttributes: { primary_reason: "Burial", primary_concern: "Income" },
+        },
+      },
+    },
+  });
+  assert.deepEqual(kept?.values, ["Income"]);
+  assert.deepEqual(kept?.warnings, []);
+
+  const omitted = customRowProjection([assignment], {
+    ...lead,
+    normalizedPayload: {
+      contact: lead.normalizedPayload.contact,
+      routing: { source_intake: { submitted_at: "2026-10-29T01:32:34.966Z", sourceAttributes: {} } },
+    },
+  });
+  assert.deepEqual(omitted?.values, [""]);
+  assert.deepEqual(omitted?.warnings, ["primary_concern_omitted"]);
 });
 
 test("the header fingerprint changes when cells move and ignores a prefix match", () => {

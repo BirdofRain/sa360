@@ -230,6 +230,28 @@ export function saveOnboardingTestIdentity(
   });
 }
 
+const CONFIRM_ONE_CUSTOM_SHEETS_ROW = "DELIVER ONE CUSTOM SHEETS TEST ROW";
+
+export function deliverCapturedSheetsTest(
+  clientAccountId: string,
+  input: { requestId: string; sourceLeadEventId: string }
+): Promise<OnboardingActionResult<OnboardingTestRun>> {
+  return request(
+    "POST",
+    clientPath(clientAccountId, "/test-runs"),
+    {
+      requestId: input.requestId,
+      kind: "captured_event_delivery",
+      sourceLeadEventId: input.sourceLeadEventId,
+      destinations: ["google_sheets"],
+      execute: true,
+      confirmation: CONFIRM_ONE_CUSTOM_SHEETS_ROW,
+      isolation: { mode: "verified_test_identity", sheetsContract: "custom_campaign_map" },
+    },
+    projectTestRun
+  );
+}
+
 export function previewOnboardingStoredLead(
   clientAccountId: string,
   input: {
@@ -515,11 +537,24 @@ function projectTestRun(data: unknown): OnboardingTestRun | null {
       sheets: calls?.sheets === true,
       ghl: calls?.ghl === true,
     },
+    effects: projectCapturedEffects(record.effects),
     sourceDeliverySatisfied: false,
     downstreamExecuted: false,
     resendAuthorized: false,
     appendStartedAtCleared: false,
     locksCleared: false,
+  };
+}
+
+function projectCapturedEffects(value: unknown): OnboardingTestRun["effects"] {
+  const effects = asRecord(value);
+  if (!effects) return null;
+  return {
+    inventoryAffected: effects.inventoryAffected === true,
+    billingAffected: effects.billingAffected === true,
+    deliveryEnabled: effects.deliveryEnabled === true,
+    cutoffChanged: effects.cutoffChanged === true,
+    duplicate: effects.duplicate === true,
   };
 }
 

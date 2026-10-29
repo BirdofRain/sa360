@@ -3,6 +3,7 @@
  * Google is mocked. No production spreadsheet is written.
  */
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { after, before, describe, it } from "node:test";
 
 import { COMPANY_SHEETS_V3_HEADER } from "@sa360/shared";
@@ -21,10 +22,13 @@ import {
   type ColumnAssignment,
 } from "./company-sheets-custom-row.js";
 import { deleteCompanySheetsDestinationForClient } from "../company-google/company-sheets-destination.service.js";
+import { createPrismaCapturedTestStore } from "../client-onboarding-v2/onboarding-test-store.js";
+import { capturedEventTestKey } from "../client-onboarding-v2/custom-captured-sheet.js";
 import {
   executeCompanySheetsDeliveryJob,
   releaseCompanySheetsDeliveryHold,
   sendCompanySheetsCampaignTestRow,
+  sendCompanySheetsCapturedEventTestRow,
   type CompanySheetsDeliveryDeps,
 } from "./company-sheets-delivery.service.js";
 
@@ -48,6 +52,8 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
   const v3Sheet = `v3KeepSheet${suffix}`;
   const reorderSheet = `reorderSheet${suffix}`;
   const reorderClient = `csw_reorder_${suffix}`;
+  const capturedClient = `csw_captured_${suffix}`;
+  const capturedSheet = `capturedSheet${suffix}`;
   const reorderHeader = ["E-mail", "Running Total", "Phone Number", "Full Name"];
   const reorderHistorical = ["kept@example.invalid", "=A2", "5550000000", "Kept Person"];
   const reorderRows = [reorderHeader.slice(), reorderHistorical.slice()];
@@ -55,6 +61,7 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
   let connectionId = "";
   const assignments = confirm(HEADER, HISTORICAL);
   const rows = [HEADER.slice(), HISTORICAL.slice()];
+  const capturedRows = [HEADER.slice(), HISTORICAL.slice()];
   const v3Rows = [[...COMPANY_SHEETS_V3_HEADER], Array.from(COMPANY_SHEETS_V3_HEADER, () => "historical")];
   const appends: Array<{ spreadsheetId: string; range: string; values: string[][] }> = [];
   const updates: Array<{ spreadsheetId: string; range: string; values: string[][] }> = [];
@@ -64,6 +71,7 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
   function gridFor(spreadsheetId: string): string[][] {
     if (spreadsheetId === v3Sheet) return v3Rows;
     if (spreadsheetId === reorderSheet) return reorderRows;
+    if (spreadsheetId === capturedSheet) return capturedRows;
     return rows;
   }
 
@@ -102,6 +110,8 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
               ? [{ sheetId: 4, title: "Campaign Leads", index: 0, hidden: false, sheetType: "GRID" }]
               : input.spreadsheetId === reorderSheet
                 ? [{ sheetId: 15, title: "Existing Form", index: 0, hidden: false, sheetType: "GRID" }]
+                : input.spreadsheetId === capturedSheet
+                  ? [{ sheetId: GID, title: "VET Web Form", index: 0, hidden: false, sheetType: "GRID" }]
               : [
                   { sheetId: 0, title: "Campaign Leads", index: 0, hidden: false, sheetType: "GRID" },
                   { sheetId: GID, title: "VET Web Form", index: 1, hidden: false, sheetType: "GRID" },
@@ -181,6 +191,7 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
         { clientAccountId: customClient, clientDisplayName: "Custom tab", status: "active" },
         { clientAccountId: v3Client, clientDisplayName: "V3 tab", status: "active" },
         { clientAccountId: reorderClient, clientDisplayName: "Reordered tab", status: "active" },
+        { clientAccountId: capturedClient, clientDisplayName: "Captured dummy", status: "active" },
       ],
     });
     const connection = await db.companyGoogleConnection.create({
@@ -202,6 +213,7 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
     await seedDestination(customClient, customSheet, GID, "VET Web Form", COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA, HEADER);
     await seedDestination(v3Client, v3Sheet, 4, "Campaign Leads", "company_sheets_campaign_v3", [...COMPANY_SHEETS_V3_HEADER]);
     await seedDestination(reorderClient, reorderSheet, 15, "Existing Form", COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA, reorderHeader);
+    await seedDestination(capturedClient, capturedSheet, GID, "VET Web Form", COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA, HEADER);
     await db.clientSheetColumnMap.create({
       data: {
         clientAccountId: reorderClient,
@@ -222,6 +234,21 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
         clientAccountId: customClient,
         sourceScope: "shared",
         spreadsheetId: customSheet,
+        worksheetId: GID,
+        mapVersion: 1,
+        status: "published",
+        baseSchemaVersion: "legacy_custom",
+        headerSnapshot: HEADER,
+        assignments,
+        revision: 2,
+        publishedAt: new Date(),
+      },
+    });
+    await db.clientSheetColumnMap.create({
+      data: {
+        clientAccountId: capturedClient,
+        sourceScope: "shared",
+        spreadsheetId: capturedSheet,
         worksheetId: GID,
         mapVersion: 1,
         status: "published",
@@ -791,6 +818,206 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
     assert.equal(job.contentSha256, null);
   });
 
+  it("appends a stored client lead through the published map without moving the cutoff", async () => {
+    const dummyId = `dummy_${suffix}`;
+    const plainId = `plain_${suffix}`;
+    const capturedEnv = {
+      ...env(false),
+      SA360_CLIENT_ONBOARDING_V2_CAPTURED_TEST_ENABLED: "true",
+    };
+    const captured = (): CompanySheetsDeliveryDeps => ({ ...deps(), env: capturedEnv });
+    const payload = {
+      contact: {
+        first_name: "Dummy",
+        last_name: "Operator",
+        email: "dummy.operator@example.invalid",
+        state: "VA",
+        date_of_birth: "1990-04-02",
+      },
+      phone: "5550100199",
+      routing: { source_intake: { submitted_at: "2026-10-29T01:32:34.966Z" } },
+    };
+    await db.sourceLeadEvent.create({
+      data: {
+        id: plainId,
+        sourceProvider: "leadcapture_io",
+        sourceSystem: "leadcapture_io_nextgen",
+        sourceType: "webhook",
+        clientAccountIdResolved: capturedClient,
+        status: "routing_matched",
+        rawPayloadJson: { fixture: true },
+        normalizedPayloadJson: payload,
+        enrichmentMetadataJson: {},
+        receivedAt: new Date("2026-10-29T01:32:34.966Z"),
+      },
+    });
+    await db.sourceLeadEvent.create({
+      data: {
+        id: dummyId,
+        sourceProvider: "leadcapture_io",
+        sourceSystem: "leadcapture_io_nextgen",
+        sourceType: "webhook",
+        clientAccountIdResolved: capturedClient,
+        status: "routing_matched",
+        rawPayloadJson: { fixture: true },
+        normalizedPayloadJson: payload,
+        enrichmentMetadataJson: { operatorDummy: true },
+        receivedAt: new Date("2026-10-29T01:32:34.966Z"),
+      },
+    });
+    const beforeAppends = appends.filter((item) => item.spreadsheetId === capturedSheet).length;
+    const closed = await sendCompanySheetsCapturedEventTestRow(capturedClient, plainId, { ...deps(), env: env(false) });
+    assert.equal(closed.ok, false);
+    if (closed.ok) return;
+    assert.equal(closed.code, "captured_test_disabled");
+    await db.companySheetsDestination.update({
+      where: { clientAccountId: capturedClient },
+      data: { campaignDispatchEnabled: true },
+    });
+    const live = await sendCompanySheetsCapturedEventTestRow(capturedClient, plainId, captured());
+    await db.companySheetsDestination.update({
+      where: { clientAccountId: capturedClient },
+      data: { campaignDispatchEnabled: false },
+    });
+    assert.equal(live.ok, false);
+    if (live.ok) return;
+    assert.equal(live.code, "delivery_not_paused");
+    assert.equal(live.externalCallExecuted, false);
+    const sent = await sendCompanySheetsCapturedEventTestRow(capturedClient, plainId, captured());
+    assert.equal(sent.ok, true);
+    if (!sent.ok) return;
+    assert.equal(sent.duplicate, false);
+    assert.equal(sent.externalCallExecuted, true);
+    assert.equal(sent.inventoryAffected, false);
+    assert.equal(sent.billingAffected, false);
+    assert.equal(sent.deliveryEnabled, false);
+    assert.equal(sent.cutoffChanged, false);
+    assert.equal(appends.filter((item) => item.spreadsheetId === capturedSheet).length, beforeAppends + 1);
+    const destination = await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId: capturedClient } });
+    assert.equal(destination.campaignDispatchEnabled, false);
+    assert.equal(destination.agedDispatchEnabled, false);
+    assert.equal(destination.enabled, false);
+    assert.equal(destination.campaignDispatchNotBefore?.toISOString(), cutoff.toISOString());
+    const job = await db.companySheetsDeliveryJob.findUniqueOrThrow({
+      where: { idempotencyKey: capturedEventTestKey(capturedClient, plainId) },
+    });
+    assert.equal(job.kind, "campaign_test");
+    assert.equal(job.sourceLeadEventId, plainId);
+    assert.equal(job.status, "succeeded");
+    assert.equal(await db.leadInventoryItem.count({ where: { sourceLeadEventId: plainId } }), 0);
+    assert.equal(await db.fulfillmentOutbox.count({ where: { sourceLeadEventId: plainId } }), 0);
+    const again = await sendCompanySheetsCapturedEventTestRow(capturedClient, plainId, captured());
+    assert.equal(again.ok, true);
+    if (!again.ok) return;
+    assert.equal(again.duplicate, true);
+    assert.equal(again.externalCallExecuted, false);
+    assert.equal(appends.filter((item) => item.spreadsheetId === capturedSheet).length, beforeAppends + 1);
+    const secondLead = await sendCompanySheetsCapturedEventTestRow(capturedClient, dummyId, captured());
+    assert.equal(secondLead.ok, true);
+    if (!secondLead.ok) return;
+    assert.equal(secondLead.duplicate, false);
+    assert.equal(secondLead.externalCallExecuted, true);
+    assert.equal(appends.filter((item) => item.spreadsheetId === capturedSheet).length, beforeAppends + 2);
+    await db.sourceLeadEvent.create({
+      data: {
+        id: `synthetic_${suffix}`,
+        sourceProvider: "leadcapture_io",
+        sourceSystem: "leadcapture_io_nextgen",
+        sourceType: "webhook",
+        sourceLeadId: "synthetic-campaign-test",
+        clientAccountIdResolved: capturedClient,
+        status: "routing_matched",
+        rawPayloadJson: { fixture: true },
+        normalizedPayloadJson: payload,
+        enrichmentMetadataJson: {},
+        receivedAt: new Date("2026-10-29T01:32:34.966Z"),
+      },
+    });
+    const synthetic = await sendCompanySheetsCapturedEventTestRow(capturedClient, `synthetic_${suffix}`, captured());
+    assert.equal(synthetic.ok, false);
+    if (synthetic.ok) return;
+    assert.equal(synthetic.code, "synthetic_campaign_test_refused");
+    assert.equal(appends.filter((item) => item.spreadsheetId === capturedSheet).length, beforeAppends + 2);
+    const store = createPrismaCapturedTestStore(db);
+    const runId = randomUUID();
+    const saved = await store.insert(
+      {
+        id: runId,
+        clientAccountId: capturedClient,
+        kind: "captured_event_replay",
+        sourceLeadEventId: dummyId,
+        destinations: ["google_sheets"],
+        isolationMode: "verified_test_identity",
+        repeatOfTestRunId: null,
+        requestId: `req_${suffix}`,
+        fingerprint: "preview",
+        status: "previewed",
+        previewJson: { sheet: { header: HEADER, values: ["Sample", "5550100199", "04/02/1990", "", "dummy.operator@example.invalid"] } },
+        warningCodes: ["operator_dummy_required"],
+        createdAt: "2026-10-29T01:40:00.000Z",
+        attempts: [
+          {
+            id: `${runId}:sheets`,
+            destination: "google_sheets",
+            idempotencyKey: `onboarding-test:${runId}:sheets`,
+            status: "previewed",
+            proves: [],
+            doesNotProve: ["row_appended"],
+            externalCallExecuted: false,
+            downstreamExecuted: false,
+            detail: null,
+          },
+        ],
+        reconciledAt: null,
+        reconcileObservation: null,
+        resendAuthorized: false,
+        appendStartedAtCleared: false,
+        locksCleared: false,
+        noteBodySha256: null,
+        sheetRowSha256: null,
+        sheetPlan: {
+          spreadsheetId: capturedSheet,
+          worksheetId: GID,
+          worksheetTitle: "VET Web Form",
+          worksheetRole: "campaign",
+          schemaVersion: COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA,
+          header: HEADER,
+          headerSha256: "a".repeat(64),
+          control: { establishControl: "drive_owner_verified", checkedAt: "2026-10-29T01:40:00.000Z" },
+          ownerClientAccountId: capturedClient,
+          destinationRevision: 4,
+          productionCampaignBind: true,
+          sheetsContract: "custom_campaign_map",
+          deliveryRowId: capturedEventTestKey(capturedClient, dummyId),
+          sourceLeadEventId: dummyId,
+          values: ["Sample", "5550100199", "04/02/1990", "", "dummy.operator@example.invalid"],
+          valuesSha256: "b".repeat(64),
+          kind: "onboarding_captured_test",
+          headerCompatible: true,
+        },
+        qaEvidence: null,
+      },
+      {
+        action: "preview",
+        requestId: `req_${suffix}`,
+        actorLabel: "operator",
+        auth: "admin_api_key",
+        sourceLeadEventId: dummyId,
+        destinations: ["google_sheets"],
+        isolationMode: "verified_test_identity",
+        idempotencyKeys: [`onboarding-test:${runId}:sheets`],
+        noteBodySha256: null,
+        sheetRowSha256: null,
+        createdAt: "2026-10-29T01:40:00.000Z",
+      }
+    );
+    assert.equal(saved.persisted, true);
+    const row = await db.clientOnboardingTestRun.findUniqueOrThrow({ where: { id: runId } });
+    assert.equal(row.sheetsContract, null);
+    const preview = row.previewJson as { sheet?: { values?: string[] } };
+    assert.equal(preview.sheet?.values?.[2], "04/02/1990");
+  });
+
   async function seedDestination(
     clientAccountId: string,
     spreadsheetId: string,
@@ -834,9 +1061,11 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
   }
 
   async function cleanup() {
-    const ids = [customClient, v3Client, reorderClient];
-    const spreadsheets = [customSheet, v3Sheet, reorderSheet];
+    const ids = [customClient, v3Client, reorderClient, capturedClient];
+    const spreadsheets = [customSheet, v3Sheet, reorderSheet, capturedSheet];
+    await db.clientOnboardingTestRun.deleteMany({ where: { clientAccountId: { in: ids } } });
     await db.companySheetsDeliveryJob.deleteMany({ where: { clientAccountId: { in: ids } } });
+    await db.sourceLeadEvent.deleteMany({ where: { clientAccountIdResolved: { in: ids } } });
     await db.companySheetsWorksheetLock.deleteMany({ where: { spreadsheetId: { in: spreadsheets } } });
     await db.clientSheetColumnMap.deleteMany({ where: { clientAccountId: { in: ids } } });
     await db.companySheetsDestination.deleteMany({ where: { clientAccountId: { in: ids } } });

@@ -78,6 +78,24 @@ test("only an observed stored event can be selected", () => {
   const [lead] = selectableStoredLeads([source]);
   assert.equal(lead?.sourceLeadEventId, "evt_alex");
   assert.equal(lead?.identity, "go.example.com/alex");
+  assert.equal(lead?.routingDryRunDecisionId, null);
+  const routed = leadcapture({
+    observed: {
+      satisfied: true,
+      at: "2026-10-26T15:00:00.000Z",
+      sourceLeadEventId: "evt_routed",
+      intakeStage: "routing_matched",
+      captureOnly: false,
+    },
+    routingMatched: {
+      satisfied: true,
+      authority: "confirmed_source_association",
+      routingDryRunDecisionId: "dry_1",
+      matchedRuleId: null,
+      looseRuleIgnored: null,
+    },
+  });
+  assert.equal(selectableStoredLeads([routed])[0]?.routingDryRunDecisionId, "dry_1");
 });
 
 test("sheet states do not collapse saved, bound, permission, and delivery", () => {

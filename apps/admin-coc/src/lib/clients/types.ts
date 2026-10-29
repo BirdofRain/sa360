@@ -12,6 +12,7 @@ export type ClientGhlDestination = {
   requiredFieldsInstalled: boolean;
   defaultAssignedUserIdGhl: string | null;
   destinationWorkflowIdGhl: string | null;
+  workflowTriggerMode?: string | null;
   destinationPipelineIdGhl: string | null;
   destinationPipelineStageIdGhl: string | null;
   pipelineStageContactingIdGhl: string | null;

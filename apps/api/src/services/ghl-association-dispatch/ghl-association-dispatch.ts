@@ -3,7 +3,9 @@
  * This outbox is the schedule for the case where that process dies first.
  *
  * A pending row has not started an external attempt and can be delivered once.
- * A live run that is executing, or that already called GHL, is not sent again.
+ * The in-process path claims that row before the external call. A crash after
+ * the claim, with no proof the call never left SA360, is uncertain and is not
+ * retried. A live run that already called GHL is not sent again.
  * Marking a row uncertain does not complete the GHL call and does not retry it.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
@@ -13,6 +15,7 @@ import { prisma } from "../../lib/db.js";
 import { ROUTING_AUTHORITY_SOURCE_ASSOCIATION } from "../routing-source-association.service.js";
 import {
   ongoingRunDisposition,
+  runHadExternalCall,
   type DeliveryRunDispositionInput,
 } from "../ghl-destination-authorization.js";
 import { deliverConfirmedAssociationIfActivated } from "../association-ongoing-delivery.js";
@@ -45,9 +48,80 @@ export function associationDispatchRecovery(input: {
     const leaseMs = input.leaseMs ?? ASSOCIATION_DISPATCH_LEASE_MS;
     const started = input.executingAt?.getTime() ?? 0;
     if (input.now.getTime() - started < leaseMs) return "wait";
+    // A recorded failure whose steps prove the call never left SA360 can be
+    // retried on the same run. No run means the outcome is unknown.
+    if (disposition === "retry") return "deliver";
+    return "mark_uncertain";
   }
-  if (input.status === "pending" || input.status === "executing") return "deliver";
+  if (input.status === "pending") return "deliver";
   return "skip";
+}
+
+export type AssociationOutboxClaim = "absent" | "claimed" | "owned";
+
+/** Move a pending row to executing before the external call. Absent means no schedule row. */
+export async function claimPendingAssociationOutbox(
+  sourceLeadEventId: string,
+  db: DispatchDb = prisma
+): Promise<AssociationOutboxClaim> {
+  const row = await db.ghlAssociationDispatchOutbox.findFirst({
+    where: { sourceLeadEventId },
+    orderBy: { createdAt: "asc" },
+    select: { id: true, status: true },
+  });
+  if (!row) return "absent";
+  if (row.status !== "pending") return "owned";
+  const claimed = await db.ghlAssociationDispatchOutbox.updateMany({
+    where: { id: row.id, status: "pending" },
+    data: { status: "executing", executingAt: new Date(), attemptCount: { increment: 1 } },
+  });
+  return claimed.count === 1 ? "claimed" : "owned";
+}
+
+export type AssociationDeliverySettlement =
+  | { action: "leave_executing" }
+  | {
+      action: "settle";
+      status: "settled" | "uncertain";
+      outcome: string;
+      liveRunId: string | null;
+      externalCallExecuted: boolean;
+      lastError: string | null;
+    };
+
+/** Known failures that already called GHL stay uncertain. A pre-send failure stays executing for one informed retry. */
+export function outboxTerminalFromDelivery(result: {
+  outcome: string;
+  reason?: string;
+  runId: string | null;
+  status?: string | null;
+  externalCallExecuted: boolean;
+}): AssociationDeliverySettlement {
+  const runStatus = result.status?.trim() || null;
+  const visibleOutcome = runStatus && runStatus !== "executing" ? runStatus : result.outcome;
+  const uncertain =
+    result.reason === "delivery_failed" ||
+    (result.outcome === "skipped" && result.externalCallExecuted) ||
+    (runStatus === "failed" && result.externalCallExecuted);
+  if (uncertain) {
+    return {
+      action: "settle",
+      status: "uncertain",
+      outcome: visibleOutcome,
+      liveRunId: result.runId,
+      externalCallExecuted: result.externalCallExecuted,
+      lastError: runStatus === "failed" ? "failed" : result.reason === "delivery_failed" ? "in_process_failed" : "external_call_without_terminal_status",
+    };
+  }
+  if (runStatus === "failed" && !result.externalCallExecuted) return { action: "leave_executing" };
+  return {
+    action: "settle",
+    status: "settled",
+    outcome: visibleOutcome,
+    liveRunId: result.runId,
+    externalCallExecuted: result.externalCallExecuted,
+    lastError: null,
+  };
 }
 
 export async function recordGhlAssociationDispatchOutbox(
@@ -98,12 +172,14 @@ type OutboxRow = {
   executingAt: Date | null;
 };
 
+type RunLookup = DeliveryRunDispositionInput & { id?: string };
+
 type ProcessDeps = {
   now?: Date;
   listDue: (now: Date, limit: number) => Promise<OutboxRow[]>;
   claim: (row: OutboxRow, now: Date) => Promise<boolean>;
-  findRun: (decisionId: string | null) => Promise<DeliveryRunDispositionInput | null>;
-  deliver: (row: OutboxRow) => Promise<{ outcome: string; reason?: string; runId: string | null; externalCallExecuted: boolean }>;
+  findRun: (decisionId: string | null) => Promise<RunLookup | null>;
+  deliver: (row: OutboxRow) => Promise<{ outcome: string; reason?: string; runId: string | null; status?: string | null; externalCallExecuted: boolean }>;
   settle: (id: string, data: { status: string; outcome: string; liveRunId: string | null; externalCallExecuted: boolean; lastError: string | null }) => Promise<void>;
 };
 
@@ -131,35 +207,44 @@ export async function processDueGhlAssociationDispatches(
     if (action === "mark_uncertain") {
       await deps.settle(row.id, {
         status: "uncertain",
-        outcome: "uncertain",
-        liveRunId: null,
-        externalCallExecuted: false,
-        lastError: "attempt_in_flight",
+        outcome: run?.status === "failed" ? "failed" : "uncertain",
+        liveRunId: run?.id ?? null,
+        externalCallExecuted: run ? runHadExternalCall(run) : false,
+        lastError: run?.status === "executing" ? "attempt_in_flight" : "external_outcome_unknown",
       });
       counts.uncertain += 1;
       continue;
     }
     if (action === "settle_without_delivery") {
+      const failed = run?.status === "failed";
       await deps.settle(row.id, {
         status: "settled",
-        outcome: "held",
-        liveRunId: null,
-        externalCallExecuted: false,
-        lastError: null,
+        outcome: run?.status ?? "held",
+        liveRunId: run?.id ?? null,
+        externalCallExecuted: run ? runHadExternalCall(run) : false,
+        lastError: failed ? "failed" : null,
       });
       counts.settled += 1;
       continue;
     }
-    const result = await deps.deliver(row);
-    const uncertain = result.reason === "delivery_failed" || (result.outcome === "skipped" && result.externalCallExecuted);
+    let result: Awaited<ReturnType<ProcessDeps["deliver"]>>;
+    try {
+      result = await deps.deliver(row);
+    } catch {
+      // The claim already moved the row to executing. Leave it there so the
+      // next drain records an uncertain outcome instead of sending again.
+      continue;
+    }
+    const terminal = outboxTerminalFromDelivery(result);
+    if (terminal.action === "leave_executing") continue;
     await deps.settle(row.id, {
-      status: uncertain ? "uncertain" : "settled",
-      outcome: result.outcome,
-      liveRunId: result.runId,
-      externalCallExecuted: result.externalCallExecuted,
-      lastError: uncertain ? "external_call_without_terminal_status" : null,
+      status: terminal.status,
+      outcome: terminal.outcome,
+      liveRunId: terminal.liveRunId,
+      externalCallExecuted: terminal.externalCallExecuted,
+      lastError: terminal.lastError,
     });
-    if (uncertain) counts.uncertain += 1;
+    if (terminal.status === "uncertain") counts.uncertain += 1;
     else if (result.externalCallExecuted) counts.delivered += 1;
     else counts.settled += 1;
   }
@@ -168,19 +253,20 @@ export async function processDueGhlAssociationDispatches(
 
 export async function settleGhlAssociationDispatchFromResult(
   sourceLeadEventId: string,
-  result: { outcome: string; runId: string | null; externalCallExecuted: boolean; reason?: string },
+  result: { outcome: string; runId: string | null; externalCallExecuted: boolean; reason?: string; status?: string | null },
   db: DispatchDb = prisma
 ): Promise<void> {
-  const uncertain = result.outcome === "skipped" && result.reason === "delivery_failed";
+  const terminal = outboxTerminalFromDelivery(result);
+  if (terminal.action === "leave_executing") return;
   await db.ghlAssociationDispatchOutbox.updateMany({
     where: { sourceLeadEventId, status: { in: ["pending", "executing"] } },
     data: {
-      status: uncertain ? "uncertain" : "settled",
-      outcome: result.outcome,
-      liveRunId: result.runId,
-      externalCallExecuted: result.externalCallExecuted,
-      settledAt: uncertain ? null : new Date(),
-      lastError: uncertain ? "in_process_failed" : null,
+      status: terminal.status,
+      outcome: terminal.outcome,
+      liveRunId: terminal.liveRunId,
+      externalCallExecuted: terminal.externalCallExecuted,
+      settledAt: terminal.status === "settled" ? new Date() : null,
+      lastError: terminal.lastError,
     },
   });
 }
@@ -246,7 +332,7 @@ async function claimOutbox(row: OutboxRow, now: Date): Promise<boolean> {
   return claimed.count === 1;
 }
 
-async function findRunForDecision(decisionId: string | null): Promise<DeliveryRunDispositionInput | null> {
+async function findRunForDecision(decisionId: string | null): Promise<RunLookup | null> {
   if (!decisionId) return null;
   const run = await prisma.ghlLiveDeliveryRun.findFirst({
     where: { routingDryRunDecisionId: decisionId },
@@ -255,12 +341,130 @@ async function findRunForDecision(decisionId: string | null): Promise<DeliveryRu
   });
   if (!run) return null;
   return {
+    id: run.id,
     status: run.status,
     stepRuns: run.stepRuns.map((step) => ({
       errorCode: step.errorCode,
       responseRedactedJson: step.responseRedactedJson,
     })),
   };
+}
+
+export type AssociationDispatchVisibilityRow = {
+  id: string;
+  status: string;
+  outcome: string | null;
+  lastError: string | null;
+  attemptCount: number;
+  sourceLeadEventId: string;
+  clientAccountId: string;
+  externalCallExecuted: boolean;
+  liveRunId: string | null;
+  availableAt: string;
+  executingAt: string | null;
+  settledAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AssociationDispatchVisibility = {
+  counts: { pending: number; executing: number; settled: number; uncertain: number; failed: number };
+  rows: AssociationDispatchVisibilityRow[];
+};
+
+type VisibilitySourceRow = {
+  id: string;
+  status: string;
+  outcome: string | null;
+  lastError: string | null;
+  attemptCount: number;
+  sourceLeadEventId: string;
+  clientAccountId: string;
+  externalCallExecuted: boolean;
+  liveRunId: string | null;
+  availableAt: Date;
+  executingAt: Date | null;
+  settledAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export function presentAssociationDispatchVisibility(input: {
+  counts: Array<{ status: string; count: number }>;
+  failed: number;
+  rows: VisibilitySourceRow[];
+}): AssociationDispatchVisibility {
+  const byStatus = new Map(input.counts.map((entry) => [entry.status, entry.count]));
+  return {
+    counts: {
+      pending: byStatus.get("pending") ?? 0,
+      executing: byStatus.get("executing") ?? 0,
+      settled: byStatus.get("settled") ?? 0,
+      uncertain: byStatus.get("uncertain") ?? 0,
+      failed: input.failed,
+    },
+    rows: input.rows.map((row) => ({
+      id: row.id,
+      status: row.status,
+      outcome: row.outcome,
+      lastError: row.lastError,
+      attemptCount: row.attemptCount,
+      sourceLeadEventId: row.sourceLeadEventId,
+      clientAccountId: row.clientAccountId,
+      externalCallExecuted: row.externalCallExecuted,
+      liveRunId: row.liveRunId,
+      availableAt: row.availableAt.toISOString(),
+      executingAt: row.executingAt?.toISOString() ?? null,
+      settledAt: row.settledAt?.toISOString() ?? null,
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+    })),
+  };
+}
+
+export async function listAssociationDispatchVisibility(limit = 50): Promise<AssociationDispatchVisibility> {
+  const take = Math.min(Math.max(limit, 1), 50);
+  const [grouped, failed, rows] = await Promise.all([
+    prisma.ghlAssociationDispatchOutbox.groupBy({
+      by: ["status"],
+      _count: { _all: true },
+    }),
+    prisma.ghlAssociationDispatchOutbox.count({
+      where: { OR: [{ outcome: "failed" }, { lastError: "failed" }] },
+    }),
+    prisma.ghlAssociationDispatchOutbox.findMany({
+      where: {
+        OR: [
+          { status: { in: ["pending", "executing", "uncertain"] } },
+          { outcome: "failed" },
+          { lastError: "failed" },
+        ],
+      },
+      orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+      take,
+      select: {
+        id: true,
+        status: true,
+        outcome: true,
+        lastError: true,
+        attemptCount: true,
+        sourceLeadEventId: true,
+        clientAccountId: true,
+        externalCallExecuted: true,
+        liveRunId: true,
+        availableAt: true,
+        executingAt: true,
+        settledAt: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    }),
+  ]);
+  return presentAssociationDispatchVisibility({
+    counts: grouped.map((entry) => ({ status: entry.status, count: entry._count._all })),
+    failed,
+    rows,
+  });
 }
 
 async function deliverOutboxRow(row: OutboxRow) {

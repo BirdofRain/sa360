@@ -1993,6 +1993,7 @@ model CompanySheetsDispatchIntent {
 
 /// Schedule row for association GHL delivery, committed with intake.
 /// Pending rows can be recovered before an attempt starts.
+/// A crash after the attempt is claimed is uncertain and is not sent again.
 /// An executing live run is not sent again. This does not finish an in-flight call.
 model GhlAssociationDispatchOutbox {
   id                       String    @id @default(cuid())

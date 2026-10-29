@@ -17,6 +17,7 @@ import type { SourceLeadRoutingResult } from "./source-intake.types.js";
 import { persistLeadProofFromPayload } from "../lead-proof/lead-proof-ingest.service.js";
 import { deliverConfirmedAssociationIfActivated } from "../association-ongoing-delivery.js";
 import {
+  claimPendingAssociationOutbox,
   recordGhlAssociationDispatchOutbox,
   settleGhlAssociationDispatchFromResult,
 } from "../ghl-association-dispatch/ghl-association-dispatch.js";
@@ -28,10 +29,11 @@ import {
  * through the same pipeline: runRoutingDryRun, duplicate-risk evaluation,
  * source enrichment, and the SourceLeadEvent status transition. A confirmed
  * parent-URL association records a GHL schedule in the same transaction, then
- * calls GHL after commit. That in-process call is not guaranteed to finish if
- * the process dies. A later drain can send a pending row once. An executing
- * or already-sent run is not sent again. A GHL failure does not roll back the
- * lead or the Sheets intent.
+ * claims that row and calls GHL after commit. That in-process call is not guaranteed to finish
+ * if the process dies. A later drain can send a pending
+ * row once. A claimed row with an unknown external outcome stays uncertain and
+ * is not sent again. A GHL failure does not roll back the lead or the Sheets
+ * intent.
  */
 export async function persistRoutingAndDuplicate(
   sourceEventId: string,
@@ -175,18 +177,25 @@ export async function persistRoutingAndDuplicate(
     );
   });
 
+  let outboxClaim: "absent" | "claimed" | "owned" = "absent";
   try {
-    const ghlResult = await deliverConfirmedAssociationIfActivated({
-      sourceLeadEventId: sourceEventId,
-      status,
-      routing,
-      lifecyclePayload: normalizedWithEnrichment,
-    });
-    await settleGhlAssociationDispatchFromResult(sourceEventId, ghlResult);
+    outboxClaim = await claimPendingAssociationOutbox(sourceEventId);
+    if (outboxClaim !== "owned") {
+      const ghlResult = await deliverConfirmedAssociationIfActivated({
+        sourceLeadEventId: sourceEventId,
+        status,
+        routing,
+        lifecyclePayload: normalizedWithEnrichment,
+      });
+      await settleGhlAssociationDispatchFromResult(sourceEventId, ghlResult);
+    }
   } catch (err) {
+    // A claimed row stays executing. The drain records uncertain after the
+    // lease instead of calling GHL again.
     logger.warn("association_ghl.ongoing_failed", {
       sourceLeadEventId: sourceEventId,
       errorName: err instanceof Error ? err.name : "Error",
+      outboxClaim,
     });
   }
 

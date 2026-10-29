@@ -25,6 +25,7 @@ import { deleteCompanySheetsDestinationForClient } from "../company-google/compa
 import { createPrismaCapturedTestStore } from "../client-onboarding-v2/onboarding-test-store.js";
 import { capturedEventTestKey } from "../client-onboarding-v2/custom-captured-sheet.js";
 import {
+  enqueueConfirmedLeadSheetsDelivery,
   executeCompanySheetsDeliveryJob,
   releaseCompanySheetsDeliveryHold,
   sendCompanySheetsCampaignTestRow,
@@ -1016,6 +1017,87 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
     assert.equal(row.sheetsContract, null);
     const preview = row.previewJson as { sheet?: { values?: string[] } };
     assert.equal(preview.sheet?.values?.[2], "04/02/1990");
+  });
+
+  it("does not append again when the other path already wrote the same lead", async () => {
+    const automaticId = `auto_${suffix}`;
+    const testedId = `tested_${suffix}`;
+    const destination = await db.companySheetsDestination.findUniqueOrThrow({
+      where: { clientAccountId: capturedClient },
+    });
+    const payload = {
+      contact: { first_name: "Already", last_name: "Written", phone: "5550100200" },
+      phone: "5550100200",
+    };
+    await db.sourceLeadEvent.createMany({
+      data: [automaticId, testedId].map((id) => ({
+        id,
+        sourceProvider: "leadcapture_io",
+        sourceSystem: "leadcapture_io_nextgen",
+        sourceType: "webhook",
+        clientAccountIdResolved: capturedClient,
+        status: "routing_matched",
+        rawPayloadJson: { fixture: true },
+        normalizedPayloadJson: payload,
+        enrichmentMetadataJson: {},
+        receivedAt: new Date("2026-10-29T02:00:00.000Z"),
+      })),
+    });
+    const jobBase = {
+      status: "succeeded",
+      clientAccountId: capturedClient,
+      companyConnectionId: connectionId,
+      destinationId: destination.id,
+      spreadsheetId: capturedSheet,
+      spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${capturedSheet}`,
+      worksheetId: GID,
+      worksheetTitle: "VET Web Form",
+      controlBasis: "drive_owner_verified",
+      destinationUpdatedAt: new Date(),
+      headerContract: HEADER,
+      schemaVersion: COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA,
+      destinationRevision: 4,
+      rowsTotal: 1,
+      rowsWritten: 1,
+    };
+    await db.companySheetsDeliveryJob.create({
+      data: {
+        ...jobBase,
+        kind: "lead",
+        idempotencyKey: `lead:${capturedClient}:${automaticId}`,
+        sourceLeadEventId: automaticId,
+      },
+    });
+    await db.companySheetsDeliveryJob.create({
+      data: {
+        ...jobBase,
+        kind: "campaign_test",
+        idempotencyKey: capturedEventTestKey(capturedClient, testedId),
+        sourceLeadEventId: testedId,
+      },
+    });
+    const before = appends.filter((item) => item.spreadsheetId === capturedSheet).length;
+    const capturedEnv = {
+      ...env(false),
+      SA360_CLIENT_ONBOARDING_V2_CAPTURED_TEST_ENABLED: "true",
+    };
+    const capturedAgain = await sendCompanySheetsCapturedEventTestRow(capturedClient, automaticId, {
+      ...deps(),
+      env: capturedEnv,
+    });
+    assert.equal(capturedAgain.ok, true);
+    if (!capturedAgain.ok) return;
+    assert.equal(capturedAgain.duplicate, true);
+    assert.equal(capturedAgain.externalCallExecuted, false);
+    const automaticAgain = await enqueueConfirmedLeadSheetsDelivery(testedId, {
+      ...deps(),
+      env: { ...env(true), SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED: "true" },
+    });
+    assert.equal(automaticAgain.ok, true);
+    if (!automaticAgain.ok) return;
+    assert.equal(automaticAgain.created, false);
+    assert.equal(automaticAgain.job.idempotencyKey, capturedEventTestKey(capturedClient, testedId));
+    assert.equal(appends.filter((item) => item.spreadsheetId === capturedSheet).length, before);
   });
 
   async function seedDestination(

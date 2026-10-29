@@ -264,6 +264,10 @@ const ACTION_ERRORS: Record<string, string> = {
     "The synthetic campaign-test identity is not a client lead. No row was appended.",
   captured_event_test_already_used:
     "This stored lead already has a captured Sheets test row. It was not appended again.",
+  event_write_already_recorded:
+    "This stored lead already has a Sheets delivery record. It was not appended again.",
+  campaign_test_unresolved:
+    "A Sheets delivery for this lead is still unresolved. It was not appended again.",
   live_tab_test_refused: "Campaign Sheets delivery is on. The test was not sent and the cutoff was not changed.",
   destination_disabled: "Company Sheets setup is disabled. Drive was not searched.",
   client_not_found: "This client was not found.",

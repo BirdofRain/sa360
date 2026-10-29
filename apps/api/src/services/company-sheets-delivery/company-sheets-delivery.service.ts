@@ -20,6 +20,7 @@ import {
 } from "../../lib/company-google-sheets-env.js";
 import { findCompanyGoogleConnection } from "../../repositories/company-google-connection.repository.js";
 import { companySheetsCampaignRowValues, type CampaignSheetLeadInput } from "./company-sheets-campaign-row.js";
+import { sheetsEventAlreadyWritten, sheetsEventWriteDisposition } from "./sheets-event-write-guard.js";
 import {
   applyOperatorAssignments,
   columnMapContentKey,
@@ -374,6 +375,41 @@ async function resolveCampaignWrite(
   return { ok: true, schemaVersion: contract.schemaVersion, header: [...contract.header], values, contentSha256: null };
 }
 
+async function otherEventSheetWrite(
+  db: PrismaClient,
+  input: {
+    clientAccountId: string;
+    sourceLeadEventId: string;
+    spreadsheetId: string;
+    worksheetId: number;
+    ownIdempotencyKey: string;
+  }
+): Promise<{ disposition: "clear" | "already_written" | "hold"; job: CompanySheetsDeliveryJob | null }> {
+  const jobs = await db.companySheetsDeliveryJob.findMany({
+    where: {
+      clientAccountId: input.clientAccountId,
+      sourceLeadEventId: input.sourceLeadEventId,
+      spreadsheetId: input.spreadsheetId,
+      worksheetId: input.worksheetId,
+    },
+    select: {
+      id: true,
+      status: true,
+      rowsWritten: true,
+      appendStartedAt: true,
+      idempotencyKey: true,
+    },
+  });
+  const disposition = sheetsEventWriteDisposition(jobs, input.ownIdempotencyKey);
+  if (disposition === "clear") return { disposition, job: null };
+  const prior =
+    disposition === "already_written"
+      ? sheetsEventAlreadyWritten(jobs, input.ownIdempotencyKey)
+      : jobs.find((job) => job.idempotencyKey !== input.ownIdempotencyKey) ?? null;
+  const job = prior ? await db.companySheetsDeliveryJob.findUnique({ where: { id: prior.id } }) : null;
+  return { disposition, job };
+}
+
 export async function enqueueConfirmedLeadSheetsDelivery(
   sourceLeadEventId: string,
   deps: CompanySheetsDeliveryDeps = {}
@@ -391,6 +427,18 @@ export async function enqueueConfirmedLeadSheetsDelivery(
   if (!("spreadsheetId" in destination)) return destination;
   const contract = await loadBoundContract(db, destination, "campaign");
   if (!("worksheetId" in contract)) return contract;
+  const leadKey = `lead:${clientAccountId}:${lead.id}`;
+  const priorWrite = await otherEventSheetWrite(db, {
+    clientAccountId,
+    sourceLeadEventId: lead.id,
+    spreadsheetId: destination.spreadsheetId,
+    worksheetId: contract.worksheetId,
+    ownIdempotencyKey: leadKey,
+  });
+  if (priorWrite.disposition === "already_written" && priorWrite.job) {
+    return { ok: true, job: priorWrite.job, created: false };
+  }
+  if (priorWrite.disposition === "hold") return fail("event_write_already_recorded", 409);
   const stableRowId = `lead:${clientAccountId}:${lead.id}`;
   const resolved = await resolveCampaignWrite(db, env, destination, contract, {
     stableRowId,
@@ -750,6 +798,27 @@ export async function sendCompanySheetsCapturedEventTestRow(
       (existing.appendStartedAt != null && existing.status !== "failed"))
   ) {
     return { ...fail("campaign_test_unresolved", 409), ...QUIET_CAPTURED_EFFECTS };
+  }
+  const priorWrite = await otherEventSheetWrite(db, {
+    clientAccountId: id,
+    sourceLeadEventId: eventId,
+    spreadsheetId: destination.spreadsheetId,
+    worksheetId: contract.worksheetId,
+    ownIdempotencyKey: idempotencyKey,
+  });
+  if (priorWrite.disposition === "already_written" && priorWrite.job) {
+    return {
+      ok: true,
+      ...QUIET_CAPTURED_EFFECTS,
+      duplicate: true,
+      jobId: priorWrite.job.id,
+      status: priorWrite.job.status,
+      spreadsheetId: destination.spreadsheetId,
+      worksheetId: contract.worksheetId,
+    };
+  }
+  if (priorWrite.disposition === "hold") {
+    return { ...fail("event_write_already_recorded", 409), ...QUIET_CAPTURED_EFFECTS };
   }
   const holder = await db.companySheetsDeliveryJob.findFirst({
     where: {

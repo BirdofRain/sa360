@@ -43,6 +43,7 @@ const BLOCKED_DISPATCH_CODES = new Set([
   "lead_mutated",
   "destination_not_configured",
   "package_not_released",
+  "event_write_already_recorded",
 ]);
 
 type DispatchFailure = { ok: false; code: string; statusCode: number };

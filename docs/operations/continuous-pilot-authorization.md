@@ -33,4 +33,6 @@ An authenticated admin connects the destination, validates it, and activates tha
 
 Activation writes `ClientGhlDestination` flags and a `ClientOnboardingV2AuditEvent` with action `activate_ghl_ongoing`. It does not edit DigitalOcean environment variables. Sheets and GHL stay independent: a failure in one does not create a second write in the other.
 
+Ongoing plan creation stores the confirmed lead’s phone and email from the routing decision and linked source lead, using the same presenter as the admin delivery-plan route. Intake does not pass a separate identity. A plan that already has a live GHL run is left unchanged.
+
 A blank Primary Concern cell is filled from `primary_reason` and the preview labels that source. A blank pair stays blank and is labeled omitted. Mapping a header named Primary Reason onto `primary_concern` stays invalid.

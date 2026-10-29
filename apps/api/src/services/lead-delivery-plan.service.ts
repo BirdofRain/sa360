@@ -1,7 +1,10 @@
 import type { CampaignRoutingRule, RoutingDryRunDecision } from "@prisma/client";
 import type { Prisma } from "@prisma/client";
 import type { RoutingAttributionInput } from "../lib/routing-attribution-extract.js";
-import type { RoutingDryRunLeadIdentity } from "./routing-dry-run-admin.present.js";
+import {
+  presentRoutingDryRunDecision,
+  type RoutingDryRunLeadIdentity,
+} from "./routing-dry-run-admin.present.js";
 import {
   type DeliveryPlanStatus,
   type DeliveryPlanStepStatus,
@@ -895,6 +898,21 @@ export async function generateLeadDeliveryPlanForDecision(
   return { plan };
 }
 
+/**
+ * Ongoing intake omits leadIdentity. The admin plan route already hydrates the
+ * confirmed lead through presentRoutingDryRunDecision. Use that presenter when
+ * the caller does not pass an identity. An explicit null stays null.
+ * A plan that already has a live run is returned before this runs.
+ */
+async function resolvePlanLeadIdentity(
+  decision: RoutingDryRunDecision,
+  explicit: RoutingDryRunLeadIdentity | null | undefined
+): Promise<RoutingDryRunLeadIdentity | null> {
+  if (explicit !== undefined) return explicit;
+  const presented = await presentRoutingDryRunDecision(decision);
+  return presented.leadIdentity;
+}
+
 export async function generateDirectCanaryDeliveryPlanForDecision(
   routingDryRunDecisionId: string,
   opts: {
@@ -915,6 +933,8 @@ export async function generateDirectCanaryDeliveryPlanForDecision(
   }
   const blocked = await blockedCompanySheetsPilotPlan(decision);
   if (blocked) return blocked;
+
+  const leadIdentity = await resolvePlanLeadIdentity(decision, opts.leadIdentity);
 
   const attribution =
     opts.attribution ??
@@ -948,7 +968,7 @@ export async function generateDirectCanaryDeliveryPlanForDecision(
       ? ROUTING_AUTHORITY_SOURCE_ASSOCIATION
       : undefined,
     attribution,
-    leadIdentity: opts.leadIdentity ?? null,
+    leadIdentity,
     duplicateRisk,
   });
 
@@ -959,9 +979,9 @@ export async function generateDirectCanaryDeliveryPlanForDecision(
     lifecycleEventId: decision.sourceEventUuid,
     masterClientAccountId: decision.masterClientAccountId,
     sourceLeadUid: decision.sourceLeadUid,
-    sourceContactIdGhl: opts.leadIdentity?.contactIdGhl ?? null,
-    sourcePhoneE164: opts.leadIdentity?.phoneE164 ?? null,
-    sourceEmail: opts.leadIdentity?.email ?? null,
+    sourceContactIdGhl: leadIdentity?.contactIdGhl ?? null,
+    sourcePhoneE164: leadIdentity?.phoneE164 ?? null,
+    sourceEmail: leadIdentity?.email ?? null,
     destinationClientAccountId:
       decision.destinationClientAccountId ?? rule?.clientAccountId ?? "unknown",
     destinationSubaccountIdGhl: decision.destinationSubaccountIdGhl ?? "",

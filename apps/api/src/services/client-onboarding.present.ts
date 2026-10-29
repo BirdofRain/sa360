@@ -30,6 +30,8 @@ export type ClientGhlDestinationDto = {
   deliveryEnabled: boolean;
   clientCutoverApproved: boolean;
   internalApprovalStatus: string;
+  /** How a saved workflow is started. Saving a workflow does not change deliveryEnabled. */
+  workflowTriggerMode: string;
   sourceAttributeFieldMapJson?: unknown;
   sourceEnrichmentPolicyJson?: unknown;
   sourceFieldAliasOverridesJson?: unknown;
@@ -113,6 +115,7 @@ export function presentClientGhlDestination(
     deliveryEnabled: dest.deliveryEnabled,
     clientCutoverApproved: dest.clientCutoverApproved,
     internalApprovalStatus: dest.internalApprovalStatus,
+    workflowTriggerMode: dest.workflowTriggerMode,
     sourceAttributeFieldMapJson: dest.sourceAttributeFieldMapJson,
     sourceEnrichmentPolicyJson: dest.sourceEnrichmentPolicyJson,
     sourceFieldAliasOverridesJson: dest.sourceFieldAliasOverridesJson,

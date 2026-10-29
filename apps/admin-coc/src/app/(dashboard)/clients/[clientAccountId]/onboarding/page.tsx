@@ -13,7 +13,6 @@ import { SetupDeliveryWorkspace } from "@/components/clients/onboarding/setup-de
 import type { GhlWalkthroughConnection, GhlWalkthroughLocation } from "@/components/clients/onboarding/ghl-walkthrough-types";
 import type { ClientDeliveryConfigResponse } from "@/lib/clients/delivery-config-types";
 import type { CompanyConnectionIdentity } from "@/lib/clients/onboarding/types";
-import type { GhlLocationConnectionItem } from "@/lib/ghl-connections/types";
 
 export const dynamic = "force-dynamic";
 
@@ -50,20 +49,17 @@ export default async function ClientOnboardingPage({
         connectionError="request_failed"
         dispatch={null}
         dispatchError="request_failed"
-        ghlLocation={null}
-        ghlConnections={[]}
-        ghlLocationError="GHL destination was not loaded."
       />
     );
   }
 
-  const [summary, connection, dispatch, runs, delivery, ghlConnections] = await Promise.all([
+  const [summary, connection, dispatch, runs, deliveryConfig, ghlConnections] = await Promise.all([
     fetchOnboardingSummary(id),
     fetchCompanyGoogleConnection(),
     fetchCompanySheetsDispatch(id),
     listOnboardingTestRuns(id),
     fetchAdminClientDeliveryConfig(id),
-    fetchAdminGhlConnections(),
+    fetchAdminGhlConnections(id),
   ]);
 
   return (
@@ -85,11 +81,43 @@ export default async function ClientOnboardingPage({
           : null
       }
       dispatchError={dispatch.ok ? null : "request_failed"}
-      ghlLocation={delivery.data ? projectGhlLocation(delivery.data) : null}
+      ghlLocation={deliveryConfig.data ? projectGhlLocation(deliveryConfig.data) : null}
       ghlConnections={ghlConnections.data ? projectGhlConnections(ghlConnections.data.items) : []}
-      ghlLocationError={delivery.error ? "GHL destination was not loaded." : null}
+      ghlLocationError={deliveryConfig.error ?? ghlConnections.error}
     />
   );
+}
+
+function projectGhlLocation(config: ClientDeliveryConfigResponse): GhlWalkthroughLocation {
+  const destination = config.ghlDestination;
+  return {
+    locationId: config.locationId,
+    locationName: config.locationName,
+    workflowId: destination?.destinationWorkflowIdGhl ?? null,
+    workflowTriggerMode: destination?.workflowTriggerMode ?? null,
+    deliveryEnabled: destination?.deliveryEnabled ?? null,
+    opportunityCreationEnabled: destination?.opportunityCreationEnabled ?? null,
+    pipelineId: destination?.destinationPipelineIdGhl ?? null,
+    stageId: destination?.destinationPipelineStageIdGhl ?? null,
+  };
+}
+
+function projectGhlConnections(
+  items: Array<{
+    id: string;
+    locationId: string;
+    locationName: string | null;
+    clientAccountId: string | null;
+    connectionStatus: string;
+  }>
+): GhlWalkthroughConnection[] {
+  return items.map((item) => ({
+    id: item.id,
+    locationId: item.locationId,
+    locationName: item.locationName,
+    clientAccountId: item.clientAccountId,
+    connectionStatus: item.connectionStatus,
+  }));
 }
 
 function projectConnection(connection: {
@@ -108,29 +136,4 @@ function projectConnection(connection: {
     connectedAt: connection.connectedAt,
     liveDeliveryEnabled: false,
   };
-}
-
-function projectGhlLocation(config: ClientDeliveryConfigResponse): GhlWalkthroughLocation | null {
-  const dest = config.ghlDestination;
-  if (!dest && !config.locationId) return null;
-  return {
-    locationId: dest?.destinationSubaccountIdGhl ?? config.locationId,
-    locationName: dest?.locationName ?? config.locationName,
-    workflowId: dest?.destinationWorkflowIdGhl ?? null,
-    workflowTriggerMode: dest?.workflowTriggerMode ?? null,
-    deliveryEnabled: dest ? dest.deliveryEnabled : null,
-    opportunityCreationEnabled: dest ? dest.opportunityCreationEnabled : null,
-    pipelineId: dest?.destinationPipelineIdGhl ?? null,
-    stageId: dest?.destinationPipelineStageIdGhl ?? null,
-  };
-}
-
-function projectGhlConnections(items: GhlLocationConnectionItem[]): GhlWalkthroughConnection[] {
-  return items.map((item) => ({
-    id: item.id,
-    locationId: item.locationId,
-    locationName: item.locationName,
-    clientAccountId: item.clientAccountId,
-    connectionStatus: item.connectionStatus,
-  }));
 }

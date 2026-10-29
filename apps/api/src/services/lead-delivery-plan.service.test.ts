@@ -1,7 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import type { CampaignRoutingRule, RoutingDryRunDecision } from "@prisma/client";
+import type { CampaignRoutingRule, ClientGhlDestination, RoutingDryRunDecision } from "@prisma/client";
 import type { RoutingAttributionInput } from "../lib/routing-attribution-extract.js";
+import {
+  associationDestinationToPlanRule,
+  CONFIRMED_SOURCE_ASSOCIATION_PLAN_RULE_ID,
+  missingDeliveryRuleBlocker,
+} from "./association-ghl-delivery-source.js";
+import { ROUTING_AUTHORITY_SOURCE_ASSOCIATION } from "./routing-source-association.service.js";
 import {
   buildDirectCanaryDeliveryPlanSteps,
   buildShadowDeliveryPlanSteps,
@@ -243,4 +249,116 @@ test("direct canary plan is planned when pipeline configured without workflow/ow
   const owner = steps.find((s) => s.stepType === "assign_owner");
   assert.equal(wf?.status, "skipped");
   assert.equal(owner?.status, "skipped");
+});
+
+test("confirmed source association plans GHL workflow from the destination, not a campaign rule", () => {
+  const workflowId = "d4c1fa4c-a3e2-4fd8-9091-b3fad0d04edd";
+  const locationId = "yCziKRW26eFg8IXAQZ73";
+  const planRule = associationDestinationToPlanRule({
+    masterClientAccountId: "lal_master_vet",
+    clientDisplayName: "Alex Gross",
+    destinationSubaccountIdGhl: locationId,
+    destination: {
+      clientAccountId: "alex_gross",
+      destinationSubaccountIdGhl: locationId,
+      locationName: "Test Sam CRM",
+      destinationWorkflowIdGhl: workflowId,
+      destinationPipelineIdGhl: "QBIEpeXqzvF2JAmbBSIR",
+      destinationPipelineStageIdGhl: "b5b3729f-d3ae-4185-84c4-2d0dc3417e81",
+      defaultAssignedUserIdGhl: null,
+      opportunityCreationEnabled: true,
+      backupSheetEnabled: false,
+      backupSheetId: null,
+      ghlConnectionStatus: "connected",
+      snapshotInstalled: false,
+      requiredFieldsInstalled: false,
+      deliveryMode: "shadow",
+      deliveryEnabled: false,
+      clientCutoverApproved: false,
+      internalApprovalStatus: "not_reviewed",
+      sourceAttributeFieldMapJson: {},
+      sourceFieldAliasOverridesJson: {},
+      createdAt: NOW,
+      updatedAt: NOW,
+    } as ClientGhlDestination,
+  });
+  assert.equal(planRule.id, CONFIRMED_SOURCE_ASSOCIATION_PLAN_RULE_ID);
+  assert.equal(planRule.deliveryEnabled, false);
+  assert.equal(planRule.deliveryMode, "shadow");
+  assert.equal(planRule.clientCutoverApproved, false);
+  assert.equal(planRule.snapshotInstalled, false);
+
+  const { steps, warnings } = buildDirectCanaryDeliveryPlanSteps({
+    decision: decision({
+      id: "d-assoc",
+      matched: true,
+      matchedRuleId: null,
+      destinationClientAccountId: "alex_gross",
+      destinationSubaccountIdGhl: locationId,
+      attributionSnapshot: {
+        routingAuthority: ROUTING_AUTHORITY_SOURCE_ASSOCIATION,
+        sourceAssociation: {
+          matchedBy: "parent_url_key",
+          parentUrlKey: "go.lifeinsuranceforvets.com/learn-alex-gross",
+        },
+      },
+    }),
+    matched: true,
+    rule: planRule,
+    attribution: {
+      ...attr,
+      campaignId: "UNKNOWN_ROUTE",
+      utmCampaign: "Alex Gross- Vet Web Form- 10/26/26",
+    },
+    leadIdentity: null,
+    duplicateRisk: {
+      riskLevel: "none",
+      confidence: "high",
+      reasons: [],
+      candidateMatches: [],
+      recommendedAction: "",
+      identityStatus: "linked",
+      blocksLiveDelivery: false,
+      isWarningOnly: false,
+    },
+  });
+
+  assert.equal(deriveDirectCanaryPlanStatusFromSteps(steps, true), "planned");
+  assert.equal(
+    warnings.some((warning) => warning.includes("No matched routing rule")),
+    false
+  );
+  const workflow = steps.find((step) => step.stepType === "start_workflow");
+  const preview = workflow?.requestPreviewJson as { workflowId?: string; locationId?: string };
+  assert.equal(workflow?.status, "planned");
+  assert.equal(preview?.workflowId, workflowId);
+  assert.equal(preview?.locationId, locationId);
+  const stamp = steps.find((step) => step.stepType === "stamp_custom_fields");
+  const fields = (stamp?.requestPreviewJson as { customFields?: Record<string, string | null> })
+    .customFields;
+  assert.equal(fields?.sa360_campaign_id, "UNKNOWN_ROUTE");
+  assert.equal(fields?.sa360_utm_campaign, "Alex Gross- Vet Web Form- 10/26/26");
+});
+
+test("association without a GHL destination is not reported as a missing campaign rule", () => {
+  const { steps, warnings } = buildDirectCanaryDeliveryPlanSteps({
+    decision: decision({
+      id: "d-assoc-gap",
+      matched: true,
+      matchedRuleId: null,
+      destinationClientAccountId: "alex_gross",
+    }),
+    matched: true,
+    rule: null,
+    routingAuthority: ROUTING_AUTHORITY_SOURCE_ASSOCIATION,
+    attribution: attr,
+    leadIdentity: null,
+  });
+  assert.equal(steps[0]?.status, "blocked");
+  assert.equal(warnings[0], missingDeliveryRuleBlocker(true));
+  assert.match(steps[0]?.description ?? "", /no GHL destination/);
+  assert.equal(
+    warnings.some((warning) => warning.includes("No matched routing rule")),
+    false
+  );
 });

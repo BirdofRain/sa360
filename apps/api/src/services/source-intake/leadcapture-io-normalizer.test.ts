@@ -8,6 +8,7 @@ import {
   inferLeadCaptureIoRoutingKeys,
 } from "./leadcapture-io-normalizer.js";
 import { lifecycleEventSchema } from "../../schemas/lifecycle-event.schema.js";
+import { extractRoutingAttributionFromPayload } from "../../lib/routing-attribution-extract.js";
 
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "../../fixtures/leadcaptureio");
 
@@ -260,4 +261,57 @@ test("Nurse canary fixture normalizes NURSE context and keeps unknown passthroug
 
   const parsed = lifecycleEventSchema.safeParse(normalized);
   assert.equal(parsed.success, true, parsed.success ? "" : JSON.stringify(parsed.error.flatten()));
+});
+
+test("Alex parent URL UTM variants share identity and do not map utm_id to campaign_id", () => {
+  const parentUrlKey = "go.lifeinsuranceforvets.com/learn-alex-gross";
+  const utmCampaign = "Alex Gross- Vet Web Form- 10/26/26";
+  const utmId = "120250095149890298";
+  const captured = new URL(`https://${parentUrlKey}`);
+  captured.searchParams.set("utm_source", "Facebook_Mobile_Reels");
+  captured.searchParams.set("utm_medium", "cpc");
+  captured.searchParams.set("utm_campaign", utmCampaign);
+  captured.searchParams.set("utm_content", "Mixed 1 ad set");
+  captured.searchParams.set("utm_term", "Female Talking Head 1");
+  captured.searchParams.set("utm_id", utmId);
+  const other = new URL(`https://${parentUrlKey}`);
+  other.searchParams.set("utm_id", "999000111");
+  other.searchParams.set("utm_campaign", "a different utm campaign");
+
+  const normalize = (parentUrl: string) =>
+    normalizeLeadCaptureIoWebhookToLifecyclePayload({
+      provider: "leadcapture_io",
+      sa360_source_system: "leadcapture_io_nextgen",
+      lead_id: "11111111-2222-4333-8444-555555555555",
+      submitted_at: "2026-10-29T01:32:34.966Z",
+      parent_url: parentUrl,
+      niche_key: "VET",
+      first_name: "Pat",
+      last_name: "Lead",
+      email: "pat.lead@example.test",
+      phone: "5550108002",
+      state: "TX",
+    });
+
+  const capturedPayload = normalize(captured.toString());
+  const otherPayload = normalize(other.toString());
+  const capturedIntake = sourceIntake(capturedPayload);
+  const otherIntake = sourceIntake(otherPayload);
+  const capturedCompliance = capturedIntake?.compliance as Record<string, unknown>;
+  const attribution = extractRoutingAttributionFromPayload(capturedPayload);
+
+  assert.equal(capturedIntake?.parent_url_key, parentUrlKey);
+  assert.equal(otherIntake?.parent_url_key, parentUrlKey);
+  assert.equal(capturedPayload.attribution?.campaign_id, "UNKNOWN_ROUTE");
+  assert.equal(otherPayload.attribution?.campaign_id, "UNKNOWN_ROUTE");
+  assert.equal(capturedPayload.attribution?.utm_campaign, utmCampaign);
+  assert.equal(otherPayload.attribution?.utm_campaign, "a different utm campaign");
+  assert.equal(capturedCompliance.utm_id, utmId);
+  assert.equal(
+    (otherIntake?.compliance as Record<string, unknown> | undefined)?.utm_id,
+    "999000111"
+  );
+  assert.equal("utm_id" in (capturedPayload.attribution ?? {}), false);
+  assert.equal(attribution.campaignId, "UNKNOWN_ROUTE");
+  assert.equal(attribution.utmCampaign, utmCampaign);
 });

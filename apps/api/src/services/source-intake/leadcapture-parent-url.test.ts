@@ -69,6 +69,35 @@ test("slug-only operator input becomes the standard hosted page", () => {
   assert.equal(fromFull?.parentUrlKey, fromSlug?.parentUrlKey);
 });
 
+test("Alex Gross parent URL drops every UTM query variant", () => {
+  const bare = "https://go.lifeinsuranceforvets.com/learn-alex-gross";
+  const captured = new URL(bare);
+  captured.searchParams.set("utm_source", "Facebook_Mobile_Reels");
+  captured.searchParams.set("utm_medium", "cpc");
+  captured.searchParams.set("utm_campaign", "Alex Gross- Vet Web Form- 10/26/26");
+  captured.searchParams.set("utm_content", "Mixed 1 ad set");
+  captured.searchParams.set("utm_term", "Female Talking Head 1");
+  captured.searchParams.set("utm_id", "120250095149890298");
+  const otherCampaign = new URL(bare);
+  otherCampaign.searchParams.set("utm_id", "999");
+  otherCampaign.searchParams.set("utm_campaign", "some other campaign");
+  const variants = [
+    bare,
+    captured.toString(),
+    otherCampaign.toString(),
+    "https://GO.LifeInsuranceForVets.com/learn-alex-gross/?utm_source=other#section",
+  ];
+  for (const url of variants) {
+    const normalized = normalizeLeadCaptureParentUrl(url);
+    assert.equal(normalized?.parentUrlKey, "go.lifeinsuranceforvets.com/learn-alex-gross");
+    assert.equal(normalized?.pageSlug, "learn-alex-gross");
+    assert.equal(normalized?.hostname, "go.lifeinsuranceforvets.com");
+    assert.equal(normalized?.pathname, "/learn-alex-gross");
+    assert.equal(normalized?.parentUrlKey.includes("utm_"), false);
+    assert.equal(normalized?.parentUrlKey.includes("120250095149890298"), false);
+  }
+});
+
 test("slug-only helper still rejects malformed strings", () => {
   assert.equal(normalizeLeadCapturePageUrlOrSlug(""), null);
   assert.equal(normalizeLeadCapturePageUrlOrSlug("p/dn_omzoj"), null);

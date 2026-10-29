@@ -894,8 +894,8 @@ export async function executeLiveCanaryGhlSteps(
   } else if (workflowTriggerMode === "direct_api" && wfPreview && contactIdGhl) {
     const startedAt = new Date();
     const path = `/contacts/${encodeURIComponent(contactIdGhl)}/workflow/${encodeURIComponent(wfPreview.workflowId)}`;
+    // Enrollment is scoped by the contact. GHL rejects a locationId property on this body.
     const res = await ghlLiveJson(deps, wfPreview.method, path, {
-      body: { locationId: wfPreview.locationId },
       locationId: ghlLocationId,
     });
     workflowStarted = res.ok;

@@ -7,6 +7,7 @@ import { CLIENT_PORTAL_KEY_HEADER } from "../lib/client-portal-auth.js";
 import { WORKSPACE_KEY_HEADER } from "../lib/workspace-auth.js";
 import {
   CAPTURED_TEST_BLOCKED_ON,
+  CUSTOM_CAMPAIGN_SHEETS_CONTRACT,
   googleOnlyPilotExecutionGate,
   isCapturedTestEnabled,
   isOnboardingConfigEnabled,
@@ -79,6 +80,7 @@ export const adminClientOnboardingV2TestRoutes: FastifyPluginAsync<CapturedTestR
       ghl: opts.ghl,
       ghlAggregate: opts.ghlAggregate,
       syntheticSheets: opts.syntheticSheets,
+      customCampaignSheets: opts.customCampaignSheets,
       rereadSheet: opts.rereadSheet,
       execution,
       priors: opts.priors,
@@ -255,7 +257,8 @@ function parseRunBody(
   if (
     sheetsContract != null &&
     sheetsContract !== "exact_v3_test_worksheet" &&
-    sheetsContract !== "canary_v1_projection"
+    sheetsContract !== "canary_v1_projection" &&
+    sheetsContract !== CUSTOM_CAMPAIGN_SHEETS_CONTRACT
   ) {
     return { ok: false, statusCode: 400, error: "test_sheet_contract_required" };
   }
@@ -278,7 +281,9 @@ function parseRunBody(
         mode || sheetsContract
           ? {
               mode: (mode as IsolationMode | undefined) ?? null,
-              sheetsContract: (sheetsContract as "exact_v3_test_worksheet" | "canary_v1_projection" | undefined) ?? null,
+              sheetsContract:
+                (sheetsContract as "exact_v3_test_worksheet" | "canary_v1_projection" | typeof CUSTOM_CAMPAIGN_SHEETS_CONTRACT | undefined) ??
+                null,
             }
           : null,
       noteOverflow: (noteOverflow as NoteOverflow | undefined) ?? "refuse",
@@ -330,6 +335,7 @@ function sendOutcome(reply: FastifyReply, outcome: CapturedTestOutcome | (Captur
     locksCleared: false,
     discrepancy: "discrepancy" in outcome ? outcome.discrepancy : undefined,
     production: outcome.production,
+    effects: outcome.effects ?? null,
   });
 }
 

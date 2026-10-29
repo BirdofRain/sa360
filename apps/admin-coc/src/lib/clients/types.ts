@@ -12,6 +12,7 @@ export type ClientGhlDestination = {
   requiredFieldsInstalled: boolean;
   defaultAssignedUserIdGhl: string | null;
   destinationWorkflowIdGhl: string | null;
+  workflowTriggerMode?: string | null;
   destinationPipelineIdGhl: string | null;
   destinationPipelineStageIdGhl: string | null;
   pipelineStageContactingIdGhl: string | null;
@@ -25,8 +26,6 @@ export type ClientGhlDestination = {
   deliveryMode: string;
   deliveryEnabled: boolean;
   clientCutoverApproved: boolean;
-  /** Present when the destination read includes the saved workflow trigger mode. */
-  workflowTriggerMode?: string | null;
   internalApprovalStatus: string;
   sourceAttributeFieldMapJson?: unknown;
   sourceEnrichmentPolicyJson?: unknown;

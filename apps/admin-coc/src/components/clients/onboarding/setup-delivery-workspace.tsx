@@ -12,6 +12,7 @@ import {
   loadOnboardingWorkflowsAction,
   previewOnboardingNoteAction,
   previewOnboardingSpreadsheetAction,
+  deliverCapturedSheetsTestAction,
   previewOnboardingStoredLeadAction,
   probeOnboardingSheetWriteAction,
   publishOnboardingColumnMapAction,
@@ -94,7 +95,6 @@ export function SetupDeliveryWorkspace({
   ghlActions?: GhlWalkthroughActions;
 }) {
   const bound = actions ?? liveActions(clientAccountId);
-  const ghlBound = ghlActions ?? liveGhlWalkthroughActions(clientAccountId);
   const revision = knownProfileRevision(profileRevision ?? summary?.destinationProfile?.revision);
   const sources = summary?.sources;
   const leads = useMemo(() => selectableStoredLeads(sources ?? []), [sources]);
@@ -180,15 +180,6 @@ export function SetupDeliveryWorkspace({
           profileRevision={revision}
         />
       </div>
-      <GhlWalkthroughPanel
-        clientAccountId={clientAccountId}
-        leads={leads}
-        location={ghlLocation}
-        connections={ghlConnections}
-        sheetsCampaignEnabled={summary ? summary.sheets.campaignDispatchEnabled : null}
-        locationError={ghlLocationError}
-        actions={ghlBound}
-      />
       <TestConsole
         leads={leads}
         proofLoaded={summary !== null}
@@ -198,6 +189,15 @@ export function SetupDeliveryWorkspace({
         testRunListLoaded={testRunListLoaded}
         viewedWorksheet={viewed}
         onAttempts={setAttempts}
+      />
+      <GhlWalkthroughPanel
+        clientAccountId={clientAccountId}
+        leads={leads}
+        location={ghlLocation}
+        connections={ghlConnections}
+        sheetsCampaignEnabled={summary ? summary.sheets.campaignDispatchEnabled : dispatch ? dispatch.campaignDispatchEnabled : null}
+        locationError={ghlLocationError}
+        actions={ghlActions ?? liveGhlWalkthroughActions(clientAccountId)}
       />
       <ActivationPanel
         clientAccountId={clientAccountId}
@@ -231,6 +231,7 @@ function liveActions(clientAccountId: string): OnboardingWorkspaceActions {
     previewNote: (sourceLeadEventId) => previewOnboardingNoteAction(clientAccountId, sourceLeadEventId),
     saveTestIdentity: (input) => saveOnboardingTestIdentityAction(clientAccountId, input),
     previewStoredLead: (input) => previewOnboardingStoredLeadAction(clientAccountId, input),
+    deliverCapturedSheetsTest: (input) => deliverCapturedSheetsTestAction(clientAccountId, input),
     recordActivationIntent: (input) => recordOnboardingActivationIntentAction(clientAccountId, input),
     saveSheetsTarget: (input) => saveOnboardingSheetsTargetAction(clientAccountId, input),
     createColumnMap: (input) => createOnboardingColumnMapAction(clientAccountId, input),

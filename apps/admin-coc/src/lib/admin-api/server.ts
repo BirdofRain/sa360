@@ -884,6 +884,70 @@ export async function postAdminClientGhlConfig(
   return { data: res.data, error: null };
 }
 
+export type OngoingGhlActivationResponse = {
+  ok: boolean;
+  error?: string;
+  alreadyActive?: boolean;
+  locationId?: string;
+  omittedCoreFields?: string[];
+  omittedOptionalFields?: string[];
+};
+
+export type SelectedGhlDeliveryResponse = {
+  ok: boolean;
+  error?: string;
+  outcome: "skipped" | "executed" | "held";
+  reason: string;
+  runId: string | null;
+  status: string | null;
+  externalCallExecuted: boolean;
+  contactIdGhl: string | null;
+  opportunityIdGhl: string | null;
+  workflowStarted: boolean | null;
+  omittedCoreFields: string[];
+  omittedOptionalFields: string[];
+};
+
+function parsedAdminBody<T>(body: string): T | null {
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    return null;
+  }
+}
+
+export async function postAdminActivateOngoingGhl(
+  clientAccountId: string,
+  body: { requestId: string; confirmation: string }
+): Promise<{ data: OngoingGhlActivationResponse | null; error: string | null }> {
+  const id = clientAccountId.trim();
+  if (!id) return { data: null, error: "Missing clientAccountId" };
+  const res = await adminRequestJson<OngoingGhlActivationResponse>(
+    "POST",
+    `/admin/v1/clients/${encodeURIComponent(id)}/ghl-destination/activate-ongoing`,
+    body
+  );
+  if (res.ok) return { data: res.data, error: null };
+  const parsed = parsedAdminBody<OngoingGhlActivationResponse>(res.body);
+  return { data: parsed, error: parsed?.error ?? formatError(res) };
+}
+
+export async function postAdminSelectedGhlDelivery(
+  clientAccountId: string,
+  body: { planId: string; confirmation: string }
+): Promise<{ data: SelectedGhlDeliveryResponse | null; error: string | null }> {
+  const id = clientAccountId.trim();
+  if (!id) return { data: null, error: "Missing clientAccountId" };
+  const res = await adminRequestJson<SelectedGhlDeliveryResponse>(
+    "POST",
+    `/admin/v1/clients/${encodeURIComponent(id)}/ghl-destination/test-delivery`,
+    body
+  );
+  if (res.ok) return { data: res.data, error: null };
+  const parsed = parsedAdminBody<SelectedGhlDeliveryResponse>(res.body);
+  return { data: parsed, error: parsed?.error ?? parsed?.reason ?? formatError(res) };
+}
+
 // ─── Shadow delivery plans (no external execution) ─────────────────────────
 
 type DeliveryPlanResponse = { ok: boolean; plan: LeadDeliveryPlanItem };

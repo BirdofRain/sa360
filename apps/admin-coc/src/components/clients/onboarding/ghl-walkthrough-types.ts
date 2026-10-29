@@ -2,24 +2,6 @@ import type { RoutingRuleGhlConfigSaveBody } from "@/lib/ghl-config/types";
 import type { GhlLocationConfigDiscoveryResponse } from "@/lib/ghl-config/types";
 import type { GhlPreviewFieldMapping, GhlPreviewStep } from "@/lib/clients/onboarding/ghl-delivery-preview";
 
-/** Destination switch only. Does not create a plan or send a lead. */
-export function ongoingGhlDeliveryPatch(enabled: boolean): Record<string, unknown> {
-  if (!enabled) return { deliveryEnabled: false };
-  return {
-    deliveryEnabled: true,
-    deliveryMode: "live",
-    clientCutoverApproved: true,
-    internalApprovalStatus: "approved",
-    confirmLiveDeliveryRisk: true,
-  };
-}
-
-/** Typed by the operator before the destination switch is turned on. */
-export const ONGOING_GHL_ENABLE_CONFIRMATION = "ENABLE ONGOING GHL DELIVERY";
-
-/** Typed by the operator before ongoing GHL delivery is paused. */
-export const ONGOING_GHL_PAUSE_CONFIRMATION = "PAUSE ONGOING GHL DELIVERY";
-
 export type GhlWalkthroughLocation = {
   locationId: string | null;
   locationName: string | null;
@@ -87,7 +69,16 @@ export type GhlWalkthroughActions = {
     | { ok: true; result: GhlWalkthroughExecution }
     | { ok: false; error: string; blockers?: string[]; result?: GhlWalkthroughExecution }
   >;
-  setOngoingDelivery: (
-    enabled: boolean
-  ) => Promise<{ ok: true; deliveryEnabled: boolean } | { ok: false; error: string }>;
+  activateOngoing: (
+    requestId: string,
+    confirmation: string
+  ) => Promise<
+    | {
+        ok: true;
+        alreadyActive: boolean;
+        omittedCoreFields: string[];
+        omittedOptionalFields: string[];
+      }
+    | { ok: false; error: string }
+  >;
 };

@@ -1,41 +1,13 @@
-import { patchClientGhlDestinationAction } from "@/app/actions/clients";
 import { discoverGhlLocationConfigAction, saveClientGhlConfigAction } from "@/app/actions/ghl-config";
 import { linkGhlConnectionClientAction, loadGhlConnectionsAction, startGhlOAuthConnectAction } from "@/app/actions/ghl-connections";
-import { executeGhlLiveCanaryAction, loadGhlLiveCanaryPreflightAction } from "@/app/actions/ghl-live-canary";
+import { loadGhlLiveCanaryPreflightAction } from "@/app/actions/ghl-live-canary";
+import { activateOngoingGhlDeliveryAction, testSelectedGhlDeliveryAction } from "@/app/actions/ghl-ongoing-delivery";
 import { simulateGhlAdapterAction } from "@/app/actions/ghl-adapter";
 import { generateDeliveryPlanAction } from "@/app/actions/routing-dry-run";
 import type { GhlPreviewStep } from "@/lib/clients/onboarding/ghl-delivery-preview";
 import { formatRoutingDryRunActionError } from "@/lib/routing-dry-run/routing-dry-run-action.util";
-import type { GhlLiveDeliveryRunItem } from "@/lib/ghl-live-canary/types";
 
-import {
-  ongoingGhlDeliveryPatch,
-  type GhlWalkthroughActions,
-  type GhlWalkthroughConnection,
-  type GhlWalkthroughExecution,
-} from "./ghl-walkthrough-types";
-
-function executionFromRun(
-  run: GhlLiveDeliveryRunItem | undefined,
-  extra: {
-    contactIdGhl: string | null;
-    opportunityIdGhl: string | null;
-    workflowStarted: boolean | null;
-    externalCallExecuted: boolean;
-    skippedDuplicate: boolean;
-  }
-): GhlWalkthroughExecution | undefined {
-  if (!run) return undefined;
-  return {
-    status: run.status,
-    contactIdGhl: extra.contactIdGhl,
-    opportunityIdGhl: extra.opportunityIdGhl,
-    workflowStarted: extra.workflowStarted,
-    externalCallExecuted: extra.externalCallExecuted,
-    errors: run.errors,
-    skippedDuplicate: extra.skippedDuplicate,
-  };
-}
+import type { GhlWalkthroughActions, GhlWalkthroughConnection } from "./ghl-walkthrough-types";
 
 function asSteps(value: unknown): GhlPreviewStep[] {
   if (!Array.isArray(value)) return [];
@@ -128,36 +100,16 @@ export function liveGhlWalkthroughActions(clientAccountId: string): GhlWalkthrou
       };
     },
     executeTest: async (planId, confirmation) => {
-      const res = await executeGhlLiveCanaryAction(planId, confirmation);
+      const res = await testSelectedGhlDeliveryAction(clientAccountId, planId, confirmation);
       if (!res.ok) {
         return {
           ok: false,
           error: res.error,
-          blockers: res.blockers,
-          result: executionFromRun(res.liveRun, {
-            contactIdGhl: res.liveRun?.contactIdGhl ?? null,
-            opportunityIdGhl: res.liveRun?.opportunityIdGhl ?? null,
-            workflowStarted: res.liveRun?.workflowStarted ?? null,
-            externalCallExecuted: false,
-            skippedDuplicate: res.skippedDuplicate === true || res.liveRun?.status === "skipped_duplicate",
-          }),
+          result: res.result,
         };
       }
-      return {
-        ok: true,
-        result: executionFromRun(res.liveRun, {
-          contactIdGhl: res.contactIdGhl,
-          opportunityIdGhl: res.opportunityIdGhl,
-          workflowStarted: res.workflowStarted,
-          externalCallExecuted: res.externalCallExecuted,
-          skippedDuplicate: res.liveRun.status === "skipped_duplicate",
-        })!,
-      };
+      return { ok: true, result: res.result };
     },
-    setOngoingDelivery: async (enabled) => {
-      const res = await patchClientGhlDestinationAction(clientAccountId, ongoingGhlDeliveryPatch(enabled));
-      if (!res.ok) return { ok: false, error: res.error };
-      return { ok: true, deliveryEnabled: res.item.ghlDestination?.deliveryEnabled ?? enabled };
-    },
+    activateOngoing: async (requestId, confirmation) => activateOngoingGhlDeliveryAction(clientAccountId, requestId, confirmation),
   };
 }

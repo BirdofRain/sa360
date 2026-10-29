@@ -6,7 +6,11 @@ import {
 import { warmEffectiveDeliveryAdapterMode } from "../delivery-runtime-mode.service.js";
 import { findLatestGhlAdapterRunForPlan } from "../../repositories/ghl-delivery-adapter-run.repository.js";
 import { findRoutingDryRunDecisionById } from "../../repositories/routing-dry-run-decision.repository.js";
-import { findCampaignRoutingRuleById } from "../../repositories/campaign-routing-rule.repository.js";
+import {
+  isConfirmedSourceAssociationDecision,
+  missingDeliveryRuleBlocker,
+  resolveDeliveryPlanRule,
+} from "../association-ghl-delivery-source.js";
 import {
   findGhlLiveDeliveryRunByIdempotencyKey,
   findLatestGhlLiveDeliveryRunForPlan,
@@ -125,8 +129,8 @@ export async function loadLiveCanaryContext(plan: LeadDeliveryPlan & { steps: un
 
   if (plan.routingDryRunDecisionId) {
     decision = await findRoutingDryRunDecisionById(plan.routingDryRunDecisionId);
-    if (decision?.matchedRuleId) {
-      rule = await findCampaignRoutingRuleById(decision.matchedRuleId);
+    if (decision) {
+      rule = (await resolveDeliveryPlanRule(decision)).rule;
     }
   }
 
@@ -231,7 +235,11 @@ export async function evaluateLiveCanaryPreflight(
   }
 
   if (!ctx.rule) {
-    blockers.push("Matched routing rule not found for this plan.");
+    blockers.push(
+      missingDeliveryRuleBlocker(
+        ctx.decision ? isConfirmedSourceAssociationDecision(ctx.decision) : false
+      )
+    );
   }
 
   let readinessCanDeliverLive = false;

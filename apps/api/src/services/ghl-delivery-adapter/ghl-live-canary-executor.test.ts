@@ -527,6 +527,7 @@ test("executeLiveCanaryGhlSteps optional owner and workflow 422 yield partial_su
   armLiveCanaryAdapterEnv();
   process.env.GHL_PRIVATE_INTEGRATION_TOKEN = "test-token";
 
+  const workflowBodies: Array<string | undefined> = [];
   const deps: GhlLiveHttpDeps = {
     fetch: async (input, init) => {
       const url = String(input);
@@ -544,6 +545,7 @@ test("executeLiveCanaryGhlSteps optional owner and workflow 422 yield partial_su
         }
       }
       if (url.includes("/workflow/") && method === "POST") {
+        workflowBodies.push(typeof init?.body === "string" ? init.body : undefined);
         return new Response(JSON.stringify({ message: "Workflow not found" }), { status: 422 });
       }
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
@@ -575,6 +577,8 @@ test("executeLiveCanaryGhlSteps optional owner and workflow 422 yield partial_su
     result.stepOutcomes.find((s) => s.stepType === "start_workflow")?.status,
     "skipped"
   );
+  assert.equal(workflowBodies.length, 1);
+  assert.equal(workflowBodies[0], undefined);
   assert.ok(
     result.stepOutcomes.find((s) => s.stepType === "start_workflow")?.errorSummary?.includes(
       "tag-based GHL trigger"

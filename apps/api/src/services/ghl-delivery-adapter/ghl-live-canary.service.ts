@@ -1,6 +1,11 @@
-import type { Prisma } from "@prisma/client";
-import { getGhlDeliveryAdapterMode } from "../../lib/ghl-delivery-adapter-mode.js";
-import { GHL_LIVE_CANARY_SAFETY_MESSAGE } from "../../lib/ghl-delivery-adapter-mode.js";
+import type { LeadDeliveryPlan, LeadDeliveryPlanStep, Prisma } from "@prisma/client";
+import {
+  getGhlDeliveryAdapterMode,
+  GHL_LIVE_CANARY_SAFETY_MESSAGE,
+} from "../../lib/ghl-delivery-adapter-mode.js";
+import { runWithOngoingGhlWrite } from "../../lib/ghl-ongoing-delivery-scope.js";
+import { prisma } from "../../lib/db.js";
+import type { LifecycleEventSchema } from "../../schemas/lifecycle-event.schema.js";
 import {
   recordLiveCanaryOutcomeAudit,
   warmEffectiveDeliveryAdapterMode,
@@ -28,6 +33,7 @@ import {
 } from "./ghl-live-canary.present.js";
 import type { GhlAdapterPlanContext } from "./ghl-delivery-adapter.types.js";
 import { buildSourceEnrichmentDeliveryContext } from "../source-intake/source-enrichment.service.js";
+import { persistedCampaignRoutingRuleId } from "../association-ghl-delivery-source.js";
 
 export async function getLiveCanaryPreflightForPlan(planId: string) {
   await warmEffectiveDeliveryAdapterMode();
@@ -88,7 +94,7 @@ export async function executeLiveCanaryForPlan(
   const run = await createGhlLiveDeliveryRun({
     leadDeliveryPlan: { connect: { id: plan.id } },
     routingDryRunDecisionId: plan.routingDryRunDecisionId,
-    campaignRoutingRuleId: ctx.rule?.id ?? null,
+    campaignRoutingRuleId: persistedCampaignRoutingRuleId(ctx.rule),
     masterClientAccountId: plan.masterClientAccountId,
     destinationClientAccountId: plan.destinationClientAccountId,
     destinationSubaccountIdGhl: plan.destinationSubaccountIdGhl,
@@ -200,6 +206,177 @@ export async function executeLiveCanaryForPlan(
     opportunityIdGhl: execution.opportunityIdGhl,
     workflowStarted: execution.workflowStarted,
     externalCallExecuted: execution.stepOutcomes.some((s) => s.externalCallExecuted),
+  };
+}
+
+export type RecordedGhlDeliveryResult = {
+  held: boolean;
+  ok: boolean;
+  runId: string | null;
+  status: string;
+  contactIdGhl: string | null;
+  opportunityIdGhl: string | null;
+  workflowStarted: boolean;
+  externalCallExecuted: boolean;
+  errors: string[];
+};
+
+/**
+ * Writes one GHL run for an existing plan and records the outcome on that same row.
+ * It does not check a confirmation phrase, a simulation, or deliveryEnabled.
+ * Callers decide whether the destination is activated or a selected test.
+ */
+export async function executeRecordedGhlDelivery(
+  input: {
+    plan: LeadDeliveryPlan & { steps: LeadDeliveryPlanStep[] };
+    mode: "ongoing_association" | "paused_location_test";
+    executedBy: string;
+    operatorConfirmationText: string | null;
+    lifecyclePayload?: LifecycleEventSchema;
+    reuseRunId?: string | null;
+  },
+  deps?: GhlLiveHttpDeps
+): Promise<RecordedGhlDeliveryResult> {
+  const ctx = await loadLiveCanaryContext(input.plan);
+  const startedAt = new Date();
+  const idempotencyKey = ctx.idempotencyKey;
+  let runId = input.reuseRunId ?? null;
+
+  if (runId) {
+    await prisma.ghlLiveDeliveryStepRun.deleteMany({ where: { liveRunId: runId } });
+    await updateGhlLiveDeliveryRun(runId, {
+      status: "executing",
+      mode: input.mode,
+      startedAt,
+      completedAt: null,
+      summary: null,
+      errors: [],
+      operatorConfirmationText: input.operatorConfirmationText,
+      executedBy: input.executedBy,
+    });
+  } else {
+    try {
+      const created = await createGhlLiveDeliveryRun({
+        leadDeliveryPlan: { connect: { id: input.plan.id } },
+        routingDryRunDecisionId: input.plan.routingDryRunDecisionId,
+        campaignRoutingRuleId: persistedCampaignRoutingRuleId(ctx.rule),
+        masterClientAccountId: input.plan.masterClientAccountId,
+        destinationClientAccountId: input.plan.destinationClientAccountId,
+        destinationSubaccountIdGhl: input.plan.destinationSubaccountIdGhl,
+        mode: input.mode,
+        status: "executing",
+        idempotencyKey,
+        operatorConfirmationText: input.operatorConfirmationText,
+        startedAt,
+        executedBy: input.executedBy,
+      });
+      runId = created.id;
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code !== "P2002") throw err;
+      const existing = await findGhlLiveDeliveryRunByIdempotencyKey(idempotencyKey);
+      return {
+        held: true,
+        ok: existing?.status === "succeeded",
+        runId: existing?.id ?? null,
+        status: existing?.status ?? "executing",
+        contactIdGhl: null,
+        opportunityIdGhl: null,
+        workflowStarted: false,
+        externalCallExecuted: false,
+        errors: [],
+      };
+    }
+  }
+
+  const sourceEnrichment = input.lifecyclePayload
+    ? buildSourceEnrichmentDeliveryContext(
+        input.lifecyclePayload,
+        (await findClientAccountById(input.plan.destinationClientAccountId))?.ghlDestination ?? null,
+        ctx.rule
+      )
+    : null;
+  const adapterCtx: GhlAdapterPlanContext = {
+    plan: input.plan,
+    rule: ctx.rule,
+    destinationFieldMapping: ctx.destinationFieldMapping,
+    sourceEnrichment: sourceEnrichment
+      ? {
+          sourceAttributes: sourceEnrichment.sourceAttributes,
+          enrichmentStatus: sourceEnrichment.enrichmentStatus,
+          automationReadiness: sourceEnrichment.automationReadiness,
+          unmappedSourceFieldKeys: sourceEnrichment.unmappedSourceFieldKeys,
+          sourceAttributeFieldMap: sourceEnrichment.sourceAttributeFieldMap,
+          sourceEnrichmentPolicy: sourceEnrichment.sourceEnrichmentPolicy,
+        }
+      : null,
+  };
+
+  let execution;
+  try {
+    execution = await runWithOngoingGhlWrite(() =>
+      executeLiveCanaryGhlSteps(adapterCtx, idempotencyKey, deps)
+    );
+  } catch {
+    const completedAt = new Date();
+    const failed = await updateGhlLiveDeliveryRun(runId!, {
+      status: "failed",
+      completedAt,
+      durationMs: completedAt.getTime() - startedAt.getTime(),
+      summary: "GHL delivery stopped before a step result was recorded.",
+      errors: ["delivery_outcome_unrecorded"] as Prisma.InputJsonValue,
+    });
+    return {
+      held: true,
+      ok: false,
+      runId: failed.id,
+      status: failed.status,
+      contactIdGhl: null,
+      opportunityIdGhl: null,
+      workflowStarted: false,
+      externalCallExecuted: false,
+      errors: ["delivery_outcome_unrecorded"],
+    };
+  }
+
+  const completedAt = new Date();
+  const externalCallExecuted = execution.stepOutcomes.some((step) => step.externalCallExecuted);
+  await updateGhlLiveDeliveryRun(runId!, {
+    status: execution.runStatus,
+    completedAt,
+    durationMs: completedAt.getTime() - startedAt.getTime(),
+    summary: execution.summary,
+    warnings: execution.warnings.length ? (execution.warnings as Prisma.InputJsonValue) : undefined,
+    errors: execution.errors.length ? (execution.errors as Prisma.InputJsonValue) : undefined,
+    stepRuns: {
+      create: execution.stepOutcomes.map((step) => ({
+        deliveryPlanStepId: step.deliveryPlanStepId,
+        stepOrder: step.stepOrder,
+        stepType: step.stepType,
+        targetSystem: step.targetSystem,
+        targetId: step.targetId,
+        status: step.status,
+        requestRedactedJson: step.requestRedactedJson ?? undefined,
+        responseRedactedJson: step.responseRedactedJson ?? undefined,
+        externalId: step.externalId,
+        errorCode: step.errorCode,
+        errorSummary: step.errorSummary,
+        warnings: step.warnings.length ? (step.warnings as Prisma.InputJsonValue) : undefined,
+        startedAt: step.startedAt,
+        completedAt: step.completedAt,
+      })),
+    },
+  });
+  return {
+    held: false,
+    ok: execution.runStatus === "succeeded",
+    runId,
+    status: execution.runStatus,
+    contactIdGhl: execution.contactIdGhl,
+    opportunityIdGhl: execution.opportunityIdGhl,
+    workflowStarted: execution.workflowStarted,
+    externalCallExecuted,
+    errors: execution.errors,
   };
 }
 

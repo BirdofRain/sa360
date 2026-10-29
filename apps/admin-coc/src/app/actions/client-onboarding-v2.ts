@@ -12,6 +12,7 @@ import {
 import {
   approveOnboardingTestWorksheet,
   browseResolvedOnboardingFolder,
+  deliverCapturedSheetsTest,
   listOnboardingTestRuns,
   readOnboardingFailure,
 } from "@/lib/admin-api/client-onboarding-v2";
@@ -363,6 +364,20 @@ export async function previewOnboardingStoredLeadAction(
     requestId: crypto.randomUUID(),
     sourceLeadEventId: input.sourceLeadEventId.trim(),
     destinations,
+  });
+}
+
+export async function deliverCapturedSheetsTestAction(
+  clientAccountId: string,
+  input: { sourceLeadEventId: string }
+): Promise<OnboardingActionResult<OnboardingTestRun>> {
+  await requireAdminCocAdminSession();
+  const rejected = rejectClient(clientAccountId);
+  if (rejected) return rejected;
+  if (!input.sourceLeadEventId.trim()) return { ok: false, error: "invalid_confirmation", status: 400 };
+  return deliverCapturedSheetsTest(clientAccountId, {
+    requestId: crypto.randomUUID(),
+    sourceLeadEventId: input.sourceLeadEventId.trim(),
   });
 }
 

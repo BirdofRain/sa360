@@ -6,9 +6,9 @@
  * LeadCapture page / form?" and is consulted when no exact rule tier matched.
  *
  * It resolves a destination without creating or widening a routing rule, so a
- * single-page association can never become a broad rule. Delivery is untouched:
- * the decision is still a dry-run decision and delivery remains explicitly
- * operator-approved.
+ * single-page association can never become a broad campaign or text rule.
+ * GHL plans read ClientGhlDestination for that client. This module does not
+ * enable delivery; live delivery still requires the destination's own gates.
  */
 
 import type { PrismaClient } from "@prisma/client";

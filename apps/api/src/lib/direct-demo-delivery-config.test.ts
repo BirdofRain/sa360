@@ -69,13 +69,14 @@ test("live canary destination allowlist accepts JSON object", () => {
   else delete process.env[LIVE_CANARY_DESTINATION_ALLOWLIST_ENV];
 });
 
-test("live canary allowlist is optional when env absent", () => {
+test("an unset live canary allowlist authorizes nobody", () => {
   const prev = process.env[LIVE_CANARY_DESTINATION_ALLOWLIST_ENV];
   delete process.env[LIVE_CANARY_DESTINATION_ALLOWLIST_ENV];
   const check = isDestinationAllowedForLiveCanary("vet_life_james_torrey", "9xSNvQCbGaPE9YNxgl4B");
   assert.equal(check.configured, false);
-  assert.equal(check.allowed, true);
+  assert.equal(check.allowed, false);
   if (prev !== undefined) process.env[LIVE_CANARY_DESTINATION_ALLOWLIST_ENV] = prev;
+  else delete process.env[LIVE_CANARY_DESTINATION_ALLOWLIST_ENV];
 });
 
 test("live canary allowlist blocks non-listed destination when configured", () => {

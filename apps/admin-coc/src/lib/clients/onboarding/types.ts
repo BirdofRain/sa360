@@ -310,6 +310,13 @@ export type OnboardingTestRun = {
   noteBodySha256: string | null;
   noteContract: string | null;
   externalCalls: { providerWebhook: boolean; sheets: boolean; ghl: boolean };
+  effects?: {
+    inventoryAffected: boolean;
+    billingAffected: boolean;
+    deliveryEnabled: boolean;
+    cutoffChanged: boolean;
+    duplicate: boolean;
+  } | null;
   sourceDeliverySatisfied: false;
   downstreamExecuted: false;
   resendAuthorized: false;
@@ -432,6 +439,9 @@ export type OnboardingWorkspaceActions = {
   previewStoredLead: (input: {
     sourceLeadEventId: string;
     destinations: Array<"google_sheets" | "ghl_location_api">;
+  }) => Promise<OnboardingActionResult<OnboardingTestRun>>;
+  deliverCapturedSheetsTest: (input: {
+    sourceLeadEventId: string;
   }) => Promise<OnboardingActionResult<OnboardingTestRun>>;
   recordActivationIntent: (input: {
     destination: "google_sheets_campaign" | "ghl_location_api";

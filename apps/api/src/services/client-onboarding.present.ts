@@ -16,6 +16,8 @@ export type ClientGhlDestinationDto = {
   requiredFieldsInstalled: boolean;
   defaultAssignedUserIdGhl: string | null;
   destinationWorkflowIdGhl: string | null;
+  /** How a saved workflow is started. Saving a workflow does not change deliveryEnabled. */
+  workflowTriggerMode: string | null;
   destinationPipelineIdGhl: string | null;
   destinationPipelineStageIdGhl: string | null;
   pipelineStageContactingIdGhl: string | null;
@@ -30,8 +32,6 @@ export type ClientGhlDestinationDto = {
   deliveryEnabled: boolean;
   clientCutoverApproved: boolean;
   internalApprovalStatus: string;
-  /** How a saved workflow is started. Saving a workflow does not change deliveryEnabled. */
-  workflowTriggerMode: string;
   sourceAttributeFieldMapJson?: unknown;
   sourceEnrichmentPolicyJson?: unknown;
   sourceFieldAliasOverridesJson?: unknown;
@@ -101,6 +101,7 @@ export function presentClientGhlDestination(
     requiredFieldsInstalled: dest.requiredFieldsInstalled,
     defaultAssignedUserIdGhl: dest.defaultAssignedUserIdGhl,
     destinationWorkflowIdGhl: dest.destinationWorkflowIdGhl,
+    workflowTriggerMode: dest.workflowTriggerMode,
     destinationPipelineIdGhl: dest.destinationPipelineIdGhl,
     destinationPipelineStageIdGhl: dest.destinationPipelineStageIdGhl,
     pipelineStageContactingIdGhl: dest.pipelineStageContactingIdGhl,
@@ -115,7 +116,6 @@ export function presentClientGhlDestination(
     deliveryEnabled: dest.deliveryEnabled,
     clientCutoverApproved: dest.clientCutoverApproved,
     internalApprovalStatus: dest.internalApprovalStatus,
-    workflowTriggerMode: dest.workflowTriggerMode,
     sourceAttributeFieldMapJson: dest.sourceAttributeFieldMapJson,
     sourceEnrichmentPolicyJson: dest.sourceEnrichmentPolicyJson,
     sourceFieldAliasOverridesJson: dest.sourceFieldAliasOverridesJson,

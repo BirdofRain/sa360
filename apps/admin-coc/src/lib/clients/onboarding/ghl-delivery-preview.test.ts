@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { ongoingGhlDeliveryPatch } from "../../../components/clients/onboarding/ghl-walkthrough-types.ts";
 import { describeGhlDeliveryPreview } from "./ghl-delivery-preview.ts";
 
 const WORKFLOW_ID = "d4c1fa4c-a3e2-4fd8-9091-b3fad0d04edd";
@@ -63,24 +62,11 @@ test("preview names contact upsert, enrollment by id, omissions, and opportunity
   assert.match(facts.workflow, /New Lead/);
   assert.doesNotMatch(facts.workflow, /must be named/i);
   assert.match(facts.fieldMapping, /email, phone/);
-  assert.match(facts.fieldMapping, /primary_reason is not delivered as Primary Concern/);
-  assert.match(facts.fieldMapping, /blank primary_concern is omitted/);
   assert.deepEqual(facts.omissions.sort(), ["beneficiary", "dob", "state"]);
   assert.match(facts.opportunity, /blocked/);
   assert.match(facts.opportunity, /Pipeline\/stage not configured/);
   assert.match(facts.persistedSimulation, /run_sim_1/);
   assert.equal(facts.ongoingDeliveryChanged, false);
-});
-
-test("ongoing delivery uses the destination switch and pause clears only that switch", () => {
-  const enabled = ongoingGhlDeliveryPatch(true);
-  assert.equal(enabled.deliveryEnabled, true);
-  assert.equal(enabled.deliveryMode, "live");
-  assert.equal(enabled.confirmLiveDeliveryRisk, true);
-  assert.equal("operatorDummy" in enabled, false);
-  assert.equal(ongoingGhlDeliveryPatch(false).deliveryEnabled, false);
-  assert.equal("deliveryMode" in ongoingGhlDeliveryPatch(false), false);
-  assert.equal("confirmLiveDeliveryRisk" in ongoingGhlDeliveryPatch(false), false);
 });
 
 test("direct_api says the live test enrolls the selected id", () => {

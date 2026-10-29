@@ -161,10 +161,23 @@ export function formatGenerationTimestamp(raw: string): string {
   return `${formatted} ${COMPANY_SHEETS_GENERATION_TIMEZONE}`;
 }
 
+/** Confirmed parent URL for the Life Insurance for Vets web form copied onto Alex's sheet. */
+const VET_WEB_FORM_PARENT_URL_KEY = "go.lifeinsuranceforvets.com/learn-alex-gross";
+const VET_WEB_FORM_LEAD_TYPE = "Vet Web Form";
+
+/**
+ * An explicit stored lead type wins. This webform otherwise has no niche stamp,
+ * so the sheet column follows the confirmed parent URL. A different route with
+ * no stored lead type stays blank or uses the existing product/niche fallback.
+ */
 function readLeadType(payload: Record<string, unknown>): string {
   const state = asRecord(payload.state);
+  const explicit = readString(state?.lead_type);
+  if (explicit) return explicit;
+  const intake = sourceIntake(payload);
+  if (readString(intake?.parent_url_key) === VET_WEB_FORM_PARENT_URL_KEY) return VET_WEB_FORM_LEAD_TYPE;
   const routing = asRecord(payload.routing);
-  return firstText(state?.lead_type, routing?.product_type, routing?.niche_key);
+  return firstText(routing?.product_type, routing?.niche_key);
 }
 
 function readDateOfBirth(payload: Record<string, unknown>): string {

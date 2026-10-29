@@ -489,3 +489,51 @@ test("stored James Torrey shapes keep exact unmapped paths, false flags, and con
   assert.equal(blanks.email_verified, "true");
   assert.equal(JSON.stringify(blanks).includes("[object Object]"), false);
 });
+
+const VET_WEB_FORM_PARENT = "go.lifeinsuranceforvets.com/learn-alex-gross";
+
+function leadTypeOf(payload: Record<string, unknown>): string {
+  const values = row(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3, payload);
+  const enriched = Object.fromEntries(COMPANY_SHEETS_V3_HEADER.map((key, index) => [key, values?.[index] ?? ""]));
+  return enriched["Lead Type"] ?? "";
+}
+
+test("Vet Web Form parent URL fills a blank lead type and does not replace an explicit value", () => {
+  assert.equal(
+    leadTypeOf({
+      state: {},
+      routing: {
+        product_type: "Final Expense",
+        niche_key: "VET",
+        source_intake: { parent_url_key: VET_WEB_FORM_PARENT, funnel_name: "UNKNOWN_ROUTE" },
+      },
+    }),
+    "Vet Web Form"
+  );
+  assert.equal(
+    leadTypeOf({
+      state: { lead_type: "VET" },
+      routing: { source_intake: { parent_url_key: VET_WEB_FORM_PARENT } },
+    }),
+    "VET"
+  );
+  assert.equal(
+    leadTypeOf({
+      state: { lead_type: "   " },
+      routing: { source_intake: { parent_url_key: VET_WEB_FORM_PARENT } },
+    }),
+    "Vet Web Form"
+  );
+  assert.equal(
+    leadTypeOf({
+      routing: { source_intake: { parent_url_key: "go.example.test/other", funnel_name: "UNKNOWN_ROUTE" } },
+    }),
+    ""
+  );
+  assert.equal(
+    leadTypeOf({
+      routing: { product_type: "Final Expense", source_intake: { funnel_name: "UNKNOWN_ROUTE" } },
+    }),
+    "Final Expense"
+  );
+});

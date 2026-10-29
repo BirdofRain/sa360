@@ -66,7 +66,7 @@ export const COMPANY_SHEETS_V3_COLUMNS: readonly CompanySheetsTemplateColumn[] =
     sourceField: "lead_type",
     group: "identity",
     systemRequired: false,
-    help: "First stored value among state.lead_type, routing.product_type, and routing.niche_key. A niche display name is not invented.",
+    help: "Stored state.lead_type when it is non-blank. The Vet Web Form parent URL fills Vet Web Form only when that value is blank. Otherwise the first stored routing.product_type or routing.niche_key. Other unresolved routes stay blank.",
   },
   {
     header: "Age",

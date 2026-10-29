@@ -7,6 +7,11 @@ import {
   getRoutingRuleGhlConfigSummary,
   saveRoutingRuleGhlConfig,
 } from "../services/ghl-config-discovery/routing-rule-ghl-config.service.js";
+import {
+  CREATE_SAM_TEST_SURVEY_TEXT_FIELDS,
+  SAM_TEST_GHL_LOCATION_ID,
+  ensureSamTestSurveyTextFields,
+} from "../services/ghl-config-discovery/sam-test-survey-text-fields.js";
 
 async function requireAdmin(
   request: FastifyRequest,
@@ -41,6 +46,37 @@ export async function adminGhlConfigRoutes(app: FastifyInstance) {
     const payload = { ok: true as const, ...result.discovery };
     assertNoTokensInGhlConfigPayload(payload as unknown as Record<string, unknown>);
     return reply.send(payload);
+  });
+
+  app.post("/ghl/locations/:locationId/survey-text-fields", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const { locationId } = request.params as { locationId: string };
+    if (locationId.trim() !== SAM_TEST_GHL_LOCATION_ID) {
+      return reply.status(403).send({ ok: false, error: "location_not_allowed" });
+    }
+    const body = request.body;
+    const confirmation =
+      body && typeof body === "object" && !Array.isArray(body) && typeof (body as { confirmation?: unknown }).confirmation === "string"
+        ? (body as { confirmation: string }).confirmation.trim()
+        : "";
+    if (confirmation !== CREATE_SAM_TEST_SURVEY_TEXT_FIELDS) {
+      return reply.status(400).send({ ok: false, error: "invalid_confirmation" });
+    }
+    const result = await ensureSamTestSurveyTextFields(locationId.trim());
+    if (!result.ok) {
+      const status = result.code === "location_not_allowed" ? 403 : result.code === "not_connected" ? 409 : 502;
+      return reply.status(status).send({ ok: false, error: result.code });
+    }
+    if (result.conflicts.length > 0) {
+      return reply.status(409).send({
+        ok: false,
+        error: "field_conflict",
+        locationId: result.locationId,
+        fields: result.fields,
+        conflicts: result.conflicts,
+      });
+    }
+    return reply.send({ ok: true, locationId: result.locationId, fields: result.fields, conflicts: [] });
   });
 
   app.get("/routing/rules/:id/ghl-config", async (request, reply) => {

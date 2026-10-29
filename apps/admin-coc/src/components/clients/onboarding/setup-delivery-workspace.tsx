@@ -47,6 +47,9 @@ import type {
 
 import { ActivationPanel, type DispatchInfrastructure } from "./activation-panel";
 import { FacebookCard, GhlCard, LeadCaptureCard, SheetsCard } from "./integration-cards";
+import { liveGhlWalkthroughActions } from "./ghl-walkthrough-actions";
+import { GhlWalkthroughPanel } from "./ghl-walkthrough-panel";
+import type { GhlWalkthroughActions, GhlWalkthroughConnection, GhlWalkthroughLocation } from "./ghl-walkthrough-types";
 import { TestConsole } from "./test-console";
 
 export function SetupDeliveryWorkspace({
@@ -62,6 +65,10 @@ export function SetupDeliveryWorkspace({
   profileRevision = null,
   testRunListLoaded = false,
   actions,
+  ghlLocation = null,
+  ghlConnections = [],
+  ghlLocationError = null,
+  ghlActions,
 }: {
   clientAccountId: string;
   summary: OnboardingSummary | null;
@@ -81,8 +88,13 @@ export function SetupDeliveryWorkspace({
   testRunListLoaded?: boolean;
   /** Tests pass mocked contracts. The page omits this and uses the server actions. */
   actions?: OnboardingWorkspaceActions;
+  ghlLocation?: GhlWalkthroughLocation | null;
+  ghlConnections?: GhlWalkthroughConnection[];
+  ghlLocationError?: string | null;
+  ghlActions?: GhlWalkthroughActions;
 }) {
   const bound = actions ?? liveActions(clientAccountId);
+  const ghlBound = ghlActions ?? liveGhlWalkthroughActions(clientAccountId);
   const revision = knownProfileRevision(profileRevision ?? summary?.destinationProfile?.revision);
   const sources = summary?.sources;
   const leads = useMemo(() => selectableStoredLeads(sources ?? []), [sources]);
@@ -168,6 +180,15 @@ export function SetupDeliveryWorkspace({
           profileRevision={revision}
         />
       </div>
+      <GhlWalkthroughPanel
+        clientAccountId={clientAccountId}
+        leads={leads}
+        location={ghlLocation}
+        connections={ghlConnections}
+        sheetsCampaignEnabled={summary ? summary.sheets.campaignDispatchEnabled : null}
+        locationError={ghlLocationError}
+        actions={ghlBound}
+      />
       <TestConsole
         leads={leads}
         proofLoaded={summary !== null}
@@ -186,6 +207,7 @@ export function SetupDeliveryWorkspace({
         actions={bound}
         profileRevision={revision}
         viewedWorksheet={viewed}
+        ghlDeliveryEnabled={ghlLocation?.deliveryEnabled ?? null}
       />
     </div>
   );

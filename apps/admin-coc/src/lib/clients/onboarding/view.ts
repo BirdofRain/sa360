@@ -110,6 +110,7 @@ export type SelectableLead = {
   at: string | null;
   captureOnly: boolean;
   identity: string;
+  routingDryRunDecisionId: string | null;
 };
 
 /** Only an observed stored event is selectable. Linked alone is not a lead. */
@@ -126,6 +127,7 @@ export function selectableStoredLeads(sources: readonly OnboardingSourceProof[])
       at: source.proofs.observed.at ?? null,
       captureOnly: source.proofs.observed.captureOnly,
       identity: sourceIdentityLabel(source),
+      routingDryRunDecisionId: source.proofs.routingMatched.routingDryRunDecisionId,
     });
   }
   return leads;

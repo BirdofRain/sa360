@@ -31,6 +31,7 @@ export function ActivationPanel({
   actions,
   profileRevision,
   viewedWorksheet = null,
+  ghlDeliveryEnabled = null,
 }: {
   clientAccountId: string;
   summary: OnboardingSummary | null;
@@ -39,6 +40,7 @@ export function ActivationPanel({
   actions: OnboardingWorkspaceActions;
   profileRevision: number | null;
   viewedWorksheet?: { spreadsheetId: string; spreadsheetTitle: string; worksheet: OnboardingWorksheetPreview } | null;
+  ghlDeliveryEnabled?: boolean | null;
 }) {
   const gaps = summary ? requiredGaps(summary.gates) : [];
   const evidence = summary ? postActivationEvidence(summary.gates) : [];
@@ -57,6 +59,16 @@ export function ActivationPanel({
         </p>
       </div>
       <div className="grid gap-2 sm:grid-cols-2">
+        <StatusMark
+          label="Sheets campaign delivery"
+          state={summary ? (summary.sheets.campaignDispatchEnabled ? "yes" : "no") : "unknown"}
+          detail="Independent of GHL. Enable campaign delivery is on the Google Sheets page."
+        />
+        <StatusMark
+          label="GHL ongoing delivery"
+          state={ghlDeliveryEnabled === true ? "yes" : ghlDeliveryEnabled === false ? "no" : "unknown"}
+          detail="Independent of Sheets. A GHL test does not change this switch."
+        />
         <StatusMark
           label="Client campaign switch"
           state={summary ? (summary.sheets.campaignDispatchEnabled ? "yes" : "no") : "unknown"}

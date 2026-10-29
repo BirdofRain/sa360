@@ -16,6 +16,7 @@ export type ClientGhlDestinationDto = {
   requiredFieldsInstalled: boolean;
   defaultAssignedUserIdGhl: string | null;
   destinationWorkflowIdGhl: string | null;
+  /** How a saved workflow is started. Saving a workflow does not change deliveryEnabled. */
   workflowTriggerMode: string | null;
   destinationPipelineIdGhl: string | null;
   destinationPipelineStageIdGhl: string | null;

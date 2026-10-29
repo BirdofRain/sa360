@@ -62,6 +62,8 @@ test("preview names contact upsert, enrollment by id, omissions, and opportunity
   assert.match(facts.workflow, /New Lead/);
   assert.doesNotMatch(facts.workflow, /must be named/i);
   assert.match(facts.fieldMapping, /email, phone/);
+  assert.deepEqual(facts.missingMappings.sort(), ["beneficiary", "state"]);
+  assert.deepEqual(facts.missingSourceValues, ["dob"]);
   assert.deepEqual(facts.omissions.sort(), ["beneficiary", "dob", "state"]);
   assert.match(facts.opportunity, /blocked/);
   assert.match(facts.opportunity, /Pipeline\/stage not configured/);

@@ -6,10 +6,16 @@ import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  CANONICAL_SURVEY_ATTRIBUTES,
+  classifyGhlFieldCoverage,
+  resolveSavedFieldIds,
+  savedFieldIds,
+} from "@/lib/clients/onboarding/ghl-field-coverage";
 import { describeGhlDeliveryPreview } from "@/lib/clients/onboarding/ghl-delivery-preview";
 import type { SelectableLead } from "@/lib/clients/onboarding/view";
 import { LIVE_CANARY_CONFIRMATION_TEXT } from "@/lib/ghl-live-canary/types";
-import type { RoutingRuleGhlConfigSaveBody } from "@/lib/ghl-config/types";
+import type { GhlDiscoveredCustomField, RoutingRuleGhlConfigSaveBody } from "@/lib/ghl-config/types";
 
 import { StatusMark } from "./status-mark";
 import type {
@@ -77,6 +83,11 @@ export function GhlWalkthroughPanel({
   const [activateConfirm, setActivateConfirm] = useState("");
   const [omittedCore, setOmittedCore] = useState<string[]>([]);
   const [omittedOptional, setOmittedOptional] = useState<string[]>([]);
+  const [discoveredFields, setDiscoveredFields] = useState<GhlDiscoveredCustomField[]>([]);
+  const [fieldMap, setFieldMap] = useState<Record<string, string>>(() =>
+    savedFieldIds(location?.sourceAttributeFieldMapJson)
+  );
+  const [leadAttributes, setLeadAttributes] = useState<Record<string, string | null> | null>(null);
 
   const selectedConnection = locationRows.find((row) => row.locationId === selectedLocationId) ?? null;
   const linkedHere = selectedConnection?.clientAccountId === clientAccountId;
@@ -111,6 +122,17 @@ export function GhlWalkthroughPanel({
     (preflight?.canExecute === true || activationBlockersOnly);
   const canExecute = pausedDestinationTest && confirmText.trim() === LIVE_CANARY_CONFIRMATION_TEXT;
   const canActivate = activateConfirm.trim() === "ENABLE ONGOING GHL DELIVERY";
+  const coverage = useMemo(
+    () =>
+      leadAttributes
+        ? classifyGhlFieldCoverage({
+            sourceAttributes: leadAttributes,
+            mappings: fieldMap,
+            discoveredIds: new Set(discoveredFields.map((field) => field.id)),
+          })
+        : null,
+    [discoveredFields, fieldMap, leadAttributes]
+  );
 
   async function refreshLocations() {
     setPending("locations");
@@ -161,6 +183,9 @@ export function GhlWalkthroughPanel({
       setError(result.error);
       return;
     }
+    const fields = result.discovery.customFields;
+    setDiscoveredFields(fields);
+    setFieldMap((current) => resolveSavedFieldIds(current, fields));
     setWorkflows(result.discovery.workflows.map((item) => ({ id: item.id, name: item.name })));
     setFieldMapping({
       coreRequiredMapped: result.discovery.sa360FieldMapping.coreRequiredMapped,
@@ -199,6 +224,36 @@ export function GhlWalkthroughPanel({
       setWorkflowId(result.workflowId);
       setSavedWorkflowId(result.workflowId);
     }
+  }
+
+  async function saveFieldMap() {
+    if (!selectedLocationId) return;
+    setPending("fields");
+    setError(null);
+    const sourceAttributeFieldMapJson: Record<string, { ghlFieldKey: string; requirement: "optional" }> = {};
+    for (const [canonical, fieldId] of Object.entries(fieldMap)) {
+      if (fieldId.trim()) sourceAttributeFieldMapJson[canonical] = { ghlFieldKey: fieldId.trim(), requirement: "optional" };
+    }
+    const result = await actions.saveFieldMap({ locationId: selectedLocationId, sourceAttributeFieldMapJson });
+    setPending(null);
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+    if (result.deliveryEnabled !== null) setDeliveryEnabled(result.deliveryEnabled);
+  }
+
+  async function reviewLeadFields() {
+    if (!eventId) return;
+    setPending("attributes");
+    setError(null);
+    const result = await actions.loadLeadAttributes(eventId);
+    setPending(null);
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+    setLeadAttributes(result.sourceAttributes);
   }
 
   async function previewDelivery() {
@@ -296,8 +351,9 @@ export function GhlWalkthroughPanel({
         </li>
         <li>Connect a GHL location or select the location already stored here.</li>
         <li>Discover workflows, choose the workflow id and trigger mode, then Save selected workflow.</li>
-        <li>Preview GHL delivery for the same stored lead.</li>
-        <li>Run one GHL test only after typing the confirmation. One attempt is shown below.</li>
+        <li>Map canonical answers to discovered GHL field ids. A blank source value stays separate from a missing mapping.</li>
+        <li>Preview GHL delivery for the same stored lead, then run one GHL test. The test does not enable ongoing delivery.</li>
+        <li>Enable ongoing GHL delivery after the test. Later incoming events deliver on their own.</li>
       </ol>
       <div className="grid gap-2 sm:grid-cols-2">
         <StatusMark
@@ -447,6 +503,71 @@ export function GhlWalkthroughPanel({
       <p className="text-xs text-slate-600">
         Save selected workflow writes the workflow id and trigger mode on this client. It does not set ongoing delivery.
       </p>
+      <div className="space-y-3 border-t border-slate-200 pt-4" data-testid="ghl-field-map">
+        <h3 className="text-sm font-semibold text-slate-900">GHL field mapping</h3>
+        <p className="text-sm text-slate-600">
+          Each row stores the discovered GHL field id. Saving this map does not enable ongoing delivery.
+          primary_reason stays its own field. It is not copied into Primary Concern.
+        </p>
+        {discoveredFields.length === 0 ? (
+          <p className="text-sm text-slate-600">Discover workflows to choose field ids from this location.</p>
+        ) : (
+          <div className="space-y-2">
+            {CANONICAL_SURVEY_ATTRIBUTES.map((canonical) => (
+              <Label key={canonical} className="grid gap-1 text-sm sm:grid-cols-[12rem_1fr] sm:items-center">
+                <span className="font-mono text-xs">{canonical}</span>
+                <select
+                  className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-sm"
+                  aria-label={`GHL field for ${canonical}`}
+                  value={discoveredFields.some((field) => field.id === fieldMap[canonical]) ? fieldMap[canonical] : ""}
+                  onChange={(event) =>
+                    setFieldMap((current) => ({ ...current, [canonical]: event.target.value }))
+                  }
+                >
+                  <option value="">Unmapped</option>
+                  {discoveredFields.map((field) => (
+                    <option key={field.id} value={field.id}>
+                      {field.name} · {field.id}
+                    </option>
+                  ))}
+                </select>
+              </Label>
+            ))}
+            <Button type="button" variant="outline" disabled={pending !== null || !selectedLocationId} onClick={() => void saveFieldMap()}>
+              {pending === "fields" ? "Saving field ids…" : "Save field ids"}
+            </Button>
+          </div>
+        )}
+        <Button type="button" variant="outline" disabled={pending !== null || !eventId} onClick={() => void reviewLeadFields()}>
+          {pending === "attributes" ? "Reading lead values…" : "Review this lead's field values"}
+        </Button>
+        {coverage ? (
+          <div className="space-y-1 text-sm" data-testid="ghl-field-coverage">
+            <p>
+              Mapped:{" "}
+              {coverage.mapped.length
+                ? coverage.mapped.map((row) => `${row.key} → ${row.fieldId}`).join(", ")
+                : "none"}
+              .
+            </p>
+            <p>
+              Missing mappings:{" "}
+              {coverage.missingMappings.length
+                ? coverage.missingMappings.map((row) => `${row.key} (${row.sourceValue})`).join(", ")
+                : "none"}
+              .
+            </p>
+            <p>
+              Missing source values:{" "}
+              {coverage.missingSourceValues.length
+                ? coverage.missingSourceValues.map((row) => `${row.key} → ${row.fieldId}`).join(", ")
+                : "none"}
+              .
+            </p>
+            <p>Missing source values are mapped and blank. Missing mappings are not sent.</p>
+          </div>
+        ) : null}
+      </div>
 
       <div className="space-y-3 border-t border-slate-200 pt-4">
         <h3 className="text-sm font-semibold text-slate-900">GHL test for this stored lead</h3>
@@ -577,6 +698,9 @@ export function GhlWalkthroughPanel({
           <div className="rounded-lg border border-slate-200 p-3 text-sm" data-testid="ghl-test-result">
             <p>Attempt status: {execution.status}.</p>
             <p>External call: {execution.externalCallExecuted ? "yes" : "no"}.</p>
+            {execution.outcome === "held" || execution.skippedDuplicate ? (
+              <p>This event already has a GHL delivery record. It was not sent again.</p>
+            ) : null}
             <p>Contact id: {execution.contactIdGhl ?? "none"}.</p>
             <p>Workflow started: {execution.workflowStarted ? "yes" : "no"}.</p>
             <p>Opportunity id: {execution.opportunityIdGhl ?? "none"}.</p>

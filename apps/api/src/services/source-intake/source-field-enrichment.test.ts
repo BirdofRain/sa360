@@ -208,6 +208,25 @@ test("source attribute stamp resolves through discovery without creating fields"
   assert.deepEqual(plan.unmappedKeys, []);
 });
 
+test("a discovered field id is used, and a blank source value is not a missing mapping", () => {
+  const plan = buildSourceAttributeStampPlan({
+    sourceAttributes: { primary_reason: "Family", beneficiary: "" },
+    fieldMap: {
+      primary_reason: { ghlFieldKey: "field-id-reason", requirement: "optional" },
+      beneficiary: { ghlFieldKey: "field-id-beneficiary", requirement: "optional" },
+      age: { ghlFieldKey: "missing-id", requirement: "optional" },
+    },
+    discoveredFields: [
+      { id: "field-id-reason", name: "Primary Reason", key: "contact.primary_reason", fieldKey: "contact.primary_reason", dataType: "TEXT" },
+      { id: "field-id-beneficiary", name: "Beneficiary", key: "contact.beneficiary", fieldKey: "contact.beneficiary", dataType: "TEXT" },
+    ],
+  });
+  assert.deepEqual(plan.mappableKeys, ["primary_reason"]);
+  assert.equal(plan.idMap.primary_reason, "field-id-reason");
+  assert.deepEqual(plan.missingSourceKeys, ["beneficiary"]);
+  assert.deepEqual(plan.unmappedKeys, ["age"]);
+});
+
 test("unmapped GHL field key is skipped — no arbitrary field creation", () => {
   const plan = buildSourceAttributeStampPlan({
     sourceAttributes: { age: "55" },

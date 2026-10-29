@@ -12,20 +12,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { CANONICAL_SURVEY_ATTRIBUTES } from "@/lib/clients/onboarding/ghl-field-coverage";
 import type { ClientGhlDestination } from "@/lib/clients/types";
 import type { GhlDiscoveredCustomField } from "@/lib/ghl-config/types";
 
-const CANONICAL_ATTRIBUTES = [
-  "best_time_to_call",
-  "age",
-  "marital_status",
-  "desired_coverage",
-  "branch_of_service",
-  "primary_reason",
-  "beneficiary",
-  "military_status",
-  "sex",
-] as const;
+const CANONICAL_ATTRIBUTES = CANONICAL_SURVEY_ATTRIBUTES;
 
 type FieldRequirement = "optional" | "automation_required" | "ignored";
 

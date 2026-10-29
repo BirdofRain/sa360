@@ -207,6 +207,7 @@ export function SetupDeliveryWorkspace({
         actions={bound}
         profileRevision={revision}
         viewedWorksheet={viewed}
+        ghlDeliveryEnabled={ghlLocation?.deliveryEnabled ?? null}
       />
     </div>
   );

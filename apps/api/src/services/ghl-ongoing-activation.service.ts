@@ -12,6 +12,7 @@ import { randomUUID } from "node:crypto";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../lib/db.js";
 import { findClientAccountById } from "../repositories/client-account.repository.js";
+import { discoveredResourcesMatchDestination } from "./ongoing-ghl-activation-rules.js";
 
 export type OngoingActivationPatch = {
   deliveryEnabled: boolean;
@@ -30,9 +31,21 @@ export type OngoingActivationDestination = {
   destinationPipelineStageIdGhl: string | null;
 };
 
+export type OngoingActivationWrite = OngoingActivationPatch & {
+  ongoingDeliveryNotBefore?: Date;
+  activationLocationIdGhl: string | null;
+  activationWorkflowIdGhl: string | null;
+  activationPipelineIdGhl: string | null;
+  activationStageIdGhl: string | null;
+};
+
 export type OngoingActivationAssessment =
   | { ok: true; patch: OngoingActivationPatch; action: string }
-  | { ok: false; code: "CONFIRMATION_REQUIRED" | "NO_DESTINATION" | "NOT_CONNECTED" | "WORKFLOW_REQUIRED" | "PIPELINE_REQUIRED"; error: string };
+  | {
+      ok: false;
+      code: "CONFIRMATION_REQUIRED" | "NO_DESTINATION" | "NOT_CONNECTED" | "WORKFLOW_REQUIRED" | "PIPELINE_REQUIRED";
+      error: string;
+    };
 
 export function assessOngoingGhlActivation(input: {
   enabled: boolean;
@@ -104,21 +117,35 @@ export function assessOngoingGhlActivation(input: {
 }
 
 export type SetOngoingGhlDeliveryResult =
-  | { ok: true; clientAccountId: string; patch: OngoingActivationPatch; auditAction: string }
+  | { ok: true; clientAccountId: string; patch: OngoingActivationWrite; auditAction: string }
   | { notFound: true }
-  | { ok: false; code: OngoingActivationAssessment extends { ok: false; code: infer C } ? C : string; error: string };
+  | {
+      ok: false;
+      code:
+        | "CONFIRMATION_REQUIRED"
+        | "NO_DESTINATION"
+        | "NOT_CONNECTED"
+        | "WORKFLOW_REQUIRED"
+        | "PIPELINE_REQUIRED"
+        | "DISCOVERY_REQUIRED"
+        | "WORKFLOW_NOT_IN_LOCATION"
+        | "PIPELINE_NOT_IN_LOCATION"
+        | "STAGE_NOT_ON_PIPELINE";
+      error: string;
+    };
 
 type ActivationClient = {
   clientAccountId: string;
-  ghlDestination: OngoingActivationDestination | null;
+  ghlDestination: (OngoingActivationDestination & { ongoingDeliveryNotBefore: Date | null }) | null;
 };
 
 type ActivationDeps = {
+  now: () => Date;
   findClient: (clientAccountId: string) => Promise<ActivationClient | null>;
-  updateDestination: (
-    clientAccountId: string,
-    patch: OngoingActivationPatch
-  ) => Promise<void>;
+  findSnapshot: (
+    locationId: string
+  ) => Promise<{ workflowsJson: unknown; pipelinesJson: unknown } | null>;
+  updateDestination: (clientAccountId: string, patch: OngoingActivationWrite) => Promise<void>;
   writeAudit: (input: {
     clientAccountId: string;
     requestId: string;
@@ -129,6 +156,7 @@ type ActivationDeps = {
 };
 
 const defaultDeps: ActivationDeps = {
+  now: () => new Date(),
   findClient: async (clientAccountId) => {
     const client = await findClientAccountById(clientAccountId);
     if (!client) return null;
@@ -136,6 +164,14 @@ const defaultDeps: ActivationDeps = {
       clientAccountId: client.clientAccountId,
       ghlDestination: activationDestination(client.ghlDestination),
     };
+  },
+  findSnapshot: async (locationId) => {
+    const snapshot = await prisma.ghlLocationConfigSnapshot.findFirst({
+      where: { locationId },
+      orderBy: { fetchedAt: "desc" },
+    });
+    if (!snapshot) return null;
+    return { workflowsJson: snapshot.workflowsJson, pipelinesJson: snapshot.pipelinesJson };
   },
   updateDestination: async (clientAccountId, patch) => {
     await prisma.clientGhlDestination.update({
@@ -168,8 +204,9 @@ function activationDestination(
     opportunityCreationEnabled: boolean;
     destinationPipelineIdGhl: string | null;
     destinationPipelineStageIdGhl: string | null;
+    ongoingDeliveryNotBefore: Date | null;
   } | null
-): OngoingActivationDestination | null {
+): (OngoingActivationDestination & { ongoingDeliveryNotBefore: Date | null }) | null {
   if (!destination) return null;
   return {
     destinationSubaccountIdGhl: destination.destinationSubaccountIdGhl,
@@ -179,6 +216,7 @@ function activationDestination(
     opportunityCreationEnabled: destination.opportunityCreationEnabled,
     destinationPipelineIdGhl: destination.destinationPipelineIdGhl,
     destinationPipelineStageIdGhl: destination.destinationPipelineStageIdGhl,
+    ongoingDeliveryNotBefore: destination.ongoingDeliveryNotBefore,
   };
 }
 
@@ -200,8 +238,49 @@ export async function setOngoingGhlDeliveryActivation(
     destination: client.ghlDestination,
   });
   if (!assessment.ok) return assessment;
-  await deps.updateDestination(client.clientAccountId, assessment.patch);
-  const locationId = client.ghlDestination?.destinationSubaccountIdGhl?.trim() ?? "";
+  const destination = client.ghlDestination;
+  const locationId = destination?.destinationSubaccountIdGhl?.trim() ?? "";
+  let write: OngoingActivationWrite;
+  if (!input.enabled) {
+    write = {
+      ...assessment.patch,
+      activationLocationIdGhl: null,
+      activationWorkflowIdGhl: null,
+      activationPipelineIdGhl: null,
+      activationStageIdGhl: null,
+    };
+  } else {
+    if (!destination) {
+      return { ok: false, code: "NO_DESTINATION", error: "Connect a GHL location before changing ongoing delivery." };
+    }
+    const snapshot = await deps.findSnapshot(locationId);
+    if (!snapshot) {
+      return {
+        ok: false,
+        code: "DISCOVERY_REQUIRED",
+        error: "Discover this location before enabling ongoing delivery.",
+      };
+    }
+    const resources = discoveredResourcesMatchDestination({
+      workflowTriggerMode: destination.workflowTriggerMode,
+      destinationWorkflowIdGhl: destination.destinationWorkflowIdGhl,
+      opportunityCreationEnabled: destination.opportunityCreationEnabled,
+      destinationPipelineIdGhl: destination.destinationPipelineIdGhl,
+      destinationPipelineStageIdGhl: destination.destinationPipelineStageIdGhl,
+      workflowsJson: snapshot.workflowsJson,
+      pipelinesJson: snapshot.pipelinesJson,
+    });
+    if (!resources.ok) return resources;
+    write = {
+      ...assessment.patch,
+      ...(destination.ongoingDeliveryNotBefore ? {} : { ongoingDeliveryNotBefore: deps.now() }),
+      activationLocationIdGhl: locationId,
+      activationWorkflowIdGhl: destination.destinationWorkflowIdGhl,
+      activationPipelineIdGhl: destination.destinationPipelineIdGhl,
+      activationStageIdGhl: destination.destinationPipelineStageIdGhl,
+    };
+  }
+  await deps.updateDestination(client.clientAccountId, write);
   await deps.writeAudit({
     clientAccountId: client.clientAccountId,
     requestId: `ghl-ongoing:${randomUUID()}`,
@@ -210,17 +289,21 @@ export async function setOngoingGhlDeliveryActivation(
     metadata: {
       enabled: input.enabled,
       locationId,
-      deliveryEnabled: assessment.patch.deliveryEnabled,
-      deliveryMode: assessment.patch.deliveryMode,
-      clientCutoverApproved: assessment.patch.clientCutoverApproved,
-      internalApprovalStatus: assessment.patch.internalApprovalStatus,
+      workflowId: destination?.destinationWorkflowIdGhl ?? null,
+      pipelineId: destination?.destinationPipelineIdGhl ?? null,
+      stageId: destination?.destinationPipelineStageIdGhl ?? null,
+      deliveryEnabled: write.deliveryEnabled,
+      deliveryMode: write.deliveryMode,
+      clientCutoverApproved: write.clientCutoverApproved,
+      internalApprovalStatus: write.internalApprovalStatus,
+      ongoingDeliveryNotBefore: write.ongoingDeliveryNotBefore?.toISOString() ?? null,
       sendsLead: false,
     },
   });
   return {
     ok: true,
     clientAccountId: client.clientAccountId,
-    patch: assessment.patch,
+    patch: write,
     auditAction: assessment.action,
   };
 }

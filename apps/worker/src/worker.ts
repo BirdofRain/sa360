@@ -4,6 +4,7 @@ import {
   BULK_IMPORT_DELIVERY_QUEUE,
   COMPANY_SHEETS_DISPATCH_QUEUE,
   CONSUMER_AGE_BIRTHDAY_SWEEP_QUEUE,
+  ONGOING_GHL_DISPATCH_QUEUE,
   FACETS_SUPPLY_REBUILD_QUEUE,
   FULFILLMENT_SHADOW_QUEUE,
   META_DISPATCH_QUEUE,
@@ -20,10 +21,12 @@ import { processFacetsSupplyRebuildJob } from "./processors/facets-supply-rebuil
 import { processMetaLeadgenFetchJob } from "./processors/meta-leadgen-fetch.processor.js";
 import { processConsumerAgeBirthdaySweepJob } from "./processors/consumer-age-birthday-sweep.processor.js";
 import { processCompanySheetsDispatchJob } from "./processors/company-sheets-dispatch.processor.js";
+import { processOngoingGhlDispatchJob } from "./processors/ongoing-ghl-dispatch.processor.js";
 import { logBulkImportWorkerStartupDiagnostics } from "./lib/bulk-import-worker-diagnostics.js";
 import { syncFacetsSupplyRebuildScheduleOnWorkerStart } from "./lib/facets-supply-rebuild-schedule.js";
 import { syncConsumerAgeBirthdaySweepScheduleOnWorkerStart } from "./lib/consumer-age-birthday-sweep-schedule.js";
 import { syncCompanySheetsDispatchScheduleOnWorkerStart } from "./lib/company-sheets-dispatch-schedule.js";
+import { syncOngoingGhlDispatchScheduleOnWorkerStart } from "./lib/ongoing-ghl-dispatch-schedule.js";
 
 dotenv.config();
 
@@ -38,6 +41,7 @@ const facetsSupplyRebuildConcurrency = Number(process.env.FACETS_SUPPLY_REBUILD_
 const metaLeadgenFetchConcurrency = Number(process.env.META_LEADGEN_FETCH_CONCURRENCY || 2);
 const consumerAgeBirthdaySweepConcurrency = 1;
 const companySheetsDispatchConcurrency = 1;
+const ongoingGhlDispatchConcurrency = 1;
 
 const metaWorker = new Worker(
   META_DISPATCH_QUEUE,
@@ -99,6 +103,15 @@ const companySheetsDispatchWorker = new Worker(
   {
     connection: redis,
     concurrency: companySheetsDispatchConcurrency,
+  }
+);
+
+const ongoingGhlDispatchWorker = new Worker(
+  ONGOING_GHL_DISPATCH_QUEUE,
+  (job) => processOngoingGhlDispatchJob(job),
+  {
+    connection: redis,
+    concurrency: ongoingGhlDispatchConcurrency,
   }
 );
 
@@ -167,6 +180,17 @@ companySheetsDispatchWorker.on("failed", (job, err) => {
   });
 });
 
+ongoingGhlDispatchWorker.on("completed", (job) => {
+  logger.info("Ongoing GHL dispatch job completed", { jobId: job.id });
+});
+
+ongoingGhlDispatchWorker.on("failed", (job, err) => {
+  logger.error("Ongoing GHL dispatch job failed", {
+    jobId: job?.id,
+    error: err.message,
+  });
+});
+
 worker.on("failed", (job, err) => {
   const job_id = String(job?.id ?? "unknown");
   const request_id = `worker:${job_id}`;
@@ -216,6 +240,11 @@ void syncCompanySheetsDispatchScheduleOnWorkerStart().catch((err) => {
     error: err instanceof Error ? err.message : String(err),
   });
 });
+void syncOngoingGhlDispatchScheduleOnWorkerStart().catch((err) => {
+  logger.error("Ongoing GHL dispatch schedule sync failed", {
+    error: err instanceof Error ? err.message : String(err),
+  });
+});
 
 async function shutdown(signal: string) {
   stopRuntimeDiagnostics();
@@ -227,6 +256,7 @@ async function shutdown(signal: string) {
   await metaLeadgenFetchWorker.close();
   await consumerAgeBirthdaySweepWorker.close();
   await companySheetsDispatchWorker.close();
+  await ongoingGhlDispatchWorker.close();
   await flushLogger();
   process.exit(0);
 }

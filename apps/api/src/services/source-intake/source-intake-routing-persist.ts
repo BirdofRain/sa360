@@ -4,6 +4,8 @@ import { prisma } from "../../lib/db.js";
 import { logger } from "../../lib/logger.js";
 import { updateSourceLeadEvent } from "../../repositories/source-lead-event.repository.js";
 import { recordCompanySheetsCampaignIntent } from "../company-sheets-dispatch/company-sheets-dispatch-record.js";
+import { recordOngoingGhlDispatchIntent } from "./ongoing-ghl-dispatch-record.js";
+import { enqueueOngoingGhlDispatch } from "./ongoing-ghl-dispatch-queue.js";
 import { findCampaignRoutingRuleById } from "../../repositories/campaign-routing-rule.repository.js";
 import { findClientAccountById } from "../../repositories/client-account.repository.js";
 import { runRoutingDryRun } from "../routing-dry-run.service.js";
@@ -15,7 +17,6 @@ import {
 import { hasDeliverableIdentity } from "./source-enrichment.service.js";
 import type { SourceLeadRoutingResult } from "./source-intake.types.js";
 import { persistLeadProofFromPayload } from "../lead-proof/lead-proof-ingest.service.js";
-import { deliverOngoingAssociationFromIntake } from "./ongoing-ghl-delivery.service.js";
 
 /**
  * Shared source-intake routing + duplicate-risk + enrichment persistence.
@@ -23,9 +24,10 @@ import { deliverOngoingAssociationFromIntake } from "./ongoing-ghl-delivery.serv
  * Used by both the LeadCapture.io and Facebook Lead Ads intake services so every source
  * flows through the identical existing pipeline: runRoutingDryRun (which persists the
  * RoutingDryRunDecision + lifecycle events), duplicate-risk evaluation, source enrichment,
- * and the SourceLeadEvent status transition. Sheets scheduling stays inside
- * the transaction. Ongoing GHL delivery runs only after that commit, and only
- * for a confirmed association whose destination is already authorized.
+ * and the SourceLeadEvent status transition. Sheets scheduling and the ongoing
+ * GHL intent stay inside the transaction. GHL itself runs later from that
+ * intent, and only for a confirmed association whose destination is already
+ * authorized.
  */
 export async function persistRoutingAndDuplicate(
   sourceEventId: string,
@@ -126,6 +128,7 @@ export async function persistRoutingAndDuplicate(
     enrichmentMetadata.unmappedSourceFields
   );
 
+  let ghlIntentRecorded = false;
   await prisma.$transaction(async (tx) => {
     await updateSourceLeadEvent(
       sourceEventId,
@@ -158,6 +161,16 @@ export async function persistRoutingAndDuplicate(
       },
       tx
     );
+    ghlIntentRecorded = await recordOngoingGhlDispatchIntent(
+      {
+        sourceLeadEventId: sourceEventId,
+        status,
+        resolvedAt: now,
+        duplicateBlocksLiveDelivery: duplicateRisk.blocksLiveDelivery === true,
+        routing,
+      },
+      tx
+    );
   });
 
   try {
@@ -178,21 +191,16 @@ export async function persistRoutingAndDuplicate(
     });
   }
 
-  // Sheets already committed. A GHL failure must not roll the lead back or
-  // schedule another Sheets row.
-  try {
-    await deliverOngoingAssociationFromIntake({
-      sourceLeadEventId: sourceEventId,
-      status,
-      routing,
-      duplicateBlocksLiveDelivery: duplicateRisk.blocksLiveDelivery === true,
-      lifecyclePayload: normalizedWithEnrichment,
-    });
-  } catch (err) {
-    logger.warn("ongoing_ghl.unexpected_error", {
-      sourceEventId,
-      error: err instanceof Error ? err.message : String(err),
-    });
+  // The intent is already committed. A queue failure leaves it for the worker.
+  if (ghlIntentRecorded) {
+    try {
+      await enqueueOngoingGhlDispatch();
+    } catch (err) {
+      logger.warn("ongoing_ghl.enqueue_failed", {
+        sourceEventId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   return { routing, duplicateRiskJson: duplicateRisk, status, normalizedWithEnrichment };

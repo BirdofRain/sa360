@@ -8,6 +8,10 @@
  *
  * Current effective mode is DB-backed via DeliveryRuntimeModeSetting (see delivery-runtime-mode.service).
  * Env no longer needs redeploy to switch simulate ↔ live_canary when max allows live_canary.
+ *
+ * live_canary is the global write switch. Which paths it unlocks, and which
+ * extra gates those paths still have, is documented in delivery-runtime-gates.ts.
+ * It does not enable Sheets and it does not send for an inactive destination.
  */
 
 export const GHL_ADAPTER_MODES = [

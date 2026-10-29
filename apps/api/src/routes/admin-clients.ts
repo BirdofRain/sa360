@@ -48,6 +48,10 @@ import {
 } from "../services/client/client-rekey.service.js";
 import { approveSourceIntakeLiveCanaryForClient, approveSourceIntakeClientCutover } from "../services/bulk-import/source-intake-live-canary-approval.service.js";
 import { setOngoingGhlDeliveryActivation } from "../services/ghl-ongoing-activation.service.js";
+import {
+  processDueOngoingGhlDispatchesFromDb,
+  reconcileOngoingGhlDelivery,
+} from "../services/source-intake/ongoing-ghl-dispatch.service.js";
 import { issuePortalInvite, type PortalInviteServiceDeps } from "../services/portal-invite.service.js";
 import { clientOnboardingSetupPatchSchema } from "../schemas/client-onboarding-setup.schema.js";
 import {
@@ -320,6 +324,37 @@ export async function adminClientsRoutes(
     }
     const item = await getClientAdmin(clientAccountId);
     return reply.send({ ok: true, activation: result, item });
+  });
+
+  app.post("/clients/:clientAccountId/ghl-ongoing-delivery/reconcile", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const { clientAccountId } = request.params as { clientAccountId: string };
+    const body = request.body as { confirmLiveDeliveryRisk?: unknown; action?: unknown } | null;
+    const action = body?.action === "mark_reviewed" ? "mark_reviewed" : body?.action === "requeue_pre_send" ? "requeue_pre_send" : null;
+    if (!action) {
+      return reply.status(400).send({ ok: false, error: "action must be requeue_pre_send or mark_reviewed." });
+    }
+    const result = await reconcileOngoingGhlDelivery({
+      clientAccountId,
+      confirmLiveDeliveryRisk: body?.confirmLiveDeliveryRisk === true,
+      action,
+      actorLabel: "admin_api_key",
+    });
+    if ("notFound" in result) {
+      return reply.status(404).send({ ok: false, error: "Client not found" });
+    }
+    if (!result.ok) {
+      return reply.status(400).send({ ok: false, error: result.error, code: result.code });
+    }
+    return reply.send({ ok: true, reconciliation: result });
+  });
+
+  app.post("/ghl-ongoing-delivery/internal/process-dispatch", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const body = (request.body ?? {}) as { limit?: unknown };
+    const limit = typeof body.limit === "number" && Number.isInteger(body.limit) ? Math.min(Math.max(body.limit, 1), 20) : 5;
+    const result = await processDueOngoingGhlDispatchesFromDb(limit);
+    return reply.send(result);
   });
 
   app.post(

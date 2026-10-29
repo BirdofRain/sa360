@@ -5,6 +5,7 @@ import {
   assessOngoingGhlActivation,
   setOngoingGhlDeliveryActivation,
   type OngoingActivationDestination,
+  type OngoingActivationWrite,
 } from "./ghl-ongoing-activation.service.js";
 
 function destination(overrides: Partial<OngoingActivationDestination> = {}): OngoingActivationDestination {
@@ -77,11 +78,17 @@ test("pausing clears the four authorization flags and does not require a workflo
   assert.equal(paused.patch.internalApprovalStatus, "not_reviewed");
 });
 
-test("activation persists the flags and an audit row without an allowlist lookup", async () => {
+const discovered = {
+  workflowsJson: [{ id: "workflow-1", name: "Welcome", status: "published", type: null }],
+  pipelinesJson: [{ id: "pipeline-1", name: "Leads", stages: [{ id: "stage-1", name: "New", position: 0 }] }],
+};
+
+test("activation persists the flags, the resource snapshot, and an audit row", async () => {
   const seen: {
-    patch: unknown;
+    patch: OngoingActivationWrite | null;
     audit: { action: string; metadata: Record<string, unknown> } | null;
   } = { patch: null, audit: null };
+  const notBefore = new Date("2026-10-29T16:40:00.000Z");
   const result = await setOngoingGhlDeliveryActivation(
     {
       clientAccountId: "alex_gross",
@@ -90,6 +97,7 @@ test("activation persists the flags and an audit row without an allowlist lookup
       actorLabel: "coc_admin",
     },
     {
+      now: () => notBefore,
       findClient: async () => ({
         clientAccountId: "alex_gross",
         ghlDestination: {
@@ -100,8 +108,10 @@ test("activation persists the flags and an audit row without an allowlist lookup
           opportunityCreationEnabled: true,
           destinationPipelineIdGhl: "pipeline-1",
           destinationPipelineStageIdGhl: "stage-1",
+          ongoingDeliveryNotBefore: null,
         },
       }),
+      findSnapshot: async () => discovered,
       updateDestination: async (_id, next) => {
         seen.patch = next;
       },
@@ -111,14 +121,80 @@ test("activation persists the flags and an audit row without an allowlist lookup
     }
   );
   assert.equal("ok" in result && result.ok, true);
-  assert.deepEqual(seen.patch, {
-    deliveryEnabled: true,
-    deliveryMode: "live",
-    clientCutoverApproved: true,
-    internalApprovalStatus: "approved",
-  });
+  assert.equal(seen.patch?.deliveryEnabled, true);
+  assert.equal(seen.patch?.deliveryMode, "live");
+  assert.equal(seen.patch?.clientCutoverApproved, true);
+  assert.equal(seen.patch?.internalApprovalStatus, "approved");
+  assert.equal(seen.patch?.activationLocationIdGhl, "yCziKRW26eFg8IXAQZ73");
+  assert.equal(seen.patch?.activationWorkflowIdGhl, "workflow-1");
+  assert.equal(seen.patch?.activationPipelineIdGhl, "pipeline-1");
+  assert.equal(seen.patch?.activationStageIdGhl, "stage-1");
+  assert.equal(seen.patch?.ongoingDeliveryNotBefore?.toISOString(), notBefore.toISOString());
   assert.equal(seen.audit?.action, "ghl_ongoing_delivery_enabled");
   assert.equal(seen.audit?.metadata.locationId, "yCziKRW26eFg8IXAQZ73");
   assert.equal(seen.audit?.metadata.sendsLead, false);
   assert.equal(JSON.stringify(seen.audit).includes("SA360_DIRECT_DELIVERY"), false);
+});
+
+test("activation refuses a workflow that is not on the location snapshot", async () => {
+  const result = await setOngoingGhlDeliveryActivation(
+    { clientAccountId: "alex_gross", enabled: true, confirmLiveDeliveryRisk: true },
+    {
+      now: () => new Date("2026-10-29T16:40:00.000Z"),
+      findClient: async () => ({
+        clientAccountId: "alex_gross",
+        ghlDestination: {
+          destinationSubaccountIdGhl: "yCziKRW26eFg8IXAQZ73",
+          ghlConnectionStatus: "connected",
+          destinationWorkflowIdGhl: "workflow-1",
+          workflowTriggerMode: "direct_api",
+          opportunityCreationEnabled: true,
+          destinationPipelineIdGhl: "pipeline-1",
+          destinationPipelineStageIdGhl: "stage-1",
+          ongoingDeliveryNotBefore: null,
+        },
+      }),
+      findSnapshot: async () => ({ ...discovered, workflowsJson: [] }),
+      updateDestination: async () => {
+        throw new Error("should not persist");
+      },
+      writeAudit: async () => {
+        throw new Error("should not audit");
+      },
+    }
+  );
+  assert.equal("ok" in result && result.ok, false);
+  if (!("ok" in result) || result.ok) return;
+  assert.equal(result.code, "WORKFLOW_NOT_IN_LOCATION");
+});
+
+test("a second enable does not move the delivery boundary", async () => {
+  const existing = new Date("2026-10-29T16:00:00.000Z");
+  const seen: { write: OngoingActivationWrite | null } = { write: null };
+  await setOngoingGhlDeliveryActivation(
+    { clientAccountId: "alex_gross", enabled: true, confirmLiveDeliveryRisk: true },
+    {
+      now: () => new Date("2026-10-29T18:00:00.000Z"),
+      findClient: async () => ({
+        clientAccountId: "alex_gross",
+        ghlDestination: {
+          destinationSubaccountIdGhl: "yCziKRW26eFg8IXAQZ73",
+          ghlConnectionStatus: "connected",
+          destinationWorkflowIdGhl: "workflow-1",
+          workflowTriggerMode: "direct_api",
+          opportunityCreationEnabled: true,
+          destinationPipelineIdGhl: "pipeline-1",
+          destinationPipelineStageIdGhl: "stage-1",
+          ongoingDeliveryNotBefore: existing,
+        },
+      }),
+      findSnapshot: async () => discovered,
+      updateDestination: async (_id, next) => {
+        seen.write = next;
+      },
+      writeAudit: async () => undefined,
+    }
+  );
+  assert.equal(seen.write?.ongoingDeliveryNotBefore, undefined);
+  assert.equal(seen.write?.deliveryEnabled, true);
 });

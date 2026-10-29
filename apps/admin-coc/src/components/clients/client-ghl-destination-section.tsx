@@ -168,8 +168,9 @@ export function ClientGhlDestinationSection({
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
               New confirmed parent-URL leads deliver here after this switch is on and the global
-              runtime allows live writes. A test send stays available before activation. This does
-              not edit an environment allowlist or move the Sheets cutoff.
+              runtime allows live writes. Activation checks that the saved workflow, pipeline, and
+              stage belong to this location. Changing those turns this switch off. This does not
+              edit an environment allowlist or move the Sheets cutoff.
             </p>
             {!dest?.destinationWorkflowIdGhl ? (
               <p className="mt-2 text-xs text-amber-800">Select a workflow before enabling ongoing delivery.</p>

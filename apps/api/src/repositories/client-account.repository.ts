@@ -1,4 +1,7 @@
+import { randomUUID } from "node:crypto";
+
 import type { Prisma, PrismaClient } from "@prisma/client";
+import { ongoingActivationInvalidationPatch } from "../services/ongoing-ghl-activation-rules.js";
 import { prisma } from "../lib/db.js";
 
 export async function listClientAccounts(
@@ -108,18 +111,56 @@ export async function findClientGhlDestinationsByClientIds(
   });
 }
 
+function textField(data: object, key: string): string | null | undefined {
+  if (!Object.prototype.hasOwnProperty.call(data, key)) return undefined;
+  const value = (data as Record<string, unknown>)[key];
+  if (value === null) return null;
+  return typeof value === "string" ? value : undefined;
+}
+
 export async function upsertClientGhlDestination(
   clientAccountId: string,
   data: Omit<Prisma.ClientGhlDestinationCreateInput, "clientAccount">,
   db: PrismaClient = prisma
 ) {
   const id = clientAccountId.trim();
-  return db.clientGhlDestination.upsert({
+  const existing = await db.clientGhlDestination.findUnique({ where: { clientAccountId: id } });
+  const invalidation = existing
+    ? ongoingActivationInvalidationPatch(existing, {
+        destinationSubaccountIdGhl: textField(data, "destinationSubaccountIdGhl"),
+        destinationWorkflowIdGhl: textField(data, "destinationWorkflowIdGhl"),
+        destinationPipelineIdGhl: textField(data, "destinationPipelineIdGhl"),
+        destinationPipelineStageIdGhl: textField(data, "destinationPipelineStageIdGhl"),
+      })
+    : null;
+  const next = invalidation ? { ...data, ...invalidation } : data;
+  const saved = await db.clientGhlDestination.upsert({
     where: { clientAccountId: id },
     create: {
-      ...data,
+      ...next,
       clientAccount: { connect: { clientAccountId: id } },
     },
-    update: data,
+    update: next,
   });
+  if (invalidation) {
+    try {
+      await db.clientOnboardingV2AuditEvent.create({
+        data: {
+          clientAccountId: id,
+          historicalClientAccountId: id,
+          requestId: `ghl-ongoing-invalidate:${randomUUID()}`,
+          action: "ghl_ongoing_activation_invalidated",
+          auth: "admin_api_key",
+          destinations: [],
+          metadataJson: {
+            reason: "destination_resources_changed",
+            sendsLead: false,
+          },
+        },
+      });
+    } catch {
+      // The destination clear already committed. Delivery stays off.
+    }
+  }
+  return saved;
 }

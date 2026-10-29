@@ -1,11 +1,15 @@
 /**
  * Ongoing GHL delivery for a confirmed parent-URL association.
  *
- * Intake calls this only after the lead and the Sheets schedule row have
- * committed. A failure here cannot roll that work back and cannot cause a
- * second Sheets write. Campaign-rule clients are ignored. Authorization is the
- * saved ClientGhlDestination, not an environment allowlist and not a per-lead
- * confirmation. The global runtime mode remains the kill switch.
+ * Intake does not call this. It records an OngoingGhlDispatchIntent in the
+ * same transaction as the lead. The drain calls this later. A failure here
+ * cannot roll the lead back and cannot cause a second Sheets write.
+ * Campaign-rule clients are ignored. Authorization is the saved destination
+ * and its activation snapshot, not an environment allowlist. The global
+ * runtime mode remains the kill switch.
+ *
+ * A known failure before any HTTP call is pre_send and may be retried.
+ * A throw that may have reached GHL is uncertain and is not retried.
  */
 
 import { Prisma, type Prisma as PrismaTypes } from "@prisma/client";
@@ -19,6 +23,7 @@ import {
   findGhlLiveDeliveryRunByIdempotencyKey,
   updateGhlLiveDeliveryRun,
 } from "../../repositories/ghl-live-delivery-run.repository.js";
+import { activationSnapshotMatches } from "../ongoing-ghl-activation-rules.js";
 import { ROUTING_AUTHORITY_SOURCE_ASSOCIATION } from "../routing-source-association.service.js";
 import { persistedCampaignRoutingRuleId } from "../association-ghl-delivery-source.js";
 import { generateDirectCanaryDeliveryPlanForDecision } from "../lead-delivery-plan.service.js";
@@ -48,6 +53,11 @@ export type OngoingGhlDestinationAuth = {
   destinationPipelineIdGhl: string | null;
   destinationPipelineStageIdGhl: string | null;
   sourceAttributeFieldMapJson: unknown;
+  ongoingDeliveryNotBefore: Date | null;
+  activationLocationIdGhl: string | null;
+  activationWorkflowIdGhl: string | null;
+  activationPipelineIdGhl: string | null;
+  activationStageIdGhl: string | null;
 };
 
 export type OngoingDeliveryPlanRef = {
@@ -86,14 +96,29 @@ export type OngoingAssociationDeliveryInput = {
   attributeKeys: string[];
 };
 
+export type OngoingOutcomeClass = "pre_send" | "uncertain" | "delivered";
+
 export type OngoingDeliveryResult = {
-  outcome: "skipped" | "executed" | "skipped_duplicate" | "failed_uncertain";
+  outcome: "skipped" | "executed" | "skipped_duplicate" | "failed_uncertain" | "failed_pre_send";
+  outcomeClass: OngoingOutcomeClass | null;
   reason: string;
   planId: string | null;
   runId: string | null;
   runStatus: string | null;
   omittedWarnings: string[];
 };
+
+/** Messages thrown before fetch. Anything else may already have called GHL. */
+export const ONGOING_PRE_SEND_THROW_MARKERS = [
+  "Live GHL writes require effective runtime mode live_canary",
+  "Delivery plan disappeared before the GHL write.",
+] as const;
+
+export function ongoingThrowClass(message: string): "pre_send" | "uncertain" {
+  return ONGOING_PRE_SEND_THROW_MARKERS.some((marker) => message.includes(marker))
+    ? "pre_send"
+    : "uncertain";
+}
 
 export type OngoingGhlDeliveryDeps = {
   findDestination: (clientAccountId: string) => Promise<OngoingGhlDestinationAuth | null>;
@@ -119,7 +144,12 @@ export type OngoingGhlDeliveryDeps = {
     execution: LiveCanaryExecutionResult,
     omittedWarnings: string[]
   ) => Promise<void>;
-  failRun: (id: string, startedAt: Date, message: string) => Promise<void>;
+  failRun: (
+    id: string,
+    startedAt: Date,
+    message: string,
+    outcomeClass?: "pre_send" | "uncertain"
+  ) => Promise<void>;
   now: () => Date;
 };
 
@@ -134,7 +164,8 @@ export function persistedGhlDestinationAuthorized(
     destination.internalApprovalStatus === "approved" &&
     destination.ghlConnectionStatus === "connected" &&
     Boolean(destination.destinationSubaccountIdGhl.trim()) &&
-    destination.clientAccountId.trim().length > 0
+    destination.clientAccountId.trim().length > 0 &&
+    activationSnapshotMatches(destination)
   );
 }
 
@@ -227,10 +258,28 @@ function isConfirmedAssociation(input: OngoingAssociationDeliveryInput): boolean
 function skip(reason: string, omittedWarnings: string[] = []): OngoingDeliveryResult {
   return {
     outcome: "skipped",
+    outcomeClass: null,
     reason,
     planId: null,
     runId: null,
     runStatus: null,
+    omittedWarnings,
+  };
+}
+
+function duplicateResult(
+  planId: string,
+  run: OngoingRunSnapshot | null,
+  omittedWarnings: string[]
+): OngoingDeliveryResult {
+  const delivered = run?.status === "succeeded";
+  return {
+    outcome: "skipped_duplicate",
+    outcomeClass: delivered ? "delivered" : "uncertain",
+    reason: "prior_write",
+    planId,
+    runId: run?.id ?? null,
+    runStatus: run?.status ?? null,
     omittedWarnings,
   };
 }
@@ -292,14 +341,7 @@ export async function deliverOngoingAssociationLead(
   const startedAt = deps.now();
   let run = await deps.findRun(idempotencyKey);
   if (ongoingRunBlocksAnotherWrite(run)) {
-    return {
-      outcome: "skipped_duplicate",
-      reason: "prior_write",
-      planId: plan.id,
-      runId: run?.id ?? null,
-      runStatus: run?.status ?? null,
-      omittedWarnings,
-    };
+    return duplicateResult(plan.id, run, omittedWarnings);
   }
   if (run) {
     run = await deps.reuseRun(run.id);
@@ -310,14 +352,7 @@ export async function deliverOngoingAssociationLead(
       if (!isUniqueConflict(err)) throw err;
       run = await deps.findRun(idempotencyKey);
       if (!run || ongoingRunBlocksAnotherWrite(run)) {
-        return {
-          outcome: "skipped_duplicate",
-          reason: "prior_write",
-          planId: plan.id,
-          runId: run?.id ?? null,
-          runStatus: run?.status ?? null,
-          omittedWarnings,
-        };
+        return duplicateResult(plan.id, run, omittedWarnings);
       }
       run = await deps.reuseRun(run.id);
     }
@@ -328,10 +363,12 @@ export async function deliverOngoingAssociationLead(
     execution = await deps.execute(plan, idempotencyKey);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    await deps.failRun(run.id, startedAt, message);
+    const outcomeClass = ongoingThrowClass(message);
+    await deps.failRun(run.id, startedAt, message, outcomeClass);
     return {
-      outcome: "failed_uncertain",
-      reason: "execution_threw",
+      outcome: outcomeClass === "pre_send" ? "failed_pre_send" : "failed_uncertain",
+      outcomeClass,
+      reason: outcomeClass === "pre_send" ? "pre_send_threw" : "execution_threw",
       planId: plan.id,
       runId: run.id,
       runStatus: "failed",
@@ -339,8 +376,14 @@ export async function deliverOngoingAssociationLead(
     };
   }
   await deps.completeRun(run.id, startedAt, execution, omittedWarnings);
+  const external = execution.stepOutcomes.some(
+    (step) => step.externalCallExecuted === true || stepRecordedExternalCall(step)
+  );
+  const delivered = execution.runStatus === "succeeded";
+  const uncertain = !delivered && (execution.runStatus === "partial_success" || external);
   return {
-    outcome: "executed",
+    outcome: delivered ? "executed" : uncertain ? "failed_uncertain" : "failed_pre_send",
+    outcomeClass: delivered ? "delivered" : uncertain ? "uncertain" : "pre_send",
     reason: execution.runStatus,
     planId: plan.id,
     runId: run.id,
@@ -388,6 +431,11 @@ function destinationAuthFromClient(
     destinationPipelineIdGhl: destination.destinationPipelineIdGhl,
     destinationPipelineStageIdGhl: destination.destinationPipelineStageIdGhl,
     sourceAttributeFieldMapJson: destination.sourceAttributeFieldMapJson,
+    ongoingDeliveryNotBefore: destination.ongoingDeliveryNotBefore,
+    activationLocationIdGhl: destination.activationLocationIdGhl,
+    activationWorkflowIdGhl: destination.activationWorkflowIdGhl,
+    activationPipelineIdGhl: destination.activationPipelineIdGhl,
+    activationStageIdGhl: destination.activationStageIdGhl,
   };
 }
 
@@ -587,20 +635,41 @@ export async function deliverOngoingAssociationFromIntake(input: {
           metadata: { liveRunId: id, status: execution.runStatus },
         });
       },
-      failRun: async (id, startedAt, message) => {
+      failRun: async (id, startedAt, message, outcomeClass = "uncertain") => {
         const completedAt = new Date();
+        const preSend = outcomeClass === "pre_send";
         await updateGhlLiveDeliveryRun(id, {
           status: "failed",
           completedAt,
           durationMs: completedAt.getTime() - startedAt.getTime(),
-          summary:
-            "uncertain_outcome: execution threw before a step result was saved. This run will not be retried.",
+          summary: preSend
+            ? "pre_send: no external call was made. A later drain may retry."
+            : "uncertain_outcome: execution threw and the call may have reached GHL. This run will not be retried.",
           errors: [message] as PrismaTypes.InputJsonValue,
+          ...(preSend
+            ? {
+                stepRuns: {
+                  create: [
+                    {
+                      stepOrder: 0,
+                      stepType: "pre_send_guard",
+                      targetSystem: "ghl",
+                      status: "failed",
+                      responseRedactedJson: {
+                        externalCallExecuted: false,
+                        outcomeClass: "pre_send",
+                      },
+                      errorSummary: message.slice(0, 500),
+                    },
+                  ],
+                },
+              }
+            : {}),
         });
         await auditOngoingOutcome({
           eventType: "live_canary_failed",
           reason: message,
-          metadata: { liveRunId: id, uncertainOutcome: true },
+          metadata: { liveRunId: id, uncertainOutcome: !preSend, outcomeClass },
         });
       },
       now: () => new Date(),

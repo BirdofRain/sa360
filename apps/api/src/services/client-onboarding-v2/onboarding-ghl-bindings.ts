@@ -1,12 +1,16 @@
 /**
  * Stored-snapshot discovery and client-only workflow selection.
  * Reads GhlLocationConfigSnapshot. Does not call GoHighLevel.
- * Writes destinationWorkflowIdGhl and workflowTriggerMode only.
+ * Writes destinationWorkflowIdGhl and workflowTriggerMode. A workflow change
+ * on an armed destination also clears ongoing GHL activation.
  */
+
+import { randomUUID } from "node:crypto";
 
 import type { PrismaClient } from "@prisma/client";
 
 import { prisma } from "../../lib/db.js";
+import { ongoingActivationInvalidationPatch } from "../ongoing-ghl-activation-rules.js";
 import type { OnboardingGhlRouteDeps } from "../../routes/admin-client-onboarding-v2-ghl.js";
 import type { DiscoveredWorkflow, SelectTimeZoneSelectionPatch } from "./onboarding-ghl-workflow.js";
 
@@ -69,6 +73,12 @@ export async function saveSelectTimeZone(
     if (!before) {
       throw new Error("client_ghl_destination_missing");
     }
+    const invalidation = ongoingActivationInvalidationPatch(before, {
+      destinationSubaccountIdGhl: before.destinationSubaccountIdGhl,
+      destinationWorkflowIdGhl: patch.destinationWorkflowIdGhl,
+      destinationPipelineIdGhl: before.destinationPipelineIdGhl,
+      destinationPipelineStageIdGhl: before.destinationPipelineStageIdGhl,
+    });
     const sheetsBefore = await tx.companySheetsDestination.findUnique({
       where: { clientAccountId },
       select: {
@@ -86,8 +96,22 @@ export async function saveSelectTimeZone(
       data: {
         destinationWorkflowIdGhl: patch.destinationWorkflowIdGhl,
         workflowTriggerMode: patch.workflowTriggerMode,
+        ...invalidation,
       },
     });
+    if (invalidation) {
+      await tx.clientOnboardingV2AuditEvent.create({
+        data: {
+          clientAccountId,
+          historicalClientAccountId: clientAccountId,
+          requestId: `ghl-ongoing-invalidate:${randomUUID()}`,
+          action: "ghl_ongoing_activation_invalidated",
+          auth: "admin_api_key",
+          destinations: [],
+          metadataJson: { reason: "workflow_changed", sendsLead: false },
+        },
+      });
+    }
     if (profile) {
       const moved = await tx.clientOnboardingDestinationProfile.updateMany({
         where: { clientAccountId, revision: profile.revision },
@@ -104,11 +128,19 @@ export async function saveSelectTimeZone(
         campaignDispatchNotBefore: true,
       },
     });
-    if (
-      after.deliveryEnabled !== before.deliveryEnabled ||
-      after.clientCutoverApproved !== before.clientCutoverApproved ||
-      JSON.stringify(sheetsBefore) !== JSON.stringify(sheetsAfter)
-    ) {
+    const sheetsChanged = JSON.stringify(sheetsBefore) !== JSON.stringify(sheetsAfter);
+    const flagsTurnedOn = after.deliveryEnabled && !before.deliveryEnabled;
+    const cleared =
+      invalidation !== null &&
+      after.deliveryEnabled === false &&
+      after.clientCutoverApproved === false &&
+      after.deliveryMode === "shadow" &&
+      after.internalApprovalStatus === "not_reviewed" &&
+      after.activationLocationIdGhl === null;
+    const flagsUnchanged =
+      after.deliveryEnabled === before.deliveryEnabled &&
+      after.clientCutoverApproved === before.clientCutoverApproved;
+    if (sheetsChanged || flagsTurnedOn || (invalidation ? !cleared : !flagsUnchanged)) {
       throw new Error("delivery_switch_changed");
     }
     const nextProfile = await tx.clientOnboardingDestinationProfile.findUnique({

@@ -31,6 +31,11 @@ function destination(overrides: Partial<OngoingGhlDestinationAuth> = {}): Ongoin
     destinationPipelineIdGhl: "pipeline-1",
     destinationPipelineStageIdGhl: "stage-1",
     sourceAttributeFieldMapJson: {},
+    ongoingDeliveryNotBefore: new Date("2026-10-29T15:00:00.000Z"),
+    activationLocationIdGhl: LOCATION,
+    activationWorkflowIdGhl: "d4c1fa4c-a3e2-4fd8-9091-b3fad0d04edd",
+    activationPipelineIdGhl: "pipeline-1",
+    activationStageIdGhl: "stage-1",
     ...overrides,
   };
 }
@@ -69,6 +74,7 @@ function harness(overrides: Partial<OngoingGhlDeliveryDeps> = {}) {
     execute: 0,
     create: 0,
     fail: 0,
+    failClass: null as string | null,
     complete: 0,
     omitted: [] as string[],
   };
@@ -94,8 +100,9 @@ function harness(overrides: Partial<OngoingGhlDeliveryDeps> = {}) {
       calls.complete += 1;
       calls.omitted = omitted;
     },
-    failRun: async () => {
+    failRun: async (_id, _started, _message, outcomeClass) => {
       calls.fail += 1;
+      calls.failClass = outcomeClass ?? "uncertain";
     },
     now: () => new Date("2026-10-29T16:00:00.000Z"),
     ...overrides,
@@ -127,6 +134,8 @@ test("persisted destination authorization ignores environment allowlists", () =>
   assert.equal(persistedGhlDestinationAuthorized(destination({ clientCutoverApproved: false })), false);
   assert.equal(persistedGhlDestinationAuthorized(destination({ internalApprovalStatus: "not_reviewed" })), false);
   assert.equal(persistedGhlDestinationAuthorized(destination({ ghlConnectionStatus: "disconnected" })), false);
+  assert.equal(persistedGhlDestinationAuthorized(destination({ activationWorkflowIdGhl: "other-workflow" })), false);
+  assert.equal(persistedGhlDestinationAuthorized(destination({ ongoingDeliveryNotBefore: null })), false);
   assert.equal(persistedGhlDestinationAuthorized(null), false);
 });
 
@@ -227,8 +236,42 @@ test("a thrown write is stored as uncertain and is not presented as success", as
   });
   const result = await deliverOngoingAssociationLead(input, deps);
   assert.equal(result.outcome, "failed_uncertain");
+  assert.equal(result.outcomeClass, "uncertain");
+  assert.equal(calls.failClass, "uncertain");
   assert.equal(calls.fail, 1);
   assert.equal(calls.complete, 0);
+});
+
+test("a known pre-send throw stays retryable and a later attempt can write", async () => {
+  let failed = false;
+  let writes = 0;
+  const { deps, calls } = harness({
+    findRun: async () =>
+      failed
+        ? {
+            id: "run-1",
+            status: "failed",
+            stepRuns: [{ responseRedactedJson: { externalCallExecuted: false, outcomeClass: "pre_send" } }],
+          }
+        : null,
+    execute: async () => {
+      writes += 1;
+      if (!failed) throw new Error("Live GHL writes require effective runtime mode live_canary");
+      return execution();
+    },
+    failRun: async (_id, _started, _message, outcomeClass) => {
+      calls.fail += 1;
+      calls.failClass = outcomeClass ?? "uncertain";
+      failed = true;
+    },
+  });
+  const first = await deliverOngoingAssociationLead(input, deps);
+  assert.equal(first.outcome, "failed_pre_send");
+  assert.equal(first.outcomeClass, "pre_send");
+  assert.equal(calls.failClass, "pre_send");
+  const second = await deliverOngoingAssociationLead(input, deps);
+  assert.equal(second.outcome, "executed");
+  assert.equal(writes, 2);
 });
 
 test("duplicate protection and a location mismatch never call GHL", async () => {

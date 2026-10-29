@@ -95,6 +95,12 @@ export const COMPANY_SHEETS_DISPATCH_QUEUE = "company-sheets-dispatch";
 export const COMPANY_SHEETS_DISPATCH_JOB = "process-company-sheets-dispatch";
 export const COMPANY_SHEETS_DISPATCH_JOB_ID = "company-sheets-dispatch-singleton";
 
+/** Ongoing association GHL drain. The API no-ops until runtime mode is live_canary. */
+export const ONGOING_GHL_DISPATCH_QUEUE = "ongoing-ghl-dispatch";
+export const ONGOING_GHL_DISPATCH_JOB = "process-ongoing-ghl-dispatch";
+export const ONGOING_GHL_DISPATCH_JOB_ID = "ongoing-ghl-dispatch-singleton";
+export const ONGOING_GHL_DISPATCH_HTTP_TIMEOUT_MS = 180_000;
+
 /** Guarded lead inventory review & activation (stacked on aged ingestion). */
 export const LEAD_INVENTORY_REVIEW_MAKE_AVAILABLE_CONFIRMATION =
   "MAKE REVIEWED INVENTORY AVAILABLE" as const;

@@ -28,6 +28,8 @@ import {
   saveOnboardingWorkflow,
   searchOnboardingDrive,
   createOnboardingColumnMap,
+  listStoredLeadsForColumnPreview,
+  previewStoredLeadColumnMap,
   publishOnboardingColumnMap,
   saveOnboardingSheetsTarget,
   updateOnboardingColumnMap,
@@ -52,6 +54,8 @@ import type {
   ColumnMapAssignment,
   ColumnMapRecord,
   SheetsTargetSave,
+  StoredLeadColumnPreview,
+  StoredLeadPreviewList,
 } from "@/lib/clients/onboarding/types";
 import {
   ACTIVATION_INTENT_CONFIRMATION,
@@ -480,4 +484,51 @@ export async function publishOnboardingColumnMapAction(
   });
   if (saved.ok) refresh(clientAccountId);
   return saved;
+}
+
+export async function listStoredLeadsForColumnPreviewAction(
+  clientAccountId: string,
+  input: { query: string; cursor: string | null }
+): Promise<OnboardingActionResult<StoredLeadPreviewList>> {
+  await requireAdminCocAdminSession();
+  const rejected = rejectClient(clientAccountId);
+  if (rejected) return rejected;
+  const query = input.query.trim();
+  if (query.length > 80) return { ok: false, error: "invalid_body", status: 400 };
+  return listStoredLeadsForColumnPreview(clientAccountId, { query, cursor: input.cursor });
+}
+
+export async function previewStoredLeadColumnMapAction(
+  clientAccountId: string,
+  input: {
+    sourceLeadEventId: string;
+    spreadsheetId: string;
+    worksheetId: number;
+    mapId: string;
+    basis: "draft" | "published";
+    assignments?: ColumnMapAssignment[];
+  }
+): Promise<OnboardingActionResult<StoredLeadColumnPreview>> {
+  await requireAdminCocAdminSession();
+  const rejected = rejectClient(clientAccountId);
+  if (rejected) return rejected;
+  if (!input.sourceLeadEventId.trim() || !input.mapId.trim()) {
+    return { ok: false, error: "invalid_body", status: 400 };
+  }
+  if (input.basis !== "draft" && input.basis !== "published") {
+    return { ok: false, error: "invalid_body", status: 400 };
+  }
+  const sheet = sheetTargetInput(input.spreadsheetId, input.worksheetId);
+  if (!sheet.ok) return sheet;
+  if (input.basis === "draft" && (!Array.isArray(input.assignments) || input.assignments.length === 0 || input.assignments.length > 80)) {
+    return { ok: false, error: "mapping_unresolved", status: 422 };
+  }
+  return previewStoredLeadColumnMap(clientAccountId, {
+    sourceLeadEventId: input.sourceLeadEventId.trim(),
+    spreadsheetId: sheet.spreadsheetId,
+    worksheetId: sheet.worksheetId,
+    mapId: input.mapId.trim(),
+    basis: input.basis,
+    assignments: input.basis === "draft" ? input.assignments : undefined,
+  });
 }

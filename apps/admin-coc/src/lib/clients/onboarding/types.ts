@@ -374,6 +374,56 @@ export type ColumnMapRecord = {
   };
 };
 
+export type StoredLeadPreviewLead = {
+  id: string;
+  receivedAt: string;
+  sourceProvider: string;
+  sourceSystem: string;
+  sourceType: string;
+  label: string;
+};
+
+export type StoredLeadPreviewList = {
+  leads: StoredLeadPreviewLead[];
+  nextCursor: string | null;
+};
+
+export type StoredLeadColumnPreviewCell = {
+  columnLetter: string;
+  position: number;
+  sheetHeader: string;
+  sourceField: string | null;
+  sourceHeader: string | null;
+  formattedValue: string;
+  appended: boolean;
+  warnings: Array<{ code: string; message: string }>;
+};
+
+export type StoredLeadColumnPreview = {
+  previewOnly: true;
+  deliveryReady: false;
+  presentAsDeliveryReady: false;
+  googleHeaderIndependentlyReread: false;
+  writes: false;
+  persisted: false;
+  externalCalls: { sheets: false; ghl: false };
+  basis: "draft" | "published";
+  publishedMapUnchanged: true;
+  reasons: string[];
+  map: {
+    id: string;
+    status: string;
+    revision: number;
+    spreadsheetId: string;
+    worksheetId: number;
+    headerFingerprint: string;
+    headerFingerprintMatchesBinding: boolean;
+  };
+  lead: StoredLeadPreviewLead;
+  columns: StoredLeadColumnPreviewCell[];
+  operatorDecisions: Array<{ code: string; message: string }>;
+};
+
 export type SheetsTargetSave = {
   spreadsheetId: string;
   worksheetId: number;
@@ -450,6 +500,18 @@ export type OnboardingWorkspaceActions = {
     input: { expectedRevision: number; assignments: ColumnMapAssignment[] }
   ) => Promise<OnboardingActionResult<ColumnMapRecord>>;
   publishColumnMap?: (mapId: string, expectedRevision: number) => Promise<OnboardingActionResult<ColumnMapRecord>>;
+  listStoredLeadsForColumnPreview?: (input: {
+    query: string;
+    cursor: string | null;
+  }) => Promise<OnboardingActionResult<StoredLeadPreviewList>>;
+  previewStoredLeadColumnMap?: (input: {
+    sourceLeadEventId: string;
+    spreadsheetId: string;
+    worksheetId: number;
+    mapId: string;
+    basis: "draft" | "published";
+    assignments?: ColumnMapAssignment[];
+  }) => Promise<OnboardingActionResult<StoredLeadColumnPreview>>;
 };
 
 export type StoredTestRunView = {

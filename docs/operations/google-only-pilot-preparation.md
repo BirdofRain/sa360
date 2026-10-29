@@ -220,11 +220,17 @@ Future files and tables, not part of this pull request:
 - Read failure is `unavailable`. A grant or production read that cannot be performed is `unverified`. Neither is an empty list. Grants use `has_table_privilege('sa360_app', c.oid, 'SELECT')`.
 - Response excludes credentials, emails, phones, payloads, and spreadsheet titles. `writes` is false. `externalCalls.sheets` and `externalCalls.ghl` are false. `decision.append` is `no_go`.
 
-## 14. Published column-map preview follow-up
+## 14. Stored-lead column-map preview
 
 The production mapping workflow is unchanged: browse the approved folder, select an authorized spreadsheet, choose a worksheet, read columns in their stored order, suggest and edit mappings, save a draft, and publish. Publishing does not call Google and does not rewrite historical rows or formulas. Changing the target or the published map while campaign delivery is active returns "Pause campaign Sheets delivery before changing the target or the column map."
 
-Follow-up, not implemented here: "Preview selected stored lead through the published custom column map, read-only." Show the exact field-to-column value, a blank mapping, and missing source data. Do not append a row to preview a mapping. Do not use the isolated 35-column test writer for that preview.
+A separate read-only preview sits beside that editor.
+
+`GET /admin/v1/clients/:clientAccountId/onboarding/column-map-preview/leads`
+
+`POST /admin/v1/clients/:clientAccountId/onboarding/column-map-preview`
+
+The list reads stored `SourceLeadEvent` rows owned by the path client, newest first. Each label shows the intake date in America/New_York, the source, and a masked contact. The row preview calls the production `customRowValues` and `companySheetsCampaignRowValues` mappers. It does not append a row, call Google, call GoHighLevel, replay a webhook, create a test run, or reserve a delivery job. Unsaved draft assignments can be previewed without saving. A published preview reads the stored map and ignores unsaved assignments. `deliveryReady` stays false because the current Google header is not reread. A stored fingerprint mismatch or a missing campaign binding is reported and is not delivery-ready. Primary Concern is not filled from `primary_reason`. That replacement remains an operator decision. These routes are not on the observer allowlist.
 
 ## 15. Review and merge decisions
 

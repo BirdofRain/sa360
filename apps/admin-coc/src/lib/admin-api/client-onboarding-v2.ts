@@ -25,7 +25,10 @@ import type {
   ColumnMapAssignment,
   ColumnMapRecord,
   SheetsTargetSave,
+  StoredLeadColumnPreview,
+  StoredLeadPreviewList,
 } from "../clients/onboarding/types";
+import { projectStoredLeadColumnPreview, projectStoredLeadPreviewList } from "../clients/onboarding/column-preview";
 
 const ERROR_CODE = /^[a-z0-9_]{1,80}$/;
 
@@ -675,6 +678,44 @@ export function updateOnboardingColumnMap(
   input: { requestId: string; expectedRevision: number; assignments: unknown[] }
 ): Promise<OnboardingActionResult<ColumnMapRecord>> {
   return request("PATCH", clientPath(clientAccountId, `/column-maps/${encodeURIComponent(mapId)}`), input, projectColumnMap);
+}
+
+export function listStoredLeadsForColumnPreview(
+  clientAccountId: string,
+  input: { query: string; cursor: string | null }
+): Promise<OnboardingActionResult<StoredLeadPreviewList>> {
+  const params = new URLSearchParams();
+  if (input.query.trim()) params.set("q", input.query.trim());
+  if (input.cursor) params.set("cursor", input.cursor);
+  params.set("limit", "20");
+  return request(
+    "GET",
+    clientPath(clientAccountId, `/column-map-preview/leads?${params.toString()}`),
+    undefined,
+    projectStoredLeadPreviewList
+  );
+}
+
+export function previewStoredLeadColumnMap(
+  clientAccountId: string,
+  input: {
+    sourceLeadEventId: string;
+    spreadsheetId: string;
+    worksheetId: number;
+    mapId: string;
+    basis: "draft" | "published";
+    assignments?: ColumnMapAssignment[];
+  }
+): Promise<OnboardingActionResult<StoredLeadColumnPreview>> {
+  const body: Record<string, unknown> = {
+    sourceLeadEventId: input.sourceLeadEventId,
+    spreadsheetId: input.spreadsheetId,
+    worksheetId: input.worksheetId,
+    mapId: input.mapId,
+    basis: input.basis,
+  };
+  if (input.basis === "draft") body.assignments = input.assignments ?? [];
+  return request("POST", clientPath(clientAccountId, "/column-map-preview"), body, projectStoredLeadColumnPreview);
 }
 
 export function publishOnboardingColumnMap(

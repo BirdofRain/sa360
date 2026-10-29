@@ -284,6 +284,8 @@ const ACTION_ERRORS: Record<string, string> = {
   stats_tab_not_a_delivery_target: "Stats and non-grid tabs stay in place. They are not delivery targets.",
   reconcile_incomplete: "The row probe was truncated, so this tab was not selected.",
   tenant_mismatch: "That spreadsheet is already saved for another client.",
+  map_target_mismatch: "That column map belongs to a different spreadsheet or worksheet.",
+  map_not_published: "This map is not published. The stored map was not changed.",
   worksheet_blocked: "The change was refused because a delivery switch or cutoff moved.",
   header_changed:
     "The worksheet header changed. Delivery stopped before any append. Review the new headers and publish a new map. Existing rows were not rewritten.",

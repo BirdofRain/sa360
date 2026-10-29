@@ -12,6 +12,9 @@ import {
 import { SOURCE_LEAD_APPROVE_DELIVERY_CONFIRMATION } from "./source-intake.types.js";
 import { evaluateNextGenEventLiveCanaryForDelivery } from "./leadcapture-nextgen-canary-gate.service.js";
 import { findCampaignRoutingRuleById } from "../../repositories/campaign-routing-rule.repository.js";
+import { findDeliveryPlanByRoutingDecisionId } from "../../repositories/lead-delivery-plan.repository.js";
+import { extractRoutingAttributionFromPayload } from "../../lib/routing-attribution-extract.js";
+import { generateDirectCanaryDeliveryPlanForDecision } from "../lead-delivery-plan.service.js";
 import { isCompanySheetsInternalPilotLead } from "../company-sheets-dispatch/company-sheets-pilot-isolation.js";
 
 export type ApproveSourceLeadDeliveryInput = {
@@ -35,6 +38,8 @@ export type SourceLeadDeliveryDeps = {
   findSourceLeadEventById?: typeof findSourceLeadEventById;
   updateSourceLeadEvent?: typeof updateSourceLeadEvent;
   runDirectDemoDelivery?: typeof runDirectDemoDelivery;
+  findDeliveryPlanByRoutingDecisionId?: typeof findDeliveryPlanByRoutingDecisionId;
+  generateDirectCanaryDeliveryPlanForDecision?: typeof generateDirectCanaryDeliveryPlanForDecision;
 };
 
 const APPROVABLE_STATUSES = new Set([
@@ -51,11 +56,32 @@ function parseNormalizedPayload(event: SourceLeadEvent): LifecycleEventSchema | 
   return parsed.success ? parsed.data : null;
 }
 
-/** Recoverable status to fall back to when delivery was blocked before any external write. */
+/**
+ * Association matches have a destination client and no campaign rule id.
+ * A resolved client is still a matched route.
+ */
 function recoverableStatusForEvent(event: SourceLeadEvent): "routing_matched" | "routing_unmatched" {
-  return event.routingRuleIdResolved && event.clientAccountIdResolved
-    ? "routing_matched"
-    : "routing_unmatched";
+  if (event.clientAccountIdResolved?.trim() || event.routingRuleIdResolved?.trim()) {
+    return "routing_matched";
+  }
+  return "routing_unmatched";
+}
+
+/**
+ * Point direct delivery at the lead's stored decision and plan.
+ * Does not invent matchedRuleId.
+ */
+function withPersistedDeliveryRefs(
+  payload: LifecycleEventSchema,
+  decisionId: string | null,
+  deliveryPlanId: string | null
+): LifecycleEventSchema {
+  if (!decisionId && !deliveryPlanId) return payload;
+  const routing =
+    payload.routing && typeof payload.routing === "object" ? { ...payload.routing } : {};
+  if (decisionId) routing.routing_dry_run_decision_id = decisionId;
+  if (deliveryPlanId) routing.delivery_plan_id = deliveryPlanId;
+  return { ...payload, routing };
 }
 
 /** Approve one source lead for simulation or live delivery via existing GHL adapter safety gates. */
@@ -66,6 +92,11 @@ export async function approveSourceLeadDelivery(
   const findEvent = deps.findSourceLeadEventById ?? findSourceLeadEventById;
   const updateEvent = deps.updateSourceLeadEvent ?? updateSourceLeadEvent;
   const runDelivery = deps.runDirectDemoDelivery ?? runDirectDemoDelivery;
+  const findPlan =
+    deps.findDeliveryPlanByRoutingDecisionId ?? findDeliveryPlanByRoutingDecisionId;
+  const generatePlan =
+    deps.generateDirectCanaryDeliveryPlanForDecision ??
+    generateDirectCanaryDeliveryPlanForDecision;
   const event = await findEvent(input.sourceLeadEventId);
   if (!event) {
     return {
@@ -184,6 +215,36 @@ export async function approveSourceLeadDelivery(
     };
   }
 
+  const decisionId = event.routingDryRunDecisionId?.trim() || null;
+  let deliveryPlanId: string | null = null;
+  if (decisionId) {
+    const existingPlan = await findPlan(decisionId);
+    if (existingPlan) {
+      deliveryPlanId = existingPlan.id;
+    } else {
+      const created = await generatePlan(decisionId, {
+        attribution: extractRoutingAttributionFromPayload(payload),
+      });
+      if ("blocked" in created) {
+        return {
+          ok: false,
+          error: created.blocked,
+          reason: "Synthetic company Sheets pilot leads are excluded from CRM delivery.",
+          sourceLeadEventId: event.id,
+        };
+      }
+      if ("notFound" in created) {
+        return {
+          ok: false,
+          error: "routing_decision_not_found",
+          reason: "Stored routing decision was not found, so no delivery plan was created.",
+          sourceLeadEventId: event.id,
+        };
+      }
+      deliveryPlanId = created.plan.id;
+    }
+  }
+
   const now = new Date();
   await updateEvent(event.id, {
     status: "approved",
@@ -192,7 +253,7 @@ export async function approveSourceLeadDelivery(
   });
 
   const deliveryResult = await runDelivery({
-    payload,
+    payload: withPersistedDeliveryRefs(payload, decisionId, deliveryPlanId),
     mode: input.mode,
     confirmLiveDeliveryRisk: input.mode === "live_canary" ? true : false,
     operatorConfirmationText:

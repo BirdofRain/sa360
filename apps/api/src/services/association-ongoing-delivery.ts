@@ -19,6 +19,7 @@ import {
 import { findLatestGhlLiveDeliveryRunForPlan } from "../repositories/ghl-live-delivery-run.repository.js";
 import { getDuplicateRiskForRoutingDecision } from "./lead-identity/lead-identity-correlation.service.js";
 import { generateDirectCanaryDeliveryPlanForDecision } from "./lead-delivery-plan.service.js";
+import { isOngoingGhlServiceEnabled } from "../lib/ghl-ongoing-delivery-scope.js";
 import { warmEffectiveDeliveryAdapterMode } from "./delivery-runtime-mode.service.js";
 import {
   destinationInputFromGhlDestination,
@@ -307,7 +308,8 @@ function planFactsFrom(plan: {
 function realAssociationDeliveryDeps(): AssociationDeliveryDeps {
   return {
     loadDestination: loadDestinationFacts,
-    runtimeCanExecute: async () => (await warmEffectiveDeliveryAdapterMode()).canRunLiveCanary,
+    runtimeCanExecute: async () =>
+      isOngoingGhlServiceEnabled() || (await warmEffectiveDeliveryAdapterMode()).canRunLiveCanary,
     duplicateBlocks: async (decisionId) => {
       const risk = await getDuplicateRiskForRoutingDecision(decisionId);
       return risk?.blocksLiveDelivery === true;

@@ -1,8 +1,11 @@
 import type { LeadDeliveryPlan, LeadDeliveryPlanStep, Prisma } from "@prisma/client";
-import { getGhlDeliveryAdapterMode } from "../../lib/ghl-delivery-adapter-mode.js";
+import {
+  getGhlDeliveryAdapterMode,
+  GHL_LIVE_CANARY_SAFETY_MESSAGE,
+} from "../../lib/ghl-delivery-adapter-mode.js";
+import { runWithOngoingGhlWrite } from "../../lib/ghl-ongoing-delivery-scope.js";
 import { prisma } from "../../lib/db.js";
 import type { LifecycleEventSchema } from "../../schemas/lifecycle-event.schema.js";
-import { GHL_LIVE_CANARY_SAFETY_MESSAGE } from "../../lib/ghl-delivery-adapter-mode.js";
 import {
   recordLiveCanaryOutcomeAudit,
   warmEffectiveDeliveryAdapterMode,
@@ -311,7 +314,9 @@ export async function executeRecordedGhlDelivery(
 
   let execution;
   try {
-    execution = await executeLiveCanaryGhlSteps(adapterCtx, idempotencyKey, deps);
+    execution = await runWithOngoingGhlWrite(() =>
+      executeLiveCanaryGhlSteps(adapterCtx, idempotencyKey, deps)
+    );
   } catch {
     const completedAt = new Date();
     const failed = await updateGhlLiveDeliveryRun(runId!, {

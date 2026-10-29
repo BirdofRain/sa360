@@ -5,10 +5,8 @@ import {
   getGhlWorkspaceSyncTimeoutMs,
   parseGhlSa360CustomFieldIdMap,
 } from "../../lib/ghl-workspace-sync-env.js";
-import {
-  isGhlLiveCanaryWriteAllowed,
-  GHL_LIVE_CANARY_SAFETY_MESSAGE,
-} from "../../lib/ghl-delivery-adapter-mode.js";
+import { GHL_LIVE_CANARY_SAFETY_MESSAGE } from "../../lib/ghl-delivery-adapter-mode.js";
+import { ghlLiveWritePermitted } from "../../lib/ghl-ongoing-delivery-scope.js";
 import { resolveGhlBearerAuthForLocation } from "../ghl-oauth/ghl-auth-resolver.service.js";
 import type { GhlLocationAuthMode } from "../ghl-oauth/ghl-location-token.service.js";
 import { defaultGhlContactFieldKeyForLogicalKey } from "../sa360-custom-field-mapping.service.js";
@@ -334,7 +332,7 @@ export async function ghlLiveJson(
     locationId?: string | null;
   }
 ): Promise<GhlLiveRequestResult> {
-  if (!isGhlLiveCanaryWriteAllowed()) {
+  if (!ghlLiveWritePermitted()) {
     throw new Error(
       `${GHL_LIVE_CANARY_SAFETY_MESSAGE} Live GHL writes require effective runtime mode live_canary.`
     );

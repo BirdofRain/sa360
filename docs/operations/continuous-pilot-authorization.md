@@ -16,8 +16,9 @@ These variables are no longer the way an operator authorizes a client:
 
 ## Remaining global controls
 
-- GHL adapter mode. Ongoing and selected GHL writes run only when the effective mode is `live_canary` and the configured maximum allows it. A window expiry returns the process to simulate.
-- `SA360_COMPANY_GOOGLE_SHEETS_ENABLED`, `SA360_COMPANY_GOOGLE_SHEETS_DISPATCH_ENABLED`, and `SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED` on the process that drains Sheets jobs.
+- `SA360_GHL_ONGOING_DELIVERY_ENABLED`. Exact `true` on the API process is the durable service switch for association GHL writes and for a selected GHL test. It does not authorize a client. An unset or any other value leaves those writes dependent on the short live-canary window. Set it on `sa360-api` only. Leave it on after the first successful delivery.
+- GHL adapter mode. The admin control `ENABLE LIVE CANARY` still opens a window of at most 30 minutes and then returns the process to simulate. That window is the manual canary control. Ongoing association delivery does not require it when `SA360_GHL_ONGOING_DELIVERY_ENABLED` is `true`.
+- `SA360_COMPANY_GOOGLE_SHEETS_ENABLED`, `SA360_COMPANY_GOOGLE_SHEETS_DISPATCH_ENABLED`, and `SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED`. The worker posts one drain request to the API. The API process is the process that appends rows, so execution is read there. The worker only needs dispatch enabled.
 - `SA360_CLIENT_ONBOARDING_V2_CUSTOM_WRITER_ENABLED` for the published custom campaign writer.
 - `SA360_CLIENT_ONBOARDING_V2_CAPTURED_TEST_ENABLED` gates the pre-activation Sheets test button only. Set it on the API service when that button is needed. Ongoing Sheets dispatch does not read it.
 - Admin authentication and the admin role check on COC actions and `/admin/v1` routes.

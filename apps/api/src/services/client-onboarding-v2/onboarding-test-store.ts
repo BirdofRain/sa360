@@ -10,6 +10,7 @@ import { prisma } from "../../lib/db.js";
 import { assertGoogleOnlyReservation } from "./google-only-quarantine.js";
 import {
   CONFIRM_ONE_GOOGLE_SHEETS_ROW,
+  CUSTOM_CAMPAIGN_SHEETS_CONTRACT,
   priorDeliveryBlock,
   type AttemptStatus,
   type CapturedTestAudit,
@@ -267,7 +268,7 @@ async function insertRun(tx: Prisma.TransactionClient, run: StoredTestRun, audit
       sourceLeadEventId: run.sourceLeadEventId,
       destinations: run.destinations,
       isolationMode: run.isolationMode,
-      sheetsContract: sheet?.sheetsContract ?? null,
+      sheetsContract: persistedSheetsContract(sheet),
       repeatOfTestRunId: run.repeatOfTestRunId,
       requestId: run.requestId,
       status: run.status,
@@ -289,13 +290,19 @@ async function insertRun(tx: Prisma.TransactionClient, run: StoredTestRun, audit
 
 async function createAttempts(tx: Prisma.TransactionClient, run: StoredTestRun, sheet: PlannedSheet | null) {
   for (const group of collapseAttempts(run.attempts)) {
-    const sheets = group.destination === "google_sheets" && !group.primaryKey.endsWith(":synthetic-sheets-delegate");
+    // The attempt check allows an exact-v3 header or a headerless synthetic key.
+    // A 15-cell custom map cannot be stored on the attempt row. The mapped cells
+    // stay on previewJson. The Sheets job key is captured-event-test:…
+    const custom = isCustomCampaignSheet(sheet) && group.destination === "google_sheets";
+    const storedKey = custom ? `onboarding-test:${run.id}:synthetic-sheets-delegate` : group.primaryKey;
+    const storedKeys = custom ? [storedKey] : group.keys;
+    const sheets = group.destination === "google_sheets" && !storedKey.endsWith(":synthetic-sheets-delegate");
     const canary = sheets && sheet?.schemaVersion === "company_sheets_canary_v1";
     await tx.clientOnboardingTestAttempt.create({
       data: {
         testRunId: run.id,
         destination: group.destination,
-        idempotencyKey: group.primaryKey,
+        idempotencyKey: storedKey,
         status: group.status,
         proves: group.proves,
         doesNotProve: group.doesNotProve,
@@ -314,7 +321,7 @@ async function createAttempts(tx: Prisma.TransactionClient, run: StoredTestRun, 
         destinationRevision: sheets && !canary ? sheet?.destinationRevision ?? null : sheet?.destinationRevision ?? null,
         productionCampaignBind: sheets ? sheet?.productionCampaignBind === true && !canary : false,
         keys: {
-          create: group.keys.map((idempotencyKey) => ({
+          create: storedKeys.map((idempotencyKey) => ({
             idempotencyKey,
             callKind: callKind(idempotencyKey),
           })),
@@ -333,6 +340,10 @@ function sheetReady(run: StoredTestRun): { ok: true; sheet: PlannedSheet | null 
   if (!sheet) return run.attempts.length === 0 ? { ok: true, sheet: null } : { ok: false };
   if (sheet.schemaVersion === "company_sheets_canary_v1") {
     if (sheet.productionCampaignBind || sheet.header.length !== 4) return { ok: false };
+    return { ok: true, sheet };
+  }
+  if (isCustomCampaignSheet(sheet)) {
+    if (!sheet.productionCampaignBind || sheet.header.length < 1 || sheet.destinationRevision < 1) return { ok: false };
     return { ok: true, sheet };
   }
   if (sheet.schemaVersion !== "company_sheets_campaign_v3" || sheet.header.length !== 35) return { ok: false };
@@ -519,7 +530,12 @@ function sheetFromSnapshot(value: unknown): PlannedSheet | null {
     ownerClientAccountId: String(record.ownerClientAccountId ?? ""),
     destinationRevision: Number(record.destinationRevision ?? 0),
     productionCampaignBind: record.productionCampaignBind === true,
-    sheetsContract: record.sheetsContract === "canary_v1_projection" ? "canary_v1_projection" : "exact_v3_test_worksheet",
+    sheetsContract:
+      record.sheetsContract === "canary_v1_projection"
+        ? "canary_v1_projection"
+        : record.sheetsContract === CUSTOM_CAMPAIGN_SHEETS_CONTRACT
+          ? CUSTOM_CAMPAIGN_SHEETS_CONTRACT
+          : "exact_v3_test_worksheet",
     deliveryRowId: "",
     sourceLeadEventId: "",
     values: [],
@@ -527,6 +543,17 @@ function sheetFromSnapshot(value: unknown): PlannedSheet | null {
     kind: "onboarding_captured_test",
     headerCompatible: record.schemaVersion === "company_sheets_campaign_v3",
   };
+}
+
+function persistedSheetsContract(sheet: PlannedSheet | null): "exact_v3_test_worksheet" | "canary_v1_projection" | null {
+  if (sheet?.sheetsContract === "exact_v3_test_worksheet" || sheet?.sheetsContract === "canary_v1_projection") {
+    return sheet.sheetsContract;
+  }
+  return null;
+}
+
+function isCustomCampaignSheet(sheet: PlannedSheet | null): boolean {
+  return sheet?.sheetsContract === CUSTOM_CAMPAIGN_SHEETS_CONTRACT || sheet?.schemaVersion === "company_sheets_campaign_custom_v1";
 }
 
 function qaOrNull(value: StoredTestRun["qaEvidence"]): Prisma.NullableJsonNullValueInput | Prisma.InputJsonValue {

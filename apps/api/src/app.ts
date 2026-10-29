@@ -72,7 +72,10 @@ import { onboardingGhlRouteDeps } from "./services/client-onboarding-v2/onboardi
 import { createPrismaCapturedTestStore } from "./services/client-onboarding-v2/onboarding-test-store.js";
 import { loadCapturedTestWorld } from "./services/client-onboarding-v2/onboarding-world.js";
 import { capturedTestNoteBuilder } from "./services/client-onboarding-v2/onboarding-note-bridge.js";
-import { createOnboardingCapturedTestSheetsAppend } from "./services/company-sheets-delivery/onboarding-captured-test-append.js";
+import {
+  createCustomCapturedCampaignSheetsPort,
+  createOnboardingCapturedTestSheetsAppend,
+} from "./services/company-sheets-delivery/onboarding-captured-test-append.js";
 import { createOnboardingGhlTestAdapter } from "./services/client-onboarding-v2/onboarding-ghl-test-adapter.js";
 import { saveVerifiedTestIdentity } from "./services/client-onboarding-v2/onboarding-config.service.js";
 import {
@@ -172,6 +175,7 @@ export async function buildApp() {
     store: createPrismaCapturedTestStore(),
     notes: capturedTestNoteBuilder(),
     sheets: createOnboardingCapturedTestSheetsAppend(),
+    customCampaignSheets: createCustomCapturedCampaignSheetsPort(),
     // One GHL owner. The step port is intentionally unset so deliver() cannot
     // run once per upsert/note/workflow callback. The adapter still refuses
     // every non-loopback host, including services.leadconnectorhq.com.

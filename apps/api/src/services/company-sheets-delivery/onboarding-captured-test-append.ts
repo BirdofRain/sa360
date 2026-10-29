@@ -7,11 +7,13 @@
 
 import type {
   CapturedTestSheetsAppendPort,
+  CustomCapturedCampaignSheetsPort,
   SheetsAppendOutcome,
   SheetsAppendRequest,
 } from "../client-onboarding-v2/captured-test-delivery.js";
 import {
   appendOnboardingCapturedTestRow,
+  sendCompanySheetsCapturedEventTestRow,
   type CompanySheetsDeliveryDeps,
   type OnboardingCapturedTestAppendResult,
 } from "./company-sheets-delivery.service.js";
@@ -57,6 +59,38 @@ export function createOnboardingCapturedTestSheetsAppend(
         deps
       );
       return onboardingCapturedTestSheetsOutcome(result);
+    },
+  };
+}
+
+export function createCustomCapturedCampaignSheetsPort(
+  deps: CompanySheetsDeliveryDeps = {}
+): CustomCapturedCampaignSheetsPort {
+  return {
+    async send(input) {
+      const result = await sendCompanySheetsCapturedEventTestRow(input.clientAccountId, input.sourceLeadEventId, deps);
+      if (result.ok) {
+        return {
+          status: "succeeded",
+          externalCallExecuted: result.externalCallExecuted,
+          inventoryAffected: result.inventoryAffected,
+          billingAffected: result.billingAffected,
+          deliveryEnabled: result.deliveryEnabled,
+          cutoffChanged: result.cutoffChanged,
+          duplicate: result.duplicate,
+        };
+      }
+      const uncertain = result.code === "uncertain" || result.code === "append_outcome_unknown";
+      return {
+        status: uncertain ? "uncertain" : "failed",
+        externalCallExecuted: result.externalCallExecuted === true,
+        error: result.code,
+        inventoryAffected: result.inventoryAffected === true,
+        billingAffected: result.billingAffected === true,
+        deliveryEnabled: result.deliveryEnabled === true,
+        cutoffChanged: result.cutoffChanged === true,
+        duplicate: result.duplicate === true,
+      };
     },
   };
 }

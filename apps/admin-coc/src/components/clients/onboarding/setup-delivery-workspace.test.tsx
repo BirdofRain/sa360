@@ -406,6 +406,7 @@ function actions(): { api: OnboardingWorkspaceActions; calls: string[] } {
       calls.push("identity");
       return { ok: true, data: { email: input.email, phoneE164: input.phoneE164, persisted: true } };
     },
+    deliverCapturedSheetsTest: async () => ({ ok: false, error: "captured_test_disabled", status: 404 }),
     previewStoredLead: async () => {
       calls.push("replay");
       return {
@@ -800,4 +801,139 @@ test("an allowed sheet save stays unbound until the operator binds that workshee
     calls.filter((call) => call === "save-sheets" || call === "bind-sheet"),
     ["save-sheets", "bind-sheet"]
   );
+});
+
+test("a pasted stored lead previews all mapped cells and the captured test reports effects", async () => {
+  const { TestConsole } = await import("./test-console.tsx");
+  const headers = [
+    "Date",
+    "Lead Type",
+    "Client Name",
+    "Phone",
+    "Email",
+    "State",
+    "Age/ DOB",
+    "Military Status",
+    "Branch of Service",
+    "Marital Status",
+    "Desired Coverage",
+    "Primary Concern",
+    "Beneficiary",
+    "Time to Call",
+    "Notes",
+  ];
+  const values = [
+    "10/28/2026, 21:32:34 EDT America/New_York",
+    "",
+    "Sample Lead",
+    "5550100199",
+    "sample.lead@example.invalid",
+    "TX",
+    "04/02/1990",
+    "Veteran",
+    "Army",
+    "Married",
+    "250000",
+    "",
+    "Spouse",
+    "Morning",
+    "",
+  ];
+  const { api } = actions();
+  let delivered = "";
+  api.previewStoredLead = async () => ({
+    ok: true,
+    data: {
+      testRunId: "run_cells",
+      status: "previewed",
+      kind: "captured_event_replay",
+      persisted: true,
+      warningCodes: ["operator_dummy_required"],
+      attempts: [],
+      sheet: {
+        worksheetTitle: "VET Web Form",
+        worksheetRole: "campaign",
+        schemaVersion: "company_sheets_campaign_custom_v1",
+        header: headers,
+        values,
+        valuesSha256: "hash_cells",
+        deliveryRowId: "captured-event-test:alex_gross:evt_pasted",
+        sourceLeadEventId: "evt_pasted",
+      },
+      noteBodySha256: null,
+      noteContract: null,
+      externalCalls: { providerWebhook: false, sheets: false, ghl: false },
+      effects: null,
+      sourceDeliverySatisfied: false,
+      downstreamExecuted: false,
+      resendAuthorized: false,
+      appendStartedAtCleared: false,
+      locksCleared: false,
+    },
+  });
+  api.deliverCapturedSheetsTest = async (input) => {
+    delivered = input.sourceLeadEventId;
+    return {
+      ok: true,
+      data: {
+        testRunId: "run_deliver",
+        status: "succeeded",
+        kind: "captured_event_delivery",
+        persisted: true,
+        warningCodes: [],
+        attempts: [],
+        sheet: {
+          worksheetTitle: "VET Web Form",
+          worksheetRole: "campaign",
+          schemaVersion: "company_sheets_campaign_custom_v1",
+          header: headers,
+          values,
+          valuesSha256: "hash_cells",
+          deliveryRowId: "captured-event-test:alex_gross:evt_pasted",
+          sourceLeadEventId: "evt_pasted",
+        },
+        noteBodySha256: null,
+        noteContract: null,
+        externalCalls: { providerWebhook: false, sheets: true, ghl: false },
+        effects: {
+          inventoryAffected: false,
+          billingAffected: false,
+          deliveryEnabled: false,
+          cutoffChanged: false,
+          duplicate: false,
+        },
+        sourceDeliverySatisfied: false,
+        downstreamExecuted: false,
+        resendAuthorized: false,
+        appendStartedAtCleared: false,
+        locksCleared: false,
+      },
+    };
+  };
+  render(
+    <TestConsole
+      leads={[]}
+      proofLoaded
+      actions={api}
+      initialRuns={[]}
+      initialIdentity={null}
+      viewedWorksheet={null}
+      onAttempts={() => undefined}
+    />
+  );
+  fireEvent.change(screen.getByLabelText("Stored lead event"), { target: { value: "evt_pasted" } });
+  fireEvent.click(screen.getByRole("button", { name: "Preview stored lead" }));
+  assert.ok(await screen.findByTestId("mapped-row-table"));
+  assert.equal(screen.getAllByRole("row").length, 16);
+  assert.ok(screen.getByText("04/02/1990"));
+  assert.ok(screen.getAllByText("blank").length >= 3);
+  assert.ok(screen.getByText(/not an operator-created dummy/));
+  fireEvent.click(screen.getByTestId("deliver-captured-sheets-test"));
+  assert.ok(await screen.findByText("Inventory affected: no"));
+  assert.ok(screen.getByText("Billing affected: no"));
+  assert.ok(screen.getByText("Ongoing delivery enabled: no"));
+  assert.ok(screen.getByText("Cutoff changed: no"));
+  assert.ok(screen.getByText("Duplicate: no"));
+  assert.equal(delivered, "evt_pasted");
+  assert.equal((screen.getByTestId("test-delivery-again") as HTMLButtonElement).disabled, true);
 });

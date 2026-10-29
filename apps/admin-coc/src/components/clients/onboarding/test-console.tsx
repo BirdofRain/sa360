@@ -70,20 +70,21 @@ export function TestConsole({
         </p>
       </div>
       {!proofLoaded ? (
-        <p className="text-sm text-slate-600">Source proof was not loaded, so no stored lead can be selected.</p>
+        <p className="text-sm text-slate-600">Source proof was not loaded. Paste a stored lead event id to preview it.</p>
       ) : leads.length === 0 ? (
         <p className="text-sm text-slate-600">
-          No stored source-generated lead is on the source proof. A linked source is not receiving leads.
+          No stored source-generated lead is on the source proof. Paste a stored lead event id to preview it.
         </p>
       ) : (
         <Label className="block">
           Stored lead
           <select
             className="mt-1 h-8 w-full max-w-xl rounded-lg border border-slate-200 bg-white px-2 text-sm"
-            value={eventId}
+            value={leads.some((lead) => lead.sourceLeadEventId === eventId) ? eventId : ""}
             onChange={(event) => setEventId(event.target.value)}
             aria-label="Stored lead"
           >
+            <option value="">Choose a stored lead</option>
             {leads.map((lead) => (
               <option key={lead.sourceLeadEventId} value={lead.sourceLeadEventId}>
                 {lead.sourceLeadEventId} · {lead.sourceKind}
@@ -93,6 +94,16 @@ export function TestConsole({
           </select>
         </Label>
       )}
+      <Label className="block">
+        Stored lead event
+        <Input
+          aria-label="Stored lead event"
+          value={eventId}
+          onChange={(event) => setEventId(event.target.value)}
+          className="mt-1 max-w-xl"
+          placeholder="Paste a stored lead event id"
+        />
+      </Label>
       <div className="flex flex-wrap gap-4 text-sm">
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={sheetsOn} onChange={(event) => setSheetsOn(event.target.checked)} />
@@ -103,13 +114,24 @@ export function TestConsole({
           GHL location
         </label>
       </div>
-      <Button
-        type="button"
-        disabled={!eventId || pending !== null || (!sheetsOn && !ghlOn)}
-        onClick={() => void preview()}
-      >
-        {pending === "preview" ? "Previewing…" : "Preview stored lead"}
-      </Button>
+      <div className="flex flex-wrap gap-2">
+        <Button
+          type="button"
+          disabled={!eventId.trim() || pending !== null || (!sheetsOn && !ghlOn)}
+          onClick={() => void preview()}
+        >
+          {pending === "preview" ? "Previewing…" : "Preview stored lead"}
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          data-testid="deliver-captured-sheets-test"
+          disabled={!eventId.trim() || pending !== null || !sheetsOn}
+          onClick={() => void deliverCaptured()}
+        >
+          {pending === "deliver" ? "Delivering…" : "Deliver captured Sheets test"}
+        </Button>
+      </div>
       <div className="grid gap-3 lg:grid-cols-2">
         <article className="rounded-lg border border-slate-200 p-3 text-sm">
           <h3 className="font-medium">Sheets</h3>
@@ -117,6 +139,20 @@ export function TestConsole({
           {run ? (
             <p className="mt-2 text-xs text-slate-600">
               External Sheets call: {run.externalCalls.sheets ? "yes" : "no"}. Source delivery satisfied: no.
+            </p>
+          ) : null}
+          {run?.effects ? (
+            <dl className="mt-2 space-y-1 text-xs text-slate-700" data-testid="captured-test-effects">
+              <div>Inventory affected: {run.effects.inventoryAffected ? "yes" : "no"}</div>
+              <div>Billing affected: {run.effects.billingAffected ? "yes" : "no"}</div>
+              <div>Ongoing delivery enabled: {run.effects.deliveryEnabled ? "yes" : "no"}</div>
+              <div>Cutoff changed: {run.effects.cutoffChanged ? "yes" : "no"}</div>
+              <div>Duplicate: {run.effects.duplicate ? "yes" : "no"}</div>
+            </dl>
+          ) : null}
+          {run?.warningCodes.includes("operator_dummy_required") ? (
+            <p className="mt-2 text-amber-800">
+              This stored lead is not an operator-created dummy. The mapped cells are a preview. Deliver captured Sheets test will refuse it.
             </p>
           ) : null}
           {error ? <p className="mt-2 text-amber-800">{actionErrorCopy(error)}</p> : null}
@@ -268,6 +304,19 @@ export function TestConsole({
     if (!noteResult.ok) setNoteError(noteResult.error);
     else setNote(noteResult.data);
   }
+
+  async function deliverCaptured() {
+    setPending("deliver");
+    setError(null);
+    const delivered = await actions.deliverCapturedSheetsTest({ sourceLeadEventId: eventId.trim() });
+    setPending(null);
+    if (!delivered.ok) {
+      setError(delivered.error);
+      return;
+    }
+    setRun(delivered.data);
+    onAttempts(delivered.data.attempts);
+  }
 }
 
 function WorksheetSchema({
@@ -284,7 +333,28 @@ function WorksheetSchema({
       <p>Spreadsheet: {viewed?.spreadsheetTitle ?? "not viewed"}</p>
       <p>Schema: {schema ?? "not in the preview payload"}</p>
       <p>Values hash: {run?.sheet?.valuesSha256 ?? "not returned"}</p>
-      {run?.sheet?.values ? (
+      {run?.sheet?.header && run.sheet.values ? (
+        <table className="mt-2 w-full text-left" data-testid="mapped-row-table">
+          <caption className="sr-only">Mapped columns</caption>
+          <thead>
+            <tr>
+              <th className="py-1 pr-2 font-medium">Header</th>
+              <th className="py-1 font-medium">Value</th>
+            </tr>
+          </thead>
+          <tbody>
+            {run.sheet.header.map((header, index) => {
+              const value = run.sheet?.values?.[index] ?? "";
+              return (
+                <tr key={`${header}-${index}`}>
+                  <td className="py-1 pr-2">{header}</td>
+                  <td className="py-1">{value.trim() ? value : "blank"}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      ) : run?.sheet?.values ? (
         <p>Mapped row: {run.sheet.values.join(" | ")}</p>
       ) : (
         <p>Mapped row cells are not in the captured-test preview payload. Header cells above are the worksheet preview.</p>

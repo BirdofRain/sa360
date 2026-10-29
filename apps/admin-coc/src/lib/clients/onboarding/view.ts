@@ -256,6 +256,11 @@ const ACTION_ERRORS: Record<string, string> = {
     "Onboarding read is disabled. The read flag is off, so this screen is not showing a substitute client.",
   onboarding_config_disabled: "Onboarding config is disabled. The change was not saved.",
   captured_test_disabled: "Captured test delivery is disabled. No external call was made.",
+  operator_dummy_required:
+    "This stored lead is not an operator-created dummy. No row was appended. Preview can still show the mapped cells.",
+  captured_event_test_already_used:
+    "This stored lead already has a captured Sheets test row. It was not appended again.",
+  live_tab_test_refused: "Campaign Sheets delivery is on. The test was not sent and the cutoff was not changed.",
   destination_disabled: "Company Sheets setup is disabled. Drive was not searched.",
   client_not_found: "This client was not found.",
   invalid_request: "That entry is not a valid search or folder reference.",

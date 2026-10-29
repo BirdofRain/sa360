@@ -36,6 +36,7 @@ import {
   columnLabel,
 } from "./company-sheets-custom-row.js";
 import { findPublishedColumnMap } from "../client-onboarding-v2/column-maps.js";
+import { capturedEventTestKey, isOperatorCreatedDummyEvent } from "../client-onboarding-v2/custom-captured-sheet.js";
 import { loadAuthorizedAgedDeliverySet } from "./company-sheets-aged-authority.js";
 import { getSpreadsheetMetadata, getWorksheetGridBounds } from "../google-sheets/google-sheets-http-client.js";
 import { authorizeGoogleOnlyAppend } from "../client-onboarding-v2/google-only-quarantine.js";
@@ -656,6 +657,246 @@ export async function sendCompanySheetsCampaignTestRow(
     appended: executed.appended,
     rowWritten: true,
   };
+}
+
+export type CapturedEventTestEffects = {
+  inventoryAffected: boolean;
+  billingAffected: boolean;
+  deliveryEnabled: boolean;
+  cutoffChanged: boolean;
+  duplicate: boolean;
+  externalCallExecuted: boolean;
+};
+
+const QUIET_CAPTURED_EFFECTS: CapturedEventTestEffects = {
+  inventoryAffected: false,
+  billingAffected: false,
+  deliveryEnabled: false,
+  cutoffChanged: false,
+  duplicate: false,
+  externalCallExecuted: false,
+};
+
+/**
+ * One captured operator-dummy row through the published custom campaign map.
+ * The job kind stays campaign_test so a controlled test can run while global
+ * execution is off. It does not use the custom-writer flag, the google-only
+ * pilot, or the synthetic campaign-test identity. It does not change switches
+ * or the cutoff.
+ */
+export async function sendCompanySheetsCapturedEventTestRow(
+  clientAccountId: string,
+  sourceLeadEventId: string,
+  deps: CompanySheetsDeliveryDeps = {}
+): Promise<
+  | ({
+      ok: true;
+      jobId: string;
+      status: string;
+      spreadsheetId: string;
+      worksheetId: number;
+    } & CapturedEventTestEffects)
+  | (DeliveryFailure & Partial<CapturedEventTestEffects>)
+> {
+  const env = deps.env ?? process.env;
+  if (env.SA360_CLIENT_ONBOARDING_V2_CAPTURED_TEST_ENABLED !== "true") {
+    return { ...fail("captured_test_disabled", 404), ...QUIET_CAPTURED_EFFECTS };
+  }
+  if (!isCompanyGoogleSheetsEnabled(env)) return { ...fail("destination_disabled", 404), ...QUIET_CAPTURED_EFFECTS };
+  const db = deps.db ?? prisma;
+  const id = clientAccountId.trim();
+  const eventId = sourceLeadEventId.trim();
+  if (!id || !eventId) return { ...fail("event_not_client_owned", 409), ...QUIET_CAPTURED_EFFECTS };
+  const lead = await db.sourceLeadEvent.findUnique({ where: { id: eventId } });
+  if (!lead || lead.clientAccountIdResolved !== id) {
+    return { ...fail("event_not_client_owned", 409), ...QUIET_CAPTURED_EFFECTS };
+  }
+  if (!isOperatorCreatedDummyEvent(lead)) {
+    return { ...fail("operator_dummy_required", 409), ...QUIET_CAPTURED_EFFECTS };
+  }
+  const destination = await snapshotDestination(id, db);
+  if (!("spreadsheetId" in destination)) return { ...destination, ...QUIET_CAPTURED_EFFECTS };
+  const beforeCutoff = destination.campaignDispatchNotBefore?.toISOString() ?? null;
+  const beforeSwitches = {
+    campaignDispatchEnabled: destination.campaignDispatchEnabled,
+    agedDispatchEnabled: destination.agedDispatchEnabled,
+    enabled: destination.enabled,
+  };
+  if (destination.campaignDispatchEnabled) {
+    return { ...fail("delivery_not_paused", 409), ...QUIET_CAPTURED_EFFECTS, deliveryEnabled: true };
+  }
+  const contract = await loadBoundContract(db, destination, "campaign");
+  if (!("worksheetId" in contract)) return { ...contract, ...QUIET_CAPTURED_EFFECTS };
+  if (contract.schemaVersion !== COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA) {
+    return { ...fail("test_worksheet_not_approved", 409), ...QUIET_CAPTURED_EFFECTS };
+  }
+  const idempotencyKey = capturedEventTestKey(id, eventId);
+  let existing = await db.companySheetsDeliveryJob.findUnique({ where: { idempotencyKey } });
+  if (existing?.status === "succeeded") {
+    return {
+      ok: true,
+      ...QUIET_CAPTURED_EFFECTS,
+      duplicate: true,
+      jobId: existing.id,
+      status: existing.status,
+      spreadsheetId: destination.spreadsheetId,
+      worksheetId: contract.worksheetId,
+    };
+  }
+  if (
+    existing &&
+    (existing.status === "uncertain" ||
+      existing.status === "running" ||
+      (existing.appendStartedAt != null && existing.status !== "failed"))
+  ) {
+    return { ...fail("campaign_test_unresolved", 409), ...QUIET_CAPTURED_EFFECTS };
+  }
+  const holder = await db.companySheetsDeliveryJob.findFirst({
+    where: {
+      spreadsheetId: destination.spreadsheetId,
+      worksheetId: contract.worksheetId,
+      ...(existing ? { id: { not: existing.id } } : {}),
+      OR: [
+        { status: { in: ["uncertain", "running"] } },
+        { appendStartedAt: { not: null }, status: { notIn: ["succeeded", "failed"] } },
+      ],
+    },
+  });
+  if (holder) return { ...fail("worksheet_blocked", 409), ...QUIET_CAPTURED_EFFECTS };
+  if (existing?.status === "failed" && existing.appendStartedAt == null && existing.rowsWritten === 0) {
+    await db.companySheetsDeliveryJob.update({
+      where: { id: existing.id },
+      data: { status: "queued", lastError: null, finishedAt: null, uncertainReason: null },
+    });
+    existing = await db.companySheetsDeliveryJob.findUnique({ where: { id: existing.id } });
+  }
+  const beforeCounts = await eventEffectCounts(db, eventId);
+  const beforeLead = {
+    status: lead.status,
+    deliveryResult: JSON.stringify(lead.deliveryResultJson ?? null),
+  };
+  const resumable =
+    existing != null &&
+    (existing.status === "queued" || existing.status === "retryable") &&
+    existing.appendStartedAt == null;
+  const resolved = resumable
+    ? null
+    : await resolveCampaignWrite(
+        db,
+        env,
+        destination,
+        contract,
+        {
+          stableRowId: idempotencyKey,
+          clientAccountId: id,
+          sourceLeadEventId: lead.id,
+          receivedAt: lead.receivedAt.toISOString(),
+          sourceLeadId: lead.sourceLeadId,
+          normalizedPayload: lead.normalizedPayloadJson,
+          sourceFunnelId: sourceFunnelIdFromLead(lead),
+        },
+        { controlledTest: true }
+      );
+  if (resolved && !resolved.ok) return { ...resolved, ...QUIET_CAPTURED_EFFECTS };
+  const job =
+    resumable && existing
+      ? existing
+      : await createJob(db, {
+          kind: "campaign_test",
+          idempotencyKey,
+          destination,
+          contract,
+          rows: [{ stableRowId: idempotencyKey, values: resolved && resolved.ok ? resolved.values : [] }],
+          sourceLeadEventId: lead.id,
+          schemaVersion: resolved && resolved.ok ? resolved.schemaVersion : contract.schemaVersion,
+          header: resolved && resolved.ok ? resolved.header : contract.header,
+          contentSha256: resolved && resolved.ok ? resolved.contentSha256 : null,
+        });
+  if (job.status === "succeeded") {
+    return {
+      ok: true,
+      ...QUIET_CAPTURED_EFFECTS,
+      duplicate: true,
+      jobId: job.id,
+      status: job.status,
+      spreadsheetId: destination.spreadsheetId,
+      worksheetId: contract.worksheetId,
+    };
+  }
+  const executed = await executeCompanySheetsDeliveryJob(job.id, { ...deps, env, db, controlledCampaignTest: true });
+  const afterJob = await db.companySheetsDeliveryJob.findUnique({ where: { id: job.id } });
+  const externalCallExecuted = Boolean(afterJob?.appendStartedAt) || (executed.ok && executed.appended);
+  const after = await db.companySheetsDestination.findUnique({ where: { id: destination.id } });
+  const afterCutoff = after?.campaignDispatchNotBefore?.toISOString() ?? null;
+  const cutoffChanged = !after || afterCutoff !== beforeCutoff;
+  const switchesChanged =
+    !after ||
+    after.campaignDispatchEnabled !== beforeSwitches.campaignDispatchEnabled ||
+    after.agedDispatchEnabled !== beforeSwitches.agedDispatchEnabled ||
+    after.enabled !== beforeSwitches.enabled;
+  const deliveryEnabled = Boolean(
+    after &&
+      ((after.campaignDispatchEnabled && !beforeSwitches.campaignDispatchEnabled) ||
+        (after.agedDispatchEnabled && !beforeSwitches.agedDispatchEnabled) ||
+        (after.enabled && !beforeSwitches.enabled))
+  );
+  const afterCounts = await eventEffectCounts(db, eventId);
+  const afterLead = await db.sourceLeadEvent.findUnique({ where: { id: lead.id } });
+  const effects: CapturedEventTestEffects = {
+    inventoryAffected: afterCounts.inventoryCount !== beforeCounts.inventoryCount,
+    billingAffected: afterCounts.billingRowCount !== beforeCounts.billingRowCount,
+    deliveryEnabled,
+    cutoffChanged,
+    duplicate: false,
+    externalCallExecuted,
+  };
+  if (cutoffChanged || switchesChanged) return { ...fail("delivery_switch_changed", 500), ...effects };
+  if (
+    effects.inventoryAffected ||
+    effects.billingAffected ||
+    afterCounts.dispatchIntentCount !== beforeCounts.dispatchIntentCount
+  ) {
+    return { ...fail("production_idempotency_guard", 409), ...effects };
+  }
+  if (
+    !afterLead ||
+    afterLead.status !== beforeLead.status ||
+    JSON.stringify(afterLead.deliveryResultJson ?? null) !== beforeLead.deliveryResult
+  ) {
+    return { ...fail("lead_mutated", 500), ...effects };
+  }
+  if (!executed.ok && executed.code === "already_succeeded") {
+    return {
+      ok: true,
+      ...QUIET_CAPTURED_EFFECTS,
+      duplicate: true,
+      jobId: job.id,
+      status: "succeeded",
+      spreadsheetId: destination.spreadsheetId,
+      worksheetId: contract.worksheetId,
+    };
+  }
+  if (!executed.ok) return { ...executed, ...effects };
+  if (executed.status !== "succeeded" || executed.rowsWritten < 1) {
+    return { ...fail("test_row_not_written", 409), ...effects };
+  }
+  return {
+    ok: true,
+    ...effects,
+    jobId: job.id,
+    status: executed.status,
+    spreadsheetId: destination.spreadsheetId,
+    worksheetId: contract.worksheetId,
+  };
+}
+
+async function eventEffectCounts(db: PrismaClient, sourceLeadEventId: string) {
+  const [inventoryCount, billingRowCount, dispatchIntentCount] = await Promise.all([
+    db.leadInventoryItem.count({ where: { sourceLeadEventId } }),
+    db.fulfillmentOutbox.count({ where: { sourceLeadEventId } }),
+    db.companySheetsDispatchIntent.count({ where: { sourceLeadEventId } }),
+  ]);
+  return { inventoryCount, billingRowCount, dispatchIntentCount };
 }
 
 type SheetsWriteDb = PrismaClient | Prisma.TransactionClient;

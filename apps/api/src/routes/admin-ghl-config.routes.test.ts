@@ -7,6 +7,7 @@ import { checkRoutingRuleGhlLocationMismatch } from "../services/ghl-config-disc
 import { routingRuleGhlConfigBodySchema } from "../schemas/ghl-config.schema.js";
 
 const HEADER = "x-sa360-admin-key";
+process.env.ADMIN_API_KEY ??= "route-test-admin-key";
 
 test("GET ghl/locations/:locationId/config requires admin auth", async () => {
   const app = Fastify({ logger: false });
@@ -49,6 +50,24 @@ test("checkRoutingRuleGhlLocationMismatch rejects mismatched location without co
   assert.ok(mismatch);
   assert.equal(mismatch.code, "LOCATION_MISMATCH");
   assert.equal(checkRoutingRuleGhlLocationMismatch("loc_a", "loc_b", true), null);
+});
+
+test("POST survey-text-fields refuses a location that is not Sam's Test", async () => {
+  const previous = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = previous || "route-test-admin-key";
+  const app = Fastify({ logger: false });
+  await app.register(adminGhlConfigRoutes, { prefix: "/admin/v1" });
+  const res = await app.inject({
+    method: "POST",
+    url: "/admin/v1/ghl/locations/other-location/survey-text-fields",
+    headers: { "x-sa360-admin-key": process.env.ADMIN_API_KEY },
+    payload: { confirmation: "CREATE SAM TEST SURVEY TEXT FIELDS" },
+  });
+  assert.equal(res.statusCode, 403);
+  assert.equal(res.json().error, "location_not_allowed");
+  if (previous == null) delete process.env.ADMIN_API_KEY;
+  else process.env.ADMIN_API_KEY = previous;
+  await app.close();
 });
 
 test("routingRuleGhlConfigBodySchema rejects unknown keys", () => {

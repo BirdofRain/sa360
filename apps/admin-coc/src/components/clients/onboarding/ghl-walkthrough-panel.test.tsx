@@ -168,6 +168,12 @@ function actions(overrides: Partial<GhlWalkthroughActions> = {}): GhlWalkthrough
         skippedDuplicate: false,
       },
     }),
+    activateOngoing: async () => ({
+      ok: true,
+      alreadyActive: false,
+      omittedCoreFields: ["state"],
+      omittedOptionalFields: ["beneficiary"],
+    }),
     ...overrides,
   };
 }
@@ -378,4 +384,63 @@ test("a location linked to another client is not moved", async () => {
   assert.equal((screen.getByRole("button", { name: "Save selected workflow" }) as HTMLButtonElement).disabled, true);
   assert.equal(saves, 0);
   assert.equal(markState(document.body, "GHL ongoing delivery"), "unknown");
+});
+
+test("a delivery-flag blocker does not disable the selected test", async () => {
+  render(
+    <GhlWalkthroughPanel
+      clientAccountId="client_sam"
+      leads={[lead()]}
+      location={location()}
+      connections={[connection()]}
+      sheetsCampaignEnabled={false}
+      actions={actions({
+        loadPreflight: async () => ({
+          ok: true,
+          preflight: preflight({
+            canExecute: false,
+            blockers: ["delivery enabled is false", "internal approval is pending"],
+          }),
+        }),
+      })}
+    />
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Preview GHL delivery" }));
+  assert.ok(await screen.findByText(/Can execute: no/));
+  assert.equal((screen.getByRole("button", { name: "Run one GHL test" }) as HTMLButtonElement).disabled, false);
+});
+
+test("ongoing GHL activation is a separate confirmation and lists omitted fields", async () => {
+  let phrase = "";
+  const { container } = render(
+    <GhlWalkthroughPanel
+      clientAccountId="client_sam"
+      leads={[lead()]}
+      location={location()}
+      connections={[connection()]}
+      sheetsCampaignEnabled={false}
+      actions={actions({
+        activateOngoing: async (_requestId, confirmation) => {
+          phrase = confirmation;
+          return {
+            ok: true,
+            alreadyActive: false,
+            omittedCoreFields: ["state"],
+            omittedOptionalFields: ["beneficiary"],
+          };
+        },
+      })}
+    />
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Enable ongoing GHL delivery" }));
+  const confirm = screen.getByRole("button", { name: "Confirm ongoing GHL delivery" }) as HTMLButtonElement;
+  assert.equal(confirm.disabled, true);
+  fireEvent.change(screen.getByLabelText("Ongoing GHL confirmation"), { target: { value: "ENABLE ONGOING GHL DELIVERY" } });
+  fireEvent.click(screen.getByRole("button", { name: "Confirm ongoing GHL delivery" }));
+  assert.ok(await screen.findByTestId("ghl-activation-omissions"));
+  assert.match(screen.getByTestId("ghl-activation-omissions").textContent ?? "", /state/);
+  assert.match(screen.getByTestId("ghl-activation-omissions").textContent ?? "", /Omitted fields are not sent/);
+  assert.equal(phrase, "ENABLE ONGOING GHL DELIVERY");
+  assert.equal(markState(container, "GHL ongoing delivery"), "yes");
+  assert.equal(markState(container, "Sheets campaign delivery"), "no");
 });

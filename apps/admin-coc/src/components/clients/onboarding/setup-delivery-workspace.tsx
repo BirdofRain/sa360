@@ -48,6 +48,9 @@ import type {
 
 import { ActivationPanel, type DispatchInfrastructure } from "./activation-panel";
 import { FacebookCard, GhlCard, LeadCaptureCard, SheetsCard } from "./integration-cards";
+import { liveGhlWalkthroughActions } from "./ghl-walkthrough-actions";
+import { GhlWalkthroughPanel } from "./ghl-walkthrough-panel";
+import type { GhlWalkthroughActions, GhlWalkthroughConnection, GhlWalkthroughLocation } from "./ghl-walkthrough-types";
 import { TestConsole } from "./test-console";
 
 export function SetupDeliveryWorkspace({
@@ -63,6 +66,10 @@ export function SetupDeliveryWorkspace({
   profileRevision = null,
   testRunListLoaded = false,
   actions,
+  ghlLocation = null,
+  ghlConnections = [],
+  ghlLocationError = null,
+  ghlActions,
 }: {
   clientAccountId: string;
   summary: OnboardingSummary | null;
@@ -82,6 +89,10 @@ export function SetupDeliveryWorkspace({
   testRunListLoaded?: boolean;
   /** Tests pass mocked contracts. The page omits this and uses the server actions. */
   actions?: OnboardingWorkspaceActions;
+  ghlLocation?: GhlWalkthroughLocation | null;
+  ghlConnections?: GhlWalkthroughConnection[];
+  ghlLocationError?: string | null;
+  ghlActions?: GhlWalkthroughActions;
 }) {
   const bound = actions ?? liveActions(clientAccountId);
   const revision = knownProfileRevision(profileRevision ?? summary?.destinationProfile?.revision);
@@ -178,6 +189,15 @@ export function SetupDeliveryWorkspace({
         testRunListLoaded={testRunListLoaded}
         viewedWorksheet={viewed}
         onAttempts={setAttempts}
+      />
+      <GhlWalkthroughPanel
+        clientAccountId={clientAccountId}
+        leads={leads}
+        location={ghlLocation}
+        connections={ghlConnections}
+        sheetsCampaignEnabled={summary ? summary.sheets.campaignDispatchEnabled : dispatch ? dispatch.campaignDispatchEnabled : null}
+        locationError={ghlLocationError}
+        actions={ghlActions ?? liveGhlWalkthroughActions(clientAccountId)}
       />
       <ActivationPanel
         clientAccountId={clientAccountId}

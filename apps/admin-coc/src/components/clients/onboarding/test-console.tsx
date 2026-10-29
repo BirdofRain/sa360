@@ -150,10 +150,11 @@ export function TestConsole({
               <div>Duplicate: {run.effects.duplicate ? "yes" : "no"}</div>
             </dl>
           ) : null}
-          {run?.warningCodes.includes("operator_dummy_required") ? (
-            <p className="mt-2 text-amber-800">
-              This stored lead is not an operator-created dummy. The mapped cells are a preview. Deliver captured Sheets test will refuse it.
-            </p>
+          {run?.warningCodes.includes("primary_concern_filled_from_primary_reason") ? (
+            <p className="mt-2 text-amber-800">Primary Concern was filled from primary_reason.</p>
+          ) : null}
+          {run?.warningCodes.includes("primary_concern_omitted") ? (
+            <p className="mt-2 text-amber-800">Primary Concern was omitted. That cell stays blank.</p>
           ) : null}
           {error ? <p className="mt-2 text-amber-800">{actionErrorCopy(error)}</p> : null}
         </article>

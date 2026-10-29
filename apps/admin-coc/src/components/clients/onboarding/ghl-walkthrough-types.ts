@@ -69,4 +69,16 @@ export type GhlWalkthroughActions = {
     | { ok: true; result: GhlWalkthroughExecution }
     | { ok: false; error: string; blockers?: string[]; result?: GhlWalkthroughExecution }
   >;
+  activateOngoing: (
+    requestId: string,
+    confirmation: string
+  ) => Promise<
+    | {
+        ok: true;
+        alreadyActive: boolean;
+        omittedCoreFields: string[];
+        omittedOptionalFields: string[];
+      }
+    | { ok: false; error: string }
+  >;
 };

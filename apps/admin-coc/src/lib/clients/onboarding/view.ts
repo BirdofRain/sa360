@@ -110,6 +110,7 @@ export type SelectableLead = {
   at: string | null;
   captureOnly: boolean;
   identity: string;
+  routingDryRunDecisionId: string | null;
 };
 
 /** Only an observed stored event is selectable. Linked alone is not a lead. */
@@ -126,6 +127,7 @@ export function selectableStoredLeads(sources: readonly OnboardingSourceProof[])
       at: source.proofs.observed.at ?? null,
       captureOnly: source.proofs.observed.captureOnly,
       identity: sourceIdentityLabel(source),
+      routingDryRunDecisionId: source.proofs.routingMatched.routingDryRunDecisionId,
     });
   }
   return leads;
@@ -258,6 +260,8 @@ const ACTION_ERRORS: Record<string, string> = {
   captured_test_disabled: "Captured test delivery is disabled. No external call was made.",
   operator_dummy_required:
     "This stored lead is not an operator-created dummy. No row was appended. Preview can still show the mapped cells.",
+  synthetic_campaign_test_refused:
+    "The synthetic campaign-test identity is not a client lead. No row was appended.",
   captured_event_test_already_used:
     "This stored lead already has a captured Sheets test row. It was not appended again.",
   live_tab_test_refused: "Campaign Sheets delivery is on. The test was not sent and the cutoff was not changed.",

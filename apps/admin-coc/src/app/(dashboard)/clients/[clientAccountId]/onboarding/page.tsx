@@ -4,8 +4,14 @@ import {
   fetchCompanyGoogleConnection,
   fetchCompanySheetsDispatch,
 } from "@/lib/admin-api/company-google-sheets";
-import { isAdminApiConfigured } from "@/lib/admin-api/server";
+import {
+  fetchAdminClientDeliveryConfig,
+  fetchAdminGhlConnections,
+  isAdminApiConfigured,
+} from "@/lib/admin-api/server";
 import { SetupDeliveryWorkspace } from "@/components/clients/onboarding/setup-delivery-workspace";
+import type { GhlWalkthroughConnection, GhlWalkthroughLocation } from "@/components/clients/onboarding/ghl-walkthrough-types";
+import type { ClientDeliveryConfigResponse } from "@/lib/clients/delivery-config-types";
 import type { CompanyConnectionIdentity } from "@/lib/clients/onboarding/types";
 
 export const dynamic = "force-dynamic";
@@ -47,11 +53,13 @@ export default async function ClientOnboardingPage({
     );
   }
 
-  const [summary, connection, dispatch, runs] = await Promise.all([
+  const [summary, connection, dispatch, runs, deliveryConfig, ghlConnections] = await Promise.all([
     fetchOnboardingSummary(id),
     fetchCompanyGoogleConnection(),
     fetchCompanySheetsDispatch(id),
     listOnboardingTestRuns(id),
+    fetchAdminClientDeliveryConfig(id),
+    fetchAdminGhlConnections(id),
   ]);
 
   return (
@@ -73,8 +81,43 @@ export default async function ClientOnboardingPage({
           : null
       }
       dispatchError={dispatch.ok ? null : "request_failed"}
+      ghlLocation={deliveryConfig.data ? projectGhlLocation(deliveryConfig.data) : null}
+      ghlConnections={ghlConnections.data ? projectGhlConnections(ghlConnections.data.items) : []}
+      ghlLocationError={deliveryConfig.error ?? ghlConnections.error}
     />
   );
+}
+
+function projectGhlLocation(config: ClientDeliveryConfigResponse): GhlWalkthroughLocation {
+  const destination = config.ghlDestination;
+  return {
+    locationId: config.locationId,
+    locationName: config.locationName,
+    workflowId: destination?.destinationWorkflowIdGhl ?? null,
+    workflowTriggerMode: destination?.workflowTriggerMode ?? null,
+    deliveryEnabled: destination?.deliveryEnabled ?? null,
+    opportunityCreationEnabled: destination?.opportunityCreationEnabled ?? null,
+    pipelineId: destination?.destinationPipelineIdGhl ?? null,
+    stageId: destination?.destinationPipelineStageIdGhl ?? null,
+  };
+}
+
+function projectGhlConnections(
+  items: Array<{
+    id: string;
+    locationId: string;
+    locationName: string | null;
+    clientAccountId: string | null;
+    connectionStatus: string;
+  }>
+): GhlWalkthroughConnection[] {
+  return items.map((item) => ({
+    id: item.id,
+    locationId: item.locationId,
+    locationName: item.locationName,
+    clientAccountId: item.clientAccountId,
+    connectionStatus: item.connectionStatus,
+  }));
 }
 
 function projectConnection(connection: {

@@ -73,6 +73,10 @@ export function GhlWalkthroughPanel({
   const [authorizeUrl, setAuthorizeUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
+  const [activateOpen, setActivateOpen] = useState(false);
+  const [activateConfirm, setActivateConfirm] = useState("");
+  const [omittedCore, setOmittedCore] = useState<string[]>([]);
+  const [omittedOptional, setOmittedOptional] = useState<string[]>([]);
 
   const selectedConnection = locationRows.find((row) => row.locationId === selectedLocationId) ?? null;
   const linkedHere = selectedConnection?.clientAccountId === clientAccountId;
@@ -95,12 +99,18 @@ export function GhlWalkthroughPanel({
   }, [fieldMapping, location?.opportunityCreationEnabled, preview, savedTriggerMode, savedWorkflowId, selectedWorkflow]);
   const uncertain = /uncertain|executing/i.test(preflight?.lastLiveRunStatus ?? "") || /uncertain/i.test(execution?.status ?? "");
   const duplicateBlocked = preflight?.duplicateBlocksLive === true || execution?.skippedDuplicate === true;
-  const canExecute =
+  const activationBlockersOnly =
+    (preflight?.blockers.length ?? 0) > 0 &&
+    (preflight?.blockers ?? []).every((blocker) =>
+      /delivery enabled|deliveryEnabled|delivery mode|cutover|internal approval/i.test(blocker)
+    );
+  const pausedDestinationTest =
     Boolean(preview?.planId) &&
-    preflight?.canExecute === true &&
     !duplicateBlocked &&
     !uncertain &&
-    confirmText.trim() === LIVE_CANARY_CONFIRMATION_TEXT;
+    (preflight?.canExecute === true || activationBlockersOnly);
+  const canExecute = pausedDestinationTest && confirmText.trim() === LIVE_CANARY_CONFIRMATION_TEXT;
+  const canActivate = activateConfirm.trim() === "ENABLE ONGOING GHL DELIVERY";
 
   async function refreshLocations() {
     setPending("locations");
@@ -235,6 +245,22 @@ export function GhlWalkthroughPanel({
     }
     const ready = await actions.loadPreflight(preview.planId);
     if (ready.ok) setPreflight(ready.preflight);
+  }
+
+  async function activateOngoing() {
+    if (!canActivate) return;
+    setPending("activate");
+    setError(null);
+    const result = await actions.activateOngoing(crypto.randomUUID(), activateConfirm.trim());
+    setPending(null);
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+    setDeliveryEnabled(true);
+    setOmittedCore(result.omittedCoreFields);
+    setOmittedOptional(result.omittedOptionalFields);
+    setActivateOpen(false);
   }
 
   return (
@@ -425,8 +451,8 @@ export function GhlWalkthroughPanel({
       <div className="space-y-3 border-t border-slate-200 pt-4">
         <h3 className="text-sm font-semibold text-slate-900">GHL test for this stored lead</h3>
         <p className="text-sm text-slate-600">
-          Preview uses the existing delivery-plan simulation. It is stored and sends nothing. Run one GHL test uses the
-          existing live canary and does not change GHL ongoing delivery.
+          Preview uses the delivery-plan simulation. It is stored and sends nothing. Run one GHL test sends the selected
+          lead to the saved location and does not turn ongoing delivery on.
         </p>
         {leads.length === 0 ? (
           <p className="text-sm text-slate-600">No stored lead is on the source proof.</p>
@@ -499,6 +525,17 @@ export function GhlWalkthroughPanel({
             <p className="text-xs text-slate-600">
               If a blocker says ongoing delivery must be on, leave it off. This test will not turn that switch on.
             </p>
+            {fieldMapping ? (
+              <div data-testid="ghl-omitted-fields">
+                <p>
+                  Omitted core fields: {fieldMapping.coreRequiredMissing.length ? fieldMapping.coreRequiredMissing.join(", ") : "none"}.
+                </p>
+                <p>
+                  Omitted optional fields: {fieldMapping.optionalMissing.length ? fieldMapping.optionalMissing.join(", ") : "none"}.
+                </p>
+                <p>Omitted fields are not sent.</p>
+              </div>
+            ) : null}
           </div>
         ) : null}
         {uncertain ? (
@@ -509,7 +546,7 @@ export function GhlWalkthroughPanel({
         <Button
           type="button"
           variant="destructive"
-          disabled={!preview?.planId || !preflight?.canExecute || pending !== null || duplicateBlocked || uncertain}
+          disabled={!pausedDestinationTest || pending !== null}
           onClick={() => setConfirmOpen(true)}
         >
           Run one GHL test
@@ -547,6 +584,45 @@ export function GhlWalkthroughPanel({
             {execution.errors.length > 0 ? <p>{execution.errors.join(" ")}</p> : null}
           </div>
         ) : null}
+        <div className="space-y-2 border-t border-slate-200 pt-4">
+          <h3 className="text-sm font-semibold text-slate-900">Enable ongoing GHL delivery</h3>
+          <p className="text-sm text-slate-600">
+            This turns on delivery for the saved location on this client. Sheets delivery stays on its own switch.
+            This does not edit an environment list.
+          </p>
+          {omittedCore.length > 0 || omittedOptional.length > 0 ? (
+            <div data-testid="ghl-activation-omissions">
+              <p>Omitted core fields: {omittedCore.length ? omittedCore.join(", ") : "none"}.</p>
+              <p>Omitted optional fields: {omittedOptional.length ? omittedOptional.join(", ") : "none"}.</p>
+              <p>Omitted fields are not sent.</p>
+            </div>
+          ) : null}
+          <Button type="button" disabled={pending !== null} onClick={() => setActivateOpen(true)}>
+            Enable ongoing GHL delivery
+          </Button>
+          {activateOpen ? (
+            <div className="space-y-2 rounded-lg border border-slate-300 p-3">
+              <p className="text-sm">
+                Type <span className="font-mono font-semibold">ENABLE ONGOING GHL DELIVERY</span> to activate this saved
+                location.
+              </p>
+              <Input
+                aria-label="Ongoing GHL confirmation"
+                value={activateConfirm}
+                onChange={(event) => setActivateConfirm(event.target.value)}
+                autoComplete="off"
+              />
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" onClick={() => setActivateOpen(false)}>
+                  Cancel activation
+                </Button>
+                <Button type="button" disabled={!canActivate || pending !== null} onClick={() => void activateOngoing()}>
+                  {pending === "activate" ? "Enabling ongoing GHL delivery…" : "Confirm ongoing GHL delivery"}
+                </Button>
+              </div>
+            </div>
+          ) : null}
+        </div>
         {error ? (
           <p className="text-sm text-amber-900" role="status">
             {error}

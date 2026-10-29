@@ -834,7 +834,7 @@ test("a pasted stored lead previews all mapped cells and the captured test repor
     "Army",
     "Married",
     "250000",
-    "",
+    "Burial",
     "Spouse",
     "Morning",
     "",
@@ -848,7 +848,7 @@ test("a pasted stored lead previews all mapped cells and the captured test repor
       status: "previewed",
       kind: "captured_event_replay",
       persisted: true,
-      warningCodes: ["operator_dummy_required"],
+      warningCodes: ["primary_concern_filled_from_primary_reason"],
       attempts: [],
       sheet: {
         worksheetTitle: "VET Web Form",
@@ -926,8 +926,9 @@ test("a pasted stored lead previews all mapped cells and the captured test repor
   assert.ok(await screen.findByTestId("mapped-row-table"));
   assert.equal(screen.getAllByRole("row").length, 16);
   assert.ok(screen.getByText("04/02/1990"));
-  assert.ok(screen.getAllByText("blank").length >= 3);
-  assert.ok(screen.getByText(/not an operator-created dummy/));
+  assert.ok(screen.getByText("Burial"));
+  assert.ok(screen.getAllByText("blank").length >= 2);
+  assert.ok(screen.getByText(/Primary Concern was filled from primary_reason/));
   fireEvent.click(screen.getByTestId("deliver-captured-sheets-test"));
   assert.ok(await screen.findByText("Inventory affected: no"));
   assert.ok(screen.getByText("Billing affected: no"));

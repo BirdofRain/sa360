@@ -67,7 +67,16 @@ export async function adminGhlConfigRoutes(app: FastifyInstance) {
       const status = result.code === "location_not_allowed" ? 403 : result.code === "not_connected" ? 409 : 502;
       return reply.status(status).send({ ok: false, error: result.code });
     }
-    return reply.send({ ok: true, locationId: result.locationId, fields: result.fields });
+    if (result.conflicts.length > 0) {
+      return reply.status(409).send({
+        ok: false,
+        error: "field_conflict",
+        locationId: result.locationId,
+        fields: result.fields,
+        conflicts: result.conflicts,
+      });
+    }
+    return reply.send({ ok: true, locationId: result.locationId, fields: result.fields, conflicts: [] });
   });
 
   app.get("/routing/rules/:id/ghl-config", async (request, reply) => {

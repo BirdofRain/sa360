@@ -110,11 +110,103 @@ test("ensure creates only missing TEXT contact fields on Sam's Test", async () =
   assert.equal(result.ok, true);
   if (!result.ok) return;
   assert.equal(result.fields.length, 7);
+  assert.deepEqual(result.conflicts, []);
   assert.equal(result.fields.every((field) => field.dataType === "TEXT"), true);
   assert.equal(result.fields.some((field) => field.id === coverageAmount.id), false);
   assert.equal(calls.filter((call) => call.method === "POST").length, 7);
   assert.equal(calls.every((call) => call.url.includes(SAM_TEST_GHL_LOCATION_ID)), true);
   assert.equal(JSON.stringify(calls).includes("test-token"), false);
+});
+
+test("plan reports a same-name incompatible type instead of creating it", () => {
+  const plan = planSamTestSurveyTextFields([
+    {
+      id: "reason-dropdown",
+      name: "Primary Reason",
+      key: "primary_reason",
+      fieldKey: "contact.primary_reason",
+      dataType: "DROPDOWN",
+      model: "contact",
+    },
+    {
+      id: "range-number",
+      name: "Desired Coverage Range",
+      key: "desired_coverage_range",
+      fieldKey: "contact.desired_coverage_range",
+      dataType: "NUMERICAL",
+      model: "contact",
+    },
+    {
+      id: "gender-id",
+      name: "Gender",
+      key: "gender",
+      fieldKey: "contact.gender",
+      dataType: "LARGE_TEXT",
+      model: "contact",
+    },
+  ]);
+  const reason = plan.find((item) => item.sourceAttribute === "primary_reason");
+  const coverage = plan.find((item) => item.sourceAttribute === "desired_coverage");
+  assert.equal(reason?.action, "conflict");
+  assert.equal(reason?.conflict?.existingDataType, "DROPDOWN");
+  assert.equal(reason?.id, null);
+  assert.equal(coverage?.action, "conflict");
+  assert.equal(coverage?.conflict?.existingId, "range-number");
+  assert.equal(plan.find((item) => item.sourceAttribute === "sex")?.action, "reuse");
+  assert.equal(plan.find((item) => item.sourceAttribute === "marital_status")?.action, "create");
+});
+
+test("ensure does not post a conflicting name and reports a duplicate-name response", async () => {
+  const posted: string[] = [];
+  const result = await ensureSamTestSurveyTextFields(SAM_TEST_GHL_LOCATION_ID, {
+    apiBase: "https://ghl.example",
+    resolveAuth: async () => ({ token: "test-token" }),
+    fetchImpl: async (_url, init) => {
+      const method = init?.method ?? "GET";
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) as { name?: string } : null;
+      if (method === "GET") {
+        return new Response(
+          JSON.stringify({
+            customFields: [
+              {
+                id: "reason-dropdown",
+                name: "Primary Reason",
+                fieldKey: "contact.primary_reason",
+                dataType: "DROPDOWN",
+                model: "contact",
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+      posted.push(body?.name ?? "");
+      if (body?.name === "Marital Status") {
+        return new Response(JSON.stringify({ message: "Custom field already exists" }), { status: 400 });
+      }
+      return new Response(
+        JSON.stringify({
+          customField: {
+            id: `created-${posted.length}`,
+            name: body?.name,
+            fieldKey: "contact.created",
+            dataType: "TEXT",
+            model: "contact",
+          },
+        }),
+        { status: 201 }
+      );
+    },
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(posted.includes("Primary Reason"), false);
+  assert.equal(posted.filter((name) => name === "Marital Status").length, 1);
+  assert.deepEqual(result.conflicts.map((conflict) => conflict.name).sort(), ["Marital Status", "Primary Reason"]);
+  assert.equal(result.conflicts.find((conflict) => conflict.name === "Primary Reason")?.existingDataType, "DROPDOWN");
+  assert.equal(result.fields.some((field) => field.name === "Primary Reason"), false);
+  assert.equal(result.fields.length, 5);
+  assert.equal(JSON.stringify(posted).includes("test-token"), false);
 });
 
 test("ensure refuses every other location before calling GHL", async () => {

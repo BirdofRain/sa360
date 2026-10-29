@@ -32,12 +32,22 @@ export type SurveyCustomField = {
   model: string | null;
 };
 
+export type SurveyFieldConflict = {
+  sourceAttribute: SamTestSurveyAttribute;
+  name: string;
+  existingId: string | null;
+  existingName: string | null;
+  existingDataType: string | null;
+  existingModel: string | null;
+};
+
 export type SurveyFieldPlanItem = {
   sourceAttribute: SamTestSurveyAttribute;
   name: string;
-  action: "reuse" | "create";
+  action: "reuse" | "create" | "conflict";
   id: string | null;
   fieldKey: string | null;
+  conflict: SurveyFieldConflict | null;
 };
 
 type EnsureDeps = {
@@ -59,12 +69,41 @@ export type EnsuredSurveyField = {
 export function planSamTestSurveyTextFields(existing: readonly SurveyCustomField[]): SurveyFieldPlanItem[] {
   return SAM_TEST_SURVEY_TEXT_FIELD_SPECS.map((spec) => {
     const match = bestCompatibleField(spec.sourceAttribute, spec.name, existing);
+    if (match) {
+      return {
+        sourceAttribute: spec.sourceAttribute,
+        name: spec.name,
+        action: "reuse" as const,
+        id: match.id,
+        fieldKey: match.fieldKey ?? match.key,
+        conflict: null,
+      };
+    }
+    const conflict = conflictingName(spec.name, existing);
+    if (conflict) {
+      return {
+        sourceAttribute: spec.sourceAttribute,
+        name: spec.name,
+        action: "conflict" as const,
+        id: null,
+        fieldKey: null,
+        conflict: {
+          sourceAttribute: spec.sourceAttribute,
+          name: spec.name,
+          existingId: conflict.id,
+          existingName: conflict.name,
+          existingDataType: conflict.dataType,
+          existingModel: conflict.model,
+        },
+      };
+    }
     return {
       sourceAttribute: spec.sourceAttribute,
       name: spec.name,
-      action: match ? "reuse" : "create",
-      id: match?.id ?? null,
-      fieldKey: match?.fieldKey ?? match?.key ?? null,
+      action: "create" as const,
+      id: null,
+      fieldKey: null,
+      conflict: null,
     };
   });
 }
@@ -73,7 +112,7 @@ export async function ensureSamTestSurveyTextFields(
   locationId: string,
   deps: EnsureDeps = {}
 ): Promise<
-  | { ok: true; locationId: string; fields: EnsuredSurveyField[] }
+  | { ok: true; locationId: string; fields: EnsuredSurveyField[]; conflicts: SurveyFieldConflict[] }
   | { ok: false; code: "location_not_allowed" | "not_connected" | "ghl_error"; error: string }
 > {
   if (locationId.trim() !== SAM_TEST_GHL_LOCATION_ID) {
@@ -92,8 +131,13 @@ export async function ensureSamTestSurveyTextFields(
   let fields = parseSurveyFields(listed.json);
   const plan = planSamTestSurveyTextFields(fields);
   const ensured: EnsuredSurveyField[] = [];
+  const conflicts: SurveyFieldConflict[] = [];
 
   for (const item of plan) {
+    if (item.action === "conflict" && item.conflict) {
+      conflicts.push(item.conflict);
+      continue;
+    }
     if (item.action === "reuse" && item.id) {
       ensured.push({
         sourceAttribute: item.sourceAttribute,
@@ -110,7 +154,20 @@ export async function ensureSamTestSurveyTextFields(
       dataType: "TEXT",
       model: "contact",
     }, timeoutMs);
-    if (!created.ok) return { ok: false, code: "ghl_error", error: created.error };
+    if (!created.ok) {
+      if (created.duplicateName) {
+        conflicts.push({
+          sourceAttribute: item.sourceAttribute,
+          name: item.name,
+          existingId: null,
+          existingName: item.name,
+          existingDataType: null,
+          existingModel: null,
+        });
+        continue;
+      }
+      return { ok: false, code: "ghl_error", error: created.error };
+    }
     const parsed = parseCreatedField(created.json);
     if (!parsed) return { ok: false, code: "ghl_error", error: `GHL did not return an id for ${item.name}.` };
     if (parsed.dataType && parsed.dataType.toUpperCase() !== "TEXT") {
@@ -126,7 +183,12 @@ export async function ensureSamTestSurveyTextFields(
       created: true,
     });
   }
-  return { ok: true, locationId: locationId.trim(), fields: ensured };
+  return { ok: true, locationId: locationId.trim(), fields: ensured, conflicts };
+}
+
+function conflictingName(preferredName: string, existing: readonly SurveyCustomField[]): SurveyCustomField | null {
+  const target = compact(preferredName);
+  return existing.find((field) => compact(field.name) === target && !isTextContact(field)) ?? null;
 }
 
 function bestCompatibleField(
@@ -199,7 +261,7 @@ async function ghlJson(
   method: "GET" | "POST",
   body: Record<string, string> | undefined,
   timeoutMs: number
-): Promise<{ ok: true; json: unknown } | { ok: false; error: string }> {
+): Promise<{ ok: true; json: unknown } | { ok: false; error: string; duplicateName: boolean }> {
   try {
     const res = await fetchImpl(url, {
       method,
@@ -219,11 +281,28 @@ async function ghlJson(
     } catch {
       json = null;
     }
-    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    if (!res.ok) {
+      const duplicateName = isDuplicateName(res.status, readErrorMessage(json));
+      return { ok: false, error: duplicateName ? "duplicate_name" : `HTTP ${res.status}`, duplicateName };
+    }
     return { ok: true, json };
   } catch {
-    return { ok: false, error: "GHL request failed" };
+    return { ok: false, error: "GHL request failed", duplicateName: false };
   }
+}
+
+function isDuplicateName(status: number, message: string): boolean {
+  if (status !== 400 && status !== 409 && status !== 422) return false;
+  const text = message.toLowerCase();
+  return text.includes("already") || text.includes("duplicate") || text.includes("exist");
+}
+
+function readErrorMessage(json: unknown): string {
+  if (!json || typeof json !== "object" || Array.isArray(json)) return "";
+  const record = json as Record<string, unknown>;
+  if (typeof record.message === "string") return record.message;
+  if (typeof record.error === "string") return record.error;
+  return "";
 }
 
 function parseSurveyFields(json: unknown): SurveyCustomField[] {

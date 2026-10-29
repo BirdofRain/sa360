@@ -27,6 +27,12 @@ import {
   isCompanySheetsInternalPilotDecision,
   isCompanySheetsInternalPilotLead,
 } from "./company-sheets-dispatch/company-sheets-pilot-isolation.js";
+import {
+  missingDeliveryRuleBlocker,
+  resolveDeliveryPlanRule,
+  isConfirmedSourceAssociationDecision,
+} from "./association-ghl-delivery-source.js";
+import { ROUTING_AUTHORITY_SOURCE_ASSOCIATION } from "./routing-source-association.service.js";
 
 async function blockedCompanySheetsPilotPlan(
   decision: RoutingDryRunDecision
@@ -77,7 +83,7 @@ export type DeliveryPlanBuildContext = {
   attribution: RoutingAttributionInput;
   leadIdentity: RoutingDryRunLeadIdentity | null;
   duplicateRisk?: DuplicateRiskResult | null;
-  routingAuthority?: "campaign_rule" | "manual_bulk_import";
+  routingAuthority?: "campaign_rule" | "manual_bulk_import" | "confirmed_source_association";
   manualDestination?: ManualDestinationPlanSource | null;
 };
 
@@ -136,17 +142,25 @@ export function buildShadowDeliveryPlanSteps(
   const warnings: string[] = [];
 
   if (!ctx.matched || !ctx.rule) {
+    const associationGap = ctx.routingAuthority === ROUTING_AUTHORITY_SOURCE_ASSOCIATION;
     return {
-      summary: "Routing did not match; shadow delivery plan is blocked.",
-      warnings: ["No matched routing rule; delivery plan cannot be generated."],
+      summary: associationGap
+        ? "Confirmed source association has no GHL destination; shadow delivery plan is blocked."
+        : "Routing did not match; shadow delivery plan is blocked.",
+      warnings: [
+        associationGap
+          ? missingDeliveryRuleBlocker(true)
+          : "No matched routing rule; delivery plan cannot be generated.",
+      ],
       steps: [
         {
           stepOrder: 1,
           stepType: "mark_ready_for_delivery_review",
           status: "blocked",
           title: "Routing review required",
-          description:
-            "No active routing rule matched this lead. Resolve routing before generating a delivery plan.",
+          description: associationGap
+            ? "Confirmed source association matched, but this client has no GHL destination. Configure the destination before generating a delivery plan."
+            : "No active routing rule matched this lead. Resolve routing before generating a delivery plan.",
         },
       ],
     };
@@ -538,9 +552,16 @@ export function buildDirectCanaryDeliveryPlanSteps(
       : null);
 
   if (!ctx.matched || !effectiveRule) {
+    const associationGap = ctx.routingAuthority === ROUTING_AUTHORITY_SOURCE_ASSOCIATION;
     return {
-      summary: "Routing did not match; direct canary delivery plan is blocked.",
-      warnings: ["No matched routing rule; adapter plan cannot be generated."],
+      summary: associationGap
+        ? "Confirmed source association has no GHL destination; direct canary delivery plan is blocked."
+        : "Routing did not match; direct canary delivery plan is blocked.",
+      warnings: [
+        associationGap
+          ? missingDeliveryRuleBlocker(true)
+          : "No matched routing rule; adapter plan cannot be generated.",
+      ],
       steps: [
         {
           stepOrder: 1,
@@ -550,7 +571,9 @@ export function buildDirectCanaryDeliveryPlanSteps(
           description:
             ctx.routingAuthority === "manual_bulk_import"
               ? "Bulk import destination metadata is missing; resolve destination before simulation."
-              : "No active routing rule matched this lead. Resolve routing before direct canary delivery.",
+              : associationGap
+                ? "Confirmed source association matched, but this client has no GHL destination. Configure the destination before GHL delivery."
+                : "No active routing rule matched this lead. Resolve routing before direct canary delivery.",
         },
       ],
     };
@@ -804,6 +827,10 @@ export async function generateLeadDeliveryPlanForDecision(
   const blocked = await blockedCompanySheetsPilotPlan(decision);
   if (blocked) return blocked;
 
+  if (isConfirmedSourceAssociationDecision(decision)) {
+    return generateDirectCanaryDeliveryPlanForDecision(routingDryRunDecisionId, opts);
+  }
+
   const attribution =
     opts.attribution ??
     (decision.attributionSnapshot as RoutingAttributionInput | null) ??
@@ -890,10 +917,8 @@ export async function generateDirectCanaryDeliveryPlanForDecision(
       masterClientAccountId: decision.masterClientAccountId,
     } as RoutingAttributionInput);
 
-  const rule =
-    decision.matched && decision.matchedRuleId
-      ? await prisma.campaignRoutingRule.findUnique({ where: { id: decision.matchedRuleId } })
-      : null;
+  const resolvedRule = await resolveDeliveryPlanRule(decision);
+  const rule = resolvedRule.rule;
 
   const duplicateRiskAssessment = await getDuplicateRiskForRoutingDecision(decision.id);
   const duplicateRisk = duplicateRiskAssessment
@@ -913,6 +938,9 @@ export async function generateDirectCanaryDeliveryPlanForDecision(
     decision,
     matched: decision.matched,
     rule,
+    routingAuthority: resolvedRule.associationMissingDestination
+      ? ROUTING_AUTHORITY_SOURCE_ASSOCIATION
+      : undefined,
     attribution,
     leadIdentity: opts.leadIdentity ?? null,
     duplicateRisk,

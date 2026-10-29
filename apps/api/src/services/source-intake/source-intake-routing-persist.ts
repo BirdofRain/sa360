@@ -22,7 +22,9 @@ import { persistLeadProofFromPayload } from "../lead-proof/lead-proof-ingest.ser
  * Used by both the LeadCapture.io and Facebook Lead Ads intake services so every source
  * flows through the identical existing pipeline: runRoutingDryRun (which persists the
  * RoutingDryRunDecision + lifecycle events), duplicate-risk evaluation, source enrichment,
- * and the SourceLeadEvent status transition. No GHL delivery is performed here.
+ * and the SourceLeadEvent status transition. No GHL delivery plan is created
+ * here and no GHL request is sent. Plan creation stays on an explicit
+ * delivery-plan or approve-delivery action.
  */
 export async function persistRoutingAndDuplicate(
   sourceEventId: string,

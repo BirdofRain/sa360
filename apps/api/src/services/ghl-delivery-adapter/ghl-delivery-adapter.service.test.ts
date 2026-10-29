@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import type { CampaignRoutingRule, LeadDeliveryPlan, LeadDeliveryPlanStep } from "@prisma/client";
+import type {
+  CampaignRoutingRule,
+  ClientGhlDestination,
+  LeadDeliveryPlan,
+  LeadDeliveryPlanStep,
+} from "@prisma/client";
 import {
   buildContactUpsertRequest,
   buildCustomFieldStampRequest,
@@ -14,7 +19,10 @@ import {
   isGhlWriteTransportAllowed,
 } from "./ghl-delivery-disabled-transport.js";
 import { getGhlDeliveryAdapterMode } from "../../lib/ghl-delivery-adapter-mode.js";
-
+import {
+  associationDestinationToPlanRule,
+  CONFIRMED_SOURCE_ASSOCIATION_PLAN_RULE_ID,
+} from "../association-ghl-delivery-source.js";
 const NOW = new Date();
 
 function planWithSteps(rule: CampaignRoutingRule | null): {
@@ -139,6 +147,41 @@ test("validateOpportunityConfig flags missing pipeline when enabled", () => {
   const { plan } = planWithSteps(rule);
   const v = validateOpportunityConfig({ plan, rule });
   assert.equal(v.valid, false);
+});
+
+test("association destination rule satisfies adapter simulation without a campaign rule row", () => {
+  const locationId = "yCziKRW26eFg8IXAQZ73";
+  const workflowId = "d4c1fa4c-a3e2-4fd8-9091-b3fad0d04edd";
+  const rule = associationDestinationToPlanRule({
+    masterClientAccountId: "lal_master_vet",
+    clientDisplayName: "Alex Gross",
+    destinationSubaccountIdGhl: locationId,
+    destination: {
+      clientAccountId: "alex_gross",
+      destinationSubaccountIdGhl: locationId,
+      destinationWorkflowIdGhl: workflowId,
+      destinationPipelineIdGhl: "QBIEpeXqzvF2JAmbBSIR",
+      destinationPipelineStageIdGhl: "b5b3729f-d3ae-4185-84c4-2d0dc3417e81",
+      opportunityCreationEnabled: true,
+      deliveryMode: "shadow",
+      deliveryEnabled: false,
+      clientCutoverApproved: false,
+      snapshotInstalled: false,
+      requiredFieldsInstalled: false,
+      createdAt: NOW,
+      updatedAt: NOW,
+    } as ClientGhlDestination,
+  });
+  const { plan } = planWithSteps(rule);
+  plan.destinationSubaccountIdGhl = locationId;
+  plan.sourceLeadUid = "lead_assoc";
+  const validation = validateDeliveryPlanForGhlSimulation({ plan, rule });
+  assert.equal(rule.id, CONFIRMED_SOURCE_ASSOCIATION_PLAN_RULE_ID);
+  assert.equal(validation.valid, true);
+  assert.equal(
+    validation.errors.includes("No CampaignRoutingRule linked to this delivery plan."),
+    false
+  );
 });
 
 test("validateDeliveryPlanForGhlSimulation flags missing subaccount", () => {

@@ -3,6 +3,7 @@ import { Worker } from "bullmq";
 import {
   BULK_IMPORT_DELIVERY_QUEUE,
   COMPANY_SHEETS_DISPATCH_QUEUE,
+  GHL_ASSOCIATION_DISPATCH_QUEUE,
   CONSUMER_AGE_BIRTHDAY_SWEEP_QUEUE,
   FACETS_SUPPLY_REBUILD_QUEUE,
   FULFILLMENT_SHADOW_QUEUE,
@@ -20,10 +21,12 @@ import { processFacetsSupplyRebuildJob } from "./processors/facets-supply-rebuil
 import { processMetaLeadgenFetchJob } from "./processors/meta-leadgen-fetch.processor.js";
 import { processConsumerAgeBirthdaySweepJob } from "./processors/consumer-age-birthday-sweep.processor.js";
 import { processCompanySheetsDispatchJob } from "./processors/company-sheets-dispatch.processor.js";
+import { processGhlAssociationDispatchJob } from "./processors/ghl-association-dispatch.processor.js";
 import { logBulkImportWorkerStartupDiagnostics } from "./lib/bulk-import-worker-diagnostics.js";
 import { syncFacetsSupplyRebuildScheduleOnWorkerStart } from "./lib/facets-supply-rebuild-schedule.js";
 import { syncConsumerAgeBirthdaySweepScheduleOnWorkerStart } from "./lib/consumer-age-birthday-sweep-schedule.js";
 import { syncCompanySheetsDispatchScheduleOnWorkerStart } from "./lib/company-sheets-dispatch-schedule.js";
+import { syncGhlAssociationDispatchScheduleOnWorkerStart } from "./lib/ghl-association-dispatch-schedule.js";
 
 dotenv.config();
 
@@ -99,6 +102,15 @@ const companySheetsDispatchWorker = new Worker(
   {
     connection: redis,
     concurrency: companySheetsDispatchConcurrency,
+  }
+);
+
+const ghlAssociationDispatchWorker = new Worker(
+  GHL_ASSOCIATION_DISPATCH_QUEUE,
+  (job) => processGhlAssociationDispatchJob(job),
+  {
+    connection: redis,
+    concurrency: 1,
   }
 );
 
@@ -216,6 +228,11 @@ void syncCompanySheetsDispatchScheduleOnWorkerStart().catch((err) => {
     error: err instanceof Error ? err.message : String(err),
   });
 });
+void syncGhlAssociationDispatchScheduleOnWorkerStart().catch((err) => {
+  logger.error("GHL association dispatch schedule sync failed", {
+    error: err instanceof Error ? err.message : String(err),
+  });
+});
 
 async function shutdown(signal: string) {
   stopRuntimeDiagnostics();
@@ -227,6 +244,7 @@ async function shutdown(signal: string) {
   await metaLeadgenFetchWorker.close();
   await consumerAgeBirthdaySweepWorker.close();
   await companySheetsDispatchWorker.close();
+  await ghlAssociationDispatchWorker.close();
   await flushLogger();
   process.exit(0);
 }

@@ -95,6 +95,14 @@ export const COMPANY_SHEETS_DISPATCH_QUEUE = "company-sheets-dispatch";
 export const COMPANY_SHEETS_DISPATCH_JOB = "process-company-sheets-dispatch";
 export const COMPANY_SHEETS_DISPATCH_JOB_ID = "company-sheets-dispatch-singleton";
 
+/**
+ * Recovers association GHL deliveries that were committed and never started.
+ * An in-flight or uncertain attempt is not sent again.
+ */
+export const GHL_ASSOCIATION_DISPATCH_QUEUE = "ghl-association-dispatch";
+export const GHL_ASSOCIATION_DISPATCH_JOB = "process-ghl-association-dispatch";
+export const GHL_ASSOCIATION_DISPATCH_JOB_ID = "ghl-association-dispatch-singleton";
+
 /** Guarded lead inventory review & activation (stacked on aged ingestion). */
 export const LEAD_INVENTORY_REVIEW_MAKE_AVAILABLE_CONFIRMATION =
   "MAKE REVIEWED INVENTORY AVAILABLE" as const;

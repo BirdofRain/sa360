@@ -1991,6 +1991,33 @@ model CompanySheetsDispatchIntent {
   @@index([sourceLeadEventId], map: "CompanySheetsDispatch_lead_idx")
 }
 
+/// Schedule row for association GHL delivery, committed with intake.
+/// Pending rows can be recovered before an attempt starts.
+/// An executing live run is not sent again. This does not finish an in-flight call.
+model GhlAssociationDispatchOutbox {
+  id                       String    @id @default(cuid())
+  idempotencyKey           String    @unique
+  /// pending | executing | settled | uncertain
+  status                   String
+  clientAccountId          String
+  sourceLeadEventId        String
+  routingDryRunDecisionId  String?
+  destinationLocationIdGhl String
+  liveRunId                String?
+  outcome                  String?
+  externalCallExecuted     Boolean   @default(false)
+  attemptCount             Int       @default(0)
+  availableAt              DateTime
+  executingAt              DateTime?
+  settledAt                DateTime?
+  lastError                String?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  @@index([status, availableAt], map: "GhlAssociationDispatch_status_available_idx")
+  @@index([sourceLeadEventId], map: "GhlAssociationDispatch_lead_idx")
+}
+
 /// Read-only GHL config discovery snapshot per location (Phase 5B).
 model GhlLocationConfigSnapshot {
   id               String   @id @default(cuid())

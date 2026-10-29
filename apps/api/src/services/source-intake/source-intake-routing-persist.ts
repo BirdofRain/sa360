@@ -16,6 +16,10 @@ import { hasDeliverableIdentity } from "./source-enrichment.service.js";
 import type { SourceLeadRoutingResult } from "./source-intake.types.js";
 import { persistLeadProofFromPayload } from "../lead-proof/lead-proof-ingest.service.js";
 import { deliverConfirmedAssociationIfActivated } from "../association-ongoing-delivery.js";
+import {
+  recordGhlAssociationDispatchOutbox,
+  settleGhlAssociationDispatchFromResult,
+} from "../ghl-association-dispatch/ghl-association-dispatch.js";
 
 /**
  * Shared source-intake routing + duplicate-risk + enrichment persistence.
@@ -23,9 +27,11 @@ import { deliverConfirmedAssociationIfActivated } from "../association-ongoing-d
  * Used by LeadCapture.io and Facebook Lead Ads intake so every source flows
  * through the same pipeline: runRoutingDryRun, duplicate-risk evaluation,
  * source enrichment, and the SourceLeadEvent status transition. A confirmed
- * parent-URL association with an activated GHL destination then records one
- * ongoing delivery. An unactivated destination is left alone. A GHL failure
- * does not roll back the lead or the Sheets intent.
+ * parent-URL association records a GHL schedule in the same transaction, then
+ * calls GHL after commit. That in-process call is not guaranteed to finish if
+ * the process dies. A later drain can send a pending row once. An executing
+ * or already-sent run is not sent again. A GHL failure does not roll back the
+ * lead or the Sheets intent.
  */
 export async function persistRoutingAndDuplicate(
   sourceEventId: string,
@@ -158,15 +164,25 @@ export async function persistRoutingAndDuplicate(
       },
       tx
     );
+    await recordGhlAssociationDispatchOutbox(
+      {
+        sourceLeadEventId: sourceEventId,
+        status,
+        routing,
+        resolvedAt: now,
+      },
+      tx
+    );
   });
 
   try {
-    await deliverConfirmedAssociationIfActivated({
+    const ghlResult = await deliverConfirmedAssociationIfActivated({
       sourceLeadEventId: sourceEventId,
       status,
       routing,
       lifecyclePayload: normalizedWithEnrichment,
     });
+    await settleGhlAssociationDispatchFromResult(sourceEventId, ghlResult);
   } catch (err) {
     logger.warn("association_ghl.ongoing_failed", {
       sourceLeadEventId: sourceEventId,

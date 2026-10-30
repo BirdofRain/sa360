@@ -21,6 +21,8 @@ type FakeItem = {
   inventoryLot: { supplierAccountId: string | null; status: string };
   sourceLeadEvent: {
     id: string;
+    sourceProvider?: string | null;
+    sourceCampaignId?: string | null;
     normalizedPayloadJson: unknown;
     rawPayloadJson: unknown;
     enrichmentMetadataJson: unknown;
@@ -44,6 +46,8 @@ function makeItem(input: {
   state?: string;
   ageDays?: number;
   originClientAccountId?: string | null;
+  sourceProvider?: string | null;
+  sourceCampaignId?: string | null;
 }): FakeItem {
   const contact = {
     first_name: input.first ?? "Ada",
@@ -67,6 +71,8 @@ function makeItem(input: {
     inventoryLot: { supplierAccountId: "supplier_ok", status: "active" },
     sourceLeadEvent: {
       id: `evt-${input.id}`,
+      sourceProvider: input.sourceProvider,
+      sourceCampaignId: input.sourceCampaignId,
       normalizedPayloadJson: payload,
       rawPayloadJson: input.rawAge == null ? {} : { consumer_age: input.rawAge },
       enrichmentMetadataJson: {},
@@ -80,6 +86,15 @@ function buildInventoryFakeDb(
     priorFingerprints?: Array<{ phone?: string; email?: string }>;
     clientAccountId?: string;
     requestedQuantity?: number;
+    funnels?: Array<{
+      id: string;
+      provider: string;
+      providerFunnelId: string | null;
+      parentUrlKey: string | null;
+      pageSlug: string | null;
+      associationStatus: string;
+      originClientAccountId: string | null;
+    }>;
   } = {}
 ) {
   let findManyCalls = 0;
@@ -123,6 +138,44 @@ function buildInventoryFakeDb(
     leadAllocation: {
       findMany: async () => [],
       findFirst: async () => null,
+    },
+    sourceFunnel: {
+      findUnique: async ({
+        where,
+      }: {
+        where: Record<string, { provider?: string; providerFunnelId?: string; parentUrlKey?: string }>;
+      }) => {
+        const funnels = opts.funnels ?? [];
+        if (where.provider_providerFunnelId) {
+          const key = where.provider_providerFunnelId;
+          return (
+            funnels.find(
+              (row) => row.provider === key.provider && row.providerFunnelId === key.providerFunnelId
+            ) ?? null
+          );
+        }
+        if (where.provider_parentUrlKey) {
+          const key = where.provider_parentUrlKey;
+          return (
+            funnels.find(
+              (row) => row.provider === key.provider && row.parentUrlKey === key.parentUrlKey
+            ) ?? null
+          );
+        }
+        return null;
+      },
+      findMany: async ({
+        where,
+      }: {
+        where: { provider: string; pageSlug: string; associationStatus: string };
+      }) =>
+        (opts.funnels ?? []).filter(
+          (row) =>
+            row.provider === where.provider &&
+            row.pageSlug === where.pageSlug &&
+            row.associationStatus === where.associationStatus &&
+            row.originClientAccountId != null
+        ),
     },
     leadInventoryItem: {
       findMany: async (args: { where: Record<string, unknown>; take: number }) => {
@@ -728,6 +781,157 @@ test("K: confirmed origin client cannot receive its own aged lead; unrelated buy
   );
   assert.equal(otherBuyer.exclusionCounts.originClient, 0);
   assert.equal(otherBuyer.exclusionCounts.sameBuyerPriorDelivery, 0);
+});
+
+test("K4: missing and unconfirmed origin stay eligible; confirmed buyer origin and prior delivery do not", async () => {
+  const evaluatedAt = nowEvaluatedAt();
+  const unknown = makeItem({
+    id: "unknown-manual",
+    evaluatedAt,
+    phone: "+12025557101",
+    email: "unknown.manual@example.test",
+    originClientAccountId: null,
+    sourceProvider: "manual_import",
+    ageDays: 50,
+  });
+  const unconfirmed = makeItem({
+    id: "unconfirmed-funnel",
+    evaluatedAt,
+    phone: "+12025557102",
+    email: "unconfirmed.funnel@example.test",
+    originClientAccountId: null,
+    sourceProvider: "leadcapture_io",
+    sourceCampaignId: "funnel-suggested",
+    ageDays: 55,
+  });
+  const confirmedBuyer = makeItem({
+    id: "confirmed-buyer",
+    evaluatedAt,
+    phone: "+12025557103",
+    email: "confirmed.buyer@example.test",
+    originClientAccountId: null,
+    sourceProvider: "leadcapture_io",
+    sourceCampaignId: "my.leadcapture.io/p/buyer-page",
+    ageDays: 58,
+  });
+  const confirmedOther = makeItem({
+    id: "confirmed-other",
+    evaluatedAt,
+    phone: "+12025557104",
+    email: "confirmed.other@example.test",
+    originClientAccountId: null,
+    sourceProvider: "leadcapture_io",
+    sourceCampaignId: "funnel-other",
+    ageDays: 48,
+  });
+  const seenUnknown = makeItem({
+    id: "seen-unknown",
+    evaluatedAt,
+    phone: "+12025557105",
+    email: "seen.unknown@example.test",
+    originClientAccountId: null,
+    sourceProvider: "manual_import",
+    ageDays: 52,
+  });
+  const funnels = [
+    {
+      id: "funnel-suggested",
+      provider: "leadcapture_io",
+      providerFunnelId: "funnel-suggested",
+      parentUrlKey: null,
+      pageSlug: null,
+      associationStatus: "suggested",
+      originClientAccountId: "client_suggested",
+    },
+    {
+      id: "funnel-buyer",
+      provider: "leadcapture_io",
+      providerFunnelId: null,
+      parentUrlKey: "my.leadcapture.io/p/buyer-page",
+      pageSlug: "buyer-page",
+      associationStatus: "confirmed",
+      originClientAccountId: "client_origin",
+    },
+    {
+      id: "funnel-other",
+      provider: "leadcapture_io",
+      providerFunnelId: "funnel-other",
+      parentUrlKey: null,
+      pageSlug: null,
+      associationStatus: "confirmed",
+      originClientAccountId: "client_other_origin",
+    },
+  ];
+  const items = [unknown, unconfirmed, confirmedBuyer, confirmedOther, seenUnknown];
+  const seenFingerprint = fingerprintIdentityValue("phone", "+12025557105");
+  const buyerDb = buildInventoryFakeDb(items, {
+    clientAccountId: "client_origin",
+    requestedQuantity: 10,
+    funnels,
+    priorFingerprints: [{ phone: seenFingerprint }],
+  });
+  const buyer = await queryEligibleInventoryCandidatesBounded(
+    {
+      nicheKey: "vet",
+      states: ["NC"],
+      commerceAgeBucketKeys: ["COMMERCE_1_3_MO"],
+      clientAccountId: "client_origin",
+      exclusions: [],
+      evaluatedAt,
+      targetEligible: 10,
+    },
+    buyerDb.db
+  );
+  assert.deepEqual(buyer.candidates.map((row) => row.item.id), [
+    "unconfirmed-funnel",
+    "unknown-manual",
+    "confirmed-other",
+  ]);
+  assert.equal(buyer.exclusionCounts.originClient, 1);
+  assert.equal(buyer.exclusionCounts.sameBuyerPriorDelivery, 1);
+
+  const preview = await previewPplInventorySelection(
+    {
+      orderId: "ord_origin",
+      commerceAgeBucketKeys: ["COMMERCE_1_3_MO"],
+      requestedQuantity: 10,
+    },
+    buyerDb.db
+  );
+  assert.equal(preview.ok, true);
+  if (!preview.ok) return;
+  assert.deepEqual(preview.selectedItemIds, buyer.candidates.map((row) => row.item.id));
+  assert.equal(buyerDb.getTransactionCalls(), 0);
+
+  const otherDb = buildInventoryFakeDb(items, {
+    clientAccountId: "client_second",
+    requestedQuantity: 10,
+    funnels,
+  });
+  const other = await queryEligibleInventoryCandidatesBounded(
+    {
+      nicheKey: "vet",
+      states: ["NC"],
+      commerceAgeBucketKeys: ["COMMERCE_1_3_MO"],
+      clientAccountId: "client_second",
+      exclusions: [],
+      evaluatedAt,
+      targetEligible: 10,
+    },
+    otherDb.db
+  );
+  assert.deepEqual(
+    other.candidates.map((row) => row.item.id).sort(),
+    [
+      "confirmed-buyer",
+      "confirmed-other",
+      "seen-unknown",
+      "unconfirmed-funnel",
+      "unknown-manual",
+    ]
+  );
+  assert.equal(other.exclusionCounts.originClient, 0);
+  assert.equal(other.exclusionCounts.sameBuyerPriorDelivery, 0);
 });
 
 test("K2: after origin stamp correction A→B, buyer B is excluded, A and unrelated stay eligible", async () => {

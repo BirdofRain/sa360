@@ -65,6 +65,7 @@ function buildFakeDb(input: {
   lockedPayload: PayloadBag;
   rawSql: string[];
   reservedIds: string[];
+  lockedOriginClientAccountId?: string | null;
 }) {
   const evaluatedAt = new Date();
   const items = [
@@ -99,6 +100,9 @@ function buildFakeDb(input: {
             },
             rawPayloadJson: {},
             enrichmentMetadataJson: {},
+            originClientAccountId: input.lockedOriginClientAccountId ?? null,
+            sourceProvider: "manual_import",
+            sourceCampaignId: null,
           },
         ];
       }
@@ -161,6 +165,7 @@ async function commitWithPayloads(input: {
   scanPayload: PayloadBag;
   lockedPayload: PayloadBag;
   idempotencyKey: string;
+  lockedOriginClientAccountId?: string | null;
 }) {
   const rawSql: string[] = [];
   const reservedIds: string[] = [];
@@ -169,6 +174,7 @@ async function commitWithPayloads(input: {
     lockedPayload: input.lockedPayload,
     rawSql,
     reservedIds,
+    lockedOriginClientAccountId: input.lockedOriginClientAccountId,
   });
   const previous = process.env.SA360_PPL_SELECTION_ENABLED;
   process.env.SA360_PPL_SELECTION_ENABLED = "true";
@@ -209,6 +215,32 @@ test("commit revalidates consumer age under the inventory row lock", async () =>
     ),
     "the locking query must read the payloads age is resolved from"
   );
+});
+
+test("a missing origin is reserved and a confirmed buyer origin is not", async () => {
+  const reserved = await commitWithPayloads({
+    scanPayload: ELIGIBLE,
+    lockedPayload: ELIGIBLE,
+    idempotencyKey: "unknown-origin-reserve",
+    lockedOriginClientAccountId: null,
+  });
+  assert.equal(reserved.result.ok, true);
+  assert.deepEqual(reserved.reservedIds, ["itemalpha"]);
+  assert.equal(
+    reserved.rawSql.some((sql) => /update\s+"LeadInventoryItem"\s+set\s+"originClientAccountId"/i.test(sql)),
+    false
+  );
+
+  const buyerOrigin = await commitWithPayloads({
+    scanPayload: ELIGIBLE,
+    lockedPayload: ELIGIBLE,
+    idempotencyKey: "buyer-origin-recheck",
+    lockedOriginClientAccountId: "client_age",
+  });
+  assert.equal(buyerOrigin.result.ok, false);
+  if (buyerOrigin.result.ok) return;
+  assert.deepEqual(buyerOrigin.reservedIds, []);
+  assert.ok(buyerOrigin.result.reasons.includes("origin_client_ineligible"));
 });
 
 test("an age that disappeared after preview fails the commit closed", async () => {

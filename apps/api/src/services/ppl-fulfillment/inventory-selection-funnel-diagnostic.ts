@@ -34,7 +34,11 @@ import {
   CONSUMER_AGE_REQUIRED_CATEGORY,
   MAX_SELLABLE_CONSUMER_AGE,
 } from "../consumer-age/consumer-age-policy.js";
-import { isOriginClientBuyerIneligible } from "./origin-client-exclusion.js";
+import {
+  createSellPathOriginCache,
+  evaluateSellPathOrigin,
+  type SellPathOriginCache,
+} from "./sell-path-origin.js";
 import { readBuyerCsvV3ZipAndAge } from "./buyer-lead-fields.js";
 import { evaluatePplBuyerReadyEligibility } from "./ppl-buyer-ready-eligibility.js";
 import { isItemExcludedByProtectedAgents } from "./protected-agent-exclusion.service.js";
@@ -187,6 +191,8 @@ type FunnelScanRow = {
   inventoryLot: { supplierAccountId: string | null; status: string };
   sourceLeadEvent: {
     id: string;
+    sourceProvider?: string | null;
+    sourceCampaignId?: string | null;
     normalizedPayloadJson: Prisma.JsonValue;
     rawPayloadJson: Prisma.JsonValue;
     enrichmentMetadataJson: Prisma.JsonValue;
@@ -370,6 +376,7 @@ export async function diagnosePplInventorySelection(
   };
 
   const seen = await loadBuyerSeenFingerprints(order.clientAccountId, db);
+  const originCache = createSellPathOriginCache();
   const flow = emptyFlow();
   let cursor: { generatedAt: Date; id: string } | null = null;
   let scanned = 0;
@@ -394,6 +401,8 @@ export async function diagnosePplInventorySelection(
         sourceLeadEvent: {
           select: {
             id: true,
+            sourceProvider: true,
+            sourceCampaignId: true,
             normalizedPayloadJson: true,
             rawPayloadJson: true,
             enrichmentMetadataJson: true,
@@ -409,7 +418,7 @@ export async function diagnosePplInventorySelection(
     for (const row of rows) {
       scanned += 1;
       cursor = { generatedAt: row.generatedAt, id: row.id };
-      classifyRow(row, {
+      await classifyRow(row, {
         flow,
         exclusions,
         buyerClientAccountId: order.clientAccountId,
@@ -418,6 +427,8 @@ export async function diagnosePplInventorySelection(
         commerceAgeBucketKeys,
         evaluatedAt,
         nicheKey: order.nicheKey,
+        db,
+        originCache,
       });
       if (scanned >= FUNNEL_MAX_SCAN_ROWS) {
         truncated = true;
@@ -497,7 +508,7 @@ function emptyFlow() {
   };
 }
 
-function classifyRow(
+async function classifyRow(
   row: FunnelScanRow,
   input: {
     flow: Flow;
@@ -508,6 +519,8 @@ function classifyRow(
     commerceAgeBucketKeys: Parameters<typeof matchesCommerceAgeBucketFilter>[1];
     evaluatedAt: Date;
     nicheKey: string;
+    db: PrismaClient | Prisma.TransactionClient;
+    originCache: SellPathOriginCache;
   }
 ) {
   const { flow } = input;
@@ -545,10 +558,16 @@ function classifyRow(
     { inventoryLot: row.inventoryLot, sourceLeadEvent: row.sourceLeadEvent },
     input.exclusions
   );
-  const originHit = isOriginClientBuyerIneligible(
-    row.originClientAccountId,
-    input.buyerClientAccountId
-  );
+  const origin = await evaluateSellPathOrigin({
+    originClientAccountId: row.originClientAccountId,
+    sourceProvider: row.sourceLeadEvent.sourceProvider,
+    sourceCampaignId: row.sourceLeadEvent.sourceCampaignId,
+    normalizedPayloadJson: row.sourceLeadEvent.normalizedPayloadJson,
+    buyerClientAccountId: input.buyerClientAccountId,
+    db: input.db,
+    cache: input.originCache,
+  });
+  const originHit = !origin.eligible;
   const fingerprints = buildIdentityFingerprints(row.sourceLeadEvent.normalizedPayloadJson);
   const identityOk = Boolean(fingerprints.phoneFingerprint || fingerprints.emailFingerprint);
   const buyer = evaluatePplBuyerReadyEligibility(row.sourceLeadEvent.normalizedPayloadJson, {

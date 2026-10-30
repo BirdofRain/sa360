@@ -148,3 +148,11 @@ and no client-folder row is still `creating`. Those claims last at most two
 minutes. Dropping the new tables while the new code is running breaks folder
 and spreadsheet-link setup. Leaving the tables in place while running the old
 code is the rollback. Do not drop them as part of an application rollback.
+
+## Follow-up
+
+Leads that reached `routing_matched` while API dispatch was off have no Sheets
+intent. Turning dispatch on does not copy them. A later explicit sync for
+Sheets and GHL is specified in
+`docs/operations/sync-existing-campaign-leads.md`. This runbook does not
+authorize that sync, a replay, or a change to Matt's Zap.

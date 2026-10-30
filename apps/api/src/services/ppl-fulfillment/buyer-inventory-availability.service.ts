@@ -265,6 +265,14 @@ function isAvailabilitySnapshotError(error: unknown): boolean {
   );
 }
 
+/** Ends the interactive transaction so Prisma returns the pooled connection. */
+function throwIfAvailabilityAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  throw Object.assign(new Error("availability_snapshot_unavailable"), {
+    code: "availability_snapshot_unavailable",
+  });
+}
+
 /**
  * One snapshot for every count, fingerprint load, source-funnel read, and page.
  * Read only so a bug cannot insert an order, reservation, delivery, or stamp.
@@ -272,6 +280,7 @@ function isAvailabilitySnapshotError(error: unknown): boolean {
  */
 async function withRepeatableReadSnapshot<T>(
   db: AvailabilityDb,
+  signal: AbortSignal | undefined,
   run: (db: PrismaClient) => Promise<T>
 ): Promise<T> {
   const client = db as PrismaClient;
@@ -280,9 +289,12 @@ async function withRepeatableReadSnapshot<T>(
       code: "availability_snapshot_unavailable",
     });
   }
+  throwIfAvailabilityAborted(signal);
   return client.$transaction(
     async (tx) => {
+      throwIfAvailabilityAborted(signal);
       await tx.$executeRawUnsafe("SET TRANSACTION READ ONLY");
+      throwIfAvailabilityAborted(signal);
       return run(tx as PrismaClient);
     },
     {
@@ -572,6 +584,11 @@ export async function lookupBuyerInventoryAvailability(
       pagesRead: number;
       rowsClassified: number;
     }) => Promise<void>;
+    /**
+     * When aborted, the snapshot transaction throws and Prisma releases the
+     * connection. Not accepted on HTTP. The route sets this from client disconnect.
+     */
+    signal?: AbortSignal;
   },
   db: AvailabilityDb = prisma
 ): Promise<BuyerInventoryAvailabilityResult> {
@@ -584,7 +601,7 @@ export async function lookupBuyerInventoryAvailability(
     return { ok: false, code: "invalid_age_buckets", reasons: ["invalid_age_buckets"] };
   }
   try {
-    return await withRepeatableReadSnapshot(db, (snapshotDb) =>
+    return await withRepeatableReadSnapshot(db, input.signal, (snapshotDb) =>
       lookupBuyerInventoryAvailabilityOnSnapshot(input, snapshotDb)
     );
   } catch (error) {
@@ -613,6 +630,7 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
       pagesRead: number;
       rowsClassified: number;
     }) => Promise<void>;
+    signal?: AbortSignal;
   },
   db: PrismaClient
 ): Promise<BuyerInventoryAvailabilityResult> {
@@ -756,6 +774,7 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
     let cohortExhausted = false;
 
     while (rowsClassified < passLimit && rowsClassified < selectableRowsExact) {
+    throwIfAvailabilityAborted(input.signal);
     const take = Math.min(pageSize, passLimit - rowsClassified);
     // Keyset the item rows first. Payload joins stay on this page so one
     // pass does not pull every source event before LIMIT.
@@ -925,6 +944,7 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
     if (input.afterClassificationPage) {
       await input.afterClassificationPage({ pagesRead, rowsClassified });
     }
+    throwIfAvailabilityAborted(input.signal);
     if (idRows.length < take) {
       cohortExhausted = true;
       break;

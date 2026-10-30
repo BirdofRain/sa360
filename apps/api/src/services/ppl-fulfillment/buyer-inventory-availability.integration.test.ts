@@ -311,6 +311,36 @@ describe("buyer inventory availability postgres proof", { skip: !runIntegration 
     );
   });
 
+  it("releases the snapshot connection when the caller aborts", async () => {
+    const controller = new AbortController();
+    const report = await lookupBuyerInventoryAvailability(
+      {
+        clientAccountId: BUYER_ID,
+        nicheKey: "trucker",
+        states: ["GA"],
+        evaluatedAt: EVALUATED_AT,
+        pageSize: 1,
+        signal: controller.signal,
+        afterClassificationPage: async ({ pagesRead }) => {
+          if (pagesRead === 1) controller.abort();
+        },
+      },
+      db
+    );
+    assert.equal(report.ok, false);
+    if (report.ok) return;
+    assert.equal(report.code, "availability_snapshot_unavailable");
+    const open = await probe.$queryRaw<Array<{ n: number }>>`
+      SELECT count(*)::int AS n
+      FROM pg_stat_activity
+      WHERE application_name = 'bav_lookup'
+        AND xact_start IS NOT NULL
+    `;
+    assert.equal(open[0]?.n ?? -1, 0);
+    const stillThere = await db.leadInventoryItem.count({ where: { id: "bav-ga-other-1-3" } });
+    assert.equal(stillThere, 1);
+  });
+
   it(
     "completes a nationwide 3–6 month count past the 100,000-row pass",
     { timeout: 900_000 },

@@ -10,7 +10,8 @@ export async function POST(request: Request) {
   const result = await adminRequestJson<Record<string, unknown>>(
     "POST",
     "/admin/v1/fulfillment-ops/buyer-availability",
-    body
+    body,
+    { signal: request.signal }
   );
   if (!result.ok) {
     let details: unknown = result.body;

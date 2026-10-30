@@ -379,4 +379,65 @@ describe("BuyerAvailabilityPanel", () => {
       globalThis.fetch = previous;
     }
   });
+
+  it("shows that a count is in progress and does not reserve inventory", async () => {
+    const previous = globalThis.fetch;
+    let release: (response: Response) => void = () => undefined;
+    globalThis.fetch = (() =>
+      new Promise<Response>((resolve) => {
+        release = resolve;
+      })) as typeof fetch;
+    try {
+      render(<BuyerAvailabilityPanel enabled clients={[]} />);
+      fireEvent.change(screen.getByTestId("buyer-availability-client-id"), {
+        target: { value: "client_jr_laird" },
+      });
+      fireEvent.click(screen.getByTestId("buyer-availability-submit"));
+      const progress = await screen.findByTestId("buyer-availability-progress");
+      assert.match(progress.textContent ?? "", /Counting buyer-eligible leads/);
+      assert.match(progress.textContent ?? "", /does not reserve inventory/);
+      assert.equal(
+        (screen.getByTestId("buyer-availability-submit") as HTMLButtonElement).disabled,
+        true
+      );
+      release(
+        new Response(JSON.stringify(exactReport), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      );
+      await screen.findByTestId("buyer-availability-total");
+      assert.equal(screen.queryByTestId("buyer-availability-progress"), null);
+    } finally {
+      globalThis.fetch = previous;
+    }
+  });
+
+  it("tells the operator to retry when the snapshot is unavailable", async () => {
+    const previous = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          ok: false,
+          error: "buyer_availability_failed",
+          details: { ok: false, code: "availability_snapshot_unavailable", reasons: ["availability_snapshot_unavailable"] },
+        }),
+        { status: 503, headers: { "content-type": "application/json" } }
+      )) as typeof fetch;
+    try {
+      render(<BuyerAvailabilityPanel enabled clients={[]} />);
+      fireEvent.change(screen.getByTestId("buyer-availability-client-id"), {
+        target: { value: "client_jr_laird" },
+      });
+      fireEvent.click(screen.getByTestId("buyer-availability-submit"));
+      const error = await screen.findByTestId("buyer-availability-error");
+      assert.match(error.textContent ?? "", /did not finish/);
+      assert.match(error.textContent ?? "", /No leads were reserved/);
+      assert.match(error.textContent ?? "", /check again/);
+      assert.equal(screen.queryByTestId("buyer-availability-result"), null);
+      assert.equal(screen.queryByText(/buyer-eligible/), null);
+    } finally {
+      globalThis.fetch = previous;
+    }
+  });
 });

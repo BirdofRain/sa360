@@ -80,6 +80,7 @@ export function BuyerAvailabilityPanel({
   const [tiers, setTiers] = useState<string[]>([...AGED_TIERS]);
   const [report, setReport] = useState<BuyerInventoryAvailabilityReport | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [counting, setCounting] = useState(false);
   const [pending, startTransition] = useTransition();
 
   if (!enabled) {
@@ -114,18 +115,23 @@ export function BuyerAvailabilityPanel({
             setError(parsedStates.error);
             return;
           }
+          setCounting(true);
           startTransition(async () => {
-            const result = await clientLookupBuyerAvailability({
-              clientAccountId: clientAccountId.trim(),
-              nicheKey,
-              ...(parsedStates.states ? { states: parsedStates.states } : {}),
-              ...(allTiers ? {} : { commerceAgeBucketKeys: tiers }),
-            });
-            if (!result.ok) {
-              setError(result.error);
-              return;
+            try {
+              const result = await clientLookupBuyerAvailability({
+                clientAccountId: clientAccountId.trim(),
+                nicheKey,
+                ...(parsedStates.states ? { states: parsedStates.states } : {}),
+                ...(allTiers ? {} : { commerceAgeBucketKeys: tiers }),
+              });
+              if (!result.ok) {
+                setError(result.error);
+                return;
+              }
+              setReport(result.data);
+            } finally {
+              setCounting(false);
             }
-            setReport(result.data);
           });
         }}
       >
@@ -218,11 +224,16 @@ export function BuyerAvailabilityPanel({
           <Button
             type="submit"
             size="sm"
-            disabled={pending || !clientAccountId.trim() || tiers.length === 0}
+            disabled={counting || pending || !clientAccountId.trim() || tiers.length === 0}
             data-testid="buyer-availability-submit"
           >
-            {pending ? "Checking availability…" : "Check availability"}
+            {counting || pending ? "Checking availability…" : "Check availability"}
           </Button>
+          {counting || pending ? (
+            <p className="text-sm text-slate-700" role="status" data-testid="buyer-availability-progress">
+              Counting buyer-eligible leads. This can take over a minute and does not reserve inventory.
+            </p>
+          ) : null}
           {error ? (
             <span className="text-sm text-red-700" data-testid="buyer-availability-error">
               {error}

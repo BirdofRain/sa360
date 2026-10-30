@@ -376,6 +376,11 @@ async function lookup(
     continuePastPassCeiling?: boolean;
     pageSize?: number;
     clientAccountId?: string;
+    signal?: AbortSignal;
+    afterClassificationPage?: (progress: {
+      pagesRead: number;
+      rowsClassified: number;
+    }) => Promise<void>;
   } = {}
 ) {
   const fake = buildFake({
@@ -397,6 +402,8 @@ async function lookup(
         ? {}
         : { continuePastPassCeiling: extra.continuePastPassCeiling }),
       pageSize: extra.pageSize,
+      signal: extra.signal,
+      afterClassificationPage: extra.afterClassificationPage,
     },
     fake.db
   );
@@ -1252,4 +1259,61 @@ test("passes continue under one snapshot and do not double-count or reset exclus
   assert.equal(byState.WA, 1);
   assert.equal(byState.FL, 0);
   assert.equal(byState.NY, 0);
+});
+
+test("an aborted caller releases the snapshot and does not return a partial total", async () => {
+  const alreadyAborted = new AbortController();
+  alreadyAborted.abort();
+  const beforeOpen = await lookup(
+    [
+      makeItem({
+        id: "abort-before",
+        ageDays: 120,
+        phone: "+14045550501",
+        state: "GA",
+        origin: "client_unrelated",
+      }),
+    ],
+    { signal: alreadyAborted.signal }
+  );
+  assert.equal(beforeOpen.transactions.length, 0);
+  assert.equal(beforeOpen.result.ok, false);
+  if (!beforeOpen.result.ok) {
+    assert.equal(beforeOpen.result.code, "availability_snapshot_unavailable");
+  }
+  assert.equal(beforeOpen.writeAttempts.length, 0);
+
+  const during = new AbortController();
+  const mid = await lookup(
+    [
+      makeItem({
+        id: "abort-page-1",
+        ageDays: 140,
+        phone: "+14045550511",
+        state: "GA",
+        origin: "client_unrelated",
+      }),
+      makeItem({
+        id: "abort-page-2",
+        ageDays: 100,
+        phone: "+14045550512",
+        state: "TX",
+        origin: "client_unrelated",
+      }),
+    ],
+    {
+      omitStates: true,
+      commerceAgeBucketKeys: ["COMMERCE_3_6_MO"],
+      pageSize: 1,
+      signal: during.signal,
+      afterClassificationPage: async ({ pagesRead }) => {
+        if (pagesRead === 1) during.abort();
+      },
+    }
+  );
+  assert.equal(mid.transactions.length, 1);
+  assert.equal(mid.result.ok, false);
+  if (!mid.result.ok) assert.equal(mid.result.code, "availability_snapshot_unavailable");
+  assert.equal(mid.writeAttempts.length, 0);
+  assert.equal(JSON.stringify(mid.result).includes("14045550511"), false);
 });

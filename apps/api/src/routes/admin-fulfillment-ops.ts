@@ -251,12 +251,25 @@ export const adminFulfillmentOpsRoutes: FastifyPluginAsync = async (app: Fastify
     if (!body.success) {
       return reply.status(400).send({ ok: false, error: "invalid_request" });
     }
-    const result = await lookupBuyerInventoryAvailability({
-      clientAccountId: body.data.clientAccountId,
-      nicheKey: body.data.nicheKey,
-      states: body.data.states,
-      commerceAgeBucketKeys: body.data.commerceAgeBucketKeys,
-    });
+    const abort = new AbortController();
+    const onClientGone = () => {
+      if (!reply.raw.writableEnded) abort.abort();
+    };
+    reply.raw.on("close", onClientGone);
+    request.raw.on("aborted", onClientGone);
+    let result;
+    try {
+      result = await lookupBuyerInventoryAvailability({
+        clientAccountId: body.data.clientAccountId,
+        nicheKey: body.data.nicheKey,
+        states: body.data.states,
+        commerceAgeBucketKeys: body.data.commerceAgeBucketKeys,
+        signal: abort.signal,
+      });
+    } finally {
+      reply.raw.off("close", onClientGone);
+      request.raw.off("aborted", onClientGone);
+    }
     if (!result.ok && result.code === "buyer_not_found") {
       return reply.status(404).send(result);
     }

@@ -86,7 +86,23 @@ finishes. The response records
 the availability total.
 
 The lookup holds one pooled connection for the snapshot (timeout 300 seconds,
-max wait 10 seconds). Counts run sequentially on that connection. Each page
+max wait 10 seconds). A second nationwide count needs another connection from
+the same Prisma pool. Prisma’s default pool is `num_physical_cpus * 2 + 1`
+per API process unless `DATABASE_URL` sets `connection_limit`. Production
+`sa360-api` is one 1 vCPU instance and its `DATABASE_URL` does not set
+`connection_limit`, so that pool is 3 connections. The worker process has its
+own pool. When every
+connection is busy, the next count waits up to 10 seconds and then returns
+503 `availability_snapshot_unavailable` instead of a total. Client disconnect
+aborts the snapshot at the next page, the read-only transaction ends, and
+Prisma returns the connection. The admin panel’s server route forwards the
+browser abort to that API request, so an edge cutoff releases the same
+connection. The portal route uses the same disconnect abort. Success, a thrown snapshot error, and the
+300-second transaction timeout do the same. App Platform fronts this route
+with Cloudflare, whose request limit is 100 seconds, so a measured 78-second
+count fits. A count that is still running at that edge limit is cut off; the
+panel tells the operator to wait and check again, and it does not show a
+total. Each page
 keysets 250 item ids, then loads payloads only for that page. The
 source-association cache is per request and is consistent because the snapshot
 does not change. A null-origin LeadCapture gate uses

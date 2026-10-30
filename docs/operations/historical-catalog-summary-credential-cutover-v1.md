@@ -118,7 +118,7 @@ Then, in an approved window only:
 Run the approved equivalent of `prepare-ownership.sql` as one transaction. Do not commit between role creation and the final checker.
 
 - Create `sa360_schema_owner`, `sa360_summary_runtime`, `sa360_summary_operator`, and `sa360_summary_reader` as `NOLOGIN`.
-- Create `sa360_app` as `LOGIN` with no password in git. Set the password in the DigitalOcean database user control, or with `ALTER ROLE` in that same window, and store it only as an App Platform secret.
+- Create `sa360_app` as `LOGIN` with no password in git. Boundary A is already applied and did not set a password. The later Boundary B procedure installs it with client-side encryption. Do not set it in the database control panel and do not submit a plaintext password statement.
 - Confirm the new login can connect from a non-production client before any service uses it. DigitalOcean may require the user to exist in the database control panel before the cluster accepts it.
 - Grant the matrix above. Do not grant `sa360_app` write on `_prisma_migrations`, projection readiness, or any summary table.
 - Transfer ownership of the five summary tables and their three sequences to `sa360_schema_owner`.
@@ -133,20 +133,20 @@ The API and worker still use `doadmin` after Boundary A. Inventory ownership doe
 
 ### Boundary B — API and worker credentials
 
-Migrate login stays `${sa360-postgres.DATABASE_URL}`.
+The executable procedure is `historical-catalog-summary-boundary-b-v1.md`. The `sa360` API app has no database component. `sa360-migrate` inherits that app's app-level `DATABASE_URL`, whose user is `doadmin`. `${sa360-postgres.DATABASE_URL}` belongs to the separate `sa360-admin-coc` app and is not the migrate job. Do not replace the app-level binding.
 
 App Platform change, not made by this repository:
 
 - Add a secret for the `sa360_app` connection string. Do not commit it and do not print it in build logs.
 - Bind that secret to `DATABASE_URL` on `sa360-api` and `sa360-worker` only.
-- Leave the `sa360-migrate` pre-deploy job on `${sa360-postgres.DATABASE_URL}`.
+- Leave `sa360-migrate` with no component `DATABASE_URL`, so it keeps inheriting the app-level `doadmin` binding.
 - Do not change `REDIS_URL`, webhook secrets, or Sheets flags.
 - Deploy API and worker. Do not attach summary triggers in this deploy.
 
 Order:
 
 1. Confirm Boundary A checkers still pass.
-2. Confirm the previous `doadmin` binding is still present on the migrate job and can be restored to the API and worker by redeploying the previous spec.
+2. Confirm the previous `doadmin` binding is still present on the migrate job. Recovery is the Boundary B controller: App Platform deployment rollback first, then one saved-spec restore. Do not depend on a file inside the API container.
 3. Deploy the credential change.
 4. `sa360-migrate` runs `pnpm migrate:deploy` as `doadmin`. No pending migration is success. A failed migrate fails the pre-deploy and does not switch traffic.
 5. Check API `/health` and the admin service health route.
@@ -158,7 +158,7 @@ Order:
 
 Fail the boundary and roll back if any smoke check returns permission denied, if projection refresh fails, if a summary routine appears, if `summary_ready` becomes true, or if the migrate job used `sa360_app`.
 
-Rollback for Boundary B: redeploy the previous app spec so API and worker use the existing `doadmin` binding again. Do not rotate the `doadmin` password. Do not drop the new roles. Roles that are unused by the services can stay until a later cleanup approval.
+Rollback for Boundary B: from the operator host, roll the `sa360` app back to the recorded pre-change deployment with `skip_pin true`. If that rollback cannot be used, restore the saved spec once. Do not rotate the `doadmin` password. Do not drop the new roles. Roles that are unused by the services can stay until a later cleanup approval. The password procedure is only the Boundary B runbook.
 
 ### Boundary C — functions only
 

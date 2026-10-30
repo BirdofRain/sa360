@@ -266,6 +266,14 @@ function BuyerAvailabilityResult({ report }: { report: BuyerInventoryAvailabilit
           writes that commit afterward are not included.
         </p>
       ) : null}
+      <p className="text-sm text-slate-800" data-testid="buyer-availability-completion">
+        Status: {incomplete ? "incomplete" : "complete"}
+        {" · "}
+        evaluated {report.evaluatedAt}
+        {report.scan.continuedPastPassCeiling && (report.scan.classificationPasses ?? 0) > 1
+          ? ` · completed across ${report.scan.classificationPasses} classification passes under one snapshot`
+          : ""}
+      </p>
       <p className="text-sm text-slate-700" data-testid="buyer-availability-total">
         {report.buyer.clientDisplayName} / {report.nicheKey} / {coverage} —{" "}
         {incomplete ? "at least " : ""}

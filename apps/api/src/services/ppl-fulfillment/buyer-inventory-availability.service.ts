@@ -25,9 +25,11 @@
  * parallel counts and later pages one snapshot.
  *
  * A blank or omitted state list counts every canonical US state. Entered
- * states still have to be canonical codes. An unfinished classification,
- * including the 100,000-row ceiling, is a lower bound and is not a nationwide
- * total. Order creation and selection keep their own state requirements.
+ * states still have to be canonical codes. The 100,000-row value is the size
+ * of one classification pass, not a nationwide total. Passes continue in the
+ * same repeatable-read snapshot, with the same dedupe sets, until the cohort
+ * is exhausted. An interrupted pass stays a lower bound and is not a total.
+ * Order creation and selection keep their own state requirements.
  */
 
 import type { Prisma, PrismaClient, SourceLeadProvider } from "@prisma/client";
@@ -76,7 +78,10 @@ import {
 
 export const BUYER_INVENTORY_AVAILABILITY_POLICY = "buyer-inventory-availability-v1";
 export const BUYER_AVAILABILITY_PAGE_SIZE = 250;
-/** Safety ceiling for payload classification. Not a reported total. */
+/**
+ * Rows classified per pass before the lookup continues from the same cursor.
+ * Not a nationwide total and not a cap that is raised to finish a count.
+ */
 export const BUYER_AVAILABILITY_MAX_CLASSIFIED_ROWS = 100_000;
 /** One admin lookup may hold a single pooled connection for the snapshot. */
 export const BUYER_AVAILABILITY_SNAPSHOT_TIMEOUT_MS = 300_000;
@@ -219,7 +224,11 @@ export type BuyerInventoryAvailabilityReport = {
     pagesRead: number;
     selectableRowsExact: number;
     rowsUnclassified: number;
+    /** Per-pass bound. A finished count may classify more than this. */
     classificationCeiling: number;
+    classificationPasses: number;
+    /** True when a later pass was required and the cohort was then exhausted. */
+    continuedPastPassCeiling: boolean;
     ceilingHit: boolean;
     /** Present so operators do not confuse this lookup with selection preview. */
     selectionScanCeiling: typeof PPL_SELECTION_MAX_SCANNED_ROWS;
@@ -355,12 +364,17 @@ function availabilitySummary(input: {
   notReached: string[];
   ceiling: number;
   ceilingHit: boolean;
+  classificationPasses: number;
 }): string {
   const scopePrefix = input.stateScope === "all" ? "All states. " : "";
   if (input.queryComplete && input.eligibleCountSemantics === "exact") {
+    const passNote =
+      input.classificationPasses > 1
+        ? ` Counted across ${input.classificationPasses} passes of at most ${input.ceiling.toLocaleString("en-US")} classified rows under one snapshot.`
+        : "";
     return input.eligibleTotal === 0
-      ? `${scopePrefix}No definitively buyer-eligible leads. Unresolved origin is excluded and is not treated as independently sourced.`
-      : `${scopePrefix}Exact buyer-eligible count is ${input.eligibleTotal}.`;
+      ? `${scopePrefix}No definitively buyer-eligible leads. Unresolved origin is excluded and is not treated as independently sourced.${passNote}`
+      : `${scopePrefix}Exact buyer-eligible count is ${input.eligibleTotal}.${passNote}`;
   }
   const notReachedNote =
     input.notReached.length > 0 ? ` Tiers not reached: ${input.notReached.join(", ")}.` : "";
@@ -540,8 +554,14 @@ export async function lookupBuyerInventoryAvailability(
     states?: readonly string[] | null;
     commerceAgeBucketKeys?: unknown;
     evaluatedAt?: Date;
-    /** Test seam. Clamped to the production ceiling. Not accepted on HTTP. */
+    /**
+     * Test seam. Clamped to the production pass ceiling. Not accepted on HTTP.
+     * When set, continuation past that pass stops unless continuePastPassCeiling
+     * is explicitly true, so interrupted counts stay lower bounds.
+     */
     maxClassifiedRows?: number;
+    /** Test seam. Production continues after each full pass. Not accepted on HTTP. */
+    continuePastPassCeiling?: boolean;
     pageSize?: number;
     /**
      * Test seam. Runs inside the snapshot after each classified page, so a
@@ -587,6 +607,7 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
     commerceAgeBucketKeys?: unknown;
     evaluatedAt?: Date;
     maxClassifiedRows?: number;
+    continuePastPassCeiling?: boolean;
     pageSize?: number;
     afterClassificationPage?: (progress: {
       pagesRead: number;
@@ -617,6 +638,8 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
     BUYER_AVAILABILITY_MAX_CLASSIFIED_ROWS,
     Math.max(1, input.maxClassifiedRows ?? BUYER_AVAILABILITY_MAX_CLASSIFIED_ROWS)
   );
+  const continuePastPassCeiling =
+    input.continuePastPassCeiling ?? input.maxClassifiedRows == null;
   const pageSize = Math.min(
     BUYER_AVAILABILITY_PAGE_SIZE,
     Math.max(1, input.pageSize ?? BUYER_AVAILABILITY_PAGE_SIZE)
@@ -723,11 +746,19 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
   const batchEmails = new Set<string>();
   const originCache = new Map<string, ReconciledOrigin>();
   let cursor: { generatedAt: Date; id: string } | null = null;
+  let classificationPasses = 0;
+  let stoppedOnPassCeiling = false;
 
-  while (rowsClassified < ceiling && rowsClassified < selectableRowsExact) {
-    const take = Math.min(pageSize, ceiling - rowsClassified);
-    // Keyset the item rows first. Payload joins stay on this page so a
-    // 100,000-row ceiling does not pull every source event before LIMIT.
+  while (rowsClassified < selectableRowsExact) {
+    const passStart = rowsClassified;
+    const passLimit = passStart + ceiling;
+    classificationPasses += 1;
+    let cohortExhausted = false;
+
+    while (rowsClassified < passLimit && rowsClassified < selectableRowsExact) {
+    const take = Math.min(pageSize, passLimit - rowsClassified);
+    // Keyset the item rows first. Payload joins stay on this page so one
+    // pass does not pull every source event before LIMIT.
     const idRows: Array<{ id: string; generatedAt: Date }> = await db.leadInventoryItem.findMany({
       where: cursor ? andWhere(scanPool, cursorWhere(cursor)) : scanPool,
       select: { id: true, generatedAt: true },
@@ -735,7 +766,10 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
       take,
     });
     pagesRead += 1;
-    if (idRows.length === 0) break;
+    if (idRows.length === 0) {
+      cohortExhausted = true;
+      break;
+    }
     const loaded = (await db.leadInventoryItem.findMany({
       where: { id: { in: idRows.map((row) => row.id) } },
       select: {
@@ -771,7 +805,7 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
       rowsClassified += 1;
       cursor = { generatedAt: idRow.generatedAt, id: idRow.id };
       if (!row) {
-        if (rowsClassified >= ceiling) break;
+        if (rowsClassified >= passLimit) break;
         continue;
       }
       const ageDays = calculateInventoryAgeDays(row.generatedAt, evaluatedAt);
@@ -783,7 +817,7 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
         !classifiedByTier.has(tierKey)
       ) {
         ageBucketMismatch += 1;
-        if (rowsClassified >= ceiling) break;
+        if (rowsClassified >= passLimit) break;
         continue;
       }
       classifiedByTier.set(tierKey, (classifiedByTier.get(tierKey) ?? 0) + 1);
@@ -794,12 +828,12 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
         row.inventoryLot.status !== "active" ||
         !isCanonicalUsStateCode(row.normalizedState)
       ) {
-        if (rowsClassified >= ceiling) break;
+        if (rowsClassified >= passLimit) break;
         continue;
       }
       if (row.leadAllocations.length > 0) {
         openAllocationLeak += 1;
-        if (rowsClassified >= ceiling) break;
+        if (rowsClassified >= passLimit) break;
         continue;
       }
       if (
@@ -809,7 +843,7 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
         )
       ) {
         protectedAgent += 1;
-        if (rowsClassified >= ceiling) break;
+        if (rowsClassified >= passLimit) break;
         continue;
       }
 
@@ -820,25 +854,25 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
         if (reconciled.kind === "unresolved") {
           originUnresolved += 1;
           bump(unresolvedReasons, reconciled.reason);
-          if (rowsClassified >= ceiling) break;
+          if (rowsClassified >= passLimit) break;
           continue;
         }
         reconciledFromSourceFunnel += 1;
         originClientAccountId = reconciled.originClientAccountId;
         if (isOriginClientBuyerIneligible(originClientAccountId, buyer.clientAccountId)) {
           originClientReconciled += 1;
-          if (rowsClassified >= ceiling) break;
+          if (rowsClassified >= passLimit) break;
           continue;
         }
       } else if (isOriginClientBuyerIneligible(originClientAccountId, buyer.clientAccountId)) {
-        if (rowsClassified >= ceiling) break;
+        if (rowsClassified >= passLimit) break;
         continue;
       }
 
       const fingerprints = buildIdentityFingerprints(row.sourceLeadEvent.normalizedPayloadJson);
       if (!fingerprints.phoneFingerprint && !fingerprints.emailFingerprint) {
         invalidIdentity += 1;
-        if (rowsClassified >= ceiling) break;
+        if (rowsClassified >= passLimit) break;
         continue;
       }
       const buyerReady = evaluatePplBuyerReadyEligibility(
@@ -856,7 +890,7 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
         for (const reason of buyerReady.reasons) {
           buyerReadyRejections[reason] += 1;
         }
-        if (rowsClassified >= ceiling) break;
+        if (rowsClassified >= passLimit) break;
         continue;
       }
       if (buyerReady.reviewFlags.length > 0) nameReviewFlagged += 1;
@@ -867,7 +901,7 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
         (fingerprints.emailFingerprint != null && seenEmails.has(fingerprints.emailFingerprint))
       ) {
         sameBuyerPriorDelivery += 1;
-        if (rowsClassified >= ceiling) break;
+        if (rowsClassified >= passLimit) break;
         continue;
       }
       if (
@@ -875,7 +909,7 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
         (fingerprints.emailFingerprint != null && batchEmails.has(fingerprints.emailFingerprint))
       ) {
         currentBatchDuplicate += 1;
-        if (rowsClassified >= ceiling) break;
+        if (rowsClassified >= passLimit) break;
         continue;
       }
       for (const fingerprint of phoneLookups) batchPhones.add(fingerprint);
@@ -885,13 +919,23 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
         row.normalizedState,
         (eligibleByState.get(row.normalizedState) ?? 0) + 1
       );
-      if (rowsClassified >= ceiling) break;
+      if (rowsClassified >= passLimit) break;
     }
 
     if (input.afterClassificationPage) {
       await input.afterClassificationPage({ pagesRead, rowsClassified });
     }
-    if (idRows.length < take) break;
+    if (idRows.length < take) {
+      cohortExhausted = true;
+      break;
+    }
+    }
+    if (cohortExhausted || rowsClassified >= selectableRowsExact) break;
+    if (rowsClassified === passStart) break;
+    if (!continuePastPassCeiling) {
+      stoppedOnPassCeiling = true;
+      break;
+    }
   }
 
   const queryComplete = rowsClassified === selectableRowsExact;
@@ -949,7 +993,8 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
     rowsUnclassified,
     notReached,
     ceiling,
-    ceilingHit: !queryComplete && rowsClassified >= ceiling,
+    ceilingHit: stoppedOnPassCeiling,
+    classificationPasses,
   });
   if (openAllocationLeak > 0) {
     summary += ` ${openAllocationLeak} rows with an open allocation were excluded during classification.`;
@@ -1040,7 +1085,9 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
       selectableRowsExact,
       rowsUnclassified,
       classificationCeiling: ceiling,
-      ceilingHit: !queryComplete && rowsClassified >= ceiling,
+      classificationPasses,
+      continuedPastPassCeiling: queryComplete && classificationPasses > 1,
+      ceilingHit: stoppedOnPassCeiling,
       selectionScanCeiling: PPL_SELECTION_MAX_SCANNED_ROWS,
       usesSelectionRowCap: false,
     },

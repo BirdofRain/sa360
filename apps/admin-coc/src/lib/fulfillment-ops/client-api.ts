@@ -417,6 +417,8 @@ export type BuyerInventoryAvailabilityReport = {
     selectableRowsExact: number;
     rowsUnclassified: number;
     ceilingHit: boolean;
+    classificationPasses?: number;
+    continuedPastPassCeiling?: boolean;
     usesSelectionRowCap: false;
   };
   summary: string;

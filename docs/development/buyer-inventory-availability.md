@@ -64,12 +64,17 @@ set is a different cohort. If the transaction cannot start, the route returns
 transaction start. Writes that commit after that — inserts, reservations,
 status changes, source-association updates — are invisible to this check.
 Exact structural counts and exact eligible tier counts are exact for that
-snapshot. Eligible tier counts stay a lower bound when classification stops at
-the 100,000-row ceiling. Tiers the oldest-first cursor has not entered are
+snapshot. The 100,000-row figure is one classification pass. The same
+repeatable-read transaction continues from the keyset cursor, keeping phone
+and email dedupe state, until the selectable cohort is exhausted. A finished
+count can therefore classify more than 100,000 rows and is still exact for
+`evaluatedAt`. Tiers the oldest-first cursor has not entered are
 `not_reached` (`eligible: null`) rather than zero. An all-states lookup uses
-the same ceiling. If the scan stops early, `stateScope` is still `all`, the
+the same passes. If a pass is interrupted, `stateScope` is still `all`, the
 summary says the figure is not a nationwide total, and unscanned states stay
-`not_reached` rather than zero. `eligibleByState` uses the
+`not_reached` rather than zero. The snapshot transaction budget is 300
+seconds. If that budget is exhausted the route returns 503 and does not
+return a partial total. `eligibleByState` uses the
 same eligible rows, after identity dedupe. For `stateScope: "all"` that list
 is every canonical US state code. The portal map sends one of the five
 priced ranges, so a state's count is only that range. A historical 6–12 admin

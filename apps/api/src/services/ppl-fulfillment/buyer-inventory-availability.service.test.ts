@@ -373,6 +373,7 @@ async function lookup(
     nicheKey?: string;
     commerceAgeBucketKeys?: string[];
     maxClassifiedRows?: number;
+    continuePastPassCeiling?: boolean;
     pageSize?: number;
     clientAccountId?: string;
   } = {}
@@ -392,6 +393,9 @@ async function lookup(
       commerceAgeBucketKeys: extra.commerceAgeBucketKeys,
       evaluatedAt: EVALUATED_AT,
       maxClassifiedRows: extra.maxClassifiedRows,
+      ...(extra.continuePastPassCeiling == null
+        ? {}
+        : { continuePastPassCeiling: extra.continuePastPassCeiling }),
       pageSize: extra.pageSize,
     },
     fake.db
@@ -1146,4 +1150,106 @@ test("an unfinished nationwide scan is a lower bound, not the eligible total", a
   const youngTier = report.ageTiers.find((tier) => tier.commerceAgeBucketKey === "COMMERCE_1_3_MO");
   assert.equal(youngTier?.countSemantics, "not_reached");
   assert.equal(youngTier?.eligible, null);
+});
+
+test("passes continue under one snapshot and do not double-count or reset exclusions", async () => {
+  const sharedPhone = "+14045550401";
+  const laterPhone = "+14045550402";
+  const seenPhone = "+14045550403";
+  const { result, transactions } = await lookup(
+    [
+      makeItem({
+        id: "pass-1",
+        ageDays: 140,
+        phone: sharedPhone,
+        state: "GA",
+        origin: "client_unrelated",
+      }),
+      makeItem({
+        id: "pass-2-dup",
+        ageDays: 130,
+        phone: sharedPhone,
+        state: "TX",
+        origin: "client_unrelated",
+      }),
+      makeItem({
+        id: "pass-3-protected",
+        ageDays: 120,
+        phone: "+14045550409",
+        state: "FL",
+        origin: "client_unrelated",
+        supplierAccountId: "supplier_blocked",
+      }),
+      makeItem({
+        id: "pass-4-seen",
+        ageDays: 110,
+        phone: seenPhone,
+        state: "NY",
+        origin: "client_unrelated",
+      }),
+      makeItem({
+        id: "pass-5-new",
+        ageDays: 100,
+        phone: laterPhone,
+        state: "WA",
+        origin: "client_unrelated",
+      }),
+      makeItem({
+        id: "same-origin",
+        ageDays: 150,
+        phone: "+14045550408",
+        state: "OH",
+        origin: BUYER_ID,
+      }),
+      makeItem({
+        id: "younger-tier",
+        ageDays: 40,
+        phone: "+14045550407",
+        state: "CA",
+        origin: "client_unrelated",
+      }),
+    ],
+    {
+      omitStates: true,
+      commerceAgeBucketKeys: ["COMMERCE_3_6_MO"],
+      maxClassifiedRows: 1,
+      continuePastPassCeiling: true,
+      pageSize: 1,
+      priorPhones: [seenPhone],
+      exclusions: [
+        { matchType: "supplier_account_id", matchValue: "supplier_blocked", active: true },
+      ],
+    }
+  );
+  const report = ok(result);
+  assert.equal(transactions.length, 1);
+  assert.equal(report.stateScope, "all");
+  assert.equal(report.queryCompleteness, "complete");
+  assert.equal(report.eligibleCountSemantics, "exact");
+  assert.equal(report.scan.ceilingHit, false);
+  assert.equal(report.scan.classificationCeiling, 1);
+  assert.equal(report.scan.continuedPastPassCeiling, true);
+  assert.ok((report.scan.classificationPasses ?? 0) > 1);
+  assert.equal(report.eligibleTotal, 2);
+  assert.equal(report.exclusionReasons.currentBatchDuplicate.count, 1);
+  assert.equal(report.exclusionReasons.protectedAgent.count, 1);
+  assert.equal(report.exclusionReasons.sameBuyerPriorDelivery.count, 1);
+  assert.equal(report.exclusionReasons.originClientStamped.count, 1);
+  assert.equal(
+    report.ageTiers.find((tier) => tier.commerceAgeBucketKey === "COMMERCE_3_6_MO")?.eligible,
+    2
+  );
+  assert.equal(
+    report.ageTiers.find((tier) => tier.commerceAgeBucketKey === "COMMERCE_1_3_MO"),
+    undefined
+  );
+  assert.match(report.summary, /Exact buyer-eligible count is 2/);
+  assert.match(report.summary, /All states/);
+  assert.equal(report.summary.includes("not a nationwide total"), false);
+  const byState = Object.fromEntries(report.eligibleByState.map((row) => [row.state, row.eligible]));
+  assert.equal(byState.GA, 1);
+  assert.equal(byState.TX, 0);
+  assert.equal(byState.WA, 1);
+  assert.equal(byState.FL, 0);
+  assert.equal(byState.NY, 0);
 });

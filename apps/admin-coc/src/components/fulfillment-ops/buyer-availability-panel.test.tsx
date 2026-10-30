@@ -272,6 +272,53 @@ describe("BuyerAvailabilityPanel", () => {
     }
   });
 
+  it("labels a finished multi-pass nationwide count as complete", async () => {
+    const previous = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          ...exactReport,
+          stateScope: "all",
+          states: ["GA", "TX"],
+          summary:
+            "All states. Exact buyer-eligible count is 4. Counted across 2 passes of at most 100,000 classified rows under one snapshot.",
+          scan: {
+            ...exactReport.scan,
+            classificationPasses: 2,
+            continuedPastPassCeiling: true,
+            ceilingHit: false,
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      )) as typeof fetch;
+    try {
+      render(<BuyerAvailabilityPanel enabled clients={[]} />);
+      fireEvent.change(screen.getByTestId("buyer-availability-client-id"), {
+        target: { value: "client_jr_laird" },
+      });
+      fireEvent.change(screen.getByTestId("buyer-availability-states"), { target: { value: "" } });
+      fireEvent.click(screen.getByTestId("buyer-availability-submit"));
+      const total = await screen.findByTestId("buyer-availability-total");
+      assert.match(total.textContent ?? "", /All states/);
+      assert.match(total.textContent ?? "", /4 buyer-eligible/);
+      assert.match(total.textContent ?? "", /\(exact\)/);
+      assert.match(
+        screen.getByTestId("buyer-availability-completion").textContent ?? "",
+        /Status: complete/
+      );
+      assert.match(
+        screen.getByTestId("buyer-availability-completion").textContent ?? "",
+        /2 classification passes/
+      );
+      assert.match(
+        screen.getByTestId("buyer-availability-completion").textContent ?? "",
+        /2026-08-24T00:00:00.000Z/
+      );
+    } finally {
+      globalThis.fetch = previous;
+    }
+  });
+
   it("rejects invalid state text instead of searching all states", async () => {
     const previous = globalThis.fetch;
     let calls = 0;

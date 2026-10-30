@@ -2,7 +2,12 @@ import { AdminCocForbiddenError, requireAdminCocAdminSession } from "@/lib/admin
 import { fetchOnboardingSummary, listOnboardingTestRuns } from "@/lib/admin-api/client-onboarding-v2";
 import {
   fetchCompanyGoogleConnection,
+  fetchCompanySheetsDestination,
   fetchCompanySheetsDispatch,
+  listCompanyClientSpreadsheets,
+  type CompanyGoogleConnectionView,
+  type CompanySheetsDestinationView,
+  type CompanySheetsFolderSpreadsheetList,
 } from "@/lib/admin-api/company-google-sheets";
 import {
   fetchAdminClientDeliveryConfig,
@@ -12,7 +17,7 @@ import {
 import { SetupDeliveryWorkspace } from "@/components/clients/onboarding/setup-delivery-workspace";
 import type { GhlWalkthroughConnection, GhlWalkthroughLocation } from "@/components/clients/onboarding/ghl-walkthrough-types";
 import type { ClientDeliveryConfigResponse } from "@/lib/clients/delivery-config-types";
-import type { CompanyConnectionIdentity } from "@/lib/clients/onboarding/types";
+import type { CompanyConnectionIdentity, PersistedSheetsSetup } from "@/lib/clients/onboarding/types";
 
 export const dynamic = "force-dynamic";
 
@@ -53,13 +58,15 @@ export default async function ClientOnboardingPage({
     );
   }
 
-  const [summary, connection, dispatch, runs, deliveryConfig, ghlConnections] = await Promise.all([
+  const [summary, connection, dispatch, runs, deliveryConfig, ghlConnections, destination, folderList] = await Promise.all([
     fetchOnboardingSummary(id),
     fetchCompanyGoogleConnection(),
     fetchCompanySheetsDispatch(id),
     listOnboardingTestRuns(id),
     fetchAdminClientDeliveryConfig(id),
     fetchAdminGhlConnections(id),
+    fetchCompanySheetsDestination(id),
+    listCompanyClientSpreadsheets(id),
   ]);
 
   return (
@@ -84,6 +91,7 @@ export default async function ClientOnboardingPage({
       ghlLocation={deliveryConfig.data ? projectGhlLocation(deliveryConfig.data) : null}
       ghlConnections={ghlConnections.data ? projectGhlConnections(ghlConnections.data.items) : []}
       ghlLocationError={deliveryConfig.error ?? ghlConnections.error}
+      sheetsSetup={projectSheetsSetup(destination, folderList)}
     />
   );
 }
@@ -121,14 +129,7 @@ function projectGhlConnections(
   }));
 }
 
-function projectConnection(connection: {
-  status: string;
-  connected: boolean;
-  googleEmail: string | null;
-  googleDisplayName: string | null;
-  connectedAt: string | null;
-  liveDeliveryEnabled: false;
-}): CompanyConnectionIdentity {
+function projectConnection(connection: CompanyGoogleConnectionView): CompanyConnectionIdentity {
   return {
     status: connection.status,
     connected: connection.connected,
@@ -136,5 +137,28 @@ function projectConnection(connection: {
     googleDisplayName: connection.googleDisplayName,
     connectedAt: connection.connectedAt,
     liveDeliveryEnabled: false,
+    destinationFolder: connection.destinationFolder
+      ? { folderId: connection.destinationFolder.folderId, title: connection.destinationFolder.title }
+      : null,
+  };
+}
+
+function projectSheetsSetup(
+  destination: Awaited<ReturnType<typeof fetchCompanySheetsDestination>>,
+  folder: Awaited<ReturnType<typeof listCompanyClientSpreadsheets>>
+): PersistedSheetsSetup {
+  const saved: CompanySheetsDestinationView | null = destination.ok ? destination.data.destination : null;
+  const campaign = saved?.tabContracts?.find((tab) => tab.role === "campaign");
+  const bound = Boolean(campaign && campaign.setupState === "bound" && campaign.worksheetId != null);
+  const listed: CompanySheetsFolderSpreadsheetList | null = folder.ok ? folder.data : null;
+  return {
+    folderLoaded: folder.ok,
+    folder: listed?.folder ?? null,
+    destinationLoaded: destination.ok,
+    spreadsheetTitle: saved?.spreadsheetTitle ?? null,
+    spreadsheetUrl: saved?.spreadsheetUrl ?? null,
+    campaignBound: destination.ok ? bound : null,
+    campaignWorksheetTitle: bound ? campaign?.worksheetTitle ?? null : null,
+    writeReadiness: saved?.writeReadiness ?? null,
   };
 }

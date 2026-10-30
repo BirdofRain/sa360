@@ -28,6 +28,7 @@ import {
   fetchCompanyGoogleConnection,
   fetchCompanySheetsDestination,
   fetchCompanySheetsDispatch,
+  listCompanyClientSpreadsheets,
 } from "@/lib/admin-api/company-google-sheets";
 import { fetchAdminClientDetail, isAdminApiConfigured } from "@/lib/admin-api/server";
 
@@ -61,11 +62,12 @@ export default async function ClientCompanyGoogleSheetsPage({
     );
   }
 
-  const [connectionResult, destinationResult, detailResult, dispatchResult] = await Promise.all([
+  const [connectionResult, destinationResult, detailResult, dispatchResult, folderResult] = await Promise.all([
     fetchCompanyGoogleConnection(),
     fetchCompanySheetsDestination(id),
     fetchAdminClientDetail(id),
     fetchCompanySheetsDispatch(id),
+    listCompanyClientSpreadsheets(id),
   ]);
   const displayName = detailResult.data?.item.clientDisplayName?.trim() || id;
   const nicheKey = detailResult.data?.item.primaryNicheKeys?.find((key) => key.trim()) ?? null;
@@ -119,6 +121,8 @@ export default async function ClientCompanyGoogleSheetsPage({
             createTab: createCompanySheetsTabAction,
             setDispatch: activateCompanySheetsDispatchAction,
           }}
+          initialFolderList={folderResult.ok ? folderResult.data : undefined}
+          folderLoadError={folderResult.ok ? null : "Saved folder could not be loaded."}
         />
       )}
     </div>

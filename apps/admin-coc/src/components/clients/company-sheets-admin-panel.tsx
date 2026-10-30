@@ -1,7 +1,11 @@
 "use client";
 
+import Link from "next/link";
 import { useRef, useState } from "react";
 import { COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3, COMPANY_SHEETS_V3_COLUMNS } from "@sa360/shared";
+
+import { SpreadsheetIdentity } from "@/components/clients/spreadsheet-identity";
+import { SPREADSHEET_SAVED_CHOOSE_WORKSHEET } from "@/lib/clients/onboarding/view";
 
 import type {
   CompanyGoogleConnectionView,
@@ -192,9 +196,9 @@ function linkHistoryLabel(link: { status: string; recordedAt: string; superseded
 
 function StatusRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-slate-200 px-3 py-2">
+    <div className="min-w-0 rounded-lg border border-slate-200 px-3 py-2">
       <p className="text-xs text-slate-500">{label}</p>
-      <p className="mt-0.5 text-sm font-medium text-slate-900">{value}</p>
+      <p className="mt-0.5 min-w-0 break-words text-sm font-medium text-slate-900">{value}</p>
     </div>
   );
 }
@@ -217,6 +221,8 @@ export function CompanySheetsAdminPanel({
   dispatch,
   notice,
   actions,
+  initialFolderList,
+  folderLoadError = null,
 }: {
   clientAccountId: string;
   clientDisplayName: string;
@@ -226,6 +232,8 @@ export function CompanySheetsAdminPanel({
   dispatch?: CompanySheetsDispatchView | null;
   notice: string | null;
   actions: CompanySheetsAdminActions;
+  initialFolderList?: CompanySheetsFolderSpreadsheetList;
+  folderLoadError?: string | null;
 }) {
   const [notes, setNotes] = useState<Partial<Record<SectionName, Note>>>({});
   const [pendingSection, setPendingSection] = useState<SectionName | null>(null);
@@ -233,10 +241,10 @@ export function CompanySheetsAdminPanel({
   const [spreadsheet, setSpreadsheet] = useState("");
   const [folder, setFolder] = useState("");
   const [clientFolder, setClientFolder] = useState("");
-  const [verifiedClientFolderId, setVerifiedClientFolderId] = useState<string | null>(null);
-  const [verifiedClientFolderTitle, setVerifiedClientFolderTitle] = useState<string | null>(null);
+  const [verifiedClientFolderId, setVerifiedClientFolderId] = useState<string | null>(initialFolderList?.folder?.folderId ?? null);
+  const [verifiedClientFolderTitle, setVerifiedClientFolderTitle] = useState<string | null>(initialFolderList?.folder?.title ?? null);
   const [folderChoices, setFolderChoices] = useState<CompanySheetsFolderChoice[]>([]);
-  const [sheetList, setSheetList] = useState<CompanySheetsFolderSpreadsheetList | null>(null);
+  const [sheetList, setSheetList] = useState<CompanySheetsFolderSpreadsheetList | null>(initialFolderList ?? null);
   const [recipient, setRecipient] = useState(destination?.sharing.intendedRecipientEmail ?? "");
   const [worksheets, setWorksheets] = useState<CompanySheetsResolvedWorksheet[]>([]);
   const [spreadsheetId, setSpreadsheetId] = useState(destination?.spreadsheetId ?? "");
@@ -348,6 +356,50 @@ export function CompanySheetsAdminPanel({
   const liveSwapBlocked = replacing && (dispatch?.campaignDispatchEnabled === true || dispatch?.agedDispatchEnabled === true);
   const parent = connection?.destinationFolder;
   const campaignTab = (destination?.tabContracts ?? []).find((tab) => tab.role === "campaign");
+  const campaignBound = campaignTab?.setupState === "bound" && campaignTab.worksheetId != null;
+  const companyFolderControls = (
+    <div className="space-y-3">
+      <label className="block text-sm text-slate-700">
+        Folder URL or ID
+        <input
+          className="mt-1 w-full min-w-0 rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          value={folder}
+          onChange={(event) => setFolder(event.target.value)}
+          placeholder="https://drive.google.com/drive/folders/…"
+        />
+      </label>
+      <div className="flex flex-wrap gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          disabled={busy("folder") || !folder.trim()}
+          onClick={() =>
+            void run("folder", async () => {
+              const result = await actions.saveFolder(clientAccountId, folder.trim());
+              if (!result.ok) return result;
+              return { ok: true, message: "Folder verified. Existing spreadsheets were not moved." };
+            })
+          }
+        >
+          Verify folder
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          disabled={busy("folder")}
+          onClick={() =>
+            void run("folder", async () => {
+              const result = await actions.clearFolder(clientAccountId);
+              if (!result.ok) return result;
+              return { ok: true, message: "Parent folder setting cleared. The Drive folder was not deleted." };
+            })
+          }
+        >
+          Clear parent setting
+        </Button>
+      </div>
+    </div>
+  );
 
   return (
     <div className="space-y-4">
@@ -355,7 +407,7 @@ export function CompanySheetsAdminPanel({
         Life Agent Launch owns the Google account. {clientDisplayName} does not connect Google
         and this page does not start lead delivery.
       </p>
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid min-w-0 gap-3 sm:grid-cols-3">
         <StatusRow label="Connection" value={connection ? connectionLabel : "Unavailable"} />
         <StatusRow label="Read access" value={destination ? destination.accessStatus : "No destination"} />
         <StatusRow label="Automatic delivery" value={deliveryOn ? "On" : "Off"} />
@@ -408,15 +460,16 @@ export function CompanySheetsAdminPanel({
           </Button>
         </div>
       </section>
-      <section aria-label="Client folder" aria-busy={busy("folder")} className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
+      <section aria-label="Client folder" aria-busy={busy("folder")} className="min-w-0 space-y-3 overflow-hidden rounded-xl border border-slate-200 bg-white p-4">
         <h2 className="text-sm font-semibold text-slate-900">Client folder</h2>
         <SectionFeedback section="folder" />
-        <p className="text-sm text-slate-600">
+        {folderLoadError ? <p className="text-sm text-amber-800">{folderLoadError}</p> : null}
+        <p className="min-w-0 text-sm text-slate-600">
           {parent ? (
             <>
-              Configured parent{" "}
-              <a className="text-sky-700 underline" href={`https://drive.google.com/drive/folders/${parent.folderId}`}>
-                {parent.title ?? "Client Folders"}
+              Company folder:{" "}
+              <a className="break-all text-sky-700 underline" href={`https://drive.google.com/drive/folders/${parent.folderId}`}>
+                {parent.title?.trim() || parent.folderId}
               </a>
               . New folders use the client name {clientDisplayName}. Existing spreadsheets stay where they are.
             </>
@@ -424,6 +477,12 @@ export function CompanySheetsAdminPanel({
             "No verified company parent. New spreadsheets stay uncreated until an approved folder is selected. They are not placed in Drive root."
           )}
         </p>
+        {parent ? null : (
+          <div className="space-y-3">
+            <p className="text-sm text-slate-700">Select the company folder. The approved-parent check still applies.</p>
+            {companyFolderControls}
+          </div>
+        )}
         <label className="block text-sm text-slate-700">
           Existing client subfolder
           <input
@@ -522,12 +581,14 @@ export function CompanySheetsAdminPanel({
           ) : null}
         </div>
         {verifiedClientFolderId ? (
-          <p className="text-sm text-slate-700">
-            Linked folder{" "}
-            <a className="text-sky-700 underline" href={`https://drive.google.com/drive/folders/${verifiedClientFolderId}`}>
-              {verifiedClientFolderTitle ?? clientDisplayName}
+          <p className="min-w-0 break-words text-sm text-slate-700">
+            Saved folder{" "}
+            <a className="break-all text-sky-700 underline" href={`https://drive.google.com/drive/folders/${verifiedClientFolderId}`}>
+              {verifiedClientFolderTitle?.trim() || verifiedClientFolderId}
             </a>
           </p>
+        ) : sheetList ? (
+          <p className="text-sm text-slate-600">No client folder is saved on this client.</p>
         ) : null}
         {folderChoices.length > 0 ? (
           <div className="space-y-2">
@@ -631,63 +692,31 @@ export function CompanySheetsAdminPanel({
             </div>
           </div>
         ) : null}
-        <details className="rounded-lg border border-slate-200 px-3 py-2">
-          <summary className="cursor-pointer text-sm font-medium text-slate-800">Advanced parent folder</summary>
-          <div className="mt-3 space-y-3">
-            <label className="block text-sm text-slate-700">
-              Folder URL or ID
-              <input
-                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                value={folder}
-                onChange={(event) => setFolder(event.target.value)}
-                placeholder="https://drive.google.com/drive/folders/…"
-              />
-            </label>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                disabled={busy("folder") || !folder.trim()}
-                onClick={() =>
-                  void run("folder", async () => {
-                    const result = await actions.saveFolder(clientAccountId, folder.trim());
-                    if (!result.ok) return result;
-                    return { ok: true, message: "Folder verified. Existing spreadsheets were not moved." };
-                  })
-                }
-              >
-                Verify folder
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                disabled={busy("folder")}
-                onClick={() =>
-                  void run("folder", async () => {
-                    const result = await actions.clearFolder(clientAccountId);
-                    if (!result.ok) return result;
-                    return { ok: true, message: "Parent folder setting cleared. The Drive folder was not deleted." };
-                  })
-                }
-              >
-                Clear parent setting
-              </Button>
-            </div>
-          </div>
-        </details>
+        {parent ? (
+          <details className="rounded-lg border border-slate-200 px-3 py-2">
+            <summary className="cursor-pointer text-sm font-medium text-slate-800">Change company folder</summary>
+            <div className="mt-3">{companyFolderControls}</div>
+          </details>
+        ) : null}
       </section>
-      <section aria-label="Client spreadsheet" aria-busy={busy("spreadsheet")} className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
+      <section aria-label="Client spreadsheet" aria-busy={busy("spreadsheet")} className="min-w-0 space-y-3 overflow-hidden rounded-xl border border-slate-200 bg-white p-4">
         <h2 className="text-sm font-semibold text-slate-900">Client spreadsheet</h2>
         <SectionFeedback section="spreadsheet" />
         {destination ? (
-          <div className="space-y-1 text-sm text-slate-700">
-            <p>
-              Saved delivery destination{" "}
-              <a className="text-sky-700 underline" href={destination.spreadsheetUrl}>
-                {destination.spreadsheetTitle ?? "Spreadsheet"}
-              </a>{" "}
-              / {destination.worksheetTitle}
-            </p>
+          <div className="min-w-0 space-y-2 text-sm text-slate-700">
+            <p>Saved spreadsheet</p>
+            <SpreadsheetIdentity
+              title={destination.spreadsheetTitle?.trim() || "Saved spreadsheet"}
+              spreadsheetId={destination.spreadsheetId}
+              url={destination.spreadsheetUrl}
+            />
+            {campaignBound ? (
+              <p>
+                Campaign worksheet {campaignTab?.worksheetTitle ?? "bound"} (gid {campaignTab?.worksheetId}).
+              </p>
+            ) : (
+              <p>{SPREADSHEET_SAVED_CHOOSE_WORKSHEET}</p>
+            )}
             <p>Control: {controlLabel(destination.controlBasis)}</p>
             <p>Write readiness: {destination.writeReadiness}. Saving this destination does not turn delivery on.</p>
             <p>
@@ -697,7 +726,7 @@ export function CompanySheetsAdminPanel({
             </p>
           </div>
         ) : (
-          <p className="text-sm text-slate-600">No spreadsheet is bound to this client.</p>
+          <p className="text-sm text-slate-600">No spreadsheet is saved for this client.</p>
         )}
         {candidate && candidate.spreadsheetId !== destination?.spreadsheetId ? (
           <p className="text-sm text-slate-800">
@@ -995,6 +1024,15 @@ export function CompanySheetsAdminPanel({
               />
             </label>
           </div>
+          <p className="text-sm text-slate-700">
+            <Link href={`/clients/${encodeURIComponent(clientAccountId)}/onboarding`} className="text-sky-700 underline">
+              Map existing columns
+            </Link>
+            . Setup & Delivery reads the worksheet that is already in the spreadsheet. That mapping editor does not apply this preset template and does not rewrite headers.
+          </p>
+          <details className="rounded-lg border border-slate-200 px-3 py-2">
+            <summary className="cursor-pointer text-sm font-medium text-slate-800">Preset template preview</summary>
+            <div className="mt-3 space-y-3">
           {tabRole === "campaign" ? (
             <div className="space-y-2">
               <label className="block text-sm text-slate-700">
@@ -1009,7 +1047,7 @@ export function CompanySheetsAdminPanel({
                 </select>
               </label>
               {campaignSchema === COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3 ? (
-                <p className="text-sm text-slate-700">
+                <p className="min-w-0 break-words text-sm text-slate-700">
                   Header preview: {COMPANY_SHEETS_V3_COLUMNS.map((column) => column.header).join(", ")}. Selecting a
                   niche does not change these columns. They are written only on a newly created empty tab.
                 </p>
@@ -1020,6 +1058,67 @@ export function CompanySheetsAdminPanel({
               )}
             </div>
           ) : null}
+              <Button
+                type="button"
+                variant="outline"
+                disabled={busy("tabs") || !actions.reviewColumns}
+                onClick={() =>
+                  void run("tabs", async () => {
+                    if (!actions.reviewColumns) return { ok: false, error: "Column mapping is unavailable." };
+                    const result = await actions.reviewColumns(clientAccountId, {
+                      schemaVersion: tabRole === "campaign" ? campaignSchema : "company_sheets_campaign_v2",
+                      ...(nicheKey ? { nicheKey } : {}),
+                    });
+                    if (!result.ok) return result;
+                    setMapping(result.data);
+                    return { ok: true, message: `Column mapping reviewed. Readiness: ${result.data.readiness}.` };
+                  })
+                }
+              >
+                Review column mapping
+              </Button>
+              {mapping ? (
+                <div className="space-y-2">
+                  <p className="min-w-0 break-words text-sm text-slate-700">
+                    Preset mapping for {mapping.schemaVersion}. Readiness {mapping.readiness} on{" "}
+                    {mapping.spreadsheetId ?? "no saved spreadsheet"} / worksheet {mapping.worksheetId ?? "none"}. This is
+                    the v1/v2/v3 template review. Legacy tabs are mapped in Setup & Delivery.
+                  </p>
+                  {mapping.warnings.map((warning) => (
+                    <p key={warning} className="text-sm text-amber-800">
+                      {warning}
+                    </p>
+                  ))}
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-left text-sm">
+                      <thead>
+                        <tr className="border-b border-slate-200 text-slate-500">
+                          <th className="py-1 pr-3 font-medium">Column</th>
+                          <th className="py-1 pr-3 font-medium">Source field</th>
+                          <th className="py-1 pr-3 font-medium">Example</th>
+                          <th className="py-1 font-medium">Missing source</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {mapping.columns.map((column) => (
+                          <tr key={column.header} className="border-b border-slate-100">
+                            <td className="py-1 pr-3">
+                              {column.header}
+                              {column.systemRequired ? " (required)" : ""}
+                              <span className="block text-xs text-slate-500">{column.help}</span>
+                            </td>
+                            <td className="py-1 pr-3">{column.sourceField}</td>
+                            <td className="py-1 pr-3">{column.example || "blank"}</td>
+                            <td className="py-1">{column.missingExample || "blank"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </details>
           <p className="text-sm text-slate-600">
             Client Name is the prospect, not the purchasing agent. Date is the
             lead generation time in America/New_York. A missing source timestamp stays blank.
@@ -1042,25 +1141,6 @@ export function CompanySheetsAdminPanel({
               }
             >
               Inspect tabs
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={busy("tabs") || !actions.reviewColumns}
-              onClick={() =>
-                void run("tabs", async () => {
-                  if (!actions.reviewColumns) return { ok: false, error: "Column mapping is unavailable." };
-                  const result = await actions.reviewColumns(clientAccountId, {
-                    schemaVersion: tabRole === "campaign" ? campaignSchema : "company_sheets_campaign_v2",
-                    ...(nicheKey ? { nicheKey } : {}),
-                  });
-                  if (!result.ok) return result;
-                  setMapping(result.data);
-                  return { ok: true, message: `Column mapping reviewed. Readiness: ${result.data.readiness}.` };
-                })
-              }
-            >
-              Review column mapping
             </Button>
             <Button
               type="button"
@@ -1103,46 +1183,6 @@ export function CompanySheetsAdminPanel({
               Create missing tab
             </Button>
           </div>
-          {mapping ? (
-            <div className="space-y-2">
-              <p className="text-sm text-slate-700">
-                Preset mapping for {mapping.schemaVersion}. Readiness {mapping.readiness} on{" "}
-                {mapping.spreadsheetId ?? "no saved spreadsheet"} / worksheet {mapping.worksheetId ?? "none"}. This is
-                the v1/v2/v3 template review. Legacy tabs are mapped in Setup & Delivery.
-              </p>
-              {mapping.warnings.map((warning) => (
-                <p key={warning} className="text-sm text-amber-800">
-                  {warning}
-                </p>
-              ))}
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-left text-sm">
-                  <thead>
-                    <tr className="border-b border-slate-200 text-slate-500">
-                      <th className="py-1 pr-3 font-medium">Column</th>
-                      <th className="py-1 pr-3 font-medium">Source field</th>
-                      <th className="py-1 pr-3 font-medium">Example</th>
-                      <th className="py-1 font-medium">Missing source</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {mapping.columns.map((column) => (
-                      <tr key={column.header} className="border-b border-slate-100">
-                        <td className="py-1 pr-3">
-                          {column.header}
-                          {column.systemRequired ? " (required)" : ""}
-                          <span className="block text-xs text-slate-500">{column.help}</span>
-                        </td>
-                        <td className="py-1 pr-3">{column.sourceField}</td>
-                        <td className="py-1 pr-3">{column.example || "blank"}</td>
-                        <td className="py-1">{column.missingExample || "blank"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          ) : null}
         </section>
       ) : null}
       <section aria-label="Delivery controls" aria-busy={busy("delivery")} className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">

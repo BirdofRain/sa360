@@ -16,7 +16,10 @@ export const UNCERTAIN_OUTCOME_LABEL = "Outcome uncertain — manual review requ
 
 export const FULL_HISTORY_UNAVAILABLE = "Full history unavailable";
 
-export const FOLDER_RESOLVED_NOT_LINKED = "Folder resolved — link or select it before browsing";
+export const FOLDER_RESOLVED_NOT_LINKED =
+  "Folder checked. Use this folder to save it on this client. Checking does not link the folder or save a spreadsheet.";
+
+export const SPREADSHEET_SAVED_CHOOSE_WORKSHEET = "Spreadsheet saved — choose a worksheet to finish setup.";
 
 /** GET onboarding omits ClientOnboardingDestinationProfile.revision. setupRequest.revision is a different row. */
 export const MISSING_PROFILE_REVISION_READ =
@@ -249,7 +252,7 @@ export function runNeedsManualReview(status: string | null | undefined): boolean
 
 export function validDriveQuery(query: string): boolean {
   const trimmed = query.trim();
-  if (!trimmed || trimmed.length > 80) return false;
+  if (trimmed.length > 80) return false;
   return !/[\u0000-\u001f\u007f]/.test(trimmed);
 }
 
@@ -272,6 +275,8 @@ const ACTION_ERRORS: Record<string, string> = {
   destination_disabled: "Company Sheets setup is disabled. Drive was not searched.",
   client_not_found: "This client was not found.",
   invalid_request: "That entry is not a valid search or folder reference.",
+  folder_unavailable: "That folder is not an approved client folder, so it was not saved on this client.",
+  not_approved_parent: "That folder is not the approved company parent. The company folder was not changed.",
   invalid_body: "That entry does not match the onboarding contract.",
   invalid_confirmation: "The confirmation or test identity does not match the required value.",
   revision_conflict:

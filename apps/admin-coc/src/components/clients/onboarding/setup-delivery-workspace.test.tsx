@@ -5,7 +5,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import React from "react";
 
 import type { OnboardingSummary, OnboardingWorkspaceActions, StoredTestRunView } from "@/lib/clients/onboarding/types";
-import { FOLDER_RESOLVED_NOT_LINKED, FULL_HISTORY_UNAVAILABLE, MISSING_PROFILE_REVISION_READ, UNCERTAIN_OUTCOME_LABEL } from "@/lib/clients/onboarding/view";
+import { FOLDER_RESOLVED_NOT_LINKED, FULL_HISTORY_UNAVAILABLE, MISSING_PROFILE_REVISION_READ, SPREADSHEET_SAVED_CHOOSE_WORKSHEET, UNCERTAIN_OUTCOME_LABEL } from "@/lib/clients/onboarding/view";
 
 const moduleLoader = module as unknown as {
   _load: (request: string, parent: NodeModule, isMain: boolean) => unknown;
@@ -195,6 +195,7 @@ function actions(): { api: OnboardingWorkspaceActions; calls: string[] } {
           saved: false,
           nameMatch: "unique",
           selectedFolderId: null,
+          companyFolder: null,
           nextPageToken: null,
           suggestions: [
             {
@@ -514,7 +515,7 @@ test("Alex Gross mocked walkthrough keeps delivery and activation closed", async
   assert.ok(screen.getByText("Sheets permission tested"));
   assert.ok(screen.getByText(/External Zapier stays in place/));
 
-  fireEvent.click(screen.getByRole("button", { name: "Search" }));
+  fireEvent.click(screen.getByRole("button", { name: "Browse company folder" }));
   assert.ok(await screen.findByText(/Alex Gross · folder/));
   fireEvent.change(screen.getByLabelText("Paste a Google Drive folder URL"), {
     target: { value: "https://drive.google.com/drive/folders/folder_alex" },
@@ -937,4 +938,163 @@ test("a pasted stored lead previews all mapped cells and the captured test repor
   assert.ok(screen.getByText("Duplicate: no"));
   assert.equal(delivered, "evt_pasted");
   assert.equal((screen.getByTestId("test-delivery-again") as HTMLButtonElement).disabled, true);
+});
+
+test("blank browse can select one of two same-named folders without pasting a URL", async () => {
+  const { api, calls } = actions();
+  let queried = "unset";
+  api.searchDrive = async (input) => {
+    queried = input.query;
+    calls.push(`search:${input.query}`);
+    return {
+      ok: true,
+      data: {
+        saved: false,
+        nameMatch: "none",
+        selectedFolderId: null,
+        companyFolder: { folderId: "approvedParent1", title: "Client Folders" },
+        nextPageToken: null,
+        suggestions: [
+          {
+            id: "hint_folder",
+            title: "Matt Mandeville",
+            kind: "folder",
+            trashed: false,
+            shortcut: false,
+            selectable: true,
+            reason: null,
+            location: "Client Folders / Matt Mandeville · hint_folder",
+          },
+        ],
+        items: [
+          {
+            id: "folder_a",
+            title: "Matthew Mandeville",
+            kind: "folder",
+            trashed: false,
+            shortcut: false,
+            selectable: true,
+            reason: null,
+            location: "Client Folders / Matthew Mandeville · folder_a",
+          },
+          {
+            id: "folder_b",
+            title: "Matthew Mandeville",
+            kind: "folder",
+            trashed: false,
+            shortcut: false,
+            selectable: true,
+            reason: null,
+            location: "Client Folders / Matthew Mandeville · folder_b",
+          },
+        ],
+      },
+    };
+  };
+  api.linkClientFolder = async (folderId) => {
+    calls.push(`link:${folderId}`);
+    return {
+      ok: true,
+      data: {
+        folderId,
+        title: "Matthew Mandeville",
+        spreadsheets: [{ spreadsheetId: "sheet_matt", title: "Copy of Matt", url: "https://docs.google.com/spreadsheets/d/sheet_matt" }],
+      },
+    };
+  };
+  render(
+    <SetupDeliveryWorkspace
+      clientAccountId="matt_mandeville"
+      summary={summary({
+        client: {
+          clientAccountId: "matt_mandeville",
+          clientDisplayName: "Matt Mandeville",
+          status: "active",
+          primaryNicheKeys: ["vet"],
+          primaryProductTypes: [],
+        },
+      })}
+      summaryError={null}
+      connection={{
+        status: "connected",
+        connected: true,
+        googleEmail: "sheets@lifeagentlaunch.test",
+        googleDisplayName: "Life Agent Launch",
+        connectedAt: null,
+        liveDeliveryEnabled: false,
+        destinationFolder: { folderId: "approvedParent1", title: "Client Folders" },
+      }}
+      connectionError={null}
+      dispatch={{ dispatchFlagEnabled: false, campaignDispatchEnabled: false, agedDispatchEnabled: false }}
+      dispatchError={null}
+      actions={api}
+    />
+  );
+  assert.equal((screen.getByLabelText("Filter by name") as HTMLInputElement).value, "");
+  fireEvent.click(screen.getByRole("button", { name: "Browse company folder" }));
+  assert.equal(queried, "");
+  assert.ok(await screen.findByText(/Company folder: Client Folders/));
+  const useA = screen.getByRole("button", { name: "Use this folder Matthew Mandeville Client Folders / Matthew Mandeville · folder_a" });
+  const useB = screen.getByRole("button", { name: "Use this folder Matthew Mandeville Client Folders / Matthew Mandeville · folder_b" });
+  assert.equal(useA === useB, false);
+  fireEvent.click(useA);
+  assert.ok(await screen.findByText(/Saved folder Matthew Mandeville/));
+  assert.ok(screen.getByText("Copy of Matt"));
+  assert.equal(calls.includes("link:folder_a"), true);
+  assert.equal(calls.includes("link:folder_b"), false);
+  assert.equal(calls.includes("save-sheets"), false);
+});
+
+test("a saved spreadsheet without a bound worksheet stays visible when the picker is empty", () => {
+  const spreadsheetId = "1OUOfsYPsPzI9uFIJ_tERWAJcVk8Mg5mBtUOiVaoh-9Y";
+  const loaded = summary({
+    sheets: {
+      destinationSaved: true,
+      spreadsheetId,
+      spreadsheetTitle: "Copy of Matt",
+      campaignTab: null,
+      campaignDispatchEnabled: false,
+      campaignDispatchNotBefore: null,
+      agedDispatchEnabled: false,
+      writeReadiness: "not_verified",
+      deliveryExecution: "disabled",
+      uncertainJob: false,
+    },
+    gates: [{ id: "sheets_destination_saved", required: true, satisfied: true, evidenceIds: ["dest"] }],
+  });
+  render(
+    <SetupDeliveryWorkspace
+      clientAccountId="matt_mandeville"
+      summary={loaded}
+      summaryError={null}
+      connection={null}
+      connectionError={null}
+      dispatch={{ dispatchFlagEnabled: false, campaignDispatchEnabled: false, agedDispatchEnabled: false }}
+      dispatchError={null}
+      sheetsSetup={{
+        folderLoaded: true,
+        folder: {
+          folderId: "1357Wlh4B3dFCZ-7KXpY9S6As4qoMjHhm",
+          title: "Matthew Mandeville",
+          url: "https://drive.google.com/drive/folders/1357Wlh4B3dFCZ-7KXpY9S6As4qoMjHhm",
+        },
+        destinationLoaded: true,
+        spreadsheetTitle: "Copy of Matt",
+        spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${spreadsheetId}`,
+        campaignBound: false,
+        campaignWorksheetTitle: null,
+        writeReadiness: "not_verified",
+      }}
+      actions={actions().api}
+    />
+  );
+  const card = screen.getByTestId("card-google-sheets");
+  assert.equal(card.className.includes("overflow-hidden"), true);
+  assert.ok(within(card).getAllByText(SPREADSHEET_SAVED_CHOOSE_WORKSHEET).length >= 1);
+  assert.ok(within(card).getByRole("link", { name: "Copy of Matt" }));
+  const id = within(card).getByText(spreadsheetId);
+  assert.equal(id.className.includes("break-all"), true);
+  assert.equal(card.contains(id), true);
+  assert.equal(within(card).queryByText(/Saved destination: no/), null);
+  assert.match(card.textContent ?? "", /Saved folder Matthew Mandeville/);
 });

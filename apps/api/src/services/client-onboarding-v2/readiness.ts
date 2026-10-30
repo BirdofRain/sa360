@@ -177,6 +177,7 @@ export async function readClientOnboardingSummary(
       sheets: {
         destinationSaved: boolean;
         spreadsheetId: string | null;
+        spreadsheetTitle: string | null;
         campaignTab: string | null;
         campaignDispatchEnabled: boolean;
         campaignDispatchNotBefore: string | null;
@@ -355,6 +356,7 @@ export async function readClientOnboardingSummary(
     sheets: {
       destinationSaved: Boolean(destination),
       spreadsheetId: destination?.spreadsheetId ?? null,
+      spreadsheetTitle: destination?.spreadsheetTitle ?? null,
       campaignTab: campaign?.worksheetTitle ?? null,
       campaignDispatchEnabled: destination?.campaignDispatchEnabled ?? false,
       campaignDispatchNotBefore: destination?.campaignDispatchNotBefore?.toISOString() ?? null,

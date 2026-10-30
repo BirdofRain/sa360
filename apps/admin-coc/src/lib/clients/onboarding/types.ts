@@ -74,6 +74,7 @@ export type OnboardingSummary = {
   sheets: {
     destinationSaved: boolean;
     spreadsheetId: string | null;
+    spreadsheetTitle?: string | null;
     campaignTab: string | null;
     campaignDispatchEnabled: boolean;
     campaignDispatchNotBefore: string | null;
@@ -123,6 +124,21 @@ export type CompanyConnectionIdentity = {
   googleDisplayName: string | null;
   connectedAt: string | null;
   liveDeliveryEnabled: false;
+  destinationFolder?: {
+    folderId: string;
+    title: string | null;
+  } | null;
+};
+
+export type PersistedSheetsSetup = {
+  folderLoaded: boolean;
+  folder: { folderId: string; title: string; url: string } | null;
+  destinationLoaded: boolean;
+  spreadsheetTitle: string | null;
+  spreadsheetUrl: string | null;
+  campaignBound: boolean | null;
+  campaignWorksheetTitle: string | null;
+  writeReadiness: string | null;
 };
 
 export type OnboardingDriveItem = {
@@ -133,6 +149,7 @@ export type OnboardingDriveItem = {
   shortcut: boolean;
   selectable: boolean;
   reason: string | null;
+  location?: string | null;
 };
 
 export type OnboardingDriveSearch = {
@@ -141,6 +158,7 @@ export type OnboardingDriveSearch = {
   suggestions: OnboardingDriveItem[];
   nameMatch: "none" | "unique" | "ambiguous";
   selectedFolderId: null;
+  companyFolder: { folderId: string; title: string | null } | null;
   nextPageToken: string | null;
 };
 
@@ -402,6 +420,13 @@ export type OnboardingWorkspaceActions = {
   resolveFolder: (folder: string) => Promise<OnboardingActionResult<OnboardingFolderResolve>>;
   listSpreadsheets: () => Promise<OnboardingActionResult<OnboardingSpreadsheetListItem[]>>;
   browseResolvedFolder?: (folderId: string) => Promise<OnboardingActionResult<OnboardingSpreadsheetListItem[]>>;
+  linkClientFolder?: (folderId: string) => Promise<
+    OnboardingActionResult<{
+      folderId: string;
+      title: string;
+      spreadsheets: OnboardingSpreadsheetListItem[];
+    }>
+  >;
   approveTestWorksheet?: (input: {
     spreadsheetId: string;
     worksheetId: number;

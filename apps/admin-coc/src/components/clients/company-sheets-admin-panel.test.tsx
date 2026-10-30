@@ -4,6 +4,8 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 
 import { COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3 } from "@sa360/shared";
 
+import { SPREADSHEET_SAVED_CHOOSE_WORKSHEET } from "@/lib/clients/onboarding/view";
+
 import { CompanySheetsAdminPanel } from "./company-sheets-admin-panel.tsx";
 import type { CompanyGoogleConnectionView, CompanySheetsDestinationView } from "@/lib/admin-api/company-google-sheets";
 
@@ -125,7 +127,8 @@ describe("CompanySheetsAdminPanel", () => {
       />
     );
     assert.ok(screen.getByText(/not placed in Drive root/));
-    assert.ok(screen.getByText("No spreadsheet is bound to this client."));
+    assert.ok(screen.getByText("No spreadsheet is saved for this client."));
+    assert.ok(screen.getByText("Select the company folder. The approved-parent check still applies."));
     assert.ok(screen.getByText("Not connected"));
     assert.equal(screen.queryByRole("link", { name: "Acme Leads" }), null);
   });
@@ -355,6 +358,59 @@ describe("CompanySheetsAdminPanel", () => {
     const status = matches.find((element) => element.getAttribute("role") === "status");
     assert.ok(status);
     assert.match(status.textContent ?? "", /Campaign delivery verified: no/);
+  });
+
+  it("loads the saved folder and keeps a long spreadsheet id inside the card", () => {
+    const spreadsheetId = "1OUOfsYPsPzI9uFIJ_tERWAJcVk8Mg5mBtUOiVaoh-9Y";
+    render(
+      <CompanySheetsAdminPanel
+        clientAccountId="matt_mandeville"
+        clientDisplayName="Matt Mandeville"
+        connection={{
+          ...connection,
+          destinationFolder: { folderId: "approvedParent1", title: "Client Folders", verifiedAt: "2026-10-30T12:00:00.000Z" },
+        }}
+        destination={{
+          ...destination,
+          clientAccountId: "matt_mandeville",
+          spreadsheetId,
+          spreadsheetTitle: "Copy of Matt",
+          spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${spreadsheetId}`,
+          tabContracts: [],
+        }}
+        notice={null}
+        actions={idleActions()}
+        initialFolderList={{
+          ok: true,
+          folder: {
+            folderId: "1357Wlh4B3dFCZ-7KXpY9S6As4qoMjHhm",
+            title: "Matthew Mandeville",
+            url: "https://drive.google.com/drive/folders/1357Wlh4B3dFCZ-7KXpY9S6As4qoMjHhm",
+          },
+          spreadsheets: [],
+          nextPageToken: null,
+          skipped: 0,
+          links: [],
+          folderEvents: [],
+          currentDestination: {
+            spreadsheetId,
+            spreadsheetTitle: "Copy of Matt",
+            spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${spreadsheetId}`,
+            updatedAt: "2026-10-30T12:00:00.000Z",
+          },
+        }}
+      />
+    );
+    const folder = screen.getByRole("region", { name: "Client folder" });
+    assert.match(folder.textContent ?? "", /Company folder:\s*Client Folders/);
+    assert.match(folder.textContent ?? "", /Saved folder/);
+    assert.ok(within(folder).getByRole("link", { name: "Matthew Mandeville" }));
+    const spreadsheet = screen.getByRole("region", { name: "Client spreadsheet" });
+    assert.equal(spreadsheet.className.includes("overflow-hidden"), true);
+    assert.ok(within(spreadsheet).getByText(SPREADSHEET_SAVED_CHOOSE_WORKSHEET));
+    const id = within(spreadsheet).getByText(spreadsheetId);
+    assert.equal(id.className.includes("break-all"), true);
+    assert.equal(spreadsheet.contains(id), true);
   });
 });
 

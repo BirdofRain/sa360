@@ -691,6 +691,18 @@ test("Drive search filters locally, pages, and does not select duplicate or unap
         if (namedMode === "unique") return { ok: true as const, files: files.slice(0, 1) };
         return { ok: false as const, reason: "ambiguous" as const, files };
       },
+      getDriveFile: async ({ fileId }) => {
+        if (fileId !== APPROVED_PARENT) throw new Error(`unexpected parent lookup ${fileId}`);
+        return {
+          ok: true as const,
+          file: driveFile({
+            id: APPROVED_PARENT,
+            name: "Client Folders",
+            mimeType: COMPANY_DRIVE_FOLDER_MIME,
+            parents: [],
+          }),
+        };
+      },
       fetchImpl: async (url) => {
         const href = String(url);
         fetched.push(href);
@@ -742,6 +754,22 @@ test("Drive search filters locally, pages, and does not select duplicate or unap
                 parents: [APPROVED_PARENT],
                 trashed: false,
               },
+              {
+                id: "matthewFolderA1",
+                name: "Matthew Mandeville",
+                mimeType: COMPANY_DRIVE_FOLDER_MIME,
+                driveId: APPROVED_DRIVE,
+                parents: [APPROVED_PARENT],
+                trashed: false,
+              },
+              {
+                id: "matthewFolderB1",
+                name: "Matthew Mandeville",
+                mimeType: COMPANY_DRIVE_FOLDER_MIME,
+                driveId: APPROVED_DRIVE,
+                parents: [APPROVED_PARENT],
+                trashed: false,
+              },
             ],
           }),
           { status: 200, headers: { "content-type": "application/json" } }
@@ -760,10 +788,17 @@ test("Drive search filters locally, pages, and does not select duplicate or unap
     const body = response.json();
     assert.equal(body.saved, false);
     assert.equal(body.selectedFolderId, null);
+    assert.equal(body.companyFolder.folderId, APPROVED_PARENT);
+    assert.equal(body.companyFolder.title, "Client Folders");
+    assert.equal(body.companyFolder.folderId === "matthewFolderA1", false);
     assert.equal(body.nameMatch, "ambiguous");
     assert.equal(body.nextPageToken, "next-page-token");
     assert.equal(body.suggestions.length, 2);
     assert.equal(body.suggestions.every((item: { selected: boolean }) => item.selected === false), true);
+    const suggestionLocations = body.suggestions.map((item: { location: string }) => item.location);
+    assert.equal(suggestionLocations[0]?.includes("nameMatchFolder1"), true);
+    assert.equal(suggestionLocations[1]?.includes("nameMatchFolder2"), true);
+    assert.equal(suggestionLocations[0] === suggestionLocations[1], false);
     const titles = body.items.map((item: { title: string }) => item.title);
     assert.deepEqual(titles, ["Alex Gross Folder", "Alex Shortcut", "Alex Trash", "Alex Foreign Sheet"]);
     const shortcut = body.items.find((item: { title: string }) => item.title === "Alex Shortcut");
@@ -779,6 +814,7 @@ test("Drive search filters locally, pages, and does not select duplicate or unap
     const folder = body.items.find((item: { title: string }) => item.title === "Alex Gross Folder");
     assert.equal(folder.selectable, true);
     assert.equal(folder.selected, false);
+    assert.equal(folder.location, "Client Folders / Alex Gross Folder · alexFolder0001");
     assert.equal(fetched.length, 1);
     const listed = new URL(fetched[0]!);
     assert.equal(decodeURIComponent(listed.searchParams.get("q") ?? "").includes("Alex"), false);
@@ -798,6 +834,25 @@ test("Drive search filters locally, pages, and does not select duplicate or unap
     assert.equal(unique.json().nameMatch, "unique");
     assert.equal(unique.json().selectedFolderId, null);
     assert.equal(unique.json().saved, false);
+
+    const browse = await app.inject({
+      method: "POST",
+      url: `/admin/v1/clients/${CLIENT}/onboarding/drive/search`,
+      headers: adminHeaders(),
+      payload: { scope: "approved_parent", query: "" },
+    });
+    assert.equal(browse.statusCode, 200);
+    const browsed = browse.json();
+    assert.equal(browsed.selectedFolderId, null);
+    assert.equal(browsed.saved, false);
+    assert.equal(browsed.companyFolder.folderId, APPROVED_PARENT);
+    assert.equal(browsed.companyFolder.title, "Client Folders");
+    const duplicates = browsed.items.filter((item: { title: string }) => item.title === "Matthew Mandeville");
+    assert.equal(duplicates.length, 2);
+    assert.equal(duplicates.every((item: { selected: boolean; selectable: boolean }) => item.selected === false && item.selectable === true), true);
+    assert.equal(duplicates[0].location === duplicates[1].location, false);
+    assert.equal(String(duplicates[0].location).startsWith("Client Folders / Matthew Mandeville · "), true);
+    assert.equal(browsed.items.some((item: { title: string }) => item.title === "Unrelated Folder"), true);
 
     const mismatch = await app.inject({
       method: "POST",

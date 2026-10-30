@@ -15,6 +15,7 @@ import {
   MISSING_PROFILE_REVISION_READ,
   MISSING_RESOLVED_FOLDER_BROWSE,
   schemaForClassification,
+  SPREADSHEET_SAVED_CHOOSE_WORKSHEET,
   sheetsMutationGate,
   sourceIdentityLabel,
   validDriveQuery,
@@ -27,6 +28,7 @@ import type {
   OnboardingFolderResolve,
   OnboardingSheetPreview,
   OnboardingSheetsDestinationWrite,
+  PersistedSheetsSetup,
   OnboardingSourceProof,
   OnboardingSpreadsheetListItem,
   OnboardingSummary,
@@ -37,6 +39,8 @@ import type {
   OnboardingWorksheetPreview,
   SheetsTargetSave,
 } from "@/lib/clients/onboarding/types";
+
+import { SpreadsheetIdentity } from "@/components/clients/spreadsheet-identity";
 
 import { ColumnMapEditor } from "./column-map-editor";
 import { StatusMark } from "./status-mark";
@@ -59,7 +63,7 @@ function CardShell({
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm" data-testid={testId}>
+    <section className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white p-4 shadow-sm" data-testid={testId}>
       <h2 className="text-base font-semibold text-slate-900">{title}</h2>
       <div className="mt-3 space-y-3">{children}</div>
     </section>
@@ -170,6 +174,7 @@ export function SheetsCard({
   connectionError,
   dispatch,
   actions,
+  sheetsSetup = null,
   onViewWorksheet,
 }: {
   clientAccountId: string;
@@ -179,13 +184,17 @@ export function SheetsCard({
   connectionError: string | null;
   dispatch: { campaignDispatchEnabled: boolean; agedDispatchEnabled: boolean } | null;
   actions: OnboardingWorkspaceActions;
+  sheetsSetup?: PersistedSheetsSetup | null;
   onViewWorksheet: (worksheet: OnboardingWorksheetPreview, spreadsheetTitle: string, spreadsheetId: string) => void;
 }) {
   const [scope, setScope] = useState<"approved_parent" | "client_folder">("approved_parent");
-  const [query, setQuery] = useState(clientName);
+  const [query, setQuery] = useState("");
   const [search, setSearch] = useState<OnboardingDriveSearch | null>(null);
   const [resolved, setResolved] = useState<OnboardingFolderResolve | null>(null);
   const [folderUrl, setFolderUrl] = useState("");
+  const [linkedFolder, setLinkedFolder] = useState<{ folderId: string; title: string } | null>(
+    sheetsSetup?.folder ? { folderId: sheetsSetup.folder.folderId, title: sheetsSetup.folder.title } : null
+  );
   const [spreadsheets, setSpreadsheets] = useState<OnboardingSpreadsheetListItem[] | null>(null);
   const [preview, setPreview] = useState<OnboardingSheetPreview | null>(null);
   const [chosen, setChosen] = useState<ChosenWorksheet | null>(null);
@@ -195,10 +204,16 @@ export function SheetsCard({
   const [pending, setPending] = useState<string | null>(null);
   const states = summary?.sheets;
   const mutation = sheetsMutationGate(summary, dispatch);
+  const persistedSaved = states?.destinationSaved === true;
+  const gateBound = summary?.gates.some((gate) => gate.id === "sheets_tab_explicitly_bound" && gate.satisfied) === true;
+  const persistedBound = sheetsSetup?.campaignBound == null ? gateBound : sheetsSetup.campaignBound;
+  const spreadsheetTitle = states?.spreadsheetTitle?.trim() || sheetsSetup?.spreadsheetTitle?.trim() || null;
+  const spreadsheetUrl = sheetsSetup?.spreadsheetUrl ?? null;
+  const companyFolder = search?.companyFolder ?? connection?.destinationFolder ?? null;
   const savedForChoice = Boolean(
     chosen &&
       ((explicitSave?.spreadsheetId === chosen.spreadsheetId && explicitSave.worksheetId === chosen.worksheetId) ||
-        (states?.destinationSaved && states.spreadsheetId === chosen.spreadsheetId))
+        (persistedSaved && states?.spreadsheetId === chosen.spreadsheetId))
   );
   const storedBound = Boolean(
     chosen &&
@@ -242,12 +257,22 @@ export function SheetsCard({
           The company connection record does not turn on the client delivery switch. OAuth tokens stay on the server.
         </p>
       </div>
-      <div className="grid gap-2 sm:grid-cols-2">
-        <StatusMark label="Saved" state={states ? (states.destinationSaved ? "yes" : "no") : "unknown"} detail={states?.spreadsheetId ?? undefined} />
+      <div className="grid min-w-0 gap-2 sm:grid-cols-2">
+        <StatusMark
+          label="Saved"
+          state={states ? (persistedSaved ? "yes" : "no") : "unknown"}
+          detail={persistedSaved ? spreadsheetTitle ?? "Spreadsheet saved" : states ? "No spreadsheet is saved" : undefined}
+        />
         <StatusMark
           label="Bound"
-          state={summary ? (summary.gates.find((gate) => gate.id === "sheets_tab_explicitly_bound")?.satisfied ? "yes" : "no") : "unknown"}
-          detail={states?.campaignTab ?? "No campaign worksheet title is stored"}
+          state={summary || sheetsSetup ? (persistedBound ? "yes" : "no") : "unknown"}
+          detail={
+            persistedBound
+              ? states?.campaignTab ?? sheetsSetup?.campaignWorksheetTitle ?? "Campaign worksheet is bound"
+              : persistedSaved
+                ? SPREADSHEET_SAVED_CHOOSE_WORKSHEET
+                : "No campaign worksheet is bound"
+          }
         />
         <StatusMark
           label="Permission tested"
@@ -262,19 +287,39 @@ export function SheetsCard({
       </div>
       {!states ? (
         <p className="text-sm text-slate-600">Sheets destination state was not loaded. Unknown is not the same as unsaved.</p>
-      ) : states.destinationSaved ? (
-        <p className="text-sm text-slate-700">
-          Saved spreadsheet <span className="font-mono">{states.spreadsheetId}</span>
-          {states.campaignTab ? <> · campaign tab {states.campaignTab}</> : null}
-        </p>
+      ) : persistedSaved && states.spreadsheetId ? (
+        <div className="min-w-0 space-y-1">
+          <p className="text-sm text-slate-700">Saved spreadsheet</p>
+          <SpreadsheetIdentity
+            title={spreadsheetTitle || "Saved spreadsheet"}
+            spreadsheetId={states.spreadsheetId}
+            url={spreadsheetUrl}
+          />
+          {persistedBound ? (
+            <p className="text-sm text-slate-700">Campaign worksheet {states.campaignTab ?? sheetsSetup?.campaignWorksheetTitle ?? "bound"}.</p>
+          ) : (
+            <p className="text-sm text-slate-800">{SPREADSHEET_SAVED_CHOOSE_WORKSHEET}</p>
+          )}
+        </div>
       ) : (
-        <p className="text-sm text-slate-600">No Sheets destination is saved yet. Search starts from the existing client name.</p>
+        <p className="text-sm text-slate-600">No spreadsheet is saved yet. Browse the company folder or paste a folder URL. A name does not select a folder.</p>
       )}
+      {linkedFolder ? (
+        <p className="min-w-0 break-words text-sm text-slate-700">
+          Saved folder {linkedFolder.title}
+          <span className="mt-1 block break-all font-mono text-xs text-slate-500">{linkedFolder.folderId}</span>
+        </p>
+      ) : sheetsSetup?.folderLoaded ? (
+        <p className="text-sm text-slate-600">No client folder is saved on this client.</p>
+      ) : null}
       <SheetSelection
         clientAccountId={clientAccountId}
         chosen={chosen}
         saved={savedForChoice}
         bound={boundForChoice}
+        persistedSaved={persistedSaved}
+        persistedBound={persistedBound}
+        spreadsheetTitle={spreadsheetTitle}
         mutation={mutation}
         pending={pending}
         onSave={() => {
@@ -289,6 +334,21 @@ export function SheetsCard({
           void run("bind-sheet", () => actions.bindCampaignWorksheet({ worksheetId: chosen.worksheetId }), setExplicitBind);
         }}
       />
+      <p className="min-w-0 text-sm text-slate-700" data-testid="company-folder-breadcrumb">
+        {companyFolder ? (
+          <>
+            Company folder: {companyFolder.title?.trim() || companyFolder.folderId}
+            <span className="mt-1 block break-all font-mono text-xs text-slate-500">{companyFolder.folderId}</span>
+          </>
+        ) : (
+          <>
+            Company folder is not on this screen yet. Browse the company folder to load its Drive name.
+            <Link href={`/clients/${encodeURIComponent(clientAccountId)}/google-sheets`} className="mt-1 block text-sky-700 hover:underline">
+              Set the company folder
+            </Link>
+          </>
+        )}
+      </p>
       <details open={!states?.destinationSaved} className="rounded-lg border border-slate-200">
         <summary className="cursor-pointer px-3 py-2 text-sm font-medium">Find an existing folder or spreadsheet</summary>
         <div className="space-y-3 border-t border-slate-200 p-3">
@@ -300,31 +360,34 @@ export function SheetsCard({
                 setError("invalid_request");
                 return;
               }
-              void run("search", () => actions.searchDrive({ scope, query }), setSearch);
+              void run("search", () => actions.searchDrive({ scope, query: query.trim() }), setSearch);
             }}
           >
-            <Label htmlFor="drive-query">Search existing client folders</Label>
-            <div className="flex flex-wrap gap-2">
+            <Label htmlFor="drive-query">Filter by name</Label>
+            <p className="text-xs text-slate-500">
+              Optional. A blank filter lists folders under the company folder. {clientName} is a hint, and a similar name is not selected automatically.
+            </p>
+            <div className="flex min-w-0 flex-wrap gap-2">
               <select
                 className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-sm"
                 value={scope}
                 onChange={(event) => setScope(event.target.value as "approved_parent" | "client_folder")}
                 aria-label="Search scope"
               >
-                <option value="approved_parent">Approved parent</option>
-                <option value="client_folder">Linked client folder</option>
+                <option value="approved_parent">Company folder</option>
+                <option value="client_folder">Saved client folder</option>
               </select>
-              <Input id="drive-query" value={query} onChange={(event) => setQuery(event.target.value)} className="max-w-sm" />
+              <Input id="drive-query" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Optional name" className="min-w-0 max-w-sm flex-1" />
               <Button type="submit" disabled={pending !== null}>
-                {pending === "search" ? "Searching…" : "Search"}
+                {pending === "search" ? "Browsing…" : "Browse company folder"}
               </Button>
             </div>
           </form>
           {search ? (
-            <div className="space-y-2 text-sm">
-              <p>Search saved nothing. Name match: {search.nameMatch}. Selected folder: none.</p>
-              <DriveList title="Suggestions" items={search.suggestions} />
-              <DriveList title="Matches" items={search.items} onPreview={previewItem} />
+            <div className="min-w-0 space-y-2 text-sm">
+              <p>Browsing saved nothing. Name match: {search.nameMatch}. Selected folder: none.</p>
+              <DriveList title="Name hints" items={search.suggestions} onUseFolder={chooseFolder} />
+              <DriveList title="In this folder" items={search.items} onPreview={previewItem} onUseFolder={chooseFolder} />
             </div>
           ) : null}
           <form
@@ -349,14 +412,18 @@ export function SheetsCard({
             </div>
           </form>
           {resolved ? (
-            <div className="space-y-1 text-sm text-slate-700" data-testid="folder-resolved-not-linked">
+            <div className="min-w-0 space-y-2 text-sm text-slate-700" data-testid="folder-resolved-not-linked">
               <p className="font-medium">{FOLDER_RESOLVED_NOT_LINKED}</p>
-              <p>
-                Resolved folder {resolved.folder.title} ({resolved.folder.folderId}). Saved: no. Linked: no. Selected
-                spreadsheet: {chosen?.spreadsheetId ?? "none"}. Saved destination: {states?.destinationSaved ? "yes" : "no"}.
-                Basis: {resolved.folder.basis}.
+              <p className="break-words">
+                Checked folder {resolved.folder.title}. Saved folder: no. Linked: no. Selected spreadsheet:{" "}
+                {chosen?.spreadsheetId ?? "none"}. Saved destination: {persistedSaved ? "yes" : "no"}. Basis:{" "}
+                {resolved.folder.basis}.
               </p>
-              {resolved.next && actions.browseResolvedFolder ? (
+              <p className="break-all font-mono text-xs text-slate-500">{resolved.folder.folderId}</p>
+              <Button type="button" disabled={pending !== null || !actions.linkClientFolder} onClick={() => chooseFolder(resolved.folder.folderId)}>
+                {pending === "link-folder" ? "Saving folder…" : "Use this folder"}
+              </Button>
+              {!actions.linkClientFolder && resolved.next && actions.browseResolvedFolder ? (
                 <Button
                   type="button"
                   variant="outline"
@@ -369,10 +436,11 @@ export function SheetsCard({
                 >
                   {pending === "browse-resolved" ? "Loading spreadsheets…" : "Browse spreadsheets in this folder"}
                 </Button>
-              ) : (
+              ) : null}
+              {!actions.linkClientFolder && !actions.browseResolvedFolder ? (
                 <p className="text-xs text-slate-600">{MISSING_RESOLVED_FOLDER_BROWSE}</p>
-              )}
-              <p className="text-xs text-slate-500">Browsing this folder does not link it or save a destination.</p>
+              ) : null}
+              <p className="text-xs text-slate-500">Use this folder saves the Drive folder on this client. It does not save a spreadsheet.</p>
             </div>
           ) : null}
           <Button
@@ -384,8 +452,7 @@ export function SheetsCard({
             {pending === "browse" ? "Loading spreadsheets…" : "Browse linked folder"}
           </Button>
           <p className="text-xs text-slate-500">
-            Browse lists the already linked client folder. It does not list the resolved folder and it does not save a
-            destination.
+            Browse linked folder lists the folder already saved on this client. It does not save a spreadsheet destination.
           </p>
           {spreadsheets ? (
             <ul className="space-y-2 text-sm">
@@ -433,35 +500,62 @@ export function SheetsCard({
   function previewItem(spreadsheetId: string) {
     void run("preview", () => actions.previewSpreadsheet(spreadsheetId), setPreview);
   }
+
+  function chooseFolder(folderId: string) {
+    const link = actions.linkClientFolder;
+    if (!link) {
+      setError("folder_unavailable");
+      return;
+    }
+    void run("link-folder", () => link(folderId), (data) => {
+      setLinkedFolder({ folderId: data.folderId, title: data.title });
+      setSpreadsheets(data.spreadsheets);
+      setResolved(null);
+    });
+  }
 }
 
 function DriveList({
   title,
   items,
   onPreview,
+  onUseFolder,
 }: {
   title: string;
   items: OnboardingDriveSearch["items"];
   onPreview?: (id: string) => void;
+  onUseFolder?: (id: string) => void;
 }) {
   if (items.length === 0) return <p className="text-xs text-slate-500">{title}: none</p>;
   return (
-    <div>
+    <div className="min-w-0">
       <p className="text-xs font-medium text-slate-600">{title}</p>
-      <ul className="mt-1 space-y-1">
+      <ul className="mt-1 space-y-2">
         {items.map((item) => (
-          <li key={item.id} className="flex flex-wrap items-center gap-2 text-xs">
-            <span>
+          <li key={item.id} className="min-w-0 rounded-md border border-slate-100 px-2 py-2 text-xs">
+            <p className="break-words text-slate-900">
               {item.title} · {item.kind}
               {item.reason ? ` · ${item.reason}` : ""}
-            </span>
-            {item.kind === "spreadsheet" && item.selectable && onPreview ? (
-              <Button type="button" size="xs" variant="outline" onClick={() => onPreview(item.id)}>
-                Preview
-              </Button>
-            ) : (
-              <span>{item.selectable ? "Selectable" : "Not selectable"}</span>
-            )}
+            </p>
+            {item.location ? <p className="mt-1 break-all text-slate-500">{item.location}</p> : null}
+            <div className="mt-2">
+              {item.kind === "folder" && item.selectable && onUseFolder ? (
+                <Button
+                  type="button"
+                  size="xs"
+                  aria-label={`Use this folder ${item.title} ${item.location ?? item.id}`}
+                  onClick={() => onUseFolder(item.id)}
+                >
+                  Use this folder
+                </Button>
+              ) : item.kind === "spreadsheet" && item.selectable && onPreview ? (
+                <Button type="button" size="xs" variant="outline" onClick={() => onPreview(item.id)}>
+                  Preview
+                </Button>
+              ) : (
+                <span>{item.selectable ? "Selectable" : "Not selectable"}</span>
+              )}
+            </div>
           </li>
         ))}
       </ul>
@@ -474,6 +568,9 @@ function SheetSelection({
   chosen,
   saved,
   bound,
+  persistedSaved,
+  persistedBound,
+  spreadsheetTitle,
   mutation,
   pending,
   onSave,
@@ -483,6 +580,9 @@ function SheetSelection({
   chosen: ChosenWorksheet | null;
   saved: boolean;
   bound: boolean;
+  persistedSaved: boolean;
+  persistedBound: boolean;
+  spreadsheetTitle: string | null;
   mutation: ReturnType<typeof sheetsMutationGate>;
   pending: string | null;
   onSave: () => void;
@@ -502,12 +602,17 @@ function SheetSelection({
               ? "The spreadsheet is the saved destination. Bind is a separate explicit step."
               : "The worksheet is selected and is not saved.";
   return (
-    <div className="space-y-2 rounded-lg border border-slate-200 p-3 text-sm" data-testid="sheet-selection">
-      <p>
+    <div className="min-w-0 space-y-2 rounded-lg border border-slate-200 p-3 text-sm" data-testid="sheet-selection">
+      <p className="break-words">
         {chosen
-          ? `Selected spreadsheet ${chosen.spreadsheetTitle} (${chosen.spreadsheetId}). Selected worksheet ${chosen.worksheetTitle}. Header ${chosen.classification}. Saved destination: ${saved ? "yes" : "no"}. Bound: ${bound ? "yes" : "no"}.`
-          : "No worksheet is selected. Preview does not select, save, or bind."}
+          ? `Selected spreadsheet ${chosen.spreadsheetTitle}. Selected worksheet ${chosen.worksheetTitle}. Header ${chosen.classification}. Unsaved selection: ${saved ? "no" : "yes"}. Saved destination: ${saved ? "yes" : "no"}. Bound: ${bound ? "yes" : "no"}.`
+          : persistedSaved
+            ? persistedBound
+              ? `Saved spreadsheet ${spreadsheetTitle ?? "saved"}. Bound: yes.`
+              : SPREADSHEET_SAVED_CHOOSE_WORKSHEET
+            : "No worksheet is selected. Preview does not select, save, or bind."}
       </p>
+      {chosen ? <p className="break-all font-mono text-xs text-slate-500">{chosen.spreadsheetId}</p> : null}
       <p className="text-xs text-slate-600">{reason}</p>
       <div className="flex flex-wrap gap-2">
         <Button type="button" data-testid="save-spreadsheet-destination" disabled={!canWrite || pending !== null} onClick={onSave}>
@@ -538,8 +643,9 @@ function SheetSelection({
         <li>Locate the spreadsheet: {chosen ? "selected" : "not selected"}</li>
         <li>Inspect worksheets: use Preview worksheets. Preview is not a save.</li>
         <li>Campaign worksheet: {chosen ? chosen.worksheetTitle : "not chosen"}</li>
-        <li>Saved destination: {saved ? "yes" : "no"}</li>
-        <li>Bound worksheet: {bound ? "yes" : "no"}</li>
+        <li>Saved spreadsheet: {persistedSaved || saved ? "yes" : "no"}</li>
+        <li>Unsaved selection: {chosen && !saved ? "yes" : "no"}</li>
+        <li>Bound worksheet: {persistedBound || bound ? "yes" : "no"}</li>
       </ul>
     </div>
   );
@@ -602,7 +708,7 @@ function WorksheetPreview({
         {preview.spreadsheetTitle} · preview saved: no
         {preview.selection ? " · selection applied: no · bound: no" : ""}
       </p>
-      <p className="font-mono text-xs text-slate-700">Spreadsheet {preview.spreadsheetId}</p>
+      <p className="min-w-0 break-all font-mono text-xs text-slate-700">Spreadsheet {preview.spreadsheetId}</p>
       {preview.recommendation ? (
         <p className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-950">
           Recommended: {preview.recommendation.title} is an exact v3 header. It is not selected, not saved, and not bound.
@@ -677,16 +783,18 @@ function WorksheetPreview({
                 </Button>
               ) : null}
               {mappable && actions.createColumnMap ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="mt-2"
-                  disabled={campaignDispatchEnabled || pendingId !== null}
-                  onClick={() => void selectTab(sheet, true)}
-                >
-                  {pendingId === sheet.worksheetId ? "Reading headers…" : "Map columns"}
-                </Button>
+                <div className="mt-2 space-y-1">
+                  <p className="text-xs text-slate-700">Map columns reads these headers. It does not overwrite them or apply the preset template.</p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={campaignDispatchEnabled || pendingId !== null}
+                    onClick={() => void selectTab(sheet, true)}
+                  >
+                    {pendingId === sheet.worksheetId ? "Reading headers…" : "Map columns"}
+                  </Button>
+                </div>
               ) : null}
               {map && map.worksheetId === sheet.worksheetId && map.spreadsheetId === preview.spreadsheetId ? (
                 <ColumnMapEditor

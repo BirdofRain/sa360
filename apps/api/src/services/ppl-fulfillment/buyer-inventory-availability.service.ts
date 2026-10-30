@@ -23,11 +23,17 @@
  * transaction. Exact means exact for that snapshot, not for writes that commit
  * after the transaction starts. PostgreSQL read committed cannot make the
  * parallel counts and later pages one snapshot.
+ *
+ * A blank or omitted state list counts every canonical US state. Entered
+ * states still have to be canonical codes. An unfinished classification,
+ * including the 100,000-row ceiling, is a lower bound and is not a nationwide
+ * total. Order creation and selection keep their own state requirements.
  */
 
 import type { Prisma, PrismaClient, SourceLeadProvider } from "@prisma/client";
 import { Prisma as PrismaNamespace } from "@prisma/client";
 import {
+  CANONICAL_US_STATE_CODES,
   COMMERCE_AGE_BUCKETS,
   canonicalizeCommerceNicheKey,
   isCanonicalUsStateCode,
@@ -102,6 +108,9 @@ const BUYER_READY_REASONS = [
 
 export type BuyerAvailabilityCountSemantics = "exact" | "lower_bound" | "not_reached";
 
+/** `all` is a blank or omitted state list. `selected` is an explicit code list. */
+export type BuyerAvailabilityStateScope = "all" | "selected";
+
 export type BuyerAvailabilityCounted = {
   count: number;
   countSemantics: "exact" | "lower_bound";
@@ -153,6 +162,12 @@ export type BuyerInventoryAvailabilityReport = {
   };
   buyer: { clientAccountId: string; clientDisplayName: string };
   nicheKey: string;
+  /**
+   * `all` means the caller did not restrict states. The queried universe is
+   * every canonical US state. `selected` is the explicit list in `states`.
+   */
+  stateScope: BuyerAvailabilityStateScope;
+  /** Canonical codes actually queried. For `all`, this is the full allowlist. */
   states: string[];
   requestedCommerceAgeBucketKeys: CommerceAgeBucketRequestKey[];
   allAgedTiers: boolean;
@@ -300,15 +315,60 @@ function emptyBuyerReadyRejections(): Record<BuyerReadyReason, number> {
   >;
 }
 
+/**
+ * Blank, omitted, or whitespace-only input means no caller state restriction.
+ * Any nonblank token that is not a canonical US code rejects the lookup.
+ * Invalid tokens are never dropped so the remainder can become an all-states search.
+ */
 export function parseBuyerAvailabilityStates(
-  states: readonly string[]
-): { ok: true; states: string[] } | { ok: false } {
+  states: readonly string[] | null | undefined
+):
+  | { ok: true; stateScope: BuyerAvailabilityStateScope; states: string[] }
+  | { ok: false } {
+  if (states == null) return { ok: true, stateScope: "all", states: [] };
   const normalized = states.map((state) => state.trim().toUpperCase()).filter(Boolean);
-  if (normalized.length === 0) return { ok: false };
+  if (normalized.length === 0) return { ok: true, stateScope: "all", states: [] };
   const sanitized = sanitizeCanonicalUsStates(normalized);
   if (sanitized.length !== new Set(normalized).size) return { ok: false };
   if (sanitized.some((state) => !isCanonicalUsStateCode(state))) return { ok: false };
-  return { ok: true, states: sanitized };
+  return { ok: true, stateScope: "selected", states: sanitized };
+}
+
+/**
+ * Nationwide eligibility uses the canonical allowlist. Rows outside that
+ * allowlist are already ineligible, and leaving them in the scan would let
+ * them consume the classification ceiling without changing the eligible total.
+ */
+export function buyerAvailabilityQueryStates(
+  parsed: { stateScope: BuyerAvailabilityStateScope; states: readonly string[] }
+): string[] {
+  return parsed.stateScope === "all" ? [...CANONICAL_US_STATE_CODES] : [...parsed.states];
+}
+
+function availabilitySummary(input: {
+  stateScope: BuyerAvailabilityStateScope;
+  queryComplete: boolean;
+  eligibleCountSemantics: "exact" | "lower_bound";
+  eligibleTotal: number;
+  rowsClassified: number;
+  rowsUnclassified: number;
+  notReached: string[];
+  ceiling: number;
+  ceilingHit: boolean;
+}): string {
+  const scopePrefix = input.stateScope === "all" ? "All states. " : "";
+  if (input.queryComplete && input.eligibleCountSemantics === "exact") {
+    return input.eligibleTotal === 0
+      ? `${scopePrefix}No definitively buyer-eligible leads. Unresolved origin is excluded and is not treated as independently sourced.`
+      : `${scopePrefix}Exact buyer-eligible count is ${input.eligibleTotal}.`;
+  }
+  const notReachedNote =
+    input.notReached.length > 0 ? ` Tiers not reached: ${input.notReached.join(", ")}.` : "";
+  const ceilingNote = input.ceilingHit
+    ? ` Classification stopped at the ${input.ceiling.toLocaleString("en-US")}-row ceiling.`
+    : "";
+  const totalLabel = input.stateScope === "all" ? "not a nationwide total" : "not a catalog total";
+  return `${scopePrefix}Buyer-eligible count ${input.eligibleTotal} is a lower bound from ${input.rowsClassified} classified rows, ${totalLabel}. ${input.rowsUnclassified} selectable rows were not classified.${notReachedNote}${ceilingNote} The ${PPL_SELECTION_MAX_SCANNED_ROWS.toLocaleString("en-US")}-row selection cap is not this total.`;
 }
 
 export function parseBuyerAvailabilityBuckets(
@@ -476,7 +536,8 @@ export async function lookupBuyerInventoryAvailability(
   input: {
     clientAccountId: string;
     nicheKey: string;
-    states: readonly string[];
+    /** Omit or pass an empty list to count every canonical US state. */
+    states?: readonly string[] | null;
     commerceAgeBucketKeys?: unknown;
     evaluatedAt?: Date;
     /** Test seam. Clamped to the production ceiling. Not accepted on HTTP. */
@@ -522,7 +583,7 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
   input: {
     clientAccountId: string;
     nicheKey: string;
-    states: readonly string[];
+    states?: readonly string[] | null;
     commerceAgeBucketKeys?: unknown;
     evaluatedAt?: Date;
     maxClassifiedRows?: number;
@@ -539,6 +600,7 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
   if (!nicheKey) return { ok: false, code: "invalid_niche", reasons: ["invalid_niche"] };
   const states = parseBuyerAvailabilityStates(input.states);
   if (!states.ok) return { ok: false, code: "invalid_states", reasons: ["invalid_states"] };
+  const queriedStates = buyerAvailabilityQueryStates(states);
   const buckets = parseBuyerAvailabilityBuckets(input.commerceAgeBucketKeys);
   if (!buckets.ok) {
     return { ok: false, code: "invalid_age_buckets", reasons: ["invalid_age_buckets"] };
@@ -560,7 +622,7 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
     Math.max(1, input.pageSize ?? BUYER_AVAILABILITY_PAGE_SIZE)
   );
   const tierKeys = concreteAvailabilityTierKeys(buckets.keys);
-  const structural = structuralWhere(nicheKey, states.states, buckets.keys, evaluatedAt);
+  const structural = structuralWhere(nicheKey, queriedStates, buckets.keys, evaluatedAt);
   const availableActive = availableActiveWhere(structural);
   const pool = withoutOpenAllocation(availableActive);
   const scanPool = andWhere(pool, {
@@ -854,7 +916,7 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
     };
   });
   const eligibleTotal = ageTiers.reduce((sum, tier) => sum + (tier.eligible ?? 0), 0);
-  const stateEligibility: BuyerAvailabilityStateEligibility[] = states.states.map((state) => {
+  const stateEligibility: BuyerAvailabilityStateEligibility[] = queriedStates.map((state) => {
     const eligibleCount = eligibleByState.get(state) ?? 0;
     if (!queryComplete && eligibleCount === 0) {
       return { state, eligible: null, countSemantics: "not_reached" };
@@ -878,17 +940,17 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
     .filter((tier) => tier.countSemantics === "not_reached")
     .map((tier) => tier.commerceAgeBucketKey);
 
-  let summary: string;
-  if (queryComplete && eligibleCountSemantics === "exact") {
-    summary =
-      eligibleTotal === 0
-        ? "No definitively buyer-eligible leads. Unresolved origin is excluded and is not treated as independently sourced."
-        : `Exact buyer-eligible count is ${eligibleTotal}.`;
-  } else {
-    summary = `Buyer-eligible count ${eligibleTotal} is a lower bound from ${rowsClassified} classified rows, not a catalog total. ${rowsUnclassified} selectable rows were not classified.${
-      notReached.length > 0 ? ` Tiers not reached: ${notReached.join(", ")}.` : ""
-    } The ${PPL_SELECTION_MAX_SCANNED_ROWS.toLocaleString("en-US")}-row selection cap is not this total.`;
-  }
+  let summary = availabilitySummary({
+    stateScope: states.stateScope,
+    queryComplete,
+    eligibleCountSemantics,
+    eligibleTotal,
+    rowsClassified,
+    rowsUnclassified,
+    notReached,
+    ceiling,
+    ceilingHit: !queryComplete && rowsClassified >= ceiling,
+  });
   if (openAllocationLeak > 0) {
     summary += ` ${openAllocationLeak} rows with an open allocation were excluded during classification.`;
   }
@@ -917,7 +979,8 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
       clientDisplayName: buyer.clientDisplayName,
     },
     nicheKey,
-    states: states.states,
+    stateScope: states.stateScope,
+    states: queriedStates,
     requestedCommerceAgeBucketKeys: buckets.keys.length > 0 ? buckets.keys : tierKeys,
     allAgedTiers: buckets.keys.length === 0,
     queryCompleteness: queryComplete ? "complete" : "incomplete",

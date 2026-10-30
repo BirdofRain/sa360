@@ -110,7 +110,12 @@ const prepareBodySchema = z.object({
 const buyerAvailabilityBodySchema = z.object({
   clientAccountId: z.string().trim().min(1).max(120),
   nicheKey: z.string().trim().min(1).max(120),
-  states: z.array(z.string().trim().min(1).max(32)).min(1).max(60),
+  /**
+   * Omit or send an empty list to count every canonical US state.
+   * A nonblank token still has to be a canonical code; whitespace-only
+   * tokens stay invalid instead of becoming an all-states search.
+   */
+  states: z.array(z.string().trim().min(1).max(32)).max(60).optional(),
   commerceAgeBucketKeys: z.array(z.string().trim().min(1).max(64)).max(8).optional(),
 });
 

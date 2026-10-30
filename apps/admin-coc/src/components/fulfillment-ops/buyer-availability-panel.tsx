@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { CANONICAL_US_STATE_CODES } from "@sa360/shared";
+import { CANONICAL_US_STATE_CODES, isCanonicalUsStateCode } from "@sa360/shared";
 
 import { EmptyState } from "@/components/dashboard/empty-state";
 import { SectionPanel } from "@/components/dashboard/section-panel";
@@ -31,6 +31,40 @@ const NICHES = [
 function countedLabel(value: { count: number; countSemantics: string } | undefined): string {
   if (!value) return "—";
   return value.countSemantics === "exact" ? String(value.count) : `at least ${value.count}`;
+}
+
+/**
+ * Blank input is an all-states search. Invalid tokens are rejected here so
+ * they are never omitted and sent as a blank (all-states) request.
+ */
+function parseBuyerAvailabilityStateInput(
+  text: string
+): { ok: true; states?: string[] } | { ok: false; error: string } {
+  const tokens = text
+    .split(/[\s,]+/)
+    .map((state) => state.trim().toUpperCase())
+    .filter(Boolean);
+  if (tokens.length === 0) return { ok: true };
+  const invalid = [...new Set(tokens.filter((state) => !isCanonicalUsStateCode(state)))];
+  if (invalid.length > 0) {
+    return {
+      ok: false,
+      error: `States must be canonical US codes. Invalid: ${invalid.join(", ")}`,
+    };
+  }
+  const states: string[] = [];
+  const seen = new Set<string>();
+  for (const state of tokens) {
+    if (seen.has(state)) continue;
+    seen.add(state);
+    states.push(state);
+  }
+  return { ok: true, states };
+}
+
+function stateCoverageLabel(report: BuyerInventoryAvailabilityReport): string {
+  if (report.stateScope === "all") return "All states";
+  return report.states.length > 0 ? report.states.join(", ") : "All states";
 }
 
 export function BuyerAvailabilityPanel({
@@ -64,10 +98,6 @@ export function BuyerAvailabilityPanel({
     );
   }
 
-  const states = statesText
-    .split(/[\s,]+/)
-    .map((state) => state.trim().toUpperCase())
-    .filter(Boolean);
   const allTiers = tiers.length === AGED_TIERS.length;
 
   return (
@@ -79,11 +109,16 @@ export function BuyerAvailabilityPanel({
           event.preventDefault();
           setError(null);
           setReport(null);
+          const parsedStates = parseBuyerAvailabilityStateInput(statesText);
+          if (!parsedStates.ok) {
+            setError(parsedStates.error);
+            return;
+          }
           startTransition(async () => {
             const result = await clientLookupBuyerAvailability({
               clientAccountId: clientAccountId.trim(),
               nicheKey,
-              states,
+              ...(parsedStates.states ? { states: parsedStates.states } : {}),
               ...(allTiers ? {} : { commerceAgeBucketKeys: tiers }),
             });
             if (!result.ok) {
@@ -145,10 +180,13 @@ export function BuyerAvailabilityPanel({
             <Input
               value={statesText}
               onChange={(event) => setStatesText(event.target.value)}
-              placeholder="GA"
+              placeholder="All states"
               list="buyer-availability-states"
               data-testid="buyer-availability-states"
             />
+            <span className="text-xs text-muted-foreground" data-testid="buyer-availability-states-help">
+              Leave blank to search all states.
+            </span>
             <datalist id="buyer-availability-states">
               {CANONICAL_US_STATE_CODES.map((code) => (
                 <option key={code} value={code} />
@@ -180,7 +218,7 @@ export function BuyerAvailabilityPanel({
           <Button
             type="submit"
             size="sm"
-            disabled={pending || !clientAccountId.trim() || states.length === 0 || tiers.length === 0}
+            disabled={pending || !clientAccountId.trim() || tiers.length === 0}
             data-testid="buyer-availability-submit"
           >
             {pending ? "Checking availability…" : "Check availability"}
@@ -199,10 +237,22 @@ export function BuyerAvailabilityPanel({
 
 function BuyerAvailabilityResult({ report }: { report: BuyerInventoryAvailabilityReport }) {
   const incomplete = report.queryCompleteness === "incomplete" || report.eligibleCountSemantics === "lower_bound";
+  const nationwideIncomplete = incomplete && report.stateScope === "all";
+  const coverage = stateCoverageLabel(report);
   return (
     <div className="space-y-3 border-t border-slate-100 pt-3" data-testid="buyer-availability-result">
+      <p className="text-sm text-slate-800" data-testid="buyer-availability-state-scope">
+        {report.stateScope === "all" ? "Coverage: All states" : `Coverage: Selected states (${coverage})`}
+      </p>
       {incomplete ? (
-        <WarningBanner tone="warn" title="Incomplete scan — lower bound">
+        <WarningBanner
+          tone="warn"
+          title={
+            nationwideIncomplete
+              ? "Incomplete nationwide scan — not a total"
+              : "Incomplete scan — lower bound"
+          }
+        >
           {report.summary}
         </WarningBanner>
       ) : (
@@ -217,10 +267,14 @@ function BuyerAvailabilityResult({ report }: { report: BuyerInventoryAvailabilit
         </p>
       ) : null}
       <p className="text-sm text-slate-700" data-testid="buyer-availability-total">
-        {report.buyer.clientDisplayName} / {report.nicheKey} / {report.states.join(", ")} —{" "}
+        {report.buyer.clientDisplayName} / {report.nicheKey} / {coverage} —{" "}
         {incomplete ? "at least " : ""}
         {report.eligibleTotal} buyer-eligible
-        {incomplete ? " (lower bound)" : " (exact)"}
+        {nationwideIncomplete
+          ? " (lower bound, not a nationwide total)"
+          : incomplete
+            ? " (lower bound)"
+            : " (exact)"}
         {" · "}
         evaluated {report.evaluatedAt}
       </p>

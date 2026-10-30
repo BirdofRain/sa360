@@ -1,7 +1,11 @@
 # Buyer-specific inventory availability
 
 Read-only admin lookup for “how many aged leads can this buyer actually take?”
-Example: JR Laird / trucker / GA / all aged tiers.
+Example: JR Laird / trucker / GA / all aged tiers. A blank or omitted state
+list on this admin lookup means every canonical US state (All states). The
+customer portal map still sends the full state list and still rejects a
+partial list. Order creation, selection preview, and commit still require
+states.
 
 Feature flag `SA360_BUYER_INVENTORY_AVAILABILITY_ENABLED` defaults off. The HTTP
 route is `POST /admin/v1/fulfillment-ops/buyer-availability` and returns 404
@@ -62,8 +66,12 @@ status changes, source-association updates — are invisible to this check.
 Exact structural counts and exact eligible tier counts are exact for that
 snapshot. Eligible tier counts stay a lower bound when classification stops at
 the 100,000-row ceiling. Tiers the oldest-first cursor has not entered are
-`not_reached` (`eligible: null`) rather than zero. `eligibleByState` uses the
-same eligible rows, after identity dedupe. The portal map sends one of the five
+`not_reached` (`eligible: null`) rather than zero. An all-states lookup uses
+the same ceiling. If the scan stops early, `stateScope` is still `all`, the
+summary says the figure is not a nationwide total, and unscanned states stay
+`not_reached` rather than zero. `eligibleByState` uses the
+same eligible rows, after identity dedupe. For `stateScope: "all"` that list
+is every canonical US state code. The portal map sends one of the five
 priced ranges, so a state's count is only that range. A historical 6–12 admin
 request still sums unique consumers across 6–9 and 9–12. A state with eligible
 rows on an incomplete scan is a lower bound. A state with no eligible rows yet

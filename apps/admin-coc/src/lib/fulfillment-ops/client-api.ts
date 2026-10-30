@@ -382,6 +382,8 @@ export type BuyerInventoryAvailabilityReport = {
   };
   buyer: { clientAccountId: string; clientDisplayName: string };
   nicheKey: string;
+  /** Present on reports from the all-states lookup. Older mocks may omit it. */
+  stateScope?: "all" | "selected";
   states: string[];
   allAgedTiers: boolean;
   queryCompleteness: "complete" | "incomplete";

@@ -168,4 +168,168 @@ describe("BuyerAvailabilityPanel", () => {
       globalThis.fetch = previous;
     }
   });
+
+  it("shows the all-states placeholder and searches with no state restriction when blank", async () => {
+    const previous = globalThis.fetch;
+    let body = "";
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      body = String(init?.body ?? "");
+      return new Response(
+        JSON.stringify({
+          ...exactReport,
+          stateScope: "all",
+          states: ["GA", "TX"],
+          summary: "All states. Exact buyer-eligible count is 4.",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }) as typeof fetch;
+    try {
+      render(<BuyerAvailabilityPanel enabled clients={[]} />);
+      const states = screen.getByTestId("buyer-availability-states");
+      assert.equal(states.getAttribute("placeholder"), "All states");
+      assert.match(
+        screen.getByTestId("buyer-availability-states-help").textContent ?? "",
+        /Leave blank to search all states\./
+      );
+      fireEvent.change(screen.getByTestId("buyer-availability-client-id"), {
+        target: { value: "client_jr_laird" },
+      });
+      fireEvent.change(states, { target: { value: "   " } });
+      fireEvent.click(screen.getByTestId("buyer-availability-submit"));
+      const total = await screen.findByTestId("buyer-availability-total");
+      const parsed = JSON.parse(body) as { states?: string[]; nicheKey?: string };
+      assert.equal(parsed.states, undefined);
+      assert.equal(parsed.nicheKey, "trucker");
+      assert.match(total.textContent ?? "", /All states/);
+      assert.match(total.textContent ?? "", /4 buyer-eligible/);
+      assert.match(total.textContent ?? "", /\(exact\)/);
+      assert.match(
+        screen.getByTestId("buyer-availability-state-scope").textContent ?? "",
+        /Coverage: All states/
+      );
+      assert.match(
+        screen.getByTestId("buyer-availability-tier-row-COMMERCE_1_3_MO").textContent ?? "",
+        /4/
+      );
+    } finally {
+      globalThis.fetch = previous;
+    }
+  });
+
+  it("labels an unfinished nationwide count as not a total", async () => {
+    const previous = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          ...exactReport,
+          stateScope: "all",
+          states: ["GA", "TX"],
+          queryCompleteness: "incomplete",
+          eligibleCountSemantics: "lower_bound",
+          eligibleTotal: 1,
+          summary:
+            "All states. Buyer-eligible count 1 is a lower bound from 1 classified rows, not a nationwide total.",
+          ageTiers: [
+            {
+              commerceAgeBucketKey: "COMMERCE_12_MO_PLUS",
+              minDaysInclusive: 365,
+              maxDaysExclusive: null,
+              eligible: 1,
+              classified: 1,
+              countSemantics: "lower_bound",
+            },
+            {
+              commerceAgeBucketKey: "COMMERCE_1_3_MO",
+              minDaysInclusive: 30,
+              maxDaysExclusive: 90,
+              eligible: null,
+              classified: 0,
+              countSemantics: "not_reached",
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      )) as typeof fetch;
+    try {
+      render(<BuyerAvailabilityPanel enabled clients={[]} />);
+      fireEvent.change(screen.getByTestId("buyer-availability-client-id"), {
+        target: { value: "client_jr_laird" },
+      });
+      fireEvent.change(screen.getByTestId("buyer-availability-states"), { target: { value: "" } });
+      fireEvent.click(screen.getByTestId("buyer-availability-submit"));
+      const total = await screen.findByTestId("buyer-availability-total");
+      assert.match(total.textContent ?? "", /All states/);
+      assert.match(total.textContent ?? "", /at least 1 buyer-eligible/);
+      assert.match(total.textContent ?? "", /not a nationwide total/);
+      assert.equal((total.textContent ?? "").includes("(exact)"), false);
+      assert.match(
+        screen.getByTestId("buyer-availability-tier-row-COMMERCE_1_3_MO").textContent ?? "",
+        /not reached/
+      );
+    } finally {
+      globalThis.fetch = previous;
+    }
+  });
+
+  it("rejects invalid state text instead of searching all states", async () => {
+    const previous = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response(JSON.stringify(exactReport), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    try {
+      render(<BuyerAvailabilityPanel enabled clients={[]} />);
+      fireEvent.change(screen.getByTestId("buyer-availability-client-id"), {
+        target: { value: "client_jr_laird" },
+      });
+      fireEvent.change(screen.getByTestId("buyer-availability-states"), {
+        target: { value: "GA ZZ" },
+      });
+      fireEvent.click(screen.getByTestId("buyer-availability-submit"));
+      const error = await screen.findByTestId("buyer-availability-error");
+      assert.match(error.textContent ?? "", /Invalid: ZZ/);
+      assert.equal(screen.queryByTestId("buyer-availability-result"), null);
+      assert.equal(screen.queryByText(/Coverage: All states/), null);
+      assert.equal(calls, 0);
+    } finally {
+      globalThis.fetch = previous;
+    }
+  });
+
+  it("keeps a valid state selection on the request", async () => {
+    const previous = globalThis.fetch;
+    let body = "";
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      body = String(init?.body ?? "");
+      return new Response(
+        JSON.stringify({ ...exactReport, stateScope: "selected", states: ["GA", "TX"] }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }) as typeof fetch;
+    try {
+      render(<BuyerAvailabilityPanel enabled clients={[]} />);
+      fireEvent.change(screen.getByTestId("buyer-availability-client-id"), {
+        target: { value: "client_jr_laird" },
+      });
+      fireEvent.change(screen.getByTestId("buyer-availability-states"), {
+        target: { value: "ga, tx" },
+      });
+      fireEvent.click(screen.getByTestId("buyer-availability-submit"));
+      const total = await screen.findByTestId("buyer-availability-total");
+      assert.deepEqual(JSON.parse(body).states, ["GA", "TX"]);
+      assert.match(total.textContent ?? "", /GA, TX/);
+      assert.match(total.textContent ?? "", /\(exact\)/);
+      assert.match(
+        screen.getByTestId("buyer-availability-state-scope").textContent ?? "",
+        /Coverage: Selected states \(GA, TX\)/
+      );
+    } finally {
+      globalThis.fetch = previous;
+    }
+  });
 });

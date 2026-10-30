@@ -10,10 +10,11 @@
  * 1. Selection may stop after a requested quantity or 5,000 scanned rows and
  *    report that window as eligibleQuantity. This lookup counts the cohort.
  *    When classification cannot finish, eligible numbers are lower bounds.
- * 2. Selection treats a null origin stamp as eligible. This lookup does not.
- *    A missing stamp is buyer-eligible only when the canonical confirmed
- *    LeadCapture source association reconciles exactly one origin that is not
- *    the buyer. Unresolved origin is reported separately.
+ * 2. Missing or unconfirmed origin is eligible for any buyer. A persisted
+ *    stamp, or a confirmed LeadCapture association, that names this buyer is
+ *    excluded. The lookup records that evidence and does not stamp or
+ *    backfill ownership. Confirmed other-origin continues through the
+ *    remaining eligibility checks.
  * 3. Selection's SQL predicate is `status = available` and does not exclude an
  *    open allocation until reservation flips that status. This lookup also
  *    excludes open allocations (shadow, reserved, delivering, committed,
@@ -47,16 +48,8 @@ import {
 import { prisma } from "../../lib/db.js";
 import { companySheetsInternalPilotLeadExclusion } from "../company-sheets-dispatch/company-sheets-pilot-isolation.js";
 import { anyPhoneFingerprintHit } from "../../lib/identity-fingerprint.js";
-import { lifecycleEventSchema } from "../../schemas/lifecycle-event.schema.js";
 import { prismaCommerceNicheWhere } from "../commerce/commerce-niche-match.js";
 import { calculateInventoryAgeDays } from "../lead-inventory/lead-inventory-age.js";
-import {
-  EMPTY_LEADCAPTURE_SOURCE_IDENTITY_SIGNALS,
-  leadCaptureSourceIdentitySignalsFromLifecyclePayload,
-  withLeadCaptureSourceCampaignIdFallback,
-  type LeadCaptureSourceIdentitySignals,
-} from "../source-intake/leadcapture-source-identity-signals.js";
-import { resolveConfirmedLeadCaptureSourceAssociation } from "../source-intake/leadcapture-source-association.service.js";
 import { SOURCE_FUNNEL_LEADCAPTURE_PROVIDER } from "../source-intake/source-funnel.service.js";
 import {
   buildCommerceGeneratedAtWhere,
@@ -66,7 +59,10 @@ import {
   PPL_SELECTION_MAX_SCANNED_ROWS,
 } from "./inventory-selection.service.js";
 import { resolveCommerceAgeBucketKey } from "./commerce-age-buckets.js";
-import { isOriginClientBuyerIneligible } from "./origin-client-exclusion.js";
+import {
+  createSellPathOriginCache,
+  evaluateSellPathOrigin,
+} from "./sell-path-origin.js";
 import {
   evaluatePplBuyerReadyEligibility,
   type PplBuyerReadyRejectionReason as BuyerReadyReason,
@@ -385,7 +381,7 @@ function availabilitySummary(input: {
         ? ` Counted across ${input.classificationPasses} passes of at most ${input.ceiling.toLocaleString("en-US")} classified rows under one snapshot.`
         : "";
     return input.eligibleTotal === 0
-      ? `${scopePrefix}No definitively buyer-eligible leads. Unresolved origin is excluded and is not treated as independently sourced.${passNote}`
+      ? `${scopePrefix}No buyer-eligible leads. Unknown origin is included and remains subject to the other eligibility rules. Confirmed buyer-origin stays excluded.${passNote}`
       : `${scopePrefix}Exact buyer-eligible count is ${input.eligibleTotal}.${passNote}`;
   }
   const notReachedNote =
@@ -512,48 +508,6 @@ function cursorWhere(
   };
 }
 
-function originSignalCacheKey(
-  sourceCampaignId: string | null,
-  signals: LeadCaptureSourceIdentitySignals
-): string {
-  return JSON.stringify([
-    sourceCampaignId,
-    signals.providerFormIds,
-    signals.parentUrlKey,
-    signals.hostedPageSlug,
-  ]);
-}
-
-type ReconciledOrigin =
-  | { kind: "reconciled"; originClientAccountId: string }
-  | { kind: "unresolved"; reason: string };
-
-async function reconcileMissingOrigin(
-  row: ScanRow,
-  db: AvailabilityDb,
-  cache: Map<string, ReconciledOrigin>
-): Promise<ReconciledOrigin> {
-  if (row.sourceLeadEvent.sourceProvider !== SOURCE_FUNNEL_LEADCAPTURE_PROVIDER) {
-    return { kind: "unresolved", reason: "provider_not_reconcilable" };
-  }
-  const parsed = lifecycleEventSchema.safeParse(row.sourceLeadEvent.normalizedPayloadJson);
-  const signals = withLeadCaptureSourceCampaignIdFallback(
-    parsed.success
-      ? leadCaptureSourceIdentitySignalsFromLifecyclePayload(parsed.data)
-      : EMPTY_LEADCAPTURE_SOURCE_IDENTITY_SIGNALS,
-    row.sourceLeadEvent.sourceCampaignId
-  );
-  const cacheKey = originSignalCacheKey(row.sourceLeadEvent.sourceCampaignId, signals);
-  const cached = cache.get(cacheKey);
-  if (cached) return cached;
-  const association = await resolveConfirmedLeadCaptureSourceAssociation(signals, db);
-  const resolved: ReconciledOrigin = association.matched
-    ? { kind: "reconciled", originClientAccountId: association.match.originClientAccountId }
-    : { kind: "unresolved", reason: association.reason };
-  cache.set(cacheKey, resolved);
-  return resolved;
-}
-
 function bump(map: Record<string, number>, key: string) {
   map[key] = (map[key] ?? 0) + 1;
 }
@@ -666,20 +620,14 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
   const structural = structuralWhere(nicheKey, queriedStates, buckets.keys, evaluatedAt);
   const availableActive = availableActiveWhere(structural);
   const pool = withoutOpenAllocation(availableActive);
+  // Null origin is selectable. SQL `<>` does not match NULL, so the null
+  // branch is explicit. A stamp equal to this buyer stays out of classification
+  // so it cannot consume phone or email dedupe. Blank stamps are not the buyer
+  // and are reconciled during classification without being written.
   const scanPool = andWhere(pool, {
     OR: [
-      {
-        AND: [
-          { originClientAccountId: { not: null } },
-          { NOT: { originClientAccountId: buyer.clientAccountId } },
-        ],
-      },
-      {
-        originClientAccountId: null,
-        // Inventory sourceProvider is stamped with the event provider at intake.
-        // Reconciliation still rechecks the event before a null origin can match.
-        sourceProvider: SOURCE_FUNNEL_LEADCAPTURE_PROVIDER,
-      },
+      { originClientAccountId: null },
+      { NOT: { originClientAccountId: buyer.clientAccountId } },
     ],
   });
 
@@ -751,7 +699,7 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
   let sameBuyerPriorDelivery = 0;
   let currentBatchDuplicate = 0;
   let originClientReconciled = 0;
-  let originUnresolved = 0;
+  let unknownOriginIncluded = 0;
   let unstampedClassified = 0;
   let reconciledFromSourceFunnel = 0;
   let ageBucketMismatch = 0;
@@ -762,7 +710,7 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
   let lastClassifiedAgeDays: number | null = null;
   const batchPhones = new Set<string>();
   const batchEmails = new Set<string>();
-  const originCache = new Map<string, ReconciledOrigin>();
+  const originCache = createSellPathOriginCache();
   let cursor: { generatedAt: Date; id: string } | null = null;
   let classificationPasses = 0;
   let stoppedOnPassCeiling = false;
@@ -866,24 +814,23 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
         continue;
       }
 
-      let originClientAccountId = row.originClientAccountId?.trim() || null;
-      if (!originClientAccountId) {
-        unstampedClassified += 1;
-        const reconciled = await reconcileMissingOrigin(row, db, originCache);
-        if (reconciled.kind === "unresolved") {
-          originUnresolved += 1;
-          bump(unresolvedReasons, reconciled.reason);
-          if (rowsClassified >= passLimit) break;
-          continue;
-        }
-        reconciledFromSourceFunnel += 1;
-        originClientAccountId = reconciled.originClientAccountId;
-        if (isOriginClientBuyerIneligible(originClientAccountId, buyer.clientAccountId)) {
-          originClientReconciled += 1;
-          if (rowsClassified >= passLimit) break;
-          continue;
-        }
-      } else if (isOriginClientBuyerIneligible(originClientAccountId, buyer.clientAccountId)) {
+      if (!row.originClientAccountId?.trim()) unstampedClassified += 1;
+      const origin = await evaluateSellPathOrigin({
+        originClientAccountId: row.originClientAccountId,
+        sourceProvider: row.sourceLeadEvent.sourceProvider,
+        sourceCampaignId: row.sourceLeadEvent.sourceCampaignId,
+        normalizedPayloadJson: row.sourceLeadEvent.normalizedPayloadJson,
+        buyerClientAccountId: buyer.clientAccountId,
+        db,
+        cache: originCache,
+      });
+      if (origin.unresolvedReason) {
+        unknownOriginIncluded += 1;
+        bump(unresolvedReasons, origin.unresolvedReason);
+      }
+      if (origin.reconciledFromSourceFunnel) reconciledFromSourceFunnel += 1;
+      if (!origin.eligible) {
+        if (origin.reconciledFromSourceFunnel) originClientReconciled += 1;
         if (rowsClassified >= passLimit) break;
         continue;
       }
@@ -999,7 +946,8 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
   const rowsUnclassified = queryComplete
     ? 0
     : Math.max(0, selectableRowsExact - rowsClassified);
-  const unresolvedTotal = originUnresolved + unstampedNotReconcilable;
+  // Unknown origin is not an exclusion. The structural non-LeadCapture count
+  // stays on the cohort for operators and is not added again here.
   const notReached = ageTiers
     .filter((tier) => tier.countSemantics === "not_reached")
     .map((tier) => tier.commerceAgeBucketKey);
@@ -1069,7 +1017,7 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
     exclusionReasons: {
       originClientStamped: counted(stampedSameOrigin, "exact"),
       originClientReconciled: counted(originClientReconciled, scanNode),
-      originUnresolved: counted(unresolvedTotal, queryComplete ? "exact" : "lower_bound"),
+      originUnresolved: counted(0, "exact"),
       existingAllocation: counted(openAllocationOnAvailable + openAllocationLeak, "exact"),
       reserved: counted(reserved, "exact"),
       committed: counted(committed, "exact"),
@@ -1086,18 +1034,13 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
     provenance: {
       stampedConfirmed: stampedSameOrigin + stampedOtherOrigin,
       reconciledFromSourceFunnel,
-      unresolvedOrigin: unresolvedTotal,
-      unresolvedReasons: {
-        ...unresolvedReasons,
-        ...(unstampedNotReconcilable > 0
-          ? { provider_not_reconcilable: unstampedNotReconcilable }
-          : {}),
-      },
+      unresolvedOrigin: unknownOriginIncluded,
+      unresolvedReasons,
       unstampedNotClassified: queryComplete
         ? 0
-        : Math.max(0, unstampedSelectable - unstampedNotReconcilable - unstampedClassified),
+        : Math.max(0, unstampedSelectable - unstampedClassified),
       coverageNote:
-        "Confirmed stamps and reconciled confirmed source funnels are ownership evidence. A missing origin is unresolved and is not counted as buyer-eligible.",
+        "Unknown-origin leads are included for any buyer and remain subject to the other eligibility rules. Confirmed origin matching the buyer stays excluded. This lookup does not stamp or backfill ownership.",
     },
     scan: {
       rowsClassified,

@@ -16,6 +16,10 @@ import {
   BUYER_AVAILABILITY_MAX_CLASSIFIED_ROWS,
   lookupBuyerInventoryAvailability,
 } from "./buyer-inventory-availability.service.js";
+import {
+  commitPplInventorySelection,
+  previewPplInventorySelection,
+} from "./inventory-selection.service.js";
 
 const integrationUrlRaw =
   process.env.SA360_PPL_INTEGRATION_DATABASE_URL?.trim() ||
@@ -25,6 +29,7 @@ const runIntegration = Boolean(integrationUrlRaw);
 
 const BUYER_ID = "client_bav_jr_laird";
 const OTHER_ID = "client_bav_other";
+const SECOND_BUYER_ID = "client_bav_second";
 const EVALUATED_AT = new Date("2026-08-24T00:00:00.000Z");
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** Enough rows that the 3–6 month selectable cohort exceeds one 100,000-row pass. */
@@ -169,14 +174,14 @@ describe("buyer inventory availability postgres proof", { skip: !runIntegration 
     assert.equal(report.queryCompleteness, "complete");
     assert.equal(report.eligibleCountSemantics, "exact");
     assert.equal(report.snapshot.isolation, "repeatable_read");
-    assert.equal(report.eligibleTotal - baseline.eligibleTotal, 6);
+    assert.equal(report.eligibleTotal - baseline.eligibleTotal, 8);
     const tierDelta = (key: string) => {
       const after = report.ageTiers.find((tier) => tier.commerceAgeBucketKey === key);
       const prior = baseline.ageTiers.find((tier) => tier.commerceAgeBucketKey === key);
       assert.equal(after?.countSemantics, "exact");
       return (after?.eligible ?? 0) - (prior?.eligible ?? 0);
     };
-    assert.equal(tierDelta("COMMERCE_1_3_MO"), 2);
+    assert.equal(tierDelta("COMMERCE_1_3_MO"), 4);
     assert.equal(tierDelta("COMMERCE_3_6_MO"), 1);
     assert.equal(tierDelta("COMMERCE_6_9_MO"), 1);
     assert.equal(tierDelta("COMMERCE_9_12_MO"), 1);
@@ -192,6 +197,11 @@ describe("buyer inventory availability postgres proof", { skip: !runIntegration 
     );
     assert.equal(
       report.exclusionReasons.originUnresolved.count - baseline.exclusionReasons.originUnresolved.count,
+      0
+    );
+    assert.equal(report.exclusionReasons.originUnresolved.count, 0);
+    assert.equal(
+      report.provenance.unresolvedOrigin - baseline.provenance.unresolvedOrigin,
       2
     );
     assert.equal(
@@ -237,6 +247,278 @@ describe("buyer inventory availability postgres proof", { skip: !runIntegration 
       await db.sourceFunnel.count({ where: { id: { startsWith: "bav-" } } }),
       beforeFunnels + 2
     );
+  });
+
+  it("availability, preview, and reservation agree for unknown origin without rewriting it", async () => {
+    const now = new Date();
+    const previousSelection = process.env.SA360_PPL_SELECTION_ENABLED;
+    process.env.SA360_PPL_SELECTION_ENABLED = "true";
+    const secondBuyer = SECOND_BUYER_ID;
+    await db.clientAccount.upsert({
+      where: { clientAccountId: secondBuyer },
+      create: {
+        clientAccountId: secondBuyer,
+        clientDisplayName: "Second buyer",
+        status: "active",
+        portalEnabled: false,
+        primaryNicheKeys: ["trucker"],
+      },
+      update: { status: "active" },
+    });
+    const buyerBefore = await lookupBuyerInventoryAvailability(
+      {
+        clientAccountId: BUYER_ID,
+        nicheKey: "trucker",
+        states: ["DE"],
+        commerceAgeBucketKeys: ["COMMERCE_1_3_MO"],
+        evaluatedAt: now,
+      },
+      db
+    );
+    const secondBefore = await lookupBuyerInventoryAvailability(
+      {
+        clientAccountId: secondBuyer,
+        nicheKey: "trucker",
+        states: ["DE"],
+        commerceAgeBucketKeys: ["COMMERCE_1_3_MO"],
+        evaluatedAt: now,
+      },
+      db
+    );
+    assert.equal(buyerBefore.ok, true);
+    assert.equal(secondBefore.ok, true);
+    if (!buyerBefore.ok || !secondBefore.ok) return;
+
+    const rows: Array<Parameters<typeof insertInventoryRow>[1]> = [
+      {
+        id: "bav-de-unknown",
+        eventId: "bav-de-unknown-evt",
+        lotId,
+        ageDays: 60,
+        phone: "+14045559001",
+        origin: null,
+        state: "DE",
+        provider: "manual_import",
+        referenceAt: now,
+      },
+      {
+        id: "bav-de-unconfirmed",
+        eventId: "bav-de-unconfirmed-evt",
+        lotId,
+        ageDays: 62,
+        phone: "+14045559002",
+        origin: null,
+        state: "DE",
+        provider: "leadcapture_io",
+        campaignId: "bav-de-suggested",
+        referenceAt: now,
+      },
+      {
+        id: "bav-de-buyer-funnel",
+        eventId: "bav-de-buyer-funnel-evt",
+        lotId,
+        ageDays: 64,
+        phone: "+14045559003",
+        origin: null,
+        state: "DE",
+        provider: "leadcapture_io",
+        campaignId: "my.leadcapture.io/p/bav-de-buyer",
+        referenceAt: now,
+      },
+      {
+        id: "bav-de-stamped-buyer",
+        eventId: "bav-de-stamped-buyer-evt",
+        lotId,
+        ageDays: 66,
+        phone: "+14045559004",
+        origin: BUYER_ID,
+        state: "DE",
+        provider: "manual_import",
+        referenceAt: now,
+      },
+      {
+        id: "bav-de-stamped-other",
+        eventId: "bav-de-stamped-other-evt",
+        lotId,
+        ageDays: 68,
+        phone: "+14045559005",
+        origin: OTHER_ID,
+        state: "DE",
+        provider: "manual_import",
+        referenceAt: now,
+      },
+      {
+        id: "bav-de-prior",
+        eventId: "bav-de-prior-evt",
+        lotId,
+        ageDays: 70,
+        phone: "+14045559006",
+        origin: null,
+        state: "DE",
+        provider: "manual_import",
+        referenceAt: now,
+      },
+    ];
+    for (const row of rows) await insertInventoryRow(db, row);
+    await db.sourceFunnel.create({
+      data: {
+        id: "bav-de-funnel-buyer",
+        provider: "leadcapture_io",
+        providerFunnelId: null,
+        parentUrlKey: "my.leadcapture.io/p/bav-de-buyer",
+        pageSlug: "bav-de-buyer",
+        associationStatus: "confirmed",
+        originClientAccountId: BUYER_ID,
+      },
+    });
+    await db.sourceFunnel.create({
+      data: {
+        id: "bav-de-funnel-suggested",
+        provider: "leadcapture_io",
+        providerFunnelId: "bav-de-suggested",
+        associationStatus: "suggested",
+        originClientAccountId: OTHER_ID,
+      },
+    });
+    await db.buyerDeliveredIdentity.create({
+      data: {
+        id: "bav-de-prior-identity",
+        clientAccountId: BUYER_ID,
+        phoneFingerprint: fingerprintPhoneIdentity("+14045559006"),
+        sourceLeadEventId: "bav-de-prior-evt",
+        leadAllocationId: "bav-de-prior-alloc",
+        leadInventoryItemId: "bav-de-prior",
+      },
+    });
+    await db.leadOrder.create({
+      data: {
+        id: "bav-de-order",
+        orderNumber: "BAV-DE-ORDER",
+        clientAccountId: BUYER_ID,
+        clientDisplayName: "JR Laird",
+        status: "active",
+        nicheKey: "trucker",
+        statesJson: ["DE"],
+        leadVolume: 3,
+        requestedQuantity: 3,
+        reservedQuantity: 0,
+        fulfilledQuantity: 0,
+        deliveryCadence: "test",
+        campaignType: "Aged leads",
+        crmPackage: "simulation_only",
+        createdByRole: "admin",
+        submittedAt: now,
+        activatedAt: now,
+        orderKind: "pay_per_lead",
+        fulfillmentMode: "pooled_matching",
+      },
+    });
+
+    try {
+      const buyerAfter = await lookupBuyerInventoryAvailability(
+        {
+          clientAccountId: BUYER_ID,
+          nicheKey: "trucker",
+          states: ["DE"],
+          commerceAgeBucketKeys: ["COMMERCE_1_3_MO"],
+          evaluatedAt: now,
+        },
+        db
+      );
+      const secondAfter = await lookupBuyerInventoryAvailability(
+        {
+          clientAccountId: secondBuyer,
+          nicheKey: "trucker",
+          states: ["DE"],
+          commerceAgeBucketKeys: ["COMMERCE_1_3_MO"],
+          evaluatedAt: now,
+        },
+        db
+      );
+      assert.equal(buyerAfter.ok, true);
+      assert.equal(secondAfter.ok, true);
+      if (!buyerAfter.ok || !secondAfter.ok) return;
+      assert.equal(buyerAfter.queryCompleteness, "complete");
+      assert.equal(secondAfter.queryCompleteness, "complete");
+      assert.equal(buyerBefore.eligibleTotal, 0);
+      assert.equal(secondBefore.eligibleTotal, 0);
+      assert.equal(buyerAfter.eligibleTotal, 3);
+      assert.equal(secondAfter.eligibleTotal, 6);
+      assert.equal(buyerAfter.exclusionReasons.originUnresolved.count, 0);
+      assert.equal(buyerAfter.exclusionReasons.originClientStamped.count - buyerBefore.exclusionReasons.originClientStamped.count, 1);
+      assert.equal(
+        buyerAfter.exclusionReasons.originClientReconciled.count -
+          buyerBefore.exclusionReasons.originClientReconciled.count,
+        1
+      );
+      assert.equal(
+        buyerAfter.exclusionReasons.sameBuyerPriorDelivery.count -
+          buyerBefore.exclusionReasons.sameBuyerPriorDelivery.count,
+        1
+      );
+      assert.equal(buyerAfter.effects.reservationCreated, false);
+      assert.equal(buyerAfter.effects.sourceDataMutated, false);
+
+      const preview = await previewPplInventorySelection(
+        {
+          orderId: "bav-de-order",
+          commerceAgeBucketKeys: ["COMMERCE_1_3_MO"],
+          requestedQuantity: 3,
+        },
+        db
+      );
+      assert.equal(preview.ok, true);
+      if (!preview.ok) return;
+      assert.equal(preview.eligibleQuantity, 3);
+      assert.deepEqual(preview.selectedItemIds, [
+        "bav-de-stamped-other",
+        "bav-de-unconfirmed",
+        "bav-de-unknown",
+      ]);
+
+      const reserved = await commitPplInventorySelection(
+        {
+          orderId: "bav-de-order",
+          commerceAgeBucketKeys: ["COMMERCE_1_3_MO"],
+          requestedQuantity: 3,
+          idempotencyKey: "bav-de-unknown-origin",
+        },
+        db
+      );
+      assert.equal(reserved.ok, true, reserved.ok ? "" : reserved.reasons.join(","));
+      if (!reserved.ok) return;
+      assert.deepEqual(reserved.selectedItemIds, preview.selectedItemIds);
+      const allocations = await db.leadAllocation.findMany({
+        where: { leadOrderId: "bav-de-order" },
+        select: { leadInventoryItemId: true, status: true },
+      });
+      assert.deepEqual(
+        allocations.map((row) => row.leadInventoryItemId).sort(),
+        [...preview.selectedItemIds].sort()
+      );
+      assert.ok(allocations.every((row) => row.status === "reserved"));
+
+      const stamps = await db.leadInventoryItem.findMany({
+        where: { id: { startsWith: "bav-de-" } },
+        select: { id: true, originClientAccountId: true },
+      });
+      const originById = Object.fromEntries(
+        stamps.map((row) => [row.id, row.originClientAccountId])
+      );
+      assert.equal(originById["bav-de-unknown"], null);
+      assert.equal(originById["bav-de-unconfirmed"], null);
+      assert.equal(originById["bav-de-buyer-funnel"], null);
+      assert.equal(originById["bav-de-prior"], null);
+      assert.equal(originById["bav-de-stamped-buyer"], BUYER_ID);
+      assert.equal(originById["bav-de-stamped-other"], OTHER_ID);
+      const suggested = await db.sourceFunnel.findUnique({
+        where: { id: "bav-de-funnel-suggested" },
+      });
+      assert.equal(suggested?.associationStatus, "suggested");
+    } finally {
+      if (previousSelection === undefined) delete process.env.SA360_PPL_SELECTION_ENABLED;
+      else process.env.SA360_PPL_SELECTION_ENABLED = previousSelection;
+    }
   });
 
   it("keeps the pre-mutation snapshot while inventory and source association change", async () => {
@@ -877,14 +1159,8 @@ async function explainAvailabilityPlans(
           )
       )
       AND (
-        (
-          i."originClientAccountId" IS NOT NULL
-          AND i."originClientAccountId" <> ${bounds.buyerId}
-        )
-        OR (
-          i."originClientAccountId" IS NULL
-          AND i."sourceProvider" = 'leadcapture_io'::"SourceLeadProvider"
-        )
+        i."originClientAccountId" IS NULL
+        OR i."originClientAccountId" <> ${bounds.buyerId}
       )
       AND (
         i."generatedAt" <= ${bounds.lte365}
@@ -939,9 +1215,13 @@ async function insertInventoryRow(
     provider: "manual_import" | "leadcapture_io";
     campaignId?: string;
     status?: "available" | "reserved";
+    referenceAt?: Date;
   }
 ) {
   const body = payload(input.phone, `${input.id}@bench.test`);
+  const generatedAt = new Date(
+    (input.referenceAt ?? EVALUATED_AT).getTime() - input.ageDays * DAY_MS
+  );
   await db.sourceLeadEvent.create({
     data: {
       id: input.eventId,
@@ -953,7 +1233,7 @@ async function insertInventoryRow(
       rawPayloadJson: body,
       normalizedPayloadJson: body,
       enrichmentMetadataJson: {},
-      receivedAt: daysAgo(input.ageDays),
+      receivedAt: generatedAt,
     },
   });
   await db.leadInventoryItem.create({
@@ -961,7 +1241,7 @@ async function insertInventoryRow(
       id: input.id,
       inventoryLotId: input.lotId,
       sourceLeadEventId: input.eventId,
-      generatedAt: daysAgo(input.ageDays),
+      generatedAt,
       normalizedState: input.state,
       nicheKey: "trucker",
       sourceProvider: input.provider,

@@ -242,6 +242,7 @@ function buildFake(input: {
   priorPhones?: string[];
   exclusions?: Array<{ matchType: string; matchValue: string; active: boolean }>;
   fingerprintError?: boolean;
+  extraBuyers?: string[];
 }) {
   const writeAttempts: string[] = [];
   const transactions: Array<{ isolationLevel?: string; timeout?: number; maxWait?: number }> = [];
@@ -253,10 +254,15 @@ function buildFake(input: {
   const funnels = input.funnels ?? [];
   const db = {
     clientAccount: {
-      findUnique: async ({ where }: { where: { clientAccountId: string } }) =>
-        where.clientAccountId === BUYER_ID
-          ? { clientAccountId: BUYER_ID, clientDisplayName: "JR Laird" }
-          : null,
+      findUnique: async ({ where }: { where: { clientAccountId: string } }) => {
+        if (where.clientAccountId === BUYER_ID) {
+          return { clientAccountId: BUYER_ID, clientDisplayName: "JR Laird" };
+        }
+        if (input.extraBuyers?.includes(where.clientAccountId)) {
+          return { clientAccountId: where.clientAccountId, clientDisplayName: "Second buyer" };
+        }
+        return null;
+      },
     },
     buyerDeliveredIdentity: {
       findMany: async () => {
@@ -367,6 +373,7 @@ async function lookup(
     priorPhones?: string[];
     exclusions?: Array<{ matchType: string; matchValue: string; active: boolean }>;
     fingerprintError?: boolean;
+    extraBuyers?: string[];
     states?: string[];
     /** Pass no `states` field, which means every canonical US state. */
     omitStates?: boolean;
@@ -389,6 +396,7 @@ async function lookup(
     priorPhones: extra.priorPhones,
     exclusions: extra.exclusions,
     fingerprintError: extra.fingerprintError,
+    extraBuyers: extra.extraBuyers,
   });
   const result = await lookupBuyerInventoryAvailability(
     {
@@ -452,8 +460,8 @@ test("same-origin stamp is excluded and unrelated origin stays eligible", async 
   assert.equal(json.includes("normalizedPayloadJson"), false);
 });
 
-test("unknown origin is not buyer-eligible, including an unconfirmed funnel", async () => {
-  const { result } = await lookup([
+test("unknown and unconfirmed origin is eligible for different buyers", async () => {
+  const items = [
     makeItem({
       id: "csv-null",
       ageDays: 70,
@@ -477,32 +485,51 @@ test("unknown origin is not buyer-eligible, including an unconfirmed funnel", as
       provider: "leadcapture_io",
       campaignId: "funnel-suggested",
     }),
-  ], {
-    funnels: [
-      {
-        id: "funnel-suggested",
-        provider: "leadcapture_io",
-        providerFunnelId: "funnel-suggested",
-        parentUrlKey: null,
-        pageSlug: null,
-        associationStatus: "suggested",
-        originClientAccountId: "client_unrelated",
-      },
-    ],
-  });
-  const report = ok(result);
-  assert.equal(report.eligibleTotal, 0);
+  ];
+  const funnels = [
+    {
+      id: "funnel-suggested",
+      provider: "leadcapture_io",
+      providerFunnelId: "funnel-suggested",
+      parentUrlKey: null,
+      pageSlug: null,
+      associationStatus: "suggested",
+      originClientAccountId: "client_unrelated",
+    },
+  ];
+  const first = await lookup(items, { funnels });
+  const report = ok(first.result);
+  assert.equal(report.eligibleTotal, 3);
   assert.equal(report.eligibleCountSemantics, "exact");
   assert.equal(report.structuralCohort.unstampedNotReconcilable, 1);
-  assert.equal(report.exclusionReasons.originUnresolved.count, 3);
+  assert.equal(report.structuralCohort.unstampedSelectable, 3);
+  assert.equal(report.exclusionReasons.originUnresolved.count, 0);
+  assert.equal(report.provenance.unresolvedOrigin, 3);
   assert.equal(report.provenance.unresolvedReasons.provider_not_reconcilable, 1);
   assert.equal(report.provenance.unresolvedReasons.no_registered_source, 1);
   assert.equal(report.provenance.unresolvedReasons.source_not_confirmed, 1);
-  assert.match(report.provenance.coverageNote, /not counted as buyer-eligible/);
+  assert.match(report.provenance.coverageNote, /Unknown-origin leads are included/);
+  assert.match(report.provenance.coverageNote, /Confirmed origin matching the buyer stays excluded/);
+  assert.equal(first.writeAttempts.length, 0);
+  assert.equal(
+    report.ageTiers.find((row) => row.commerceAgeBucketKey === "COMMERCE_1_3_MO")?.eligible,
+    3
+  );
+
+  const second = await lookup(items, {
+    funnels,
+    clientAccountId: "client_second_buyer",
+    extraBuyers: ["client_second_buyer"],
+  });
+  const other = ok(second.result);
+  assert.equal(other.buyer.clientDisplayName, "Second buyer");
+  assert.equal(other.eligibleTotal, 3);
+  assert.equal(other.exclusionReasons.originUnresolved.count, 0);
+  assert.equal(second.writeAttempts.length, 0);
 });
 
 test("confirmed source funnel origin is reconciled and same-origin funnel inventory is excluded", async () => {
-  const { result } = await lookup(
+  const { result, writeAttempts } = await lookup(
     [
       makeItem({
         id: "reconciled-other",
@@ -547,8 +574,93 @@ test("confirmed source funnel origin is reconciled and same-origin funnel invent
   const report = ok(result);
   assert.equal(report.eligibleTotal, 1);
   assert.equal(report.provenance.reconciledFromSourceFunnel, 2);
+  assert.equal(report.provenance.unresolvedOrigin, 0);
   assert.equal(report.exclusionReasons.originClientReconciled.count, 1);
+  assert.equal(report.exclusionReasons.originUnresolved.count, 0);
   assert.equal(report.structuralCohort.stampedSameOrigin, 0);
+  assert.equal(writeAttempts.length, 0);
+});
+
+test("other restrictions still exclude unknown-origin leads", async () => {
+  const seenPhone = "+14045550161";
+  const sharedPhone = "+14045550162";
+  const { result, writeAttempts } = await lookup(
+    [
+      makeItem({
+        id: "unknown-clean",
+        ageDays: 70,
+        phone: "+14045550160",
+        origin: null,
+        provider: "manual_import",
+      }),
+      makeItem({
+        id: "unknown-seen",
+        ageDays: 71,
+        phone: seenPhone,
+        origin: null,
+        provider: "manual_import",
+      }),
+      makeItem({
+        id: "unknown-protected",
+        ageDays: 72,
+        phone: "+14045550163",
+        origin: null,
+        provider: "manual_import",
+        supplierAccountId: "supplier_blocked",
+      }),
+      makeItem({
+        id: "unknown-allocated",
+        ageDays: 73,
+        phone: "+14045550164",
+        origin: null,
+        provider: "manual_import",
+        allocations: [{ id: "alloc-unknown", status: "reserved" }],
+      }),
+      makeItem({
+        id: "unknown-commerce",
+        ageDays: 74,
+        phone: "+14045550165",
+        origin: null,
+        provider: "manual_import",
+        commerceExcludedAt: EVALUATED_AT,
+      }),
+      makeItem({
+        id: "unknown-older-copy",
+        ageDays: 80,
+        phone: sharedPhone,
+        origin: null,
+        provider: "manual_import",
+      }),
+      makeItem({
+        id: "unknown-newer-copy",
+        ageDays: 40,
+        phone: sharedPhone,
+        origin: null,
+        provider: "manual_import",
+      }),
+    ],
+    {
+      priorPhones: [seenPhone],
+      exclusions: [
+        { matchType: "supplier_account_id", matchValue: "supplier_blocked", active: true },
+      ],
+    }
+  );
+  const report = ok(result);
+  assert.equal(report.eligibleTotal, 2);
+  assert.equal(report.exclusionReasons.originUnresolved.count, 0);
+  assert.equal(report.provenance.unresolvedOrigin, 4);
+  assert.equal(report.provenance.unresolvedReasons.provider_not_reconcilable, 4);
+  assert.equal(report.exclusionReasons.sameBuyerPriorDelivery.count, 1);
+  assert.equal(report.exclusionReasons.protectedAgent.count, 1);
+  assert.equal(report.exclusionReasons.currentBatchDuplicate.count, 1);
+  assert.equal(report.structuralCohort.openAllocationOnAvailable, 1);
+  assert.equal(report.structuralCohort.commerceExcluded, 1);
+  assert.equal(writeAttempts.length, 0);
+  assert.equal(
+    report.ageTiers.find((row) => row.commerceAgeBucketKey === "COMMERCE_1_3_MO")?.eligible,
+    2
+  );
 });
 
 test("prior buyer delivery fingerprint excludes an unrelated-origin lead", async () => {
@@ -1157,6 +1269,102 @@ test("an unfinished nationwide scan is a lower bound, not the eligible total", a
   const youngTier = report.ageTiers.find((tier) => tier.commerceAgeBucketKey === "COMMERCE_1_3_MO");
   assert.equal(youngTier?.countSemantics, "not_reached");
   assert.equal(youngTier?.eligible, null);
+});
+
+test("nationwide continuation keeps unknown origin eligible and still applies other exclusions", async () => {
+  const sharedPhone = "+14045550601";
+  const seenPhone = "+14045550602";
+  const { result, transactions, writeAttempts } = await lookup(
+    [
+      makeItem({
+        id: "unknown-oldest",
+        ageDays: 140,
+        phone: sharedPhone,
+        state: "GA",
+        origin: null,
+        provider: "manual_import",
+      }),
+      makeItem({
+        id: "unknown-dup",
+        ageDays: 130,
+        phone: sharedPhone,
+        state: "TX",
+        origin: null,
+        provider: "manual_import",
+      }),
+      makeItem({
+        id: "unknown-seen",
+        ageDays: 120,
+        phone: seenPhone,
+        state: "NY",
+        origin: null,
+        provider: "leadcapture_io",
+        campaignId: "unconfirmed-pass",
+      }),
+      makeItem({
+        id: "unknown-protected",
+        ageDays: 110,
+        phone: "+14045550603",
+        state: "FL",
+        origin: null,
+        provider: "manual_import",
+        supplierAccountId: "supplier_blocked",
+      }),
+      makeItem({
+        id: "stamped-buyer",
+        ageDays: 150,
+        phone: "+14045550604",
+        state: "OH",
+        origin: BUYER_ID,
+      }),
+    ],
+    {
+      omitStates: true,
+      commerceAgeBucketKeys: ["COMMERCE_3_6_MO"],
+      maxClassifiedRows: 1,
+      continuePastPassCeiling: true,
+      pageSize: 1,
+      priorPhones: [seenPhone],
+      exclusions: [
+        { matchType: "supplier_account_id", matchValue: "supplier_blocked", active: true },
+      ],
+      funnels: [
+        {
+          id: "unconfirmed-pass",
+          provider: "leadcapture_io",
+          providerFunnelId: "unconfirmed-pass",
+          parentUrlKey: null,
+          pageSlug: null,
+          associationStatus: "suggested",
+          originClientAccountId: "client_unrelated",
+        },
+      ],
+    }
+  );
+  const report = ok(result);
+  assert.equal(transactions.length, 1);
+  assert.equal(report.stateScope, "all");
+  assert.equal(report.queryCompleteness, "complete");
+  assert.equal(report.scan.continuedPastPassCeiling, true);
+  assert.ok((report.scan.classificationPasses ?? 0) > 1);
+  assert.equal(report.eligibleTotal, 1);
+  assert.equal(report.exclusionReasons.originUnresolved.count, 0);
+  assert.equal(report.exclusionReasons.originClientStamped.count, 1);
+  assert.equal(report.exclusionReasons.currentBatchDuplicate.count, 1);
+  assert.equal(report.exclusionReasons.sameBuyerPriorDelivery.count, 1);
+  assert.equal(report.exclusionReasons.protectedAgent.count, 1);
+  assert.equal(report.provenance.unresolvedOrigin, 3);
+  assert.equal(report.provenance.unresolvedReasons.source_not_confirmed, 1);
+  assert.match(report.summary, /Exact buyer-eligible count is 1/);
+  assert.match(report.summary, /All states/);
+  assert.equal(report.summary.includes("not a nationwide total"), false);
+  assert.equal(writeAttempts.length, 0);
+  const byState = Object.fromEntries(report.eligibleByState.map((row) => [row.state, row.eligible]));
+  assert.equal(byState.GA, 1);
+  assert.equal(byState.TX, 0);
+  assert.equal(byState.NY, 0);
+  assert.equal(byState.FL, 0);
+  assert.equal(byState.OH, 0);
 });
 
 test("passes continue under one snapshot and do not double-count or reset exclusions", async () => {

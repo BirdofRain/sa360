@@ -18,7 +18,7 @@ reservations, deliveries, or CSV files, and it does not mutate source data.
 | --- | --- | --- | --- | --- |
 | Inventory Explorer (`/front-office/pipeline-studio`) | Fixture geography snapshot | No | No | Fixture |
 | Leads on Demand | Proof/verification availability labels by niche, state, and age band | Client filter only | No | Loads the matching corpus |
-| Fulfillment Ops selection preview | Canonical PPL eligibility for one existing order | Yes, from the order | Persisted stamp only. Null origin stays eligible | Stops at requested quantity or 5,000 scanned rows |
+| Fulfillment Ops selection preview | Canonical PPL eligibility for one existing order | Yes, from the order | Unknown origin stays eligible. Confirmed buyer origin is excluded | Stops at requested quantity or 5,000 scanned rows |
 
 Selection preview’s `eligibleQuantity` is the number of candidates collected in
 that window. Hitting the 5,000-row ceiling is an incomplete search, not a
@@ -29,27 +29,33 @@ windows, `available` plus active lot, commerce exclusion, protected-agent
 rules, `BuyerDeliveredIdentity` plus applied external-receipt fingerprints, and
 in-result phone/email dedupe. Origin exclusion runs before dedupe, so a
 same-origin row does not consume the identity of a cross-client copy.
-`isOriginClientBuyerIneligible` still treats a blank stamp as eligible. This
-lookup does not change that selection contract.
+Availability, selection preview, and reservation share one sell-path origin
+rule. A blank or missing stamp is eligible. A confirmed origin that names the
+buyer is not.
 
-## Ownership rule for this lookup
+## Ownership rule
 
-A lead is buyer-eligible on origin only when ownership is confirmed and is not
-the buyer:
+Unknown-origin aged leads may be purchased by any client. Confirmed origin
+matching the buyer stays excluded. Confirmed other-origin continues through
+the remaining eligibility rules. The lookup does not invent or backfill
+ownership.
 
 - Persisted `LeadInventoryItem.originClientAccountId` wins. The live funnel is
-  not allowed to override a stamp.
+  not allowed to override a stamp, and a missing stamp is never written back.
 - A null stamp is reconciled only through
   `resolveConfirmedLeadCaptureSourceAssociation` (confirmed LeadCapture source
-  funnel / parent URL). Suggestions, ambiguous slugs, and unconfirmed rows do
-  not match.
-- Any other missing origin, including non-LeadCapture inventory, is
-  `provider_not_reconcilable` or another unresolved reason. It is reported and
-  is not counted as eligible.
+  funnel / parent URL). A confirmed association equal to the buyer is excluded.
+  Suggestions, ambiguous slugs, and unconfirmed rows do not match.
+- Any other missing origin, including non-LeadCapture inventory, is recorded
+  as `provider_not_reconcilable` or another unresolved reason and stays in the
+  eligibility path. It is not an exclusion by itself.
+- Prior delivery, phone/email dedupe, protected agents, open allocations,
+  commerce eligibility, niche, age, and requested states still exclude an
+  unknown-origin lead.
 
-Stamped same-origin rows and non-reconcilable null stamps are counted in SQL
-and their payloads are not loaded. Payload classification is reserved for
-stamped other-origin rows and unstamped LeadCapture rows that might reconcile.
+Stamped same-origin rows are counted in SQL and their payloads are not loaded,
+so they do not consume phone or email dedupe. Every other available row in the
+cohort, including unknown origin, is classified.
 
 ## Counts and snapshot
 
@@ -105,9 +111,8 @@ panel tells the operator to wait and check again, and it does not show a
 total. Each page
 keysets 250 item ids, then loads payloads only for that page. The
 source-association cache is per request and is consistent because the snapshot
-does not change. A null-origin LeadCapture gate uses
-`LeadInventoryItem.sourceProvider`, and reconciliation rechecks the event
-provider before a funnel can match.
+does not change. Reconciliation rechecks the event provider before a confirmed
+funnel can match, and an unresolved result does not remove the row.
 
 Open allocations are a stricter predicate than selection preview. Selection SQL
 keeps `status = available` rows until reservation flips the status. This lookup

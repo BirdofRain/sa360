@@ -41,7 +41,7 @@ const exactReport = {
   },
   exclusionReasons: {
     originClientStamped: { count: 1, countSemantics: "exact" },
-    originUnresolved: { count: 1, countSemantics: "exact" },
+    originUnresolved: { count: 0, countSemantics: "exact" },
     existingAllocation: { count: 0, countSemantics: "exact" },
     reserved: { count: 1, countSemantics: "exact" },
     sameBuyerPriorDelivery: { count: 0, countSemantics: "exact" },
@@ -52,7 +52,8 @@ const exactReport = {
     unresolvedOrigin: 1,
     unresolvedReasons: { provider_not_reconcilable: 1 },
     unstampedNotClassified: 0,
-    coverageNote: "A missing origin is unresolved and is not counted as buyer-eligible.",
+    coverageNote:
+      "Unknown-origin leads are included for any buyer and remain subject to the other eligibility rules. Confirmed origin matching the buyer stays excluded.",
   },
   scan: {
     rowsClassified: 6,
@@ -109,6 +110,12 @@ describe("BuyerAvailabilityPanel", () => {
       assert.match(total.textContent ?? "", /JR Laird/);
       assert.match(total.textContent ?? "", /4 buyer-eligible/);
       assert.match(total.textContent ?? "", /\(exact\)/);
+      assert.match(document.body.textContent ?? "", /Unknown-origin leads are included/);
+      assert.match(document.body.textContent ?? "", /Confirmed origin matching this buyer stays excluded/);
+      assert.match(
+        screen.getByTestId("buyer-availability-provenance").textContent ?? "",
+        /Unknown origin included/
+      );
       assert.equal((total.textContent ?? "").includes("5000"), false);
       assert.match(screen.getByTestId("buyer-availability-snapshot").textContent ?? "", /repeatable-read snapshot/);
       assert.match(body, /"nicheKey":"trucker"/);
@@ -436,6 +443,39 @@ describe("BuyerAvailabilityPanel", () => {
       assert.match(error.textContent ?? "", /check again/);
       assert.equal(screen.queryByTestId("buyer-availability-result"), null);
       assert.equal(screen.queryByText(/buyer-eligible/), null);
+    } finally {
+      globalThis.fetch = previous;
+    }
+  });
+
+  it("shows unknown origin as included when nothing is eligible", async () => {
+    const previous = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          ...exactReport,
+          eligibleTotal: 0,
+          summary:
+            "No buyer-eligible leads. Unknown origin is included and remains subject to the other eligibility rules. Confirmed buyer-origin stays excluded.",
+          ageTiers: exactReport.ageTiers.map((tier) => ({ ...tier, eligible: 0 })),
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      )) as typeof fetch;
+    try {
+      render(<BuyerAvailabilityPanel enabled clients={[]} />);
+      assert.match(
+        document.body.textContent ?? "",
+        /Unknown-origin leads are included. Confirmed origin matching this buyer stays excluded/
+      );
+      fireEvent.change(screen.getByTestId("buyer-availability-client-id"), {
+        target: { value: "client_jr_laird" },
+      });
+      fireEvent.click(screen.getByTestId("buyer-availability-submit"));
+      const total = await screen.findByTestId("buyer-availability-total");
+      assert.match(total.textContent ?? "", /0 buyer-eligible/);
+      assert.match(document.body.textContent ?? "", /Unknown origin is included/);
+      assert.match(document.body.textContent ?? "", /Confirmed buyer-origin stays excluded/);
+      assert.equal((document.body.textContent ?? "").includes("not counted as eligible"), false);
     } finally {
       globalThis.fetch = previous;
     }

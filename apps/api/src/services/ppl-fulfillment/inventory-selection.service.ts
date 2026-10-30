@@ -61,7 +61,10 @@ import {
   listActiveExclusions,
   type ProtectedAgentExclusionRecord,
 } from "./protected-agent-exclusion.service.js";
-import { isOriginClientBuyerIneligible } from "./origin-client-exclusion.js";
+import {
+  createSellPathOriginCache,
+  evaluateSellPathOrigin,
+} from "./sell-path-origin.js";
 
 export const PPL_ALLOCATION_POLICY_VERSION = "ppl-aged-inventory-selection-v1";
 /** Production minimum requested quantity for PPL selection (no commercial floor). */
@@ -433,7 +436,12 @@ type InventoryScanRow = LeadInventoryItem & {
   inventoryLot: Pick<InventoryLot, "supplierAccountId" | "status">;
   sourceLeadEvent: Pick<
     SourceLeadEvent,
-    "id" | "normalizedPayloadJson" | "rawPayloadJson" | "enrichmentMetadataJson"
+    | "id"
+    | "sourceProvider"
+    | "sourceCampaignId"
+    | "normalizedPayloadJson"
+    | "rawPayloadJson"
+    | "enrichmentMetadataJson"
   >;
 };
 
@@ -575,6 +583,7 @@ export async function queryEligibleInventoryCandidatesBounded(
 
   const batchPhones = new Set<string>();
   const batchEmails = new Set<string>();
+  const originCache = createSellPathOriginCache();
   const candidates: PplInventoryCandidate[] = [];
   const exclusionCounts = emptyExclusionCounts();
 
@@ -621,6 +630,8 @@ export async function queryEligibleInventoryCandidatesBounded(
         sourceLeadEvent: {
           select: {
             id: true,
+            sourceProvider: true,
+            sourceCampaignId: true,
             normalizedPayloadJson: true,
             rawPayloadJson: true,
             enrichmentMetadataJson: true,
@@ -677,7 +688,16 @@ export async function queryEligibleInventoryCandidatesBounded(
         continue;
       }
 
-      if (isOriginClientBuyerIneligible(row.originClientAccountId, input.clientAccountId)) {
+      const origin = await evaluateSellPathOrigin({
+        originClientAccountId: row.originClientAccountId,
+        sourceProvider: row.sourceLeadEvent.sourceProvider,
+        sourceCampaignId: row.sourceLeadEvent.sourceCampaignId,
+        normalizedPayloadJson: row.sourceLeadEvent.normalizedPayloadJson,
+        buyerClientAccountId: input.clientAccountId,
+        db,
+        cache: originCache,
+      });
+      if (!origin.eligible) {
         exclusionCounts.originClient += 1;
         continue;
       }
@@ -767,8 +787,11 @@ type LockedCandidateRow = {
   id: string;
   status: string;
   commerceExcludedAt: Date | null;
+  originClientAccountId: string | null;
   metadataJson: Prisma.JsonValue;
   sourceRouteKey?: string | null;
+  sourceProvider: string | null;
+  sourceCampaignId: string | null;
   normalizedPayloadJson: Prisma.JsonValue;
   rawPayloadJson: Prisma.JsonValue;
   enrichmentMetadataJson: Prisma.JsonValue;
@@ -777,6 +800,7 @@ type LockedCandidateRow = {
 /** Thrown inside the reservation transaction when the age policy fails at commit time. */
 export const CONSUMER_AGE_REVALIDATION_FAILED = "consumer_age_revalidation_failed";
 export const BUYER_READY_REVALIDATION_FAILED = "buyer_ready_revalidation_failed";
+const ORIGIN_CLIENT_INELIGIBLE = "origin_client_ineligible";
 
 /**
  * Authoritative commit-time revalidation under the inventory row lock.
@@ -790,15 +814,19 @@ async function revalidateCandidateUnderLock(
   tx: Prisma.TransactionClient,
   itemId: string,
   evaluatedAt: Date,
-  nicheKey?: string
+  nicheKey: string | undefined,
+  buyerClientAccountId: string
 ): Promise<ResolvedConsumerAge> {
   const locked = await tx.$queryRaw<LockedCandidateRow[]>`
     SELECT
       i.id,
       i.status::text AS status,
       i."commerceExcludedAt",
+      i."originClientAccountId",
       i."metadataJson",
       e."sourceRouteKey",
+      e."sourceProvider"::text AS "sourceProvider",
+      e."sourceCampaignId",
       e."normalizedPayloadJson",
       e."rawPayloadJson",
       e."enrichmentMetadataJson"
@@ -813,6 +841,17 @@ async function revalidateCandidateUnderLock(
   }
   if (isCompanySheetsInternalPilotLead(row)) {
     throw new Error("company_sheets_internal_pilot");
+  }
+  const origin = await evaluateSellPathOrigin({
+    originClientAccountId: row.originClientAccountId,
+    sourceProvider: row.sourceProvider,
+    sourceCampaignId: row.sourceCampaignId,
+    normalizedPayloadJson: row.normalizedPayloadJson,
+    buyerClientAccountId,
+    db: tx,
+  });
+  if (!origin.eligible) {
+    throw new Error(ORIGIN_CLIENT_INELIGIBLE);
   }
 
   const buyerReady = evaluatePplBuyerReadyEligibility(row.normalizedPayloadJson, {
@@ -1119,7 +1158,13 @@ export async function selectAndReservePplReplacementCandidate(
   try {
     const allocationId = await db.$transaction(
       async (tx) => {
-        await revalidateCandidateUnderLock(tx, selected.item.id, new Date(), order.nicheKey);
+        await revalidateCandidateUnderLock(
+          tx,
+          selected.item.id,
+          new Date(),
+          order.nicheKey,
+          order.clientAccountId
+        );
 
         const allocation = await tx.leadAllocation.create({
           data: {
@@ -1192,6 +1237,14 @@ export async function selectAndReservePplReplacementCandidate(
         ok: false,
         code: "not_buyer_ready",
         reasons: [BUYER_READY_REVALIDATION_FAILED],
+        eligibleQuantity: eligible.length,
+      };
+    }
+    if (err instanceof Error && err.message === ORIGIN_CLIENT_INELIGIBLE) {
+      return {
+        ok: false,
+        code: "shortage",
+        reasons: [ORIGIN_CLIENT_INELIGIBLE],
         eligibleQuantity: eligible.length,
       };
     }
@@ -1831,7 +1884,8 @@ export async function commitPplInventorySelection(
               tx,
               candidate.item.id,
               reservationEvaluatedAt,
-              order.nicheKey
+              order.nicheKey,
+              order.clientAccountId
             );
 
             const allocation = await tx.leadAllocation.create({
@@ -1909,6 +1963,26 @@ export async function commitPplInventorySelection(
             ok: false,
             code: "not_buyer_ready",
             reasons: [BUYER_READY_REVALIDATION_FAILED],
+            eligibleQuantity,
+            requestedQuantity,
+            selectedQuantity: 0,
+            shortfallQuantity: requestedQuantity,
+            exclusionCounts: scan.exclusionCounts,
+            diagnostics: buildScanDiagnostics({
+              requestedQuantity,
+              selectedQuantity: 0,
+              eligibleQuantity,
+              rowsScanned: scan.rowsScanned,
+              pagesRead: scan.pagesRead,
+              scanCeilingHit: scan.scanCeilingHit,
+            }),
+          };
+        }
+        if (err.message === ORIGIN_CLIENT_INELIGIBLE) {
+          return {
+            ok: false,
+            code: "shortage",
+            reasons: [ORIGIN_CLIENT_INELIGIBLE],
             eligibleQuantity,
             requestedQuantity,
             selectedQuantity: 0,

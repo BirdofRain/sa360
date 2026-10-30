@@ -137,8 +137,7 @@ export function BuyerAvailabilityPanel({
       >
         <WarningBanner tone="info" title="Read-only eligibility count">
           Uses the same buyer-ready, age, allocation, commerce, protected-agent, and prior-delivery
-          rules as selection. Confirmed origin matching this buyer is excluded. Missing origin is
-          unresolved and is not counted as eligible. This check does not reserve or deliver leads.
+          rules as selection. Unknown-origin leads are included. Confirmed origin matching this buyer stays excluded. This check does not reserve or deliver leads.
         </WarningBanner>
         <div className="grid gap-2 md:grid-cols-4">
           <label className="grid gap-1 text-sm">
@@ -299,8 +298,8 @@ function BuyerAvailabilityResult({ report }: { report: BuyerInventoryAvailabilit
       </p>
       {report.eligibleTotal === 0 && report.queryCompleteness === "complete" ? (
         <EmptyState
-          title="No definitively buyer-eligible leads"
-          hint="Unresolved origin is listed separately and is not counted as eligible."
+          title="No buyer-eligible leads"
+          hint="Unknown origin is included. Confirmed buyer-origin stays excluded. Other eligibility rules still apply."
         />
       ) : null}
       <div className="overflow-x-auto">
@@ -339,8 +338,8 @@ function BuyerAvailabilityResult({ report }: { report: BuyerInventoryAvailabilit
           <dd>{countedLabel(report.exclusionReasons.originClientStamped as BuyerAvailabilityCounted)}</dd>
         </div>
         <div>
-          <dt className="text-muted-foreground">Unresolved origin</dt>
-          <dd>{countedLabel(report.exclusionReasons.originUnresolved as BuyerAvailabilityCounted)}</dd>
+          <dt className="text-muted-foreground">Unknown origin included</dt>
+          <dd>{report.provenance.unresolvedOrigin}</dd>
         </div>
         <div>
           <dt className="text-muted-foreground">Reconciled from source funnel</dt>

@@ -382,6 +382,8 @@ export type BuyerInventoryAvailabilityReport = {
   };
   buyer: { clientAccountId: string; clientDisplayName: string };
   nicheKey: string;
+  /** Present on reports from the all-states lookup. Older mocks may omit it. */
+  stateScope?: "all" | "selected";
   states: string[];
   allAgedTiers: boolean;
   queryCompleteness: "complete" | "incomplete";
@@ -415,10 +417,26 @@ export type BuyerInventoryAvailabilityReport = {
     selectableRowsExact: number;
     rowsUnclassified: number;
     ceilingHit: boolean;
+    classificationPasses?: number;
+    continuedPastPassCeiling?: boolean;
     usesSelectionRowCap: false;
   };
   summary: string;
 };
+
+export const BUYER_AVAILABILITY_RETRY_MESSAGE =
+  "The availability count did not finish. No leads were reserved. Wait a moment and check again.";
+
+function availabilityFailureCode(payload: unknown): string {
+  if (!payload || typeof payload !== "object") return "";
+  const record = payload as Record<string, unknown>;
+  if (typeof record.code === "string") return record.code;
+  const details = record.details;
+  if (details && typeof details === "object" && typeof (details as { code?: unknown }).code === "string") {
+    return (details as { code: string }).code;
+  }
+  return "";
+}
 
 export async function clientLookupBuyerAvailability(
   body: Record<string, unknown>
@@ -429,7 +447,20 @@ export async function clientLookupBuyerAvailability(
     body: JSON.stringify(body),
   });
   const payload = await parseJson(res);
-  if (!res.ok) return asError(payload, `HTTP ${res.status}`);
+  if (!res.ok) {
+    const failure = asError(payload, `HTTP ${res.status}`);
+    const code = availabilityFailureCode(payload);
+    if (
+      !failure.ok &&
+      (code === "availability_snapshot_unavailable" ||
+        res.status === 503 ||
+        res.status === 504 ||
+        res.status === 524)
+    ) {
+      return { ok: false, error: BUYER_AVAILABILITY_RETRY_MESSAGE, details: failure.details };
+    }
+    return failure;
+  }
   return { ok: true, data: payload as BuyerInventoryAvailabilityReport };
 }
 

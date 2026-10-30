@@ -86,6 +86,50 @@ test("POST /admin/v1/fulfillment-ops/buyer-availability stays disabled and read-
     });
     assert.equal(invalid.statusCode, 400);
     assert.equal(invalid.json().code, "invalid_states");
+
+    const mixed = await app.inject({
+      method: "POST",
+      url: "/admin/v1/fulfillment-ops/buyer-availability",
+      headers: { "x-sa360-admin-key": getAdminApiKey()! },
+      payload: { ...body, states: ["GA", "ZZ"] },
+    });
+    assert.equal(mixed.statusCode, 400);
+    assert.equal(mixed.json().code, "invalid_states");
+
+    const whitespace = await app.inject({
+      method: "POST",
+      url: "/admin/v1/fulfillment-ops/buyer-availability",
+      headers: { "x-sa360-admin-key": getAdminApiKey()! },
+      payload: { ...body, states: ["  "] },
+    });
+    assert.equal(whitespace.statusCode, 400);
+    assert.equal(whitespace.json().error, "invalid_request");
+    assert.equal(whitespace.json().code, undefined);
+
+    const omitted = await app.inject({
+      method: "POST",
+      url: "/admin/v1/fulfillment-ops/buyer-availability",
+      headers: { "x-sa360-admin-key": getAdminApiKey()! },
+      payload: {
+        clientAccountId: "missing_buyer_all_states",
+        nicheKey: "trucker",
+      },
+    });
+    assert.equal(omitted.statusCode, 404);
+    assert.equal(omitted.json().code, "buyer_not_found");
+
+    const blank = await app.inject({
+      method: "POST",
+      url: "/admin/v1/fulfillment-ops/buyer-availability",
+      headers: { "x-sa360-admin-key": getAdminApiKey()! },
+      payload: {
+        clientAccountId: "missing_buyer_all_states",
+        nicheKey: "trucker",
+        states: [],
+      },
+    });
+    assert.equal(blank.statusCode, 404);
+    assert.equal(blank.json().code, "buyer_not_found");
   } finally {
     if (prevKey === undefined) delete process.env.ADMIN_API_KEY;
     else process.env.ADMIN_API_KEY = prevKey;

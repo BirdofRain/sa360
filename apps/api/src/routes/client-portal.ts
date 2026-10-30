@@ -914,12 +914,25 @@ export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> =
       });
     }
 
-    const result = await lookupAvailability({
-      clientAccountId: resolved.tenant.clientAccountId,
-      nicheKey: parsed.data.nicheKey,
-      states: states.states,
-      commerceAgeBucketKeys: [parsed.data.commerceAgeBucketKey],
-    });
+    const abort = new AbortController();
+    const onClientGone = () => {
+      if (!reply.raw.writableEnded) abort.abort();
+    };
+    reply.raw.on("close", onClientGone);
+    request.raw.on("aborted", onClientGone);
+    let result;
+    try {
+      result = await lookupAvailability({
+        clientAccountId: resolved.tenant.clientAccountId,
+        nicheKey: parsed.data.nicheKey,
+        states: states.states,
+        commerceAgeBucketKeys: [parsed.data.commerceAgeBucketKey],
+        signal: abort.signal,
+      });
+    } finally {
+      reply.raw.off("close", onClientGone);
+      request.raw.off("aborted", onClientGone);
+    }
     if (!result.ok && result.code === "buyer_not_found") {
       return reply.status(404).send(result);
     }

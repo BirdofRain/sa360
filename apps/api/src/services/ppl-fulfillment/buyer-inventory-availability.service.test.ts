@@ -3,13 +3,17 @@ import test from "node:test";
 
 import { Prisma, type PrismaClient } from "@prisma/client";
 
+import { CANONICAL_US_STATE_CODES } from "@sa360/shared";
+
 import { fingerprintPhoneIdentity } from "../../lib/identity-fingerprint.js";
 import {
   BUYER_AVAILABILITY_MAX_CLASSIFIED_ROWS,
   BUYER_AVAILABILITY_SNAPSHOT_TIMEOUT_MS,
+  buyerAvailabilityQueryStates,
   concreteAvailabilityTierKeys,
   lookupBuyerInventoryAvailability,
   parseBuyerAvailabilityBuckets,
+  parseBuyerAvailabilityStates,
   type BuyerInventoryAvailabilityReport,
 } from "./buyer-inventory-availability.service.js";
 
@@ -364,11 +368,19 @@ async function lookup(
     exclusions?: Array<{ matchType: string; matchValue: string; active: boolean }>;
     fingerprintError?: boolean;
     states?: string[];
+    /** Pass no `states` field, which means every canonical US state. */
+    omitStates?: boolean;
     nicheKey?: string;
     commerceAgeBucketKeys?: string[];
     maxClassifiedRows?: number;
+    continuePastPassCeiling?: boolean;
     pageSize?: number;
     clientAccountId?: string;
+    signal?: AbortSignal;
+    afterClassificationPage?: (progress: {
+      pagesRead: number;
+      rowsClassified: number;
+    }) => Promise<void>;
   } = {}
 ) {
   const fake = buildFake({
@@ -382,11 +394,16 @@ async function lookup(
     {
       clientAccountId: extra.clientAccountId ?? BUYER_ID,
       nicheKey: extra.nicheKey ?? "trucker",
-      states: extra.states ?? ["GA"],
+      ...(extra.omitStates ? {} : { states: extra.states ?? ["GA"] }),
       commerceAgeBucketKeys: extra.commerceAgeBucketKeys,
       evaluatedAt: EVALUATED_AT,
       maxClassifiedRows: extra.maxClassifiedRows,
+      ...(extra.continuePastPassCeiling == null
+        ? {}
+        : { continuePastPassCeiling: extra.continuePastPassCeiling }),
       pageSize: extra.pageSize,
+      signal: extra.signal,
+      afterClassificationPage: extra.afterClassificationPage,
     },
     fake.db
   );
@@ -411,6 +428,7 @@ test("same-origin stamp is excluded and unrelated origin stays eligible", async 
   const report = ok(result);
   assert.equal(report.buyer.clientDisplayName, "JR Laird");
   assert.equal(report.nicheKey, "trucker");
+  assert.equal(report.stateScope, "selected");
   assert.deepEqual(report.states, ["GA"]);
   assert.equal(report.queryCompleteness, "complete");
   assert.equal(report.eligibleCountSemantics, "exact");
@@ -942,4 +960,360 @@ test("snapshot startup failure does not return a torn exact count", async () => 
   );
   assert.equal(result.ok, false);
   if (!result.ok) assert.equal(result.code, "availability_snapshot_unavailable");
+});
+
+test("blank or omitted states count every canonical state and keep buyer rules", async () => {
+  const seenPhone = "+14045550304";
+  const items = [
+    makeItem({ id: "ga-ready", ageDays: 40, phone: "+14045550301", state: "GA", origin: "client_unrelated" }),
+    makeItem({ id: "tx-ready", ageDays: 100, phone: "+14045550302", state: "TX", origin: "client_unrelated" }),
+    makeItem({ id: "fl-origin", ageDays: 60, phone: "+14045550303", state: "FL", origin: BUYER_ID }),
+    makeItem({ id: "ny-seen", ageDays: 50, phone: seenPhone, state: "NY", origin: "client_unrelated" }),
+    makeItem({
+      id: "il-allocated",
+      ageDays: 55,
+      phone: "+14045550305",
+      state: "IL",
+      origin: "client_unrelated",
+      allocations: [{ id: "alloc-il", status: "reserved" }],
+    }),
+    makeItem({
+      id: "oh-commerce",
+      ageDays: 70,
+      phone: "+14045550306",
+      state: "OH",
+      origin: "client_unrelated",
+      commerceExcludedAt: EVALUATED_AT,
+    }),
+    makeItem({
+      id: "pa-protected",
+      ageDays: 80,
+      phone: "+14045550307",
+      state: "PA",
+      origin: "client_unrelated",
+      supplierAccountId: "supplier_blocked",
+    }),
+    makeItem({
+      id: "wa-vet",
+      ageDays: 45,
+      phone: "+14045550308",
+      state: "WA",
+      origin: "client_unrelated",
+      nicheKey: "vet",
+    }),
+    makeItem({
+      id: "zz-noncanonical",
+      ageDays: 45,
+      phone: "+14045550309",
+      state: "ZZ",
+      origin: "client_unrelated",
+    }),
+    makeItem({ id: "ca-young", ageDays: 20, phone: "+14045550310", state: "CA", origin: "client_unrelated" }),
+  ];
+  const extra = {
+    priorPhones: [seenPhone],
+    exclusions: [{ matchType: "supplier_account_id", matchValue: "supplier_blocked", active: true }],
+  };
+
+  for (const mode of ["omit", "empty"] as const) {
+    const { result, writeAttempts } = await lookup(items, {
+      ...extra,
+      ...(mode === "omit" ? { omitStates: true } : { states: [] }),
+    });
+    const report = ok(result);
+    assert.equal(report.stateScope, "all", mode);
+    assert.deepEqual(report.states, [...CANONICAL_US_STATE_CODES]);
+    assert.equal(report.queryCompleteness, "complete", mode);
+    assert.equal(report.eligibleCountSemantics, "exact", mode);
+    assert.equal(report.eligibleTotal, 2, mode);
+    assert.match(report.summary, /All states\. Exact buyer-eligible count is 2\./);
+    assert.equal(report.summary.includes("not a nationwide total"), false);
+    assert.equal(report.structuralCohort.rows, 7, mode);
+    assert.equal(report.structuralCohort.stampedSameOrigin, 1, mode);
+    assert.equal(report.exclusionReasons.originClientStamped.count, 1, mode);
+    assert.equal(report.exclusionReasons.sameBuyerPriorDelivery.count, 1, mode);
+    assert.equal(report.exclusionReasons.existingAllocation.count, 1, mode);
+    assert.equal(report.exclusionReasons.commerceExcluded.count, 1, mode);
+    assert.equal(report.exclusionReasons.protectedAgent.count, 1, mode);
+    assert.equal(report.effects.orderCreated, false);
+    assert.equal(writeAttempts.length, 0);
+    const byTier = Object.fromEntries(
+      report.ageTiers.map((tier) => [tier.commerceAgeBucketKey, tier.eligible])
+    );
+    assert.deepEqual(byTier, {
+      COMMERCE_1_3_MO: 1,
+      COMMERCE_3_6_MO: 1,
+      COMMERCE_6_9_MO: 0,
+      COMMERCE_9_12_MO: 0,
+      COMMERCE_12_MO_PLUS: 0,
+    });
+    assert.equal(report.ageTiers.every((tier) => tier.countSemantics === "exact"), true);
+    const byState = Object.fromEntries(
+      report.eligibleByState.map((row) => [row.state, row.eligible])
+    );
+    assert.equal(byState.GA, 1);
+    assert.equal(byState.TX, 1);
+    assert.equal(byState.FL, 0);
+    assert.equal(byState.ZZ, undefined);
+    assert.equal(
+      report.eligibleByState.reduce((sum, row) => sum + (row.eligible ?? 0), 0),
+      report.eligibleTotal
+    );
+  }
+
+  const selected = ok(
+    (await lookup(items, { ...extra, states: ["ga", "TX"] })).result
+  );
+  assert.equal(selected.stateScope, "selected");
+  assert.deepEqual(selected.states, ["GA", "TX"]);
+  assert.equal(selected.eligibleTotal, 2);
+  assert.equal(selected.queryCompleteness, "complete");
+  assert.deepEqual(
+    Object.fromEntries(selected.eligibleByState.map((row) => [row.state, row.eligible])),
+    { GA: 1, TX: 1 }
+  );
+
+  const georgiaOnly = ok((await lookup(items, { ...extra, states: ["GA"] })).result);
+  assert.equal(georgiaOnly.stateScope, "selected");
+  assert.equal(georgiaOnly.eligibleTotal, 1);
+  assert.deepEqual(georgiaOnly.states, ["GA"]);
+  assert.equal(georgiaOnly.eligibleByState.find((row) => row.state === "TX"), undefined);
+});
+
+test("invalid nonblank states do not become an all-states search", async () => {
+  assert.deepEqual(parseBuyerAvailabilityStates(undefined), {
+    ok: true,
+    stateScope: "all",
+    states: [],
+  });
+  assert.deepEqual(parseBuyerAvailabilityStates([]), {
+    ok: true,
+    stateScope: "all",
+    states: [],
+  });
+  assert.deepEqual(parseBuyerAvailabilityStates(["  ", ""]), {
+    ok: true,
+    stateScope: "all",
+    states: [],
+  });
+  assert.equal(buyerAvailabilityQueryStates({ stateScope: "all", states: [] }).length, 51);
+
+  for (const states of [["Georgia"], ["ZZ"], ["GA", "ZZ"], ["GA", "not-a-state"]]) {
+    const parsed = parseBuyerAvailabilityStates(states);
+    assert.equal(parsed.ok, false, states.join(","));
+    const { result, transactions } = await lookup([], { states });
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.code, "invalid_states");
+    assert.equal(transactions.length, 0);
+  }
+});
+
+test("an unfinished nationwide scan is a lower bound, not the eligible total", async () => {
+  const { result } = await lookup(
+    [
+      makeItem({
+        id: "fl-origin-old",
+        ageDays: 500,
+        phone: "+14045550321",
+        state: "FL",
+        origin: BUYER_ID,
+      }),
+      makeItem({
+        id: "tx-ready",
+        ageDays: 400,
+        phone: "+14045550323",
+        state: "TX",
+        origin: "client_unrelated",
+      }),
+      makeItem({
+        id: "ga-ready",
+        ageDays: 40,
+        phone: "+14045550322",
+        state: "GA",
+        origin: "client_unrelated",
+      }),
+    ],
+    { omitStates: true, maxClassifiedRows: 1, pageSize: 1 }
+  );
+  const report = ok(result);
+  assert.equal(report.stateScope, "all");
+  assert.equal(report.queryCompleteness, "incomplete");
+  assert.equal(report.eligibleCountSemantics, "lower_bound");
+  assert.equal(report.scan.ceilingHit, true);
+  assert.equal(report.eligibleTotal, 1);
+  assert.equal(report.structuralCohort.stampedSameOrigin, 1);
+  assert.match(report.summary, /All states/);
+  assert.match(report.summary, /not a nationwide total/);
+  assert.match(report.summary, /Classification stopped at the 1-row ceiling/);
+  assert.equal(report.summary.includes("Exact buyer-eligible count"), false);
+  assert.equal(report.eligibleByState.find((row) => row.state === "TX")?.countSemantics, "lower_bound");
+  assert.equal(report.eligibleByState.find((row) => row.state === "TX")?.eligible, 1);
+  assert.equal(report.eligibleByState.find((row) => row.state === "GA")?.countSemantics, "not_reached");
+  assert.equal(report.eligibleByState.find((row) => row.state === "GA")?.eligible, null);
+  assert.equal(report.eligibleByState.find((row) => row.state === "FL")?.eligible, null);
+  const oldestTier = report.ageTiers.find((tier) => tier.commerceAgeBucketKey === "COMMERCE_12_MO_PLUS");
+  assert.equal(oldestTier?.countSemantics, "lower_bound");
+  assert.equal(oldestTier?.eligible, 1);
+  const youngTier = report.ageTiers.find((tier) => tier.commerceAgeBucketKey === "COMMERCE_1_3_MO");
+  assert.equal(youngTier?.countSemantics, "not_reached");
+  assert.equal(youngTier?.eligible, null);
+});
+
+test("passes continue under one snapshot and do not double-count or reset exclusions", async () => {
+  const sharedPhone = "+14045550401";
+  const laterPhone = "+14045550402";
+  const seenPhone = "+14045550403";
+  const { result, transactions } = await lookup(
+    [
+      makeItem({
+        id: "pass-1",
+        ageDays: 140,
+        phone: sharedPhone,
+        state: "GA",
+        origin: "client_unrelated",
+      }),
+      makeItem({
+        id: "pass-2-dup",
+        ageDays: 130,
+        phone: sharedPhone,
+        state: "TX",
+        origin: "client_unrelated",
+      }),
+      makeItem({
+        id: "pass-3-protected",
+        ageDays: 120,
+        phone: "+14045550409",
+        state: "FL",
+        origin: "client_unrelated",
+        supplierAccountId: "supplier_blocked",
+      }),
+      makeItem({
+        id: "pass-4-seen",
+        ageDays: 110,
+        phone: seenPhone,
+        state: "NY",
+        origin: "client_unrelated",
+      }),
+      makeItem({
+        id: "pass-5-new",
+        ageDays: 100,
+        phone: laterPhone,
+        state: "WA",
+        origin: "client_unrelated",
+      }),
+      makeItem({
+        id: "same-origin",
+        ageDays: 150,
+        phone: "+14045550408",
+        state: "OH",
+        origin: BUYER_ID,
+      }),
+      makeItem({
+        id: "younger-tier",
+        ageDays: 40,
+        phone: "+14045550407",
+        state: "CA",
+        origin: "client_unrelated",
+      }),
+    ],
+    {
+      omitStates: true,
+      commerceAgeBucketKeys: ["COMMERCE_3_6_MO"],
+      maxClassifiedRows: 1,
+      continuePastPassCeiling: true,
+      pageSize: 1,
+      priorPhones: [seenPhone],
+      exclusions: [
+        { matchType: "supplier_account_id", matchValue: "supplier_blocked", active: true },
+      ],
+    }
+  );
+  const report = ok(result);
+  assert.equal(transactions.length, 1);
+  assert.equal(report.stateScope, "all");
+  assert.equal(report.queryCompleteness, "complete");
+  assert.equal(report.eligibleCountSemantics, "exact");
+  assert.equal(report.scan.ceilingHit, false);
+  assert.equal(report.scan.classificationCeiling, 1);
+  assert.equal(report.scan.continuedPastPassCeiling, true);
+  assert.ok((report.scan.classificationPasses ?? 0) > 1);
+  assert.equal(report.eligibleTotal, 2);
+  assert.equal(report.exclusionReasons.currentBatchDuplicate.count, 1);
+  assert.equal(report.exclusionReasons.protectedAgent.count, 1);
+  assert.equal(report.exclusionReasons.sameBuyerPriorDelivery.count, 1);
+  assert.equal(report.exclusionReasons.originClientStamped.count, 1);
+  assert.equal(
+    report.ageTiers.find((tier) => tier.commerceAgeBucketKey === "COMMERCE_3_6_MO")?.eligible,
+    2
+  );
+  assert.equal(
+    report.ageTiers.find((tier) => tier.commerceAgeBucketKey === "COMMERCE_1_3_MO"),
+    undefined
+  );
+  assert.match(report.summary, /Exact buyer-eligible count is 2/);
+  assert.match(report.summary, /All states/);
+  assert.equal(report.summary.includes("not a nationwide total"), false);
+  const byState = Object.fromEntries(report.eligibleByState.map((row) => [row.state, row.eligible]));
+  assert.equal(byState.GA, 1);
+  assert.equal(byState.TX, 0);
+  assert.equal(byState.WA, 1);
+  assert.equal(byState.FL, 0);
+  assert.equal(byState.NY, 0);
+});
+
+test("an aborted caller releases the snapshot and does not return a partial total", async () => {
+  const alreadyAborted = new AbortController();
+  alreadyAborted.abort();
+  const beforeOpen = await lookup(
+    [
+      makeItem({
+        id: "abort-before",
+        ageDays: 120,
+        phone: "+14045550501",
+        state: "GA",
+        origin: "client_unrelated",
+      }),
+    ],
+    { signal: alreadyAborted.signal }
+  );
+  assert.equal(beforeOpen.transactions.length, 0);
+  assert.equal(beforeOpen.result.ok, false);
+  if (!beforeOpen.result.ok) {
+    assert.equal(beforeOpen.result.code, "availability_snapshot_unavailable");
+  }
+  assert.equal(beforeOpen.writeAttempts.length, 0);
+
+  const during = new AbortController();
+  const mid = await lookup(
+    [
+      makeItem({
+        id: "abort-page-1",
+        ageDays: 140,
+        phone: "+14045550511",
+        state: "GA",
+        origin: "client_unrelated",
+      }),
+      makeItem({
+        id: "abort-page-2",
+        ageDays: 100,
+        phone: "+14045550512",
+        state: "TX",
+        origin: "client_unrelated",
+      }),
+    ],
+    {
+      omitStates: true,
+      commerceAgeBucketKeys: ["COMMERCE_3_6_MO"],
+      pageSize: 1,
+      signal: during.signal,
+      afterClassificationPage: async ({ pagesRead }) => {
+        if (pagesRead === 1) during.abort();
+      },
+    }
+  );
+  assert.equal(mid.transactions.length, 1);
+  assert.equal(mid.result.ok, false);
+  if (!mid.result.ok) assert.equal(mid.result.code, "availability_snapshot_unavailable");
+  assert.equal(mid.writeAttempts.length, 0);
+  assert.equal(JSON.stringify(mid.result).includes("14045550511"), false);
 });

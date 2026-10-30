@@ -1,7 +1,11 @@
 # Buyer-specific inventory availability
 
 Read-only admin lookup for “how many aged leads can this buyer actually take?”
-Example: JR Laird / trucker / GA / all aged tiers.
+Example: JR Laird / trucker / GA / all aged tiers. A blank or omitted state
+list on this admin lookup means every canonical US state (All states). The
+customer portal map still sends the full state list and still rejects a
+partial list. Order creation, selection preview, and commit still require
+states.
 
 Feature flag `SA360_BUYER_INVENTORY_AVAILABILITY_ENABLED` defaults off. The HTTP
 route is `POST /admin/v1/fulfillment-ops/buyer-availability` and returns 404
@@ -60,10 +64,19 @@ set is a different cohort. If the transaction cannot start, the route returns
 transaction start. Writes that commit after that — inserts, reservations,
 status changes, source-association updates — are invisible to this check.
 Exact structural counts and exact eligible tier counts are exact for that
-snapshot. Eligible tier counts stay a lower bound when classification stops at
-the 100,000-row ceiling. Tiers the oldest-first cursor has not entered are
-`not_reached` (`eligible: null`) rather than zero. `eligibleByState` uses the
-same eligible rows, after identity dedupe. The portal map sends one of the five
+snapshot. The 100,000-row figure is one classification pass. The same
+repeatable-read transaction continues from the keyset cursor, keeping phone
+and email dedupe state, until the selectable cohort is exhausted. A finished
+count can therefore classify more than 100,000 rows and is still exact for
+`evaluatedAt`. Tiers the oldest-first cursor has not entered are
+`not_reached` (`eligible: null`) rather than zero. An all-states lookup uses
+the same passes. If a pass is interrupted, `stateScope` is still `all`, the
+summary says the figure is not a nationwide total, and unscanned states stay
+`not_reached` rather than zero. The snapshot transaction budget is 300
+seconds. If that budget is exhausted the route returns 503 and does not
+return a partial total. `eligibleByState` uses the
+same eligible rows, after identity dedupe. For `stateScope: "all"` that list
+is every canonical US state code. The portal map sends one of the five
 priced ranges, so a state's count is only that range. A historical 6–12 admin
 request still sums unique consumers across 6–9 and 9–12. A state with eligible
 rows on an incomplete scan is a lower bound. A state with no eligible rows yet
@@ -73,7 +86,23 @@ finishes. The response records
 the availability total.
 
 The lookup holds one pooled connection for the snapshot (timeout 300 seconds,
-max wait 10 seconds). Counts run sequentially on that connection. Each page
+max wait 10 seconds). A second nationwide count needs another connection from
+the same Prisma pool. Prisma’s default pool is `num_physical_cpus * 2 + 1`
+per API process unless `DATABASE_URL` sets `connection_limit`. Production
+`sa360-api` is one 1 vCPU instance and its `DATABASE_URL` does not set
+`connection_limit`, so that pool is 3 connections. The worker process has its
+own pool. When every
+connection is busy, the next count waits up to 10 seconds and then returns
+503 `availability_snapshot_unavailable` instead of a total. Client disconnect
+aborts the snapshot at the next page, the read-only transaction ends, and
+Prisma returns the connection. The admin panel’s server route forwards the
+browser abort to that API request, so an edge cutoff releases the same
+connection. The portal route uses the same disconnect abort. Success, a thrown snapshot error, and the
+300-second transaction timeout do the same. App Platform fronts this route
+with Cloudflare, whose request limit is 100 seconds, so a measured 78-second
+count fits. A count that is still running at that edge limit is cut off; the
+panel tells the operator to wait and check again, and it does not show a
+total. Each page
 keysets 250 item ids, then loads payloads only for that page. The
 source-association cache is per request and is consistent because the snapshot
 does not change. A null-origin LeadCapture gate uses

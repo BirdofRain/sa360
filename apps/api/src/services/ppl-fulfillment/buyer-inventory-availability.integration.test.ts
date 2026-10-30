@@ -8,6 +8,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { after, before, describe, it } from "node:test";
 
 import { Prisma, PrismaClient } from "@prisma/client";
+import { CANONICAL_US_STATE_CODES } from "@sa360/shared";
 
 import { fingerprintPhoneIdentity } from "../../lib/identity-fingerprint.js";
 import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
@@ -26,7 +27,8 @@ const BUYER_ID = "client_bav_jr_laird";
 const OTHER_ID = "client_bav_other";
 const EVALUATED_AT = new Date("2026-08-24T00:00:00.000Z");
 const DAY_MS = 24 * 60 * 60 * 1000;
-const BULK_ROWS = 100_050;
+/** Enough rows that the 3–6 month selectable cohort exceeds one 100,000-row pass. */
+const BULK_ROWS = 112_000;
 const ARTIFACT_DIR = "/opt/cursor/artifacts";
 
 function withApplicationName(databaseUrl: string, applicationName: string): string {
@@ -309,12 +311,48 @@ describe("buyer inventory availability postgres proof", { skip: !runIntegration 
     );
   });
 
-  it("stops a 100,000-row classification as an incomplete lower bound", async () => {
-    const existing = await db.leadInventoryItem.count({
-      where: { nicheKey: "trucker", normalizedState: "ND", inventoryClass: "aged" },
+  it("releases the snapshot connection when the caller aborts", async () => {
+    const controller = new AbortController();
+    const report = await lookupBuyerInventoryAvailability(
+      {
+        clientAccountId: BUYER_ID,
+        nicheKey: "trucker",
+        states: ["GA"],
+        evaluatedAt: EVALUATED_AT,
+        pageSize: 1,
+        signal: controller.signal,
+        afterClassificationPage: async ({ pagesRead }) => {
+          if (pagesRead === 1) controller.abort();
+        },
+      },
+      db
+    );
+    assert.equal(report.ok, false);
+    if (report.ok) return;
+    assert.equal(report.code, "availability_snapshot_unavailable");
+    const open = await probe.$queryRaw<Array<{ n: number }>>`
+      SELECT count(*)::int AS n
+      FROM pg_stat_activity
+      WHERE application_name = 'bav_lookup'
+        AND xact_start IS NOT NULL
+    `;
+    assert.equal(open[0]?.n ?? -1, 0);
+    const stillThere = await db.leadInventoryItem.count({ where: { id: "bav-ga-other-1-3" } });
+    assert.equal(stillThere, 1);
+  });
+
+  it(
+    "completes a nationwide 3–6 month count past the 100,000-row pass",
+    { timeout: 900_000 },
+    async () => {
+    await db.leadInventoryItem.deleteMany({
+      where: { OR: [{ id: { startsWith: "bav-" } }, { id: { startsWith: "bav100k-" } }] },
     });
-    assert.equal(existing, 0, "ND trucker aged cohort must be empty before the bench insert");
+    await db.sourceLeadEvent.deleteMany({
+      where: { OR: [{ id: { startsWith: "bav-" } }, { id: { startsWith: "bav100k-" } }] },
+    });
     const bulkEvaluatedAt = new Date("2026-08-24T12:00:00.000Z");
+    const stateList = Prisma.join(CANONICAL_US_STATE_CODES.map((code) => Prisma.sql`${code}`));
     const insertStarted = Date.now();
     await db.$executeRaw`
       INSERT INTO "SourceLeadEvent" (
@@ -331,7 +369,7 @@ describe("buyer inventory availability postgres proof", { skip: !runIntegration 
         "updatedAt"
       )
       SELECT
-        'bav100k-evt-' || lpad(g::text, 6, '0'),
+        'bav100k-evt-' || lpad(s.g::text, 6, '0'),
         'manual_import'::"SourceLeadProvider",
         'csv_import'::"SourceLeadSystem",
         'bulk_import'::"SourceLeadType",
@@ -340,9 +378,9 @@ describe("buyer inventory availability postgres proof", { skip: !runIntegration 
           'contact', jsonb_build_object(
             'first_name', 'Ada',
             'last_name', 'Lee',
-            'phone_e164', '+1404' || lpad((200 + (g % 800))::text, 3, '0') || lpad(((g / 800)::int % 10000)::text, 4, '0'),
-            'email', 'bav' || g::text || '@bench.test',
-            'state', 'ND'
+            'phone_e164', '+1404' || lpad((200 + ((s.phone_key - 1) % 800))::text, 3, '0') || lpad((((s.phone_key - 1) / 800))::int::text, 4, '0'),
+            'email', 'bav' || s.g::text || '@bench.test',
+            'state', s.state_code
           ),
           'lead_details', jsonb_build_object('consumer_age', 62)
         ),
@@ -350,17 +388,23 @@ describe("buyer inventory availability postgres proof", { skip: !runIntegration 
           'contact', jsonb_build_object(
             'first_name', 'Ada',
             'last_name', 'Lee',
-            'phone_e164', '+1404' || lpad((200 + (g % 800))::text, 3, '0') || lpad(((g / 800)::int % 10000)::text, 4, '0'),
-            'email', 'bav' || g::text || '@bench.test',
-            'state', 'ND'
+            'phone_e164', '+1404' || lpad((200 + ((s.phone_key - 1) % 800))::text, 3, '0') || lpad((((s.phone_key - 1) / 800))::int::text, 4, '0'),
+            'email', 'bav' || s.g::text || '@bench.test',
+            'state', s.state_code
           ),
           'lead_details', jsonb_build_object('consumer_age', 62)
         ),
         '{}'::jsonb,
-        ${bulkEvaluatedAt}::timestamptz - ((30 + (g % 500)) * interval '1 day'),
+        ${bulkEvaluatedAt}::timestamptz - interval '120 days' + (s.g * interval '1 millisecond'),
         NOW(),
         NOW()
-      FROM generate_series(1, ${BULK_ROWS}) AS g
+      FROM (
+        SELECT
+          g,
+          CASE WHEN g > 50 AND g % 50 = 0 THEN g - 50 ELSE g END AS phone_key,
+          (ARRAY[${stateList}]::text[])[1 + ((g - 1) % 51)] AS state_code
+        FROM generate_series(1, ${BULK_ROWS}) AS g
+      ) s
     `;
     await db.$executeRaw`
       INSERT INTO "LeadInventoryItem" (
@@ -382,12 +426,76 @@ describe("buyer inventory availability postgres proof", { skip: !runIntegration 
         "updatedAt"
       )
       SELECT
-        'bav100k-item-' || lpad(g::text, 6, '0'),
+        'bav100k-item-' || lpad(s.g::text, 6, '0'),
         ${lotId},
-        'bav100k-evt-' || lpad(g::text, 6, '0'),
-        ${bulkEvaluatedAt}::timestamptz - ((30 + (g % 500)) * interval '1 day'),
-        'ND',
+        'bav100k-evt-' || lpad(s.g::text, 6, '0'),
+        ${bulkEvaluatedAt}::timestamptz - interval '120 days' + (s.g * interval '1 millisecond'),
+        s.state_code,
         'trucker',
+        'manual_import'::"SourceLeadProvider",
+        'avail_bench_16e9',
+        'aged'::"LeadInventoryClass",
+        'exclusive'::"InventoryExclusivityMode",
+        'available'::"LeadInventoryItemStatus",
+        ${bulkEvaluatedAt}::timestamptz,
+        CASE WHEN s.g % 17 = 0 THEN ${BUYER_ID} ELSE ${OTHER_ID} END,
+        '{}'::jsonb,
+        NOW(),
+        NOW()
+      FROM (
+        SELECT
+          g,
+          (ARRAY[${stateList}]::text[])[1 + ((g - 1) % 51)] AS state_code
+        FROM generate_series(1, ${BULK_ROWS}) AS g
+      ) s
+    `;
+    await db.$executeRaw`ANALYZE "LeadInventoryItem"`;
+    await db.$executeRaw`ANALYZE "InventoryLot"`;
+    await db.$executeRaw`ANALYZE "LeadAllocation"`;
+    const insertMs = Date.now() - insertStarted;
+
+    await db.$executeRaw`
+      INSERT INTO "SourceLeadEvent" (
+        id, "sourceProvider", "sourceSystem", "sourceType", status,
+        "rawPayloadJson", "normalizedPayloadJson", "enrichmentMetadataJson",
+        "receivedAt", "createdAt", "updatedAt"
+      )
+      SELECT
+        'bav-distractor-evt-' || g::text,
+        'manual_import'::"SourceLeadProvider",
+        'csv_import'::"SourceLeadSystem",
+        'bulk_import'::"SourceLeadType",
+        'approved'::"SourceLeadEventStatus",
+        jsonb_build_object('contact', jsonb_build_object(
+          'first_name', 'Ada', 'last_name', 'Lee',
+          'phone_e164', '+1404555900' || g::text,
+          'email', 'distractor' || g::text || '@bench.test',
+          'state', 'GA'
+        ), 'lead_details', jsonb_build_object('consumer_age', 62)),
+        jsonb_build_object('contact', jsonb_build_object(
+          'first_name', 'Ada', 'last_name', 'Lee',
+          'phone_e164', '+1404555900' || g::text,
+          'email', 'distractor' || g::text || '@bench.test',
+          'state', 'GA'
+        ), 'lead_details', jsonb_build_object('consumer_age', 62)),
+        '{}'::jsonb,
+        ${bulkEvaluatedAt}::timestamptz - CASE WHEN g <= 3 THEN interval '40 days' ELSE interval '120 days' END,
+        NOW(), NOW()
+      FROM generate_series(1, 6) AS g
+    `;
+    await db.$executeRaw`
+      INSERT INTO "LeadInventoryItem" (
+        id, "inventoryLotId", "sourceLeadEventId", "generatedAt", "normalizedState",
+        "nicheKey", "sourceProvider", "sourceLane", "inventoryClass", "exclusivityMode",
+        status, "availableAt", "originClientAccountId", "metadataJson", "createdAt", "updatedAt"
+      )
+      SELECT
+        'bav-distractor-item-' || g::text,
+        ${lotId},
+        'bav-distractor-evt-' || g::text,
+        ${bulkEvaluatedAt}::timestamptz - CASE WHEN g <= 3 THEN interval '40 days' ELSE interval '120 days' END,
+        'GA',
+        CASE WHEN g <= 3 THEN 'trucker' ELSE 'vet' END,
         'manual_import'::"SourceLeadProvider",
         'avail_bench_16e9',
         'aged'::"LeadInventoryClass",
@@ -396,14 +504,133 @@ describe("buyer inventory availability postgres proof", { skip: !runIntegration 
         ${bulkEvaluatedAt}::timestamptz,
         ${OTHER_ID},
         '{}'::jsonb,
-        NOW(),
-        NOW()
-      FROM generate_series(1, ${BULK_ROWS}) AS g
+        NOW(), NOW()
+      FROM generate_series(1, 6) AS g
     `;
-    await db.$executeRaw`ANALYZE "LeadInventoryItem"`;
-    await db.$executeRaw`ANALYZE "InventoryLot"`;
-    await db.$executeRaw`ANALYZE "LeadAllocation"`;
-    const insertMs = Date.now() - insertStarted;
+
+    // Independent of the lookup. Same-origin rows are not selectable. Strict US
+    // NANP (NPA/NXX not N11) matches buyer-ready for the trucker niche, and
+    // oldest-first phone dedupe keeps one row per remaining number.
+    const formulaExpected = await db.$queryRaw<Array<{ n: number; invalid: number }>>`
+      WITH series AS (
+        SELECT
+          g,
+          CASE WHEN g % 17 = 0 THEN 'buyer' ELSE 'other' END AS origin,
+          CASE WHEN g > 50 AND g % 50 = 0 THEN g - 50 ELSE g END AS phone_key
+        FROM generate_series(1, ${BULK_ROWS}) AS g
+      ),
+      phones AS (
+        SELECT
+          '+1404' || lpad((200 + ((phone_key - 1) % 800))::text, 3, '0')
+            || lpad((((phone_key - 1) / 800))::int::text, 4, '0') AS phone,
+          row_number() OVER (PARTITION BY phone_key ORDER BY g) AS rn
+        FROM series
+        WHERE origin = 'other'
+      ),
+      first_seen AS (
+        SELECT
+          phone,
+          (
+            length(phone) = 12
+            AND substring(phone from 1 for 2) = '+1'
+            AND substring(phone from 3 for 10) ~ '^[0-9]{10}$'
+            AND substring(phone from 3 for 1) BETWEEN '2' AND '9'
+            AND substring(phone from 6 for 1) BETWEEN '2' AND '9'
+            AND substring(phone from 3 for 3) !~ '^[2-9]11$'
+            AND substring(phone from 6 for 3) !~ '^[2-9]11$'
+          ) AS nanp_ok
+        FROM phones
+        WHERE rn = 1
+      )
+      SELECT
+        count(*) FILTER (WHERE nanp_ok)::int AS n,
+        count(*) FILTER (WHERE NOT nanp_ok)::int AS invalid
+      FROM first_seen
+    `;
+    const storedExpected = await db.$queryRaw<Array<{ n: number; invalid_rows: number }>>`
+      WITH scanned AS (
+        SELECT
+          i.id,
+          i."generatedAt",
+          e."normalizedPayloadJson" #>> '{contact,phone_e164}' AS phone
+        FROM "LeadInventoryItem" i
+        JOIN "SourceLeadEvent" e ON e.id = i."sourceLeadEventId"
+        WHERE i.id LIKE 'bav100k-item-%'
+          AND i."nicheKey" = 'trucker'
+          AND i."inventoryClass" = 'aged'::"LeadInventoryClass"
+          AND i.status = 'available'::"LeadInventoryItemStatus"
+          AND i."commerceExcludedAt" IS NULL
+          AND i."originClientAccountId" = ${OTHER_ID}
+          AND i."generatedAt" > ${bulkEvaluatedAt}::timestamptz - interval '180 days'
+          AND i."generatedAt" <= ${bulkEvaluatedAt}::timestamptz - interval '90 days'
+      ),
+      marked AS (
+        SELECT
+          id,
+          "generatedAt",
+          phone,
+          (
+            length(phone) = 12
+            AND substring(phone from 1 for 2) = '+1'
+            AND substring(phone from 3 for 10) ~ '^[0-9]{10}$'
+            AND substring(phone from 3 for 1) BETWEEN '2' AND '9'
+            AND substring(phone from 6 for 1) BETWEEN '2' AND '9'
+            AND substring(phone from 3 for 3) !~ '^[2-9]11$'
+            AND substring(phone from 6 for 3) !~ '^[2-9]11$'
+          ) AS nanp_ok
+        FROM scanned
+      ),
+      ranked AS (
+        SELECT
+          nanp_ok,
+          row_number() OVER (PARTITION BY phone ORDER BY "generatedAt" ASC, id ASC) AS rn
+        FROM marked
+        WHERE nanp_ok
+      )
+      SELECT
+        (SELECT count(*)::int FROM ranked WHERE rn = 1) AS n,
+        (SELECT count(*)::int FROM marked WHERE NOT nanp_ok) AS invalid_rows
+    `;
+    const texasExpected = await db.$queryRaw<Array<{ n: number }>>`
+      WITH scanned AS (
+        SELECT i.id, i."generatedAt", e."normalizedPayloadJson" #>> '{contact,phone_e164}' AS phone
+        FROM "LeadInventoryItem" i
+        JOIN "SourceLeadEvent" e ON e.id = i."sourceLeadEventId"
+        WHERE i.id LIKE 'bav100k-item-%'
+          AND i."nicheKey" = 'trucker'
+          AND i."normalizedState" = 'TX'
+          AND i."inventoryClass" = 'aged'::"LeadInventoryClass"
+          AND i.status = 'available'::"LeadInventoryItemStatus"
+          AND i."commerceExcludedAt" IS NULL
+          AND i."originClientAccountId" = ${OTHER_ID}
+          AND i."generatedAt" > ${bulkEvaluatedAt}::timestamptz - interval '180 days'
+          AND i."generatedAt" <= ${bulkEvaluatedAt}::timestamptz - interval '90 days'
+      ),
+      marked AS (
+        SELECT id, "generatedAt", phone
+        FROM scanned
+        WHERE length(phone) = 12
+          AND substring(phone from 1 for 2) = '+1'
+          AND substring(phone from 3 for 10) ~ '^[0-9]{10}$'
+          AND substring(phone from 3 for 1) BETWEEN '2' AND '9'
+          AND substring(phone from 6 for 1) BETWEEN '2' AND '9'
+          AND substring(phone from 3 for 3) !~ '^[2-9]11$'
+          AND substring(phone from 6 for 3) !~ '^[2-9]11$'
+      ),
+      ranked AS (
+        SELECT row_number() OVER (PARTITION BY phone ORDER BY "generatedAt" ASC, id ASC) AS rn
+        FROM marked
+      )
+      SELECT count(*)::int AS n FROM ranked WHERE rn = 1
+    `;
+    const expectedEligible = storedExpected[0]?.n ?? -1;
+    const expectedInvalidPhones = storedExpected[0]?.invalid_rows ?? -1;
+    const formulaEligible = formulaExpected[0]?.n ?? -2;
+    const formulaInvalid = formulaExpected[0]?.invalid ?? -3;
+    assert.equal(expectedEligible, formulaEligible);
+    assert.equal(expectedInvalidPhones, formulaInvalid);
+    assert.ok(expectedEligible > BUYER_AVAILABILITY_MAX_CLASSIFIED_ROWS);
+    assert.ok(expectedInvalidPhones > 0);
 
     const heapBefore = process.memoryUsage().heapUsed;
     let inTransaction = 0;
@@ -412,7 +639,7 @@ describe("buyer inventory availability postgres proof", { skip: !runIntegration 
       {
         clientAccountId: BUYER_ID,
         nicheKey: "trucker",
-        states: ["ND"],
+        commerceAgeBucketKeys: ["COMMERCE_3_6_MO"],
         evaluatedAt: bulkEvaluatedAt,
         afterClassificationPage: async ({ pagesRead }) => {
           if (pagesRead !== 1) return;
@@ -432,23 +659,127 @@ describe("buyer inventory availability postgres proof", { skip: !runIntegration 
 
     assert.equal(report.ok, true);
     if (!report.ok) return;
+    assert.equal(report.stateScope, "all");
     assert.equal(report.scan.classificationCeiling, BUYER_AVAILABILITY_MAX_CLASSIFIED_ROWS);
-    assert.equal(report.scan.ceilingHit, true);
-    assert.equal(report.scan.rowsClassified, BUYER_AVAILABILITY_MAX_CLASSIFIED_ROWS);
+    assert.equal(report.scan.ceilingHit, false);
+    assert.equal(report.scan.continuedPastPassCeiling, true);
+    assert.ok(report.scan.classificationPasses > 1);
+    assert.ok(report.scan.rowsClassified > BUYER_AVAILABILITY_MAX_CLASSIFIED_ROWS);
+    assert.equal(report.scan.rowsUnclassified, 0);
     assert.equal(report.scan.usesSelectionRowCap, false);
-    assert.equal(report.queryCompleteness, "incomplete");
-    assert.equal(report.eligibleCountSemantics, "lower_bound");
+    assert.equal(report.queryCompleteness, "complete");
+    assert.equal(report.eligibleCountSemantics, "exact");
+    assert.equal(report.eligibleTotal, expectedEligible);
+    assert.equal(report.exclusionReasons.notBuyerReady.count, expectedInvalidPhones);
+    assert.equal(
+      report.exclusionReasons.buyerReadyRejections.phone_structurally_invalid,
+      expectedInvalidPhones
+    );
+    assert.equal(report.exclusionReasons.currentBatchDuplicate.count, 1);
+    assert.equal(report.structuralCohort.stampedSameOrigin > 0, true);
+    assert.equal(
+      report.eligibleTotal +
+        report.exclusionReasons.notBuyerReady.count +
+        report.exclusionReasons.currentBatchDuplicate.count,
+      report.scan.rowsClassified
+    );
     assert.equal(report.structuralCohort.countSemantics, "exact");
-    assert.equal(report.structuralCohort.rows, BULK_ROWS);
-    assert.ok(report.scan.rowsUnclassified >= BULK_ROWS - BUYER_AVAILABILITY_MAX_CLASSIFIED_ROWS);
-    assert.ok(report.scan.selectableRowsExact >= BULK_ROWS - 0);
+    assert.equal(
+      report.ageTiers.find((tier) => tier.commerceAgeBucketKey === "COMMERCE_3_6_MO")?.eligible,
+      expectedEligible
+    );
+    assert.equal(
+      report.ageTiers.find((tier) => tier.commerceAgeBucketKey === "COMMERCE_3_6_MO")?.countSemantics,
+      "exact"
+    );
     assert.equal(report.snapshot.consistent, true);
+    assert.equal(report.evaluatedAt, bulkEvaluatedAt.toISOString());
+    assert.match(report.summary, /All states/);
+    assert.match(report.summary, /Exact buyer-eligible count/);
+    assert.equal(report.summary.includes("not a nationwide total"), false);
     assert.equal(inTransaction, 1);
     assert.ok(heapAfter - heapBefore < 512 * 1024 * 1024);
     const serialized = JSON.stringify(report);
     assert.equal(serialized.includes("@bench.test"), false);
     assert.equal(serialized.includes("+1404"), false);
     assert.equal(serialized.includes("Ada"), false);
+
+    const selected = await lookupBuyerInventoryAvailability(
+      {
+        clientAccountId: BUYER_ID,
+        nicheKey: "trucker",
+        states: ["TX"],
+        commerceAgeBucketKeys: ["COMMERCE_3_6_MO"],
+        evaluatedAt: bulkEvaluatedAt,
+      },
+      db
+    );
+    assert.equal(selected.ok, true);
+    if (!selected.ok) return;
+    assert.equal(selected.stateScope, "selected");
+    assert.deepEqual(selected.states, ["TX"]);
+    assert.equal(selected.queryCompleteness, "complete");
+    assert.equal(selected.eligibleCountSemantics, "exact");
+    assert.equal(selected.eligibleTotal, texasExpected[0]?.n ?? -1);
+    assert.equal(selected.exclusionReasons.originClientStamped.count, 0);
+    assert.equal(selected.summary.includes("not a nationwide total"), false);
+
+    const kentuckyExpected = await db.$queryRaw<Array<{ same_origin: number; eligible: number }>>`
+      WITH scanned AS (
+        SELECT
+          i."originClientAccountId" AS origin,
+          e."normalizedPayloadJson" #>> '{contact,phone_e164}' AS phone
+        FROM "LeadInventoryItem" i
+        JOIN "SourceLeadEvent" e ON e.id = i."sourceLeadEventId"
+        WHERE i.id LIKE 'bav100k-item-%'
+          AND i."nicheKey" = 'trucker'
+          AND i."normalizedState" = 'KY'
+          AND i."inventoryClass" = 'aged'::"LeadInventoryClass"
+          AND i.status = 'available'::"LeadInventoryItemStatus"
+          AND i."commerceExcludedAt" IS NULL
+          AND i."generatedAt" > ${bulkEvaluatedAt}::timestamptz - interval '180 days'
+          AND i."generatedAt" <= ${bulkEvaluatedAt}::timestamptz - interval '90 days'
+      )
+      SELECT
+        count(*) FILTER (WHERE origin = ${BUYER_ID})::int AS same_origin,
+        count(DISTINCT phone) FILTER (
+          WHERE origin = ${OTHER_ID}
+            AND length(phone) = 12
+            AND substring(phone from 1 for 2) = '+1'
+            AND substring(phone from 3 for 10) ~ '^[0-9]{10}$'
+            AND substring(phone from 3 for 1) BETWEEN '2' AND '9'
+            AND substring(phone from 6 for 1) BETWEEN '2' AND '9'
+            AND substring(phone from 3 for 3) !~ '^[2-9]11$'
+            AND substring(phone from 6 for 3) !~ '^[2-9]11$'
+        )::int AS eligible
+      FROM scanned
+    `;
+    const kentucky = await lookupBuyerInventoryAvailability(
+      {
+        clientAccountId: BUYER_ID,
+        nicheKey: "trucker",
+        states: ["KY"],
+        commerceAgeBucketKeys: ["COMMERCE_3_6_MO"],
+        evaluatedAt: bulkEvaluatedAt,
+      },
+      db
+    );
+    assert.equal(kentucky.ok, true);
+    if (!kentucky.ok) return;
+    assert.equal(kentucky.stateScope, "selected");
+    assert.equal(kentucky.queryCompleteness, "complete");
+    assert.equal(kentucky.eligibleCountSemantics, "exact");
+    assert.equal(kentucky.eligibleTotal, kentuckyExpected[0]?.eligible ?? -1);
+    assert.equal(
+      kentucky.exclusionReasons.originClientStamped.count,
+      kentuckyExpected[0]?.same_origin ?? -1
+    );
+    assert.ok((kentuckyExpected[0]?.same_origin ?? 0) > 0);
+    assert.equal(kentuckyExpected[0]?.eligible, 0);
+    assert.equal(
+      kentucky.ageTiers.find((tier) => tier.commerceAgeBucketKey === "COMMERCE_3_6_MO")?.countSemantics,
+      "exact"
+    );
 
     const lte = (days: number) => new Date(bulkEvaluatedAt.getTime() - days * DAY_MS);
     const plans = await explainAvailabilityPlans(probe, {
@@ -471,8 +802,13 @@ describe("buyer inventory availability postgres proof", { skip: !runIntegration 
       rowsClassified: report.scan.rowsClassified,
       selectableRowsExact: report.scan.selectableRowsExact,
       rowsUnclassified: report.scan.rowsUnclassified,
+      classificationPasses: report.scan.classificationPasses,
+      classificationCeiling: report.scan.classificationCeiling,
+      continuedPastPassCeiling: report.scan.continuedPastPassCeiling,
       structuralRows: report.structuralCohort.rows,
       eligibleTotal: report.eligibleTotal,
+      expectedEligible,
+      texasEligible: selected.eligibleTotal,
       eligibleCountSemantics: report.eligibleCountSemantics,
       queryCompleteness: report.queryCompleteness,
     };

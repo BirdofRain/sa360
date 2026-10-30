@@ -145,7 +145,8 @@ export async function adminFetchJson<T>(path: string): Promise<AdminFetchResult<
 export async function executeAuthorizedAdminApiRequest<T>(
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
   path: string,
-  body?: unknown
+  body?: unknown,
+  init?: { signal?: AbortSignal }
 ): Promise<AdminFetchResult<T>> {
   const baseUrl = getAdminApiBaseUrl();
   const apiKey = getAdminApiKey();
@@ -171,6 +172,7 @@ export async function executeAuthorizedAdminApiRequest<T>(
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
       cache: "no-store",
+      signal: init?.signal,
     });
 
     const text = await res.text();
@@ -198,13 +200,14 @@ export async function executeAuthorizedAdminApiRequest<T>(
 export async function adminRequestJson<T>(
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
   path: string,
-  body?: unknown
+  body?: unknown,
+  init?: { signal?: AbortSignal }
 ): Promise<AdminFetchResult<T>> {
   const denied = await adminCocAdminApiUnauthorized();
   if (denied) return denied;
   const observerDenied = await observerAdminApiKeyDenied(method, path);
   if (observerDenied) return observerDenied;
-  return executeAuthorizedAdminApiRequest<T>(method, path, body);
+  return executeAuthorizedAdminApiRequest<T>(method, path, body, init);
 }
 
 function formatError(err: AdminFetchFailure): string {

@@ -110,7 +110,12 @@ const prepareBodySchema = z.object({
 const buyerAvailabilityBodySchema = z.object({
   clientAccountId: z.string().trim().min(1).max(120),
   nicheKey: z.string().trim().min(1).max(120),
-  states: z.array(z.string().trim().min(1).max(32)).min(1).max(60),
+  /**
+   * Omit or send an empty list to count every canonical US state.
+   * A nonblank token still has to be a canonical code; whitespace-only
+   * tokens stay invalid instead of becoming an all-states search.
+   */
+  states: z.array(z.string().trim().min(1).max(32)).max(60).optional(),
   commerceAgeBucketKeys: z.array(z.string().trim().min(1).max(64)).max(8).optional(),
 });
 
@@ -246,12 +251,25 @@ export const adminFulfillmentOpsRoutes: FastifyPluginAsync = async (app: Fastify
     if (!body.success) {
       return reply.status(400).send({ ok: false, error: "invalid_request" });
     }
-    const result = await lookupBuyerInventoryAvailability({
-      clientAccountId: body.data.clientAccountId,
-      nicheKey: body.data.nicheKey,
-      states: body.data.states,
-      commerceAgeBucketKeys: body.data.commerceAgeBucketKeys,
-    });
+    const abort = new AbortController();
+    const onClientGone = () => {
+      if (!reply.raw.writableEnded) abort.abort();
+    };
+    reply.raw.on("close", onClientGone);
+    request.raw.on("aborted", onClientGone);
+    let result;
+    try {
+      result = await lookupBuyerInventoryAvailability({
+        clientAccountId: body.data.clientAccountId,
+        nicheKey: body.data.nicheKey,
+        states: body.data.states,
+        commerceAgeBucketKeys: body.data.commerceAgeBucketKeys,
+        signal: abort.signal,
+      });
+    } finally {
+      reply.raw.off("close", onClientGone);
+      request.raw.off("aborted", onClientGone);
+    }
     if (!result.ok && result.code === "buyer_not_found") {
       return reply.status(404).send(result);
     }

@@ -25,12 +25,12 @@ export function StatusMark({
           ? "Review"
           : "Unknown";
   return (
-    <div className={cn("rounded-lg border px-3 py-2", tone)} data-status={label} data-state={state}>
-      <div className="flex items-center justify-between gap-3">
+    <div className={cn("min-w-0 rounded-lg border px-3 py-2", tone)} data-status={label} data-state={state}>
+      <div className="flex min-w-0 items-center justify-between gap-3">
         <span className="text-xs font-medium">{label}</span>
         <span className="text-xs font-semibold">{word}</span>
       </div>
-      {detail ? <p className="mt-1 text-xs leading-5">{detail}</p> : null}
+      {detail ? <p className="mt-1 min-w-0 break-words text-xs leading-5">{detail}</p> : null}
     </div>
   );
 }

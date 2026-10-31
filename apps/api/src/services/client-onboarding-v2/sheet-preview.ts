@@ -20,6 +20,7 @@ import { parseGoogleSpreadsheetRef } from "../../lib/google-spreadsheet-ref.js";
 import { findClientForCompanySheets } from "../../repositories/company-sheets-destination.repository.js";
 import {
   findCompanyDriveNamedChild,
+  getCompanyDriveFile,
   listCompanyDriveFolderChildren,
   parseCompanyDriveFile,
   type CompanyDriveFile,
@@ -99,6 +100,8 @@ type DriveSearchItem = {
   selectable: boolean;
   selected: false;
   reason: string | null;
+  /** Parent title, file title, and file id. Same names stay distinguishable. */
+  location: string;
 };
 
 export function isStatsWorksheetTitle(title: string): boolean {
@@ -312,6 +315,7 @@ export async function searchOnboardingDrive(
       suggestions: DriveSearchItem[];
       nameMatch: "none" | "unique" | "ambiguous";
       selectedFolderId: null;
+      companyFolder: { folderId: string; title: string | null };
       nextPageToken: string | null;
     }
   | OnboardingReadFailure
@@ -320,7 +324,7 @@ export async function searchOnboardingDrive(
   const disabled = sheetsDisabled(env);
   if (disabled) return disabled;
   const query = input.query.trim();
-  if (!query || query.length > 80 || containsControl(query)) return invalidRequest();
+  if (query.length > 80 || containsControl(query)) return invalidRequest();
   const pageToken = input.pageToken?.trim() || null;
   if (pageToken && (pageToken.length > 512 || containsControl(pageToken))) return invalidRequest();
   const db = deps.db ?? prisma;
@@ -331,6 +335,7 @@ export async function searchOnboardingDrive(
     return { ok: false, code: "approved_parent_unconfigured", statusCode: 409, retryable: false };
   }
   let parentId = config.approvedParentFolderId;
+  let parentTitle: string | null = null;
   if (input.scope === "client_folder") {
     const stored = await db.companySheetsClientFolder.findUnique({ where: { clientAccountId: client.clientAccountId } });
     if (!stored?.folderId || stored.status !== "active") return notFound("folder_unavailable");
@@ -344,9 +349,16 @@ export async function searchOnboardingDrive(
       return { ok: false, code: "unapproved_shared_drive", statusCode: 409, retryable: false };
     }
     parentId = resolved.folder.folderId;
+    parentTitle = stored.folderTitle.trim() || resolved.folder.title;
   }
   const ready = await loadReadyConnection({ ...deps, env, db });
   if (!ready.ok) return fromSheets(ready);
+  const parentFile = await (deps.getDriveFile ?? getCompanyDriveFile)(
+    { fileId: config.approvedParentFolderId, accessToken: ready.accessToken },
+    deps.fetchImpl
+  );
+  const companyTitle = parentFile.ok && parentFile.file.id === config.approvedParentFolderId ? parentFile.file.name : null;
+  if (parentId === config.approvedParentFolderId) parentTitle = companyTitle;
   const listed = await listOnboardingDrivePage(
     {
       parentId,
@@ -361,15 +373,18 @@ export async function searchOnboardingDrive(
   const suggestions = await clientNameSuggestions(
     folderTitle,
     config.approvedParentFolderId,
+    companyTitle,
     config.approvedSharedDriveId,
     ready.accessToken,
     deps
   );
   if (!suggestions.ok) return suggestions.failure;
+  const needle = query.toLowerCase();
   const items: DriveSearchItem[] = [];
   for (const file of listed.files) {
-    if (!file.name.toLowerCase().includes(query.toLowerCase())) continue;
-    items.push(await presentSearchFile(file, parentId, config.approvedSharedDriveId, ready, deps));
+    if (needle && !file.name.toLowerCase().includes(needle)) continue;
+    const presented = await presentSearchFile(file, parentId, config.approvedSharedDriveId, ready, deps);
+    items.push(withLocation(presented, parentTitle, parentId));
   }
   return {
     ok: true,
@@ -378,6 +393,7 @@ export async function searchOnboardingDrive(
     suggestions: suggestions.items,
     nameMatch: suggestions.nameMatch,
     selectedFolderId: null,
+    companyFolder: { folderId: config.approvedParentFolderId, title: companyTitle },
     nextPageToken: listed.nextPageToken,
   };
 }
@@ -621,16 +637,16 @@ async function presentSearchFile(
     shortcut,
     selected: false as const,
   };
-  if (shortcut) return { ...base, selectable: false, reason: "shortcut_bypass" };
-  if (trashed) return { ...base, selectable: false, reason: "trashed_file" };
-  if (file.driveId !== approvedDriveId) return { ...base, selectable: false, reason: "unapproved_shared_drive" };
-  if (!file.parents.includes(parentId)) return { ...base, selectable: false, reason: "outside_approved_parent" };
-  if (kind !== "spreadsheet") return { ...base, selectable: true, reason: null };
+  if (shortcut) return { ...base, selectable: false, reason: "shortcut_bypass", location: "" };
+  if (trashed) return { ...base, selectable: false, reason: "trashed_file", location: "" };
+  if (file.driveId !== approvedDriveId) return { ...base, selectable: false, reason: "unapproved_shared_drive", location: "" };
+  if (!file.parents.includes(parentId)) return { ...base, selectable: false, reason: "outside_approved_parent", location: "" };
+  if (kind !== "spreadsheet") return { ...base, selectable: true, reason: null, location: "" };
   const metadataResult = await (deps.getMetadata ?? getSpreadsheetMetadata)(
     { spreadsheetId: file.id, accessToken: ready.accessToken },
     deps.fetchImpl
   );
-  if (!metadataResult.ok) return { ...base, selectable: false, reason: metadataResult.reason };
+  if (!metadataResult.ok) return { ...base, selectable: false, reason: metadataResult.reason, location: "" };
   const control = await (deps.establishControl ?? establishControl)(
     {
       connection: ready.connection,
@@ -640,13 +656,23 @@ async function presentSearchFile(
     },
     deps
   );
-  if (!control.ok) return { ...base, selectable: false, reason: control.code };
-  return { ...base, selectable: true, reason: null };
+  if (!control.ok) return { ...base, selectable: false, reason: control.code, location: "" };
+  return { ...base, selectable: true, reason: null, location: "" };
+}
+
+function withLocation(
+  item: DriveSearchItem,
+  parentTitle: string | null,
+  parentId: string
+): DriveSearchItem {
+  const parent = parentTitle?.trim() || parentId;
+  return { ...item, location: `${parent} / ${item.title} · ${item.id}` };
 }
 
 async function clientNameSuggestions(
   folderTitle: string | null,
   parentId: string,
+  parentTitle: string | null,
   driveId: string,
   accessToken: string,
   deps: OnboardingSheetDeps
@@ -663,19 +689,26 @@ async function clientNameSuggestions(
     return { ok: false, failure: { ok: false, code: named.reason, statusCode: 502, retryable: false } };
   }
   const files = named.ok ? named.files : (named.files ?? []);
-  const items = files.map((file) => ({
-    id: file.id,
-    title: file.name,
-    mimeType: file.mimeType,
-    kind: "folder" as const,
-    driveId: file.driveId,
-    parents: file.parents,
-    trashed: false,
-    shortcut: false,
-    selectable: true,
-    selected: false as const,
-    reason: null,
-  }));
+  const items = files.map((file) =>
+    withLocation(
+      {
+        id: file.id,
+        title: file.name,
+        mimeType: file.mimeType,
+        kind: "folder" as const,
+        driveId: file.driveId,
+        parents: file.parents,
+        trashed: false,
+        shortcut: false,
+        selectable: true,
+        selected: false as const,
+        reason: null,
+        location: "",
+      },
+      parentTitle,
+      parentId
+    )
+  );
   const nameMatch = !named.ok || items.length > 1 ? "ambiguous" : items.length === 1 ? "unique" : "none";
   return { ok: true, items, nameMatch };
 }

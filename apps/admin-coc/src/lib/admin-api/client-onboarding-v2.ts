@@ -372,12 +372,17 @@ function projectSummary(data: unknown): OnboardingSummary | null {
 function projectDriveSearch(data: unknown): OnboardingDriveSearch | null {
   const record = asRecord(data);
   if (!record || record.ok !== true || record.saved !== false) return null;
+  const company = asRecord(record.companyFolder);
   return {
     saved: false,
     items: driveItems(record.items),
     suggestions: driveItems(record.suggestions),
     nameMatch: record.nameMatch === "unique" || record.nameMatch === "ambiguous" ? record.nameMatch : "none",
     selectedFolderId: null,
+    companyFolder:
+      company && typeof company.folderId === "string" && company.folderId
+        ? { folderId: company.folderId, title: typeof company.title === "string" ? company.title : null }
+        : null,
     nextPageToken: typeof record.nextPageToken === "string" ? record.nextPageToken : null,
   };
 }
@@ -679,6 +684,7 @@ function driveItems(value: unknown): OnboardingDriveItem[] {
       shortcut: record.shortcut === true || kind === "shortcut",
       selectable: record.selectable === true,
       reason: typeof record.reason === "string" ? record.reason : null,
+      location: typeof record.location === "string" ? record.location : null,
     });
   }
   return items;

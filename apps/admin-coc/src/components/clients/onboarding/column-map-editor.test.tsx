@@ -230,7 +230,7 @@ function mockActions(calls: string[], record: ColumnMapRecord): OnboardingWorksp
     readinessEvidenceInvalidated: true,
   };
   return {
-    searchDrive: async () => ({ ok: true, data: { saved: false, items: [], suggestions: [], nameMatch: "none", selectedFolderId: null, nextPageToken: null } }),
+    searchDrive: async () => ({ ok: true, data: { saved: false, items: [], suggestions: [], nameMatch: "none", selectedFolderId: null, companyFolder: null, nextPageToken: null } }),
     resolveFolder: async () => ({ ok: false, error: "invalid_request", status: 400 }),
     listSpreadsheets: async () => ({
       ok: true,
@@ -275,6 +275,8 @@ function mockActions(calls: string[], record: ColumnMapRecord): OnboardingWorksp
         ],
       },
     }),
+    saveSheetsDestination: async () => ({ ok: false, error: "invalid_body", status: 400 }),
+    bindCampaignWorksheet: async () => ({ ok: false, error: "invalid_body", status: 400 }),
     saveDestination: async () => ({ ok: false, error: "invalid_body", status: 400 }),
     loadWorkflows: async () => ({ ok: false, error: "invalid_body", status: 400 }),
     saveWorkflow: async () => ({ ok: false, error: "invalid_body", status: 400 }),

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 
+import { prepareCompanyClientFolderAction } from "@/app/actions/company-google-sheets";
 import {
   approveOnboardingTestWorksheetAction,
   bindOnboardingCampaignWorksheetAction,
@@ -43,6 +44,7 @@ import type {
   OnboardingSummary,
   OnboardingWorksheetPreview,
   OnboardingWorkspaceActions,
+  PersistedSheetsSetup,
   StoredTestRunView,
 } from "@/lib/clients/onboarding/types";
 
@@ -70,6 +72,7 @@ export function SetupDeliveryWorkspace({
   ghlConnections = [],
   ghlLocationError = null,
   ghlActions,
+  sheetsSetup = null,
 }: {
   clientAccountId: string;
   summary: OnboardingSummary | null;
@@ -93,6 +96,7 @@ export function SetupDeliveryWorkspace({
   ghlConnections?: GhlWalkthroughConnection[];
   ghlLocationError?: string | null;
   ghlActions?: GhlWalkthroughActions;
+  sheetsSetup?: PersistedSheetsSetup | null;
 }) {
   const bound = actions ?? liveActions(clientAccountId);
   const revision = knownProfileRevision(profileRevision ?? summary?.destinationProfile?.revision);
@@ -150,7 +154,7 @@ export function SetupDeliveryWorkspace({
           {UNCERTAIN_OUTCOME_LABEL}
         </p>
       ) : null}
-      <div className="grid gap-4 xl:grid-cols-2">
+      <div className="grid min-w-0 gap-4 xl:grid-cols-2">
         <LeadCaptureCard
           sources={sourcesByKind(sources ?? [], ["leadcapture"])}
           evidenceTruncated={summary?.evidenceTruncated === true}
@@ -168,6 +172,7 @@ export function SetupDeliveryWorkspace({
           connectionError={connectionError}
           dispatch={dispatch}
           actions={bound}
+          sheetsSetup={sheetsSetup}
           onViewWorksheet={(worksheet, spreadsheetTitle, spreadsheetId) =>
             setViewed({ worksheet, spreadsheetTitle, spreadsheetId })
           }
@@ -219,6 +224,21 @@ function liveActions(clientAccountId: string): OnboardingWorkspaceActions {
     resolveFolder: (folder) => resolveOnboardingFolderAction(clientAccountId, folder),
     listSpreadsheets: () => listOnboardingSpreadsheetsAction(clientAccountId),
     browseResolvedFolder: (folderId) => browseResolvedOnboardingFolderAction(clientAccountId, folderId),
+    linkClientFolder: async (folderId) => {
+      const linked = await prepareCompanyClientFolderAction(clientAccountId, { intent: "link", folderId });
+      if (!linked.ok) return { ok: false, error: linked.error, status: 400 };
+      if (!linked.data.linked || !linked.data.folder) return { ok: false, error: "folder_unavailable", status: 409 };
+      const listed = await listOnboardingSpreadsheetsAction(clientAccountId);
+      if (!listed.ok) return listed;
+      return {
+        ok: true,
+        data: {
+          folderId: linked.data.folder.folderId,
+          title: linked.data.folder.title,
+          spreadsheets: listed.data,
+        },
+      };
+    },
     previewSpreadsheet: (spreadsheetId) => previewOnboardingSpreadsheetAction(clientAccountId, spreadsheetId),
     approveTestWorksheet: (input) => approveOnboardingTestWorksheetAction(clientAccountId, input),
     probeSheetWrite: (input) => probeOnboardingSheetWriteAction(clientAccountId, input),

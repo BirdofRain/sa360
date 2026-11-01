@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { CANONICAL_US_STATE_CODES, isCommerceAgeBucketKey } from "@sa360/shared";
+import { z } from "zod";
 
 import { verifyClientPortalApiKey } from "../lib/client-portal-auth.js";
 import {
@@ -104,7 +105,13 @@ import { portalBuyerAvailabilityBodySchema } from "../schemas/portal-buyer-avail
 import {
   lookupBuyerInventoryAvailability,
   parseBuyerAvailabilityStates,
+  type BuyerInventoryAvailabilityReport,
 } from "../services/ppl-fulfillment/buyer-inventory-availability.service.js";
+import {
+  cancelBuyerInventoryAvailabilityJob,
+  readBuyerInventoryAvailabilityJob,
+  startBuyerInventoryAvailabilityJob,
+} from "../services/ppl-fulfillment/buyer-inventory-availability-jobs.js";
 
 export type ClientPortalRoutesOptions = {
   tenantDeps?: ClientPortalTenantDeps;
@@ -957,16 +964,176 @@ export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> =
       });
     }
 
-    return reply.send({
-      ok: true,
-      clientAccountId: result.buyer.clientAccountId,
-      policyVersion: result.policyVersion,
-      nicheKey: result.nicheKey,
-      commerceAgeBucketKey: parsed.data.commerceAgeBucketKey,
-      states: result.states,
-      evaluatedAt: result.evaluatedAt,
-      eligibleByState: result.eligibleByState,
-      effects: result.effects,
-    });
+    return reply.send(presentPortalBuyerAvailability(result, parsed.data.commerceAgeBucketKey));
   });
+
+  app.post(
+    "/buyer-inventory-availability/jobs",
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      if (!(await verifyClientPortalApiKey(request, reply))) return;
+      if (!isBuyerInventoryAvailabilityEnabled()) {
+        return reply.status(404).send({
+          ok: false,
+          error: "buyer_inventory_availability_disabled",
+        });
+      }
+      const parsed = portalBuyerAvailabilityBodySchema.safeParse(request.body ?? {});
+      if (!parsed.success) {
+        return reply.status(400).send({ ok: false, error: "invalid_request" });
+      }
+      if (!isCommerceAgeBucketKey(parsed.data.commerceAgeBucketKey)) {
+        return reply.status(400).send({ ok: false, error: "invalid_age_buckets" });
+      }
+      const states = parseBuyerAvailabilityStates(parsed.data.states);
+      const canonical = new Set<string>(CANONICAL_US_STATE_CODES);
+      if (
+        !states.ok ||
+        states.states.length !== canonical.size ||
+        states.states.some((state) => !canonical.has(state))
+      ) {
+        return reply.status(400).send({ ok: false, error: "invalid_states" });
+      }
+      const resolved = await resolveClientPortalTenant(parsed.data.clientAccountId, tenantDeps);
+      if ("error" in resolved) {
+        const status = resolved.code === "PORTAL_DISABLED" ? 403 : 404;
+        return reply.status(status).send({
+          ok: false,
+          error: resolved.error,
+          code: resolved.code,
+        });
+      }
+      const started = startBuyerInventoryAvailabilityJob({
+        audience: { kind: "portal", clientAccountId: resolved.tenant.clientAccountId },
+        request: {
+          clientAccountId: resolved.tenant.clientAccountId,
+          nicheKey: parsed.data.nicheKey,
+          states: states.states,
+          commerceAgeBucketKeys: [parsed.data.commerceAgeBucketKey],
+        },
+        lookup: lookupAvailability,
+      });
+      if (!started.ok) {
+        const status = started.code === "availability_job_busy" ? 503 : 400;
+        return reply.status(status).send(started);
+      }
+      return reply.status(202).send(started);
+    }
+  );
+
+  app.get(
+    "/buyer-inventory-availability/jobs/:jobId",
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      if (!(await verifyClientPortalApiKey(request, reply))) return;
+      if (!isBuyerInventoryAvailabilityEnabled()) {
+        return reply.status(404).send({
+          ok: false,
+          error: "buyer_inventory_availability_disabled",
+        });
+      }
+      const params = z
+        .object({ jobId: z.string().trim().regex(/^bav_[0-9a-f-]{36}$/i) })
+        .safeParse(request.params ?? {});
+      const query = z
+        .object({ clientAccountId: z.string().trim().min(1).max(120) })
+        .safeParse(request.query ?? {});
+      if (!params.success || !query.success) {
+        return reply.status(400).send({ ok: false, error: "invalid_request" });
+      }
+      const resolved = await resolveClientPortalTenant(query.data.clientAccountId, tenantDeps);
+      if ("error" in resolved) {
+        const status = resolved.code === "PORTAL_DISABLED" ? 403 : 404;
+        return reply.status(status).send({
+          ok: false,
+          error: resolved.error,
+          code: resolved.code,
+        });
+      }
+      const job = readBuyerInventoryAvailabilityJob(params.data.jobId, {
+        kind: "portal",
+        clientAccountId: resolved.tenant.clientAccountId,
+      });
+      if (!job.ok) return reply.status(404).send(job);
+      if (job.status !== "complete" || !job.result) {
+        return reply.send({
+          ok: true,
+          jobId: job.jobId,
+          status: job.status,
+          readOnly: true,
+          effects: job.effects,
+          progress: job.progress,
+          ...(job.failure ? { failure: job.failure } : {}),
+        });
+      }
+      if (job.result.buyer.clientAccountId !== resolved.tenant.clientAccountId) {
+        return reply.status(409).send({ ok: false, error: "buyer_mismatch" });
+      }
+      const commerceAgeBucketKey = job.result.requestedCommerceAgeBucketKeys[0];
+      if (!commerceAgeBucketKey || !isCommerceAgeBucketKey(commerceAgeBucketKey)) {
+        return reply.status(409).send({ ok: false, error: "invalid_age_buckets" });
+      }
+      return reply.send({
+        ok: true,
+        jobId: job.jobId,
+        status: "complete",
+        readOnly: true,
+        effects: job.effects,
+        progress: job.progress,
+        result: presentPortalBuyerAvailability(job.result, commerceAgeBucketKey),
+      });
+    }
+  );
+
+  app.delete(
+    "/buyer-inventory-availability/jobs/:jobId",
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      if (!(await verifyClientPortalApiKey(request, reply))) return;
+      if (!isBuyerInventoryAvailabilityEnabled()) {
+        return reply.status(404).send({
+          ok: false,
+          error: "buyer_inventory_availability_disabled",
+        });
+      }
+      const params = z
+        .object({ jobId: z.string().trim().regex(/^bav_[0-9a-f-]{36}$/i) })
+        .safeParse(request.params ?? {});
+      const query = z
+        .object({ clientAccountId: z.string().trim().min(1).max(120) })
+        .safeParse(request.query ?? {});
+      if (!params.success || !query.success) {
+        return reply.status(400).send({ ok: false, error: "invalid_request" });
+      }
+      const resolved = await resolveClientPortalTenant(query.data.clientAccountId, tenantDeps);
+      if ("error" in resolved) {
+        const status = resolved.code === "PORTAL_DISABLED" ? 403 : 404;
+        return reply.status(status).send({
+          ok: false,
+          error: resolved.error,
+          code: resolved.code,
+        });
+      }
+      const cancelled = cancelBuyerInventoryAvailabilityJob(params.data.jobId, {
+        kind: "portal",
+        clientAccountId: resolved.tenant.clientAccountId,
+      });
+      if (!cancelled.ok) return reply.status(404).send(cancelled);
+      return reply.send({ ...cancelled, readOnly: true });
+    }
+  );
 };
+
+function presentPortalBuyerAvailability(
+  result: BuyerInventoryAvailabilityReport,
+  commerceAgeBucketKey: string
+) {
+  return {
+    ok: true as const,
+    clientAccountId: result.buyer.clientAccountId,
+    policyVersion: result.policyVersion,
+    nicheKey: result.nicheKey,
+    commerceAgeBucketKey,
+    states: result.states,
+    evaluatedAt: result.evaluatedAt,
+    eligibleByState: result.eligibleByState,
+    effects: result.effects,
+  };
+}

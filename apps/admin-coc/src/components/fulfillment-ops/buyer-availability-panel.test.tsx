@@ -480,4 +480,115 @@ describe("BuyerAvailabilityPanel", () => {
       globalThis.fetch = previous;
     }
   });
+
+  it("shows classified progress and only then an exact total", async () => {
+    const previous = globalThis.fetch;
+    let polls = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/jobs")) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            jobId: "bav_11111111-1111-1111-1111-111111111111",
+            status: "running",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      }
+      polls += 1;
+      if (polls === 1) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            jobId: "bav_11111111-1111-1111-1111-111111111111",
+            status: "running",
+            progress: {
+              phase: "classifying",
+              rowsClassified: 250,
+              selectableRowsExact: 1000,
+              pagesRead: 1,
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          jobId: "bav_11111111-1111-1111-1111-111111111111",
+          status: "complete",
+          result: exactReport,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }) as typeof fetch;
+    try {
+      render(<BuyerAvailabilityPanel enabled clients={[]} />);
+      fireEvent.change(screen.getByTestId("buyer-availability-client-id"), {
+        target: { value: "client_jr_laird" },
+      });
+      fireEvent.click(screen.getByTestId("buyer-availability-submit"));
+      const progress = await screen.findByText(/Classified 250 of 1,000 selectable rows/);
+      assert.match(progress.textContent ?? "", /not ready/);
+      assert.equal(screen.queryByTestId("buyer-availability-total"), null);
+      const total = await screen.findByTestId(
+        "buyer-availability-total",
+        {},
+        { timeout: 4_000 }
+      );
+      assert.match(total.textContent ?? "", /4 buyer-eligible/);
+      assert.match(total.textContent ?? "", /\(exact\)/);
+    } finally {
+      globalThis.fetch = previous;
+    }
+  });
+
+  it("does not show a total when the job is cancelled", async () => {
+    const previous = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (init?.method === "DELETE") {
+        return new Response(JSON.stringify({ ok: true, status: "cancelled" }), { status: 200 });
+      }
+      if (url.endsWith("/jobs")) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            jobId: "bav_22222222-2222-2222-2222-222222222222",
+            status: "running",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          jobId: "bav_22222222-2222-2222-2222-222222222222",
+          status: "cancelled",
+          progress: {
+            phase: "classifying",
+            rowsClassified: 10,
+            selectableRowsExact: 100,
+            pagesRead: 1,
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }) as typeof fetch;
+    try {
+      render(<BuyerAvailabilityPanel enabled clients={[]} />);
+      fireEvent.change(screen.getByTestId("buyer-availability-client-id"), {
+        target: { value: "client_jr_laird" },
+      });
+      fireEvent.click(screen.getByTestId("buyer-availability-submit"));
+      const error = await screen.findByTestId("buyer-availability-error");
+      assert.match(error.textContent ?? "", /stopped before it finished/);
+      assert.match(error.textContent ?? "", /No exact total/);
+      assert.equal(screen.queryByTestId("buyer-availability-result"), null);
+      assert.equal(screen.queryByText(/10 buyer-eligible/), null);
+    } finally {
+      globalThis.fetch = previous;
+    }
+  });
 });

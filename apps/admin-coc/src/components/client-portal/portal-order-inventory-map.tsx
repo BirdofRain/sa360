@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 
 import { isCommerceAgeBucketKey } from "@sa360/shared";
 
+import { loadPortalInventoryAvailabilityThroughJob } from "@/lib/client-portal/portal-availability-job-client";
+
 import { Input } from "@/components/ui/input";
 import usStatesGeo from "@/lib/front-office/pipeline-studio/geo/us-states-albers.svg.json";
 import {
@@ -47,23 +49,22 @@ export type PortalInventoryAvailabilityLoader = (input: {
   requestedAgeBucket: string;
   requestedQuantity: number;
   signal: AbortSignal;
+  onProgress?: (progress: {
+    rowsClassified: number;
+    selectableRowsExact: number | null;
+  }) => void;
 }) => Promise<PortalInventoryAvailabilityResponse>;
 
 async function defaultLoadAvailability(
   input: Parameters<PortalInventoryAvailabilityLoader>[0]
 ): Promise<PortalInventoryAvailabilityResponse> {
-  const params = new URLSearchParams({
+  return loadPortalInventoryAvailabilityThroughJob({
     nicheKey: input.nicheKey,
     requestedAgeBucket: input.requestedAgeBucket,
-    requestedQuantity: String(input.requestedQuantity),
+    requestedQuantity: input.requestedQuantity,
+    signal: input.signal,
+    onProgress: input.onProgress,
   });
-  if (input.productType) params.set("productType", input.productType);
-  const response = await fetch(
-    `/api/client-portal/leads-on-demand/availability?${params.toString()}`,
-    { headers: { Accept: "application/json" }, signal: input.signal }
-  );
-  if (!response.ok) throw new Error("Inventory availability is temporarily unavailable.");
-  return (await response.json()) as PortalInventoryAvailabilityResponse;
 }
 
 export function PortalOrderInventoryMap({
@@ -92,6 +93,7 @@ export function PortalOrderInventoryMap({
   const [availability, setAvailability] =
     useState<PortalInventoryAvailabilityResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [progressNote, setProgressNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const canLoadAvailability = requestedQuantity >= 1;
   const pricedAgeRange = isCommerceAgeBucketKey(requestedAgeBucket);
@@ -106,6 +108,7 @@ export function PortalOrderInventoryMap({
     const controller = new AbortController();
     setAvailability(null);
     setLoading(true);
+    setProgressNote(null);
     setError(null);
     void loadAvailability({
       nicheKey,
@@ -113,6 +116,16 @@ export function PortalOrderInventoryMap({
       requestedAgeBucket,
       requestedQuantity,
       signal: controller.signal,
+      onProgress: (progress) => {
+        if (controller.signal.aborted) return;
+        if (progress.selectableRowsExact == null) {
+          setProgressNote("Counting selectable rows. Availability is not ready yet.");
+          return;
+        }
+        setProgressNote(
+          `Classified ${progress.rowsClassified.toLocaleString("en-US")} of ${progress.selectableRowsExact.toLocaleString("en-US")} selectable rows. Availability is not ready yet.`
+        );
+      },
     })
       .then((result) => {
         if (!controller.signal.aborted) setAvailability(result);
@@ -216,7 +229,7 @@ export function PortalOrderInventoryMap({
         </p>
       ) : loading ? (
         <p role="status" className="rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-600">
-          Loading current availability…
+          {progressNote ?? "Loading current availability…"}
         </p>
       ) : error ? (
         <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">

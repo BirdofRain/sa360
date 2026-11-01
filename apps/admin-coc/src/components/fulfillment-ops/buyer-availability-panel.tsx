@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { CANONICAL_US_STATE_CODES, isCanonicalUsStateCode } from "@sa360/shared";
 
 import { EmptyState } from "@/components/dashboard/empty-state";
@@ -9,7 +9,9 @@ import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
+  BUYER_AVAILABILITY_STOPPED_MESSAGE,
   clientLookupBuyerAvailability,
+  type BuyerAvailabilityJobProgress,
   type BuyerInventoryAvailabilityReport,
 } from "@/lib/fulfillment-ops/client-api";
 import { presentationLabelForBucket } from "@/lib/fulfillment-ops/ppl-pricing-catalog";
@@ -27,6 +29,13 @@ const NICHES = [
   { value: "vet", label: "Veteran" },
   { value: "nurse", label: "Nurse" },
 ] as const;
+
+function progressLabel(progress: BuyerAvailabilityJobProgress): string {
+  if (progress.selectableRowsExact == null) {
+    return "Counting selectable rows. The buyer-eligible total is not ready until this check finishes. This does not reserve inventory.";
+  }
+  return `Classified ${progress.rowsClassified.toLocaleString("en-US")} of ${progress.selectableRowsExact.toLocaleString("en-US")} selectable rows. The buyer-eligible total is not ready until this check finishes. This does not reserve inventory.`;
+}
 
 function countedLabel(value: { count: number; countSemantics: string } | undefined): string {
   if (!value) return "—";
@@ -81,7 +90,19 @@ export function BuyerAvailabilityPanel({
   const [report, setReport] = useState<BuyerInventoryAvailabilityReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [counting, setCounting] = useState(false);
+  const [progressText, setProgressText] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const runAbort = useRef<AbortController | null>(null);
+  const generation = useRef(0);
+  const mounted = useRef(true);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      runAbort.current?.abort();
+    };
+  }, []);
 
   if (!enabled) {
     return (
@@ -110,27 +131,42 @@ export function BuyerAvailabilityPanel({
           event.preventDefault();
           setError(null);
           setReport(null);
+          setProgressText(null);
           const parsedStates = parseBuyerAvailabilityStateInput(statesText);
           if (!parsedStates.ok) {
             setError(parsedStates.error);
             return;
           }
+          const token = ++generation.current;
+          runAbort.current?.abort();
+          const controller = new AbortController();
+          runAbort.current = controller;
           setCounting(true);
           startTransition(async () => {
             try {
-              const result = await clientLookupBuyerAvailability({
-                clientAccountId: clientAccountId.trim(),
-                nicheKey,
-                ...(parsedStates.states ? { states: parsedStates.states } : {}),
-                ...(allTiers ? {} : { commerceAgeBucketKeys: tiers }),
-              });
+              const result = await clientLookupBuyerAvailability(
+                {
+                  clientAccountId: clientAccountId.trim(),
+                  nicheKey,
+                  ...(parsedStates.states ? { states: parsedStates.states } : {}),
+                  ...(allTiers ? {} : { commerceAgeBucketKeys: tiers }),
+                },
+                {
+                  signal: controller.signal,
+                  onProgress: (progress) => {
+                    if (!mounted.current || generation.current !== token) return;
+                    setProgressText(progressLabel(progress));
+                  },
+                }
+              );
+              if (!mounted.current || generation.current !== token) return;
               if (!result.ok) {
                 setError(result.error);
                 return;
               }
               setReport(result.data);
             } finally {
-              setCounting(false);
+              if (mounted.current && generation.current === token) setCounting(false);
             }
           });
         }}
@@ -230,8 +266,28 @@ export function BuyerAvailabilityPanel({
           </Button>
           {counting || pending ? (
             <p className="text-sm text-slate-700" role="status" data-testid="buyer-availability-progress">
-              Counting buyer-eligible leads. This can take over a minute and does not reserve inventory.
+              {progressText ??
+                "Counting buyer-eligible leads. This can take several minutes and does not reserve inventory."}
             </p>
+          ) : null}
+          {counting || pending ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              data-testid="buyer-availability-cancel"
+              onClick={() => {
+                generation.current += 1;
+                runAbort.current?.abort();
+                runAbort.current = null;
+                setCounting(false);
+                setProgressText(null);
+                setReport(null);
+                setError(BUYER_AVAILABILITY_STOPPED_MESSAGE);
+              }}
+            >
+              Stop count
+            </Button>
           ) : null}
           {error ? (
             <span className="text-sm text-red-700" data-testid="buyer-availability-error">

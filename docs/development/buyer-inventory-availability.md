@@ -92,23 +92,21 @@ finishes. The response records
 the availability total.
 
 The lookup holds one pooled connection for the snapshot (timeout 300 seconds,
-max wait 10 seconds). A second nationwide count needs another connection from
-the same Prisma pool. Prisma’s default pool is `num_physical_cpus * 2 + 1`
-per API process unless `DATABASE_URL` sets `connection_limit`. Production
-`sa360-api` is one 1 vCPU instance and its `DATABASE_URL` does not set
-`connection_limit`, so that pool is 3 connections. The worker process has its
-own pool. When every
-connection is busy, the next count waits up to 10 seconds and then returns
-503 `availability_snapshot_unavailable` instead of a total. Client disconnect
-aborts the snapshot at the next page, the read-only transaction ends, and
-Prisma returns the connection. The admin panel’s server route forwards the
-browser abort to that API request, so an edge cutoff releases the same
-connection. The portal route uses the same disconnect abort. Success, a thrown snapshot error, and the
-300-second transaction timeout do the same. App Platform fronts this route
-with Cloudflare, whose request limit is 100 seconds, so a measured 78-second
-count fits. A count that is still running at that edge limit is cut off; the
-panel tells the operator to wait and check again, and it does not show a
-total. Each page
+max wait 10 seconds). Production `sa360-api` is one 1 vCPU instance and its
+`DATABASE_URL` does not set `connection_limit`, so that Prisma pool is
+`num_physical_cpus * 2 + 1` = 3 connections. The worker process has its own
+pool. A nationwide count can run longer than the Cloudflare and App Platform
+100-second request limit, so the browser does not hold the count open. The
+admin panel and the portal map `POST` a job, receive a job id immediately, and
+poll. The poll shows rows classified and the selectable-row total. It does not
+show a buyer-eligible total until the job status is `complete`. A completed
+report can still be a lower bound when the scan itself stopped early; that
+label comes from the report, not from an interrupted job. Cancel, a failed
+snapshot, and a poll gap of 45 seconds abort the transaction and return no
+result. One availability job runs at a time. A second start returns 503
+`availability_job_busy` instead of opening another snapshot. The synchronous
+`POST` remains for a caller that can hold the connection, and it still aborts
+when that request closes. Each page
 keysets 250 item ids, then loads payloads only for that page. The
 source-association cache is per request and is consistent because the snapshot
 does not change. Reconciliation rechecks the event provider before a confirmed

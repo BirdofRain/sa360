@@ -150,4 +150,39 @@ export async function loadPortalBuyerMapAvailability(input: {
   };
 }
 
+export function readCachedPortalMapSnapshot(input: {
+  clientAccountId: string;
+  nicheKey: string;
+  requestedAgeBucket: string;
+  now?: Date;
+}): PortalBuyerAvailabilitySnapshot | null {
+  const nowMs = (input.now ?? new Date()).getTime();
+  return readCachedPortalBuyerAvailability(
+    cacheKeyFor(input),
+    {
+      clientAccountId: input.clientAccountId,
+      policyVersion: PORTAL_BUYER_AVAILABILITY_POLICY,
+      nicheKey: input.nicheKey,
+      commerceAgeBucketKey: input.requestedAgeBucket,
+    },
+    nowMs
+  );
+}
+
+export function storePortalMapSnapshot(
+  snapshot: PortalBuyerAvailabilitySnapshot,
+  now?: Date
+): void {
+  const nowMs = (now ?? new Date()).getTime();
+  writeCachedPortalBuyerAvailability(
+    cacheKeyFor({
+      clientAccountId: snapshot.clientAccountId,
+      nicheKey: snapshot.nicheKey,
+      requestedAgeBucket: snapshot.commerceAgeBucketKey,
+    }),
+    snapshot,
+    nowMs
+  );
+}
+
 export { clearPortalBuyerAvailabilityCache };

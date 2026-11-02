@@ -17,6 +17,7 @@ import {
   type CompanySheetsDeliveryDeps,
 } from "../company-sheets-delivery/company-sheets-delivery.service.js";
 import { sheetsPersonDecisionKey } from "./client-sheets-person-gate.js";
+import { recoverDueSheetsPersonHolds } from "./client-sheets-person-recovery.js";
 
 const DRAIN_ADVISORY_KEY = "company_sheets_dispatch_drain";
 const CLAIM_MAX_WAIT_MS = 2_000;
@@ -372,6 +373,7 @@ export async function processDueCompanySheetsDispatches(
   if (!isCompanyGoogleSheetsDispatchEnabled(env)) return finish(0, 0, 0, null, "dispatch_disabled");
   const db = deps.db ?? prisma;
   const clock = () => deps.now?.() ?? new Date();
+  await recoverDueSheetsPersonHolds(db, clock(), limit);
   const executionEnabled = isCompanyGoogleSheetsExecutionEnabled(env);
   if (!executionEnabled) {
     const now = clock();

@@ -140,14 +140,31 @@ export async function hasPriorLeadCreatedForIdentity(opts: {
   return row != null;
 }
 
+export function classifyAssessmentFailure(err: unknown): "transient" | "review" {
+  const name = err instanceof Error ? err.name : "Error";
+  const message = err instanceof Error ? err.message : "";
+  const code = typeof (err as { code?: unknown })?.code === "string" ? (err as { code: string }).code : "";
+  if (
+    name === "PrismaClientInitializationError" ||
+    name === "PrismaClientRustPanicError" ||
+    name === "TimeoutError"
+  ) {
+    return "transient";
+  }
+  if (/^(P1001|P1002|P1008|P1017|P2024)$/.test(code)) return "transient";
+  if (/ECONNRESET|ECONNREFUSED|ETIMEDOUT|timeout|timed out/i.test(`${name} ${code} ${message}`)) return "transient";
+  return "review";
+}
+
 export async function recordDuplicateRiskAssessmentFailure(
   routingDryRunDecisionId: string,
-  errorName: string
+  errorName: string,
+  failureClass: "transient" | "review" = "review"
 ): Promise<void> {
   await prisma.duplicateRiskAssessmentFailure.upsert({
     where: { routingDryRunDecisionId },
-    create: { routingDryRunDecisionId, errorName },
-    update: { errorName },
+    create: { routingDryRunDecisionId, errorName, failureClass },
+    update: { errorName, failureClass },
   });
 }
 

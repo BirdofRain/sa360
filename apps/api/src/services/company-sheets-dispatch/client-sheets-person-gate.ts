@@ -32,7 +32,24 @@ import { tryNormalizeToVerifiedE164 } from "../phone-e164.service.js";
  */
 export const SHEETS_PERSON_POLICY = "client_normalized_phone_email_v1";
 export const SHEETS_PERSON_CHANNEL = "sheets";
-const DELIVERY_HISTORY_CAP = 500;
+/**
+ * One history pass reads at most this many eligible lead jobs.
+ * A client with more than this many still-unindexed jobs is partial, not complete.
+ * The next pass resumes after the cursor. 500 is the batch size, not proof of coverage.
+ */
+export const SHEETS_HISTORY_BATCH_LIMIT = 500;
+
+export type HistoryCoverageStatus = "unavailable" | "partial" | "complete";
+export type HistoryCompletenessProof = "cursor_exhausted" | "no_eligible_jobs" | "cursor_open" | "not_started";
+
+export type HistoryCoverageSnapshot = {
+  status: HistoryCoverageStatus;
+  completenessProof: HistoryCompletenessProof;
+  indexedCount: number;
+  observedJobCount: number;
+  /** Counts describe the pass. Only status plus completenessProof say whether history was exhausted. */
+  countsAreNotProof: true;
+};
 
 export type SheetsPersonDb = PrismaClient | Prisma.TransactionClient;
 
@@ -53,6 +70,7 @@ export type SheetsPersonGateResult = {
   reason: string;
   policy: string;
   assessmentState: "present" | "missing" | "failed" | "not_applicable" | "exempt";
+  historyCoverage: HistoryCoverageStatus | null;
   priorEvidence: Prisma.InputJsonValue | null;
 };
 
@@ -105,12 +123,45 @@ function ownerKey(owner: SheetsPersonOwner): string {
  * email are not the same person. A phone owned by one admission and an email
  * owned by another is a review, not an automatic block against either owner.
  */
+/**
+ * A new person is held when one batch cannot exhaust prior eligible jobs.
+ * With the production batch of 500, 501 prior jobs hold them. A matched identifier
+ * is a duplicate decision, not a coverage hold. The next batch can finish coverage.
+ */
+export function newPersonHeldForUnindexedHistory(input: {
+  batchLimit: number;
+  priorEligibleJobs: number;
+  identifierMatched: boolean;
+}): { held: boolean; status: HistoryCoverageStatus; reason: string | null } {
+  const after = historyCoverageAfterBatch({
+    batchLimit: input.batchLimit,
+    jobsReturned: Math.min(input.priorEligibleJobs, input.batchLimit),
+    moreRemain: input.priorEligibleJobs > input.batchLimit,
+  });
+  if (input.identifierMatched) return { held: false, status: after.status, reason: null };
+  if (after.status !== "complete") {
+    return { held: true, status: after.status, reason: `history_coverage_${after.status}` };
+  }
+  return { held: false, status: "complete", reason: null };
+}
+
+export function historyCoverageAfterBatch(input: {
+  batchLimit: number;
+  jobsReturned: number;
+  moreRemain: boolean;
+}): { status: "partial" | "complete"; completenessProof: HistoryCompletenessProof } {
+  if (input.jobsReturned === 0) return { status: "complete", completenessProof: "no_eligible_jobs" };
+  if (input.jobsReturned < input.batchLimit || !input.moreRemain) {
+    return { status: "complete", completenessProof: "cursor_exhausted" };
+  }
+  return { status: "partial", completenessProof: "cursor_open" };
+}
+
 export function classifySheetsPerson(input: {
   sourceLeadEventId: string;
   phone: string | null;
   email: string | null;
   owners: readonly SheetsPersonOwner[];
-  historyIncomplete: boolean;
 }): SheetsPersonClassification {
   if (!input.phone && !input.email) {
     return { action: "review", reason: "no_normalized_phone_or_email", evidence: [] };
@@ -126,9 +177,6 @@ export function classifySheetsPerson(input: {
   const selfOwns = phoneKeys.includes(self) || emailKeys.includes(self);
 
   if (phoneForeign.length === 0 && emailForeign.length === 0) {
-    if (!selfOwns && input.historyIncomplete) {
-      return { action: "review", reason: "delivery_history_incomplete", evidence };
-    }
     if (selfOwns) return { action: "replay", reason: "same_event_reservation", evidence };
     return { action: "admit", reason: "identifiers_reserved", evidence };
   }
@@ -140,10 +188,12 @@ export function classifySheetsPerson(input: {
   if (foreign.length > 1 || selfSplit) {
     return { action: "review", reason: "shared_identifier_conflict", evidence };
   }
-  const deliveryOnly = evidence.length > 0 && evidence.every((owner) => owner.admissionId == null && owner.jobId);
+  const recordedDelivery =
+    evidence.length > 0 &&
+    evidence.every((owner) => owner.origin === "delivery_index" || owner.origin === "sheets_delivery_job");
   return {
     action: "block",
-    reason: deliveryOnly ? "sheets_delivery_already_recorded" : "normalized_identifier_already_admitted",
+    reason: recordedDelivery ? "sheets_delivery_already_recorded" : "normalized_identifier_already_admitted",
     evidence,
   };
 }
@@ -227,6 +277,7 @@ function hold(
     reason,
     policy: SHEETS_PERSON_POLICY,
     assessmentState,
+    historyCoverage: null,
     priorEvidence,
   };
 }
@@ -243,6 +294,7 @@ function allow(
     reason,
     policy: SHEETS_PERSON_POLICY,
     assessmentState,
+    historyCoverage: null,
     priorEvidence: null,
   };
 }
@@ -280,64 +332,202 @@ function evidenceJson(owners: readonly SheetsPersonOwner[]): Prisma.InputJsonVal
   };
 }
 
-async function blockingDeliveryOwners(
+function eligibleLeadJobWhere(clientAccountId: string): Prisma.CompanySheetsDeliveryJobWhereInput {
+  return {
+    clientAccountId,
+    kind: "lead",
+    sourceLeadEventId: { not: null },
+    NOT: { AND: [{ status: "failed" }, { appendStartedAt: null }, { rowsWritten: 0 }] },
+  };
+}
+
+function afterCursor(
+  cursor: { createdAt: Date; jobId: string } | null
+): Prisma.CompanySheetsDeliveryJobWhereInput {
+  if (!cursor) return {};
+  return {
+    OR: [
+      { createdAt: { gt: cursor.createdAt } },
+      { AND: [{ createdAt: cursor.createdAt }, { id: { gt: cursor.jobId } }] },
+    ],
+  };
+}
+
+function coverageSnapshot(
+  status: HistoryCoverageStatus,
+  completenessProof: HistoryCompletenessProof,
+  indexedCount: number,
+  observedJobCount: number
+): HistoryCoverageSnapshot {
+  return { status, completenessProof, indexedCount, observedJobCount, countsAreNotProof: true };
+}
+
+function evidenceRecord(value: Prisma.JsonValue | null | undefined): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+async function advanceHistoryBaseline(
   db: SheetsPersonDb,
   clientAccountId: string,
-  sourceLeadEventId: string
-): Promise<{ owners: SheetsPersonOwner[]; historyIncomplete: boolean }> {
+  batchSize: number
+): Promise<HistoryCoverageSnapshot> {
+  const limit = Math.min(Math.max(batchSize, 1), SHEETS_HISTORY_BATCH_LIMIT);
+  const existing = await db.clientSheetsHistoryCoverage.findUnique({ where: { clientAccountId } });
+  const cursor =
+    existing?.cursorCreatedAt && existing.cursorJobId
+      ? { createdAt: existing.cursorCreatedAt, jobId: existing.cursorJobId }
+      : null;
   const jobs = await db.companySheetsDeliveryJob.findMany({
-    where: {
-      AND: [
-        { clientAccountId, kind: "lead" },
-        { sourceLeadEventId: { not: null } },
-        { NOT: { sourceLeadEventId } },
-        { NOT: { AND: [{ status: "failed" }, { appendStartedAt: null }, { rowsWritten: 0 }] } },
-      ],
-    },
+    where: { AND: [eligibleLeadJobWhere(clientAccountId), afterCursor(cursor)] },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    take: limit,
     select: {
       id: true,
+      createdAt: true,
       status: true,
       sourceLeadEventId: true,
       spreadsheetId: true,
       worksheetId: true,
-      appendStartedAt: true,
-      rowsWritten: true,
     },
-    take: DELIVERY_HISTORY_CAP,
-    orderBy: { createdAt: "asc" },
   });
-  const historyIncomplete = jobs.length >= DELIVERY_HISTORY_CAP;
   const eventIds = [...new Set(jobs.map((job) => job.sourceLeadEventId).filter((id): id is string => Boolean(id)))];
-  if (eventIds.length === 0) return { owners: [], historyIncomplete };
-  const leads = await db.sourceLeadEvent.findMany({
-    where: { id: { in: eventIds } },
-    select: { id: true, normalizedPayloadJson: true },
-  });
+  const leads = eventIds.length
+    ? await db.sourceLeadEvent.findMany({
+        where: { id: { in: eventIds } },
+        select: { id: true, normalizedPayloadJson: true },
+      })
+    : [];
   const byId = new Map(leads.map((lead) => [lead.id, sheetsPersonIdentifiers(lead.normalizedPayloadJson)]));
-  const owners: SheetsPersonOwner[] = [];
+  const wanted: Array<{ kind: "phone" | "email"; normalizedValue: string; sourceLeadEventId: string; job: (typeof jobs)[number] }> = [];
   for (const job of jobs) {
     if (!job.sourceLeadEventId) continue;
     const identity = byId.get(job.sourceLeadEventId);
     if (!identity) continue;
-    const base = {
-      ownerEventId: job.sourceLeadEventId,
-      historicalImportKey: null,
-      admissionId: null,
-      origin: "sheets_delivery_job",
-      status: job.status,
-      jobId: job.id,
-      spreadsheetId: job.spreadsheetId,
-      worksheetId: job.worksheetId,
-    };
-    if (identity.phone) owners.push({ ...base, kind: "phone", normalizedValue: identity.phone });
-    if (identity.email) owners.push({ ...base, kind: "email", normalizedValue: identity.email });
+    if (identity.phone) wanted.push({ kind: "phone", normalizedValue: identity.phone, sourceLeadEventId: job.sourceLeadEventId, job });
+    if (identity.email) wanted.push({ kind: "email", normalizedValue: identity.email, sourceLeadEventId: job.sourceLeadEventId, job });
   }
-  return { owners, historyIncomplete };
+  const values = [...new Set(wanted.map((row) => row.normalizedValue))];
+  const occupied = values.length
+    ? await db.clientSheetsPersonAdmission.findMany({
+        where: { clientAccountId, normalizedValue: { in: values } },
+        select: { kind: true, normalizedValue: true },
+      })
+    : [];
+  const taken = new Set(occupied.map((row) => `${row.kind}:${row.normalizedValue}`));
+  const fresh = wanted.filter((row) => !taken.has(`${row.kind}:${row.normalizedValue}`));
+  const uniqueFresh: typeof fresh = [];
+  for (const row of fresh) {
+    const key = `${row.kind}:${row.normalizedValue}`;
+    if (taken.has(key)) continue;
+    taken.add(key);
+    uniqueFresh.push(row);
+  }
+  if (uniqueFresh.length > 0) {
+    await db.clientSheetsPersonAdmission.createMany({
+      data: uniqueFresh.map((row) => ({
+        clientAccountId,
+        kind: row.kind,
+        normalizedValue: row.normalizedValue,
+        fingerprint: fingerprintIdentityValue(row.kind, row.normalizedValue),
+        sourceLeadEventId: row.sourceLeadEventId,
+        status: row.job.status === "succeeded" ? "admitted" : "reserved",
+        policy: SHEETS_PERSON_POLICY,
+        origin: "delivery_index",
+        evidenceJson: {
+          jobId: row.job.id,
+          spreadsheetId: row.job.spreadsheetId,
+          worksheetId: row.job.worksheetId,
+          jobStatus: row.job.status,
+        },
+      })),
+    });
+  }
+  const last = jobs.at(-1) ?? null;
+  const more = last
+    ? await db.companySheetsDeliveryJob.findFirst({
+        where: {
+          AND: [eligibleLeadJobWhere(clientAccountId), afterCursor({ createdAt: last.createdAt, jobId: last.id })],
+        },
+        select: { id: true },
+      })
+    : null;
+  const after =
+    jobs.length === 0 && cursor
+      ? { status: "complete" as const, completenessProof: "cursor_exhausted" as const }
+      : historyCoverageAfterBatch({
+          batchLimit: limit,
+          jobsReturned: jobs.length,
+          moreRemain: Boolean(more),
+        });
+  const indexedCount = (existing?.indexedCount ?? 0) + uniqueFresh.length;
+  const observedJobCount = (existing?.observedJobCount ?? 0) + jobs.length;
+  await db.clientSheetsHistoryCoverage.upsert({
+    where: { clientAccountId },
+    create: {
+      clientAccountId,
+      status: after.status,
+      completenessProof: after.completenessProof,
+      cursorCreatedAt: last?.createdAt,
+      cursorJobId: last?.id,
+      indexedCount,
+      observedJobCount,
+    },
+    update: {
+      status: after.status,
+      completenessProof: after.completenessProof,
+      cursorCreatedAt: last?.createdAt ?? existing?.cursorCreatedAt,
+      cursorJobId: last?.id ?? existing?.cursorJobId,
+      indexedCount,
+      observedJobCount,
+    },
+  });
+  return coverageSnapshot(after.status, after.completenessProof, indexedCount, observedJobCount);
+}
+
+export async function readClientSheetsHistoryCoverage(
+  db: SheetsPersonDb,
+  clientAccountId: string
+): Promise<HistoryCoverageSnapshot> {
+  const row = await db.clientSheetsHistoryCoverage.findUnique({ where: { clientAccountId } });
+  if (!row) {
+    const pending = await db.companySheetsDeliveryJob.findFirst({
+      where: eligibleLeadJobWhere(clientAccountId),
+      select: { id: true },
+    });
+    if (!pending) return coverageSnapshot("complete", "no_eligible_jobs", 0, 0);
+    return coverageSnapshot("unavailable", "not_started", 0, 0);
+  }
+  const cursor =
+    row.cursorCreatedAt && row.cursorJobId ? { createdAt: row.cursorCreatedAt, jobId: row.cursorJobId } : null;
+  const remaining = await db.companySheetsDeliveryJob.findFirst({
+    where: { AND: [eligibleLeadJobWhere(clientAccountId), afterCursor(cursor)] },
+    select: { id: true },
+  });
+  if (remaining) {
+    return coverageSnapshot(
+      row.status === "unavailable" ? "unavailable" : "partial",
+      row.status === "unavailable" ? "not_started" : "cursor_open",
+      row.indexedCount,
+      row.observedJobCount
+    );
+  }
+  return coverageSnapshot("complete", row.observedJobCount === 0 ? "no_eligible_jobs" : "cursor_exhausted", row.indexedCount, row.observedJobCount);
+}
+
+export async function prepareClientSheetsHistoryBaseline(
+  db: PrismaClient,
+  input: { clientAccountId: string; batchSize?: number }
+): Promise<HistoryCoverageSnapshot> {
+  const clientAccountId = input.clientAccountId.trim();
+  return inClientLock(db, clientAccountId, (tx) =>
+    advanceHistoryBaseline(tx, clientAccountId, input.batchSize ?? SHEETS_HISTORY_BATCH_LIMIT)
+  );
 }
 
 export async function evaluateClientSheetsPersonGate(
   db: SheetsPersonDb,
-  input: { clientAccountId: string; sourceLeadEventId: string }
+  input: { clientAccountId: string; sourceLeadEventId: string; historyBatchSize?: number }
 ): Promise<SheetsPersonGateResult> {
   const clientAccountId = input.clientAccountId.trim();
   const sourceLeadEventId = input.sourceLeadEventId.trim();
@@ -396,10 +586,18 @@ export async function evaluateClientSheetsPersonGate(
       db.duplicateRiskAssessmentFailure.findUnique({ where: { routingDryRunDecisionId: decisionId } }),
     ]);
     if (!assessment && failure) {
-      const result = hold("assessment_failed", "assessment_failed", "assessment_failed", "failed", {
-        routingDryRunDecisionId: decisionId,
-        errorName: failure.errorName,
-      });
+      const failureClass = failure.failureClass === "transient" ? "transient" : "review";
+      const result = hold(
+        "assessment_failed",
+        "assessment_failed",
+        failureClass === "transient" ? "assessment_failed_transient" : "assessment_needs_review",
+        "failed",
+        {
+          routingDryRunDecisionId: decisionId,
+          errorName: failure.errorName,
+          failureClass,
+        }
+      );
       await writeDecision(db, {
         clientAccountId,
         sourceLeadEventId,
@@ -462,15 +660,16 @@ export async function evaluateClientSheetsPersonGate(
   }
 
   return inClientLock(db, clientAccountId, async (tx) => {
+    const coverage = await advanceHistoryBaseline(tx, clientAccountId, input.historyBatchSize ?? SHEETS_HISTORY_BATCH_LIMIT);
     const values = [identity.phone, identity.email].filter((value): value is string => Boolean(value));
     const admissions = values.length
       ? await tx.clientSheetsPersonAdmission.findMany({
           where: { clientAccountId, normalizedValue: { in: values } },
         })
       : [];
-    const delivery = await blockingDeliveryOwners(tx, clientAccountId, sourceLeadEventId);
-    const owners: SheetsPersonOwner[] = [
-      ...admissions.map((row) => ({
+    const owners: SheetsPersonOwner[] = admissions.map((row) => {
+      const stored = evidenceRecord(row.evidenceJson);
+      return {
         kind: row.kind === "email" ? ("email" as const) : ("phone" as const),
         normalizedValue: row.normalizedValue,
         ownerEventId: row.sourceLeadEventId,
@@ -478,19 +677,47 @@ export async function evaluateClientSheetsPersonGate(
         admissionId: row.id,
         origin: row.origin,
         status: row.status,
-        jobId: null,
-        spreadsheetId: null,
-        worksheetId: null,
-      })),
-      ...delivery.owners,
-    ];
+        jobId: typeof stored?.jobId === "string" ? stored.jobId : null,
+        spreadsheetId: typeof stored?.spreadsheetId === "string" ? stored.spreadsheetId : null,
+        worksheetId: typeof stored?.worksheetId === "number" ? stored.worksheetId : null,
+      };
+    });
     const classified = classifySheetsPerson({
       sourceLeadEventId,
       phone: identity.phone,
       email: identity.email,
       owners,
-      historyIncomplete: delivery.historyIncomplete,
     });
+    const coverageEvidence: Prisma.InputJsonObject = {
+      policy: SHEETS_PERSON_POLICY,
+      historyCoverage: coverage.status,
+      completenessProof: coverage.completenessProof,
+      indexedCount: coverage.indexedCount,
+      observedJobCount: coverage.observedJobCount,
+      countsAreNotProof: true,
+    };
+    if (classified.action === "admit" && coverage.status !== "complete") {
+      const result = hold(
+        "person_review",
+        "review_held",
+        coverage.status === "partial" ? "history_coverage_partial" : "history_coverage_unavailable",
+        assessmentState,
+        coverageEvidence
+      );
+      result.historyCoverage = coverage.status;
+      await writeDecision(tx, {
+        clientAccountId,
+        sourceLeadEventId,
+        idempotencyKey: decisionKey(clientAccountId, sourceLeadEventId),
+        outcome: "review_held",
+        reason: result.reason,
+        assessmentState,
+        phone: identity.phone,
+        email: identity.email,
+        priorEvidence: coverageEvidence,
+      });
+      return result;
+    }
     if (classified.action === "admit" || classified.action === "replay") {
       const owned = new Set(
         admissions
@@ -519,8 +746,15 @@ export async function evaluateClientSheetsPersonGate(
         }
       }
     }
-    const priorEvidence = classified.evidence.length > 0 ? evidenceJson(classified.evidence) : null;
+    const matchEvidence = classified.evidence.length > 0 ? evidenceJson(classified.evidence) : null;
+    const priorEvidence: Prisma.InputJsonObject = {
+      ...coverageEvidence,
+      ...(matchEvidence && typeof matchEvidence === "object" && !Array.isArray(matchEvidence)
+        ? (matchEvidence as Prisma.InputJsonObject)
+        : {}),
+    };
     const mapped = mapClassification(classified, assessmentState, priorEvidence);
+    mapped.historyCoverage = coverage.status;
     await writeDecision(tx, {
       clientAccountId,
       sourceLeadEventId,
@@ -588,6 +822,103 @@ export async function noteSheetsPersonDelivery(
     },
     data: { evidenceJson: evidence },
   });
+}
+
+function preSendFailure(job: { status: string; appendStartedAt: Date | null; rowsWritten: number }): boolean {
+  return job.status === "failed" && job.appendStartedAt == null && job.rowsWritten === 0;
+}
+
+export async function releaseKnownDeadSheetsPersonReservation(
+  db: SheetsPersonDb,
+  input: { clientAccountId: string; sourceLeadEventId: string; actor?: string | null }
+): Promise<{ ok: true; released: number } | { ok: false; code: "reservation_not_releasable" | "uncertain_append_held" | "delivery_not_conclusively_unsent" }> {
+  const clientAccountId = input.clientAccountId.trim();
+  const sourceLeadEventId = input.sourceLeadEventId.trim();
+  return inClientLock(db, clientAccountId, async (tx) => {
+    const admissions = await tx.clientSheetsPersonAdmission.findMany({
+      where: { clientAccountId, sourceLeadEventId, origin: "live_reservation", status: "reserved" },
+    });
+    if (admissions.length === 0) return { ok: false, code: "reservation_not_releasable" };
+    const jobs = await tx.companySheetsDeliveryJob.findMany({
+      where: { clientAccountId, sourceLeadEventId },
+      select: { id: true, status: true, appendStartedAt: true, rowsWritten: true, kind: true },
+    });
+    if (jobs.some((job) => job.status === "uncertain" || job.appendStartedAt != null || job.rowsWritten > 0)) {
+      return { ok: false, code: "uncertain_append_held" };
+    }
+    if (jobs.some((job) => !preSendFailure(job))) return { ok: false, code: "delivery_not_conclusively_unsent" };
+    await tx.clientSheetsPersonRelease.createMany({
+      data: admissions.map((row) => ({
+        clientAccountId,
+        kind: row.kind,
+        normalizedValue: row.normalizedValue,
+        fingerprint: row.fingerprint,
+        sourceLeadEventId,
+        admissionId: row.id,
+        policy: row.policy,
+        reason: "known_dead_presend_released",
+        actor: input.actor ?? null,
+        evidenceJson: row.evidenceJson ?? undefined,
+      })),
+    });
+    await tx.clientSheetsPersonAdmission.deleteMany({ where: { id: { in: admissions.map((row) => row.id) } } });
+    await writeDecision(tx, {
+      clientAccountId,
+      sourceLeadEventId,
+      idempotencyKey: decisionKey(clientAccountId, sourceLeadEventId),
+      outcome: "reservation_released",
+      reason: "known_dead_presend_released",
+      assessmentState: "not_applicable",
+      phone: admissions.find((row) => row.kind === "phone")?.normalizedValue ?? null,
+      email: admissions.find((row) => row.kind === "email")?.normalizedValue ?? null,
+      priorEvidence: {
+        policy: SHEETS_PERSON_POLICY,
+        releasedAdmissionIds: admissions.map((row) => row.id),
+        actor: input.actor ?? null,
+      },
+    });
+    return { ok: true, released: admissions.length };
+  });
+}
+
+/**
+ * Lists lead jobs created before person admission that execution would still send.
+ * This does not update jobs, claim them, or call Google.
+ */
+export async function planPreMigrationLeadJobQuarantine(
+  db: SheetsPersonDb,
+  clientAccountId: string
+): Promise<{
+  strategy: "quarantine_until_reconciled";
+  ran: false;
+  jobs: Array<{ jobId: string; sourceLeadEventId: string; status: string; reason: "no_person_admission" }>;
+}> {
+  const id = clientAccountId.trim();
+  const jobs = await db.companySheetsDeliveryJob.findMany({
+    where: { clientAccountId: id, kind: "lead", status: { in: ["queued", "retryable", "running"] } },
+    select: { id: true, sourceLeadEventId: true, status: true },
+    orderBy: { createdAt: "asc" },
+  });
+  const eventIds = [...new Set(jobs.map((job) => job.sourceLeadEventId).filter((value): value is string => Boolean(value)))];
+  const covered = eventIds.length
+    ? await db.clientSheetsPersonAdmission.findMany({
+        where: { clientAccountId: id, sourceLeadEventId: { in: eventIds } },
+        select: { sourceLeadEventId: true },
+      })
+    : [];
+  const admitted = new Set(covered.map((row) => row.sourceLeadEventId));
+  return {
+    strategy: "quarantine_until_reconciled",
+    ran: false,
+    jobs: jobs
+      .filter((job) => job.sourceLeadEventId && !admitted.has(job.sourceLeadEventId))
+      .map((job) => ({
+        jobId: job.id,
+        sourceLeadEventId: job.sourceLeadEventId as string,
+        status: job.status,
+        reason: "no_person_admission" as const,
+      })),
+  };
 }
 
 export type VerifiedZapBaselineRecord = {

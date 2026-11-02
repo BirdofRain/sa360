@@ -19,7 +19,10 @@ import {
   type RoutingMatchResult,
 } from "./routing-matcher.service.js";
 import { evaluateAndPersistDuplicateRiskForRoutingDecision } from "./lead-identity/lead-identity-correlation.service.js";
-import { recordDuplicateRiskAssessmentFailure } from "../repositories/lead-duplicate-risk.repository.js";
+import {
+  classifyAssessmentFailure,
+  recordDuplicateRiskAssessmentFailure,
+} from "../repositories/lead-duplicate-risk.repository.js";
 import {
   resolveRoutingDestinationFromConfirmedSourceAssociation,
   ROUTING_AUTHORITY_CAMPAIGN_RULE,
@@ -251,7 +254,8 @@ export async function runRoutingDryRun(
     try {
       await recordDuplicateRiskAssessmentFailure(
         decision.id,
-        err instanceof Error ? err.name : "Error"
+        err instanceof Error ? err.name : "Error",
+        classifyAssessmentFailure(err)
       );
     } catch {
       /* recording the failure must not block routing dry-run */
@@ -347,7 +351,8 @@ export async function runManualBulkImportRoutingDryRun(
     try {
       await recordDuplicateRiskAssessmentFailure(
         decision.id,
-        err instanceof Error ? err.name : "Error"
+        err instanceof Error ? err.name : "Error",
+        classifyAssessmentFailure(err)
       );
     } catch {
       /* recording the failure must not block bulk import simulation */

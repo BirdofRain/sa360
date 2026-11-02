@@ -830,6 +830,11 @@ export async function sendCompanySheetsCapturedEventTestRow(
   if (priorWrite.disposition === "hold") {
     return { ...fail("event_write_already_recorded", 409), ...QUIET_CAPTURED_EFFECTS };
   }
+  const person = await evaluateClientSheetsPersonGate(db, {
+    clientAccountId: id,
+    sourceLeadEventId: lead.id,
+  });
+  if (!person.ok) return { ...fail(person.code, 409), ...QUIET_CAPTURED_EFFECTS };
   const holder = await db.companySheetsDeliveryJob.findFirst({
     where: {
       spreadsheetId: destination.spreadsheetId,

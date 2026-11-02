@@ -1993,10 +1993,14 @@ model CompanySheetsDispatchIntent {
 
 /// A routing dry-run whose duplicate-risk evaluation threw.
 /// A persisted LeadDuplicateRiskAssessment outranks this row. Routing itself is not failed.
+/// failureClass transient is retried by the Sheets drain. review waits for an operator.
 model DuplicateRiskAssessmentFailure {
   routingDryRunDecisionId String   @id
   errorName               String
+  /// transient | review
+  failureClass            String   @default("review")
   createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
 }
 
 /// Client-scoped person slot for Sheets delivery. Not a tab, not a GHL receipt, not an event id.
@@ -2014,7 +2018,7 @@ model ClientSheetsPersonAdmission {
   /// reserved | admitted
   status              String
   policy              String
-  /// live_reservation | historical_baseline
+  /// live_reservation | historical_baseline | delivery_index
   origin              String
   evidenceJson        Json?
   createdAt           DateTime @default(now())
@@ -2046,6 +2050,40 @@ model ClientSheetsDedupeDecision {
 
   @@index([clientAccountId, outcome], map: "ClientSheetsDedupeDecision_client_outcome_idx")
   @@index([sourceLeadEventId], map: "ClientSheetsDedupeDecision_event_idx")
+}
+
+/// How much of this client's lead-job history is represented in ClientSheetsPersonAdmission.
+/// status is the completeness proof. indexedCount and observedJobCount are not.
+model ClientSheetsHistoryCoverage {
+  clientAccountId String    @id
+  /// unavailable | partial | complete
+  status          String
+  /// cursor_exhausted | no_eligible_jobs | cursor_open | not_started
+  completenessProof String
+  cursorCreatedAt DateTime?
+  cursorJobId     String?
+  indexedCount    Int       @default(0)
+  observedJobCount Int      @default(0)
+  updatedAt       DateTime  @updatedAt
+}
+
+/// Audit copy of a live reservation released because the send never reached Google.
+model ClientSheetsPersonRelease {
+  id                String   @id @default(cuid())
+  clientAccountId   String
+  kind              String
+  normalizedValue   String
+  fingerprint       String
+  sourceLeadEventId String?
+  admissionId       String
+  policy            String
+  reason            String
+  actor             String?
+  evidenceJson      Json?
+  releasedAt        DateTime @default(now())
+
+  @@index([clientAccountId, normalizedValue], map: "ClientSheetsPersonRelease_client_value_idx")
+  @@index([sourceLeadEventId], map: "ClientSheetsPersonRelease_event_idx")
 }
 
 /// Schedule row for association GHL delivery, committed with intake.

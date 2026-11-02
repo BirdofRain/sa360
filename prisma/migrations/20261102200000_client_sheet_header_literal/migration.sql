@@ -1,12 +1,12 @@
--- Allow a blank Google header to be stored as an empty string.
--- A previous writer stored that blank as U+200B so the older
--- client_onboarding_v2_string_array_ok check (length 1–200) would pass.
--- This migration lets headerSnapshot keep length 0 and rewrites those
--- sentinel cells back to "". Column order is preserved.
--- A header that is only U+200B and was stored by that writer cannot be
--- distinguished from a blank. Later literal U+200B headers are left alone.
+-- Allow a blank Google header to be stored as "".
+--
+-- Master stores headerSnapshot from the worksheet read. The U+200B blank
+-- sentinel existed only on unmerged PR #262, so production rows were not
+-- written by it. This migration does not rewrite any cell. A header whose
+-- text is U+200B stays U+200B. Empty strings were invalid under
+-- client_onboarding_v2_string_array_ok (length 1–200).
 
-CREATE FUNCTION client_onboarding_v2_header_snapshot_ok(value jsonb) RETURNS boolean
+CREATE OR REPLACE FUNCTION client_onboarding_v2_header_snapshot_ok(value jsonb) RETURNS boolean
 LANGUAGE sql
 IMMUTABLE
 AS $fn$
@@ -35,27 +35,3 @@ ALTER TABLE "ClientSheetColumnMap"
     AND client_onboarding_v2_header_snapshot_ok("headerSnapshot")
     AND jsonb_typeof("assignments") = 'array'
   );
-
-UPDATE "ClientSheetColumnMap" AS map
-SET "headerSnapshot" = converted.header
-FROM (
-  SELECT
-    id,
-    (
-      SELECT jsonb_agg(
-        CASE
-          WHEN item #>> '{}' = E'\u200b' THEN to_jsonb(''::text)
-          ELSE item
-        END
-        ORDER BY ord
-      )
-      FROM jsonb_array_elements(m."headerSnapshot") WITH ORDINALITY AS cells(item, ord)
-    ) AS header
-  FROM "ClientSheetColumnMap" AS m
-  WHERE EXISTS (
-    SELECT 1
-    FROM jsonb_array_elements(m."headerSnapshot") AS item
-    WHERE item #>> '{}' = E'\u200b'
-  )
-) AS converted
-WHERE map.id = converted.id;

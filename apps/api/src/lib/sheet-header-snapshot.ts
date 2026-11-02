@@ -3,11 +3,9 @@ import { createHash } from "node:crypto";
 /**
  * Literal worksheet headers.
  *
- * Column position is the array index. An empty Google header is stored as ""
- * and is not replaced with a sentinel. A header whose only character is
- * U+200B stays that character. It is not treated as blank, so a leftover
- * storage sentinel fails an exact match against a truly empty Google cell
- * instead of hiding the mismatch.
+ * Column position is the array index. An empty Google header is stored as "".
+ * A header whose only character is U+200B stays that character. It is not
+ * treated as blank and it is not rewritten.
  */
 export function persistHeaderSnapshot(header: readonly string[]): string[] {
   return header.map((cell) => cell);

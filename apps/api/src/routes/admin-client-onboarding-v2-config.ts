@@ -147,6 +147,8 @@ export const adminClientOnboardingV2ConfigRoutes: FastifyPluginAsync<OnboardingC
   const env = opts.env ?? process.env;
   const readHeader = opts.readWorksheetHeader ?? (async () => null);
   const readExisting = opts.readExistingWorksheet ?? readExistingWorksheetSnapshot;
+  const worksheetRead = opts.readExistingWorksheet ? "controlled_fixture" : "live_google";
+  const googleProof = { cellsWritten: false as const, worksheetRead };
 
   app.put("/clients/:clientAccountId/onboarding/destination", async (request, reply) => {
     if (!(await authorize(request, reply, env))) return;
@@ -364,7 +366,14 @@ export const adminClientOnboardingV2ConfigRoutes: FastifyPluginAsync<OnboardingC
     }
     const read = await readExisting(clientAccountId, map.spreadsheetId, map.worksheetId);
     if (!read.ok) {
-      return reply.status(read.statusCode).send({ ok: false, error: read.error, detail: read.detail, published: false, deliveryEnabled: false });
+      return reply.status(read.statusCode).send({
+        ok: false,
+        error: read.error,
+        detail: read.detail,
+        published: false,
+        deliveryEnabled: false,
+        ...googleProof,
+      });
     }
     const saved = await saveAndPublishColumnMap({
       clientAccountId,
@@ -382,6 +391,7 @@ export const adminClientOnboardingV2ConfigRoutes: FastifyPluginAsync<OnboardingC
         detail: saved.detail,
         published: false,
         deliveryEnabled: false,
+        ...googleProof,
         ...(saved.map ? { map: saved.map } : {}),
       });
     }
@@ -393,6 +403,7 @@ export const adminClientOnboardingV2ConfigRoutes: FastifyPluginAsync<OnboardingC
       customMapping: true,
       published: true,
       deliveryEnabled: false,
+      ...googleProof,
     });
   });
 

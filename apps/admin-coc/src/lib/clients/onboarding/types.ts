@@ -411,6 +411,7 @@ export type ColumnMapDobAge = {
   referenceDate: string;
   referenceRule: "submitted_at_utc_date_else_received_at_utc_date";
   conflict: boolean;
+  ageUnavailableReason?: "no_valid_reference" | "future_date_of_birth" | null;
 };
 
 export type ColumnMapDraftPreview = {

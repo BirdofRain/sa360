@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { sheetsColumnMapIssues } from "@sa360/shared";
+
 import { Button } from "@/components/ui/button";
 import { actionErrorCopy } from "@/lib/clients/onboarding/view";
 import type {
@@ -69,6 +71,12 @@ function withChoice(column: ColumnMapAssignment, choice: string, targets: Column
 
 function dobAgeStatus(dobAge: NonNullable<ColumnMapDraftPreview["sheet"]>["dobAge"]): string {
   if (dobAge.conflict) return "Supplied age differs from DOB-derived age";
+  if (dobAge.ageUnavailableReason === "no_valid_reference") {
+    return "Missing reference date. Date of birth is stored and age was not derived.";
+  }
+  if (dobAge.ageUnavailableReason === "future_date_of_birth") {
+    return "Date of birth is after the reference date. Age was not derived.";
+  }
   if (dobAge.ageProvenance === "derived_from_date_of_birth") return "Age derived from DOB";
   if (dobAge.ageProvenance === "supplied") return "Supplied age";
   return "Missing DOB / reference information";
@@ -131,7 +139,7 @@ export function ColumnMapEditor({
   const previewRequest = useRef(0);
   const paused = campaignDispatchEnabled;
   const shown = draft.id !== record.id ? record : record.revision > draft.revision ? record : draft;
-  const blocking = shown.issues.filter((issue) => issue.code !== "formula_column_omitted");
+  const blocking = sheetsColumnMapIssues(shown.assignments).filter((issue) => issue.code !== "formula_column_omitted");
 
   const clearPreview = useCallback(() => {
     generation.current += 1;

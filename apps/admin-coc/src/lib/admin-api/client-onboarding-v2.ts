@@ -973,6 +973,10 @@ function projectDobAge(value: unknown): ColumnMapDobAge | null {
     referenceDate,
     referenceRule: "submitted_at_utc_date_else_received_at_utc_date",
     conflict: record.conflict,
+    ageUnavailableReason:
+      record.ageUnavailableReason === "no_valid_reference" || record.ageUnavailableReason === "future_date_of_birth"
+        ? record.ageUnavailableReason
+        : null,
   };
 }
 

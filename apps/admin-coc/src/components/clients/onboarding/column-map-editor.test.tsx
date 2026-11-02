@@ -71,7 +71,10 @@ test("choosing DOB publishes that choice and does not enable delivery", async ()
       onChange={() => undefined}
     />
   );
+  assert.match(screen.getByTestId("column-map-issues").textContent ?? "", /Age\/DOB is ambiguous/);
   fireEvent.change(screen.getByRole("combobox", { name: "Map Age/DOB" }), { target: { value: "date_of_birth" } });
+  assert.equal(screen.queryByText(/Age\/DOB is ambiguous/), null);
+  assert.match(screen.getByTestId("column-map-issues").textContent ?? "", /Confirm this suggestion or mark the column unmapped/);
   fireEvent.change(screen.getByRole("combobox", { name: "Map Score" }), { target: { value: "unmapped" } });
   fireEvent.click(screen.getByRole("button", { name: "Save & publish mapping" }));
   assert.match((await screen.findByTestId("column-map-state")).textContent ?? "", /Published delivery configuration/);

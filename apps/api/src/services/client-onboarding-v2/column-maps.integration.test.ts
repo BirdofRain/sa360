@@ -8,8 +8,11 @@ import { after, before, describe, it } from "node:test";
 
 import { COMPANY_SHEETS_V3_HEADER } from "@sa360/shared";
 import { PrismaClient } from "@prisma/client";
+import Fastify from "fastify";
 
 import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
+import { headerFingerprint } from "../../lib/sheet-header-snapshot.js";
+import { adminClientOnboardingV2ConfigRoutes } from "../../routes/admin-client-onboarding-v2-config.js";
 import {
   createColumnMapDraft,
   patchColumnMap,
@@ -682,6 +685,228 @@ describe("existing tab column maps", { skip: !runIntegration }, () => {
     assert.equal(stale.ok, false);
     if (stale.ok) return;
     assert.equal(stale.error, "revision_conflict");
+  });
+
+  it("publishes through the admin route with a controlled worksheet read and keeps a failed read as a draft", async () => {
+    const header = ["Full Name", "Phone Number", "E-mail", "Age/DOB", "Score", "Running Total", "", "\u200b"];
+    const sample = ["Pat Example", "5550001111", "pat@example.invalid", "", "9", "=F2", "", ""];
+    const snapshot = {
+      ...legacySnapshot(existingSheet, header),
+      worksheetId: 31,
+      worksheetTitle: "Controlled tab",
+      sampleRow: sample,
+    };
+    await db.companySheetsDestination.update({
+      where: { clientAccountId },
+      data: { campaignDispatchEnabled: false, enabled: false },
+    });
+    const previousFlag = process.env.SA360_CLIENT_ONBOARDING_V2_CONFIG_ENABLED;
+    const previousAdmin = process.env.ADMIN_API_KEY;
+    const previousAlias = process.env.SA360_ADMIN_KEY;
+    process.env.SA360_CLIENT_ONBOARDING_V2_CONFIG_ENABLED = "true";
+    process.env.ADMIN_API_KEY = "column-map-http-key";
+    delete process.env.SA360_ADMIN_KEY;
+    let reads = 0;
+    let failRead = false;
+    const app = Fastify({ logger: false });
+    await app.register(adminClientOnboardingV2ConfigRoutes, {
+      prefix: "/admin/v1",
+      env: process.env,
+      readExistingWorksheet: async (_clientAccountId, spreadsheetId, worksheetId) => {
+        reads += 1;
+        if (failRead) {
+          return {
+            ok: false,
+            statusCode: 503,
+            error: "worksheet_read_failed",
+            detail: "Controlled reader refused the worksheet. No cells were written.",
+          };
+        }
+        if (spreadsheetId !== snapshot.spreadsheetId || worksheetId !== snapshot.worksheetId) {
+          return { ok: false, statusCode: 409, error: "header_changed", detail: "Unexpected worksheet." };
+        }
+        return { ok: true, snapshot };
+      },
+    });
+    try {
+      const created = await app.inject({
+        method: "POST",
+        url: `/admin/v1/clients/${clientAccountId}/onboarding/column-maps`,
+        headers: { "x-sa360-admin-key": "column-map-http-key" },
+        payload: {
+          requestId: randomUUID(),
+          spreadsheetId: existingSheet,
+          worksheetId: 31,
+          sourceScope: "shared",
+          baseSchemaVersion: "legacy_custom",
+        },
+      });
+      assert.equal(created.statusCode, 200);
+      const createdBody = created.json() as {
+        map: { id: string; revision: number; worksheetId: number; headerSnapshot: string[]; assignments: Array<Record<string, unknown>> };
+      };
+      assert.equal(createdBody.map.worksheetId, 31);
+      assert.deepEqual(createdBody.map.headerSnapshot, header);
+      const unresolved = await app.inject({
+        method: "POST",
+        url: `/admin/v1/clients/${clientAccountId}/onboarding/column-maps/${createdBody.map.id}/save-and-publish`,
+        headers: { "x-sa360-admin-key": "column-map-http-key" },
+        payload: {
+          requestId: randomUUID(),
+          expectedRevision: createdBody.map.revision,
+          assignments: createdBody.map.assignments,
+        },
+      });
+      assert.equal(unresolved.statusCode, 422);
+      const unresolvedBody = unresolved.json() as {
+        ok: boolean;
+        error: string;
+        published: boolean;
+        deliveryEnabled: boolean;
+        cellsWritten: boolean;
+        worksheetRead: string;
+        map: { revision: number; status: string; assignments: Array<{ sheetHeader: string; explicit?: boolean; decision?: string; target?: { sourceField?: string } | null; transform?: string; code?: string | null }> };
+      };
+      assert.equal(unresolvedBody.ok, false);
+      assert.equal(unresolvedBody.error, "mapping_unresolved");
+      assert.equal(unresolvedBody.published, false);
+      assert.equal(unresolvedBody.deliveryEnabled, false);
+      assert.equal(unresolvedBody.cellsWritten, false);
+      assert.equal(unresolvedBody.worksheetRead, "controlled_fixture");
+      assert.notEqual(unresolvedBody.worksheetRead, "live_google");
+      assert.equal(unresolvedBody.map.status, "draft");
+      const chosen = unresolvedBody.map.assignments.map((column) =>
+        column.sheetHeader === "Age/DOB"
+          ? {
+              ...column,
+              decision: "mapped",
+              explicit: true,
+              transform: "date_america_new_york",
+              target: { kind: "v3_column", header: "DOB", sourceField: "date_of_birth" },
+              code: null,
+            }
+          : column.sheetHeader === "Score" || column.explicit !== true
+            ? { ...column, decision: "unmapped", explicit: true, transform: "blank", target: null, code: column.sheetHeader.trim() ? column.code ?? null : "blank_header" }
+            : column
+      );
+      const published = await app.inject({
+        method: "POST",
+        url: `/admin/v1/clients/${clientAccountId}/onboarding/column-maps/${createdBody.map.id}/save-and-publish`,
+        headers: { "x-sa360-admin-key": "column-map-http-key" },
+        payload: {
+          requestId: randomUUID(),
+          expectedRevision: unresolvedBody.map.revision,
+          assignments: chosen,
+        },
+      });
+      assert.equal(published.statusCode, 200, published.body);
+      const publishedBody = published.json() as {
+        ok: boolean;
+        published: boolean;
+        deliveryEnabled: boolean;
+        cellsWritten: boolean;
+        worksheetRead: boolean | string;
+        headerRewritten: boolean;
+        map: { id: string; status: string; revision: number; worksheetId: number; headerSnapshot: string[]; headerFingerprint: string };
+      };
+      assert.equal(publishedBody.ok, true);
+      assert.equal(publishedBody.published, true);
+      assert.equal(publishedBody.deliveryEnabled, false);
+      assert.equal(publishedBody.cellsWritten, false);
+      assert.equal(publishedBody.worksheetRead, "controlled_fixture");
+      assert.equal(publishedBody.headerRewritten, false);
+      assert.equal(publishedBody.map.status, "published");
+      assert.equal(publishedBody.map.worksheetId, 31);
+      assert.deepEqual(publishedBody.map.headerSnapshot, header);
+      assert.equal(publishedBody.map.headerFingerprint, headerFingerprint(header));
+      const stored = await db.clientSheetColumnMap.findUniqueOrThrow({ where: { id: createdBody.map.id } });
+      assert.deepEqual(stored.headerSnapshot, header);
+      assert.equal((stored.headerSnapshot as string[])[6], "");
+      assert.equal((stored.headerSnapshot as string[])[7], "\u200b");
+      const listed = await app.inject({
+        method: "GET",
+        url: `/admin/v1/clients/${clientAccountId}/onboarding/column-maps`,
+        headers: { "x-sa360-admin-key": "column-map-http-key" },
+      });
+      assert.equal(listed.statusCode, 200);
+      const listedBody = listed.json() as {
+        maps: Array<{ id: string; worksheetId: number; revision: number; status: string; headerSnapshot: string[]; spreadsheetId: string }>;
+      };
+      const reopened = listedBody.maps.find((map) => map.id === createdBody.map.id);
+      assert.ok(reopened);
+      assert.equal(reopened?.worksheetId, 31);
+      assert.equal(reopened?.revision, publishedBody.map.revision);
+      assert.equal(reopened?.status, "published");
+      assert.equal(reopened?.spreadsheetId, existingSheet);
+      assert.deepEqual(reopened?.headerSnapshot, header);
+      const stale = await app.inject({
+        method: "POST",
+        url: `/admin/v1/clients/${clientAccountId}/onboarding/column-maps/${createdBody.map.id}/preview`,
+        headers: { "x-sa360-admin-key": "column-map-http-key" },
+        payload: { expectedRevision: createdBody.map.revision, previewToken: "stale_http" },
+      });
+      assert.equal(stale.statusCode, 409);
+      assert.equal(stale.json().error, "revision_conflict");
+      const failHeader = ["Full Name", "Phone Number", "E-mail", "Age/DOB"];
+      const failSnapshot = {
+        ...legacySnapshot(existingSheet, failHeader),
+        worksheetId: 32,
+        worksheetTitle: "Unread tab",
+        sampleRow: ["Pat Example", "5550001111", "pat@example.invalid", ""],
+      };
+      const failDraft = await createColumnMapDraft(
+        {
+          clientAccountId,
+          requestId: randomUUID(),
+          spreadsheetId: existingSheet,
+          worksheetId: 32,
+          sourceScope: "shared",
+          baseSchemaVersion: "legacy_custom",
+          snapshot: failSnapshot,
+        },
+        db
+      );
+      assert.equal(failDraft.ok, true);
+      if (!failDraft.ok) return;
+      failRead = true;
+      const refused = await app.inject({
+        method: "POST",
+        url: `/admin/v1/clients/${clientAccountId}/onboarding/column-maps/${failDraft.map.id}/save-and-publish`,
+        headers: { "x-sa360-admin-key": "column-map-http-key" },
+        payload: {
+          requestId: randomUUID(),
+          expectedRevision: failDraft.map.revision,
+          assignments: confirm(failHeader),
+        },
+      });
+      assert.equal(refused.statusCode, 503);
+      const refusedBody = refused.json() as {
+        published: boolean;
+        deliveryEnabled: boolean;
+        cellsWritten: boolean;
+        worksheetRead: string;
+        error: string;
+      };
+      assert.equal(refusedBody.published, false);
+      assert.equal(refusedBody.deliveryEnabled, false);
+      assert.equal(refusedBody.cellsWritten, false);
+      assert.equal(refusedBody.worksheetRead, "controlled_fixture");
+      assert.equal(refusedBody.error, "worksheet_read_failed");
+      const stillDraft = await db.clientSheetColumnMap.findUniqueOrThrow({ where: { id: failDraft.map.id } });
+      assert.equal(stillDraft.status, "draft");
+      assert.ok(reads >= 4);
+      const destination = await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId } });
+      assert.equal(destination.campaignDispatchEnabled, false);
+      assert.equal(destination.enabled, false);
+    } finally {
+      await app.close();
+      if (previousFlag === undefined) delete process.env.SA360_CLIENT_ONBOARDING_V2_CONFIG_ENABLED;
+      else process.env.SA360_CLIENT_ONBOARDING_V2_CONFIG_ENABLED = previousFlag;
+      if (previousAdmin === undefined) delete process.env.ADMIN_API_KEY;
+      else process.env.ADMIN_API_KEY = previousAdmin;
+      if (previousAlias === undefined) delete process.env.SA360_ADMIN_KEY;
+      else process.env.SA360_ADMIN_KEY = previousAlias;
+    }
   });
 
   async function cleanup() {

@@ -1994,6 +1994,89 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
     );
   });
 
+  it("settles expired claims when execution is off and does not append", async () => {
+    await reset(client.camp, sheetId.camp);
+    const destination = await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId: client.camp } });
+    const expired = new Date(Date.now() - COMPANY_SHEETS_EXECUTION_LEASE_MS - 60_000);
+    const base = {
+      kind: "lead" as const,
+      clientAccountId: client.camp,
+      companyConnectionId: connectionId,
+      destinationId: destination.id,
+      spreadsheetId: sheetId.camp,
+      spreadsheetUrl: sheetUrl(sheetId.camp),
+      controlBasis: destination.controlBasis,
+      destinationUpdatedAt: destination.updatedAt,
+      headerContract: ["Phone", "\u200b"],
+      schemaVersion: "company_sheets_campaign_v1",
+      destinationRevision: destination.destinationRevision,
+      rowsTotal: 1,
+      attemptCount: 1,
+    };
+    const preAppend = await db.companySheetsDeliveryJob.create({
+      data: {
+        ...base,
+        status: "running",
+        worksheetId: 41,
+        worksheetTitle: "Pre",
+        idempotencyKey: `pre-${suffix}-${Date.now()}`,
+        startedAt: expired,
+        appendStartedAt: null,
+        claimToken: "pre-append",
+      },
+    });
+    const appendStarted = await db.companySheetsDeliveryJob.create({
+      data: {
+        ...base,
+        status: "running",
+        worksheetId: 42,
+        worksheetTitle: "Started",
+        idempotencyKey: `started-${suffix}-${Date.now()}`,
+        startedAt: expired,
+        appendStartedAt: expired,
+        claimToken: "append-started",
+      },
+    });
+    const insideLease = await db.companySheetsDeliveryJob.create({
+      data: {
+        ...base,
+        status: "running",
+        worksheetId: 43,
+        worksheetTitle: "Live",
+        idempotencyKey: `live-${suffix}-${Date.now()}`,
+        startedAt: new Date(),
+        appendStartedAt: null,
+        claimToken: "inside-lease",
+      },
+    });
+    let googleCalls = 0;
+    const quiet = deps(true, false);
+    quiet.fetchImpl = async () => {
+      googleCalls += 1;
+      throw new Error("execution-off drain called Google");
+    };
+    try {
+      const drained = await processDueCompanySheetsDispatches(quiet);
+      assert.equal(drained.executed, 0);
+      assert.equal(googleCalls, 0);
+      const preAfter = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: preAppend.id } });
+      assert.equal(preAfter.status, "retryable");
+      assert.equal(preAfter.appendStartedAt, null);
+      assert.deepEqual(preAfter.headerContract, ["Phone", "\u200b"]);
+      const startedAfter = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: appendStarted.id } });
+      assert.equal(startedAfter.status, "uncertain");
+      assert.equal(startedAfter.uncertainReason, "worker_lost");
+      assert.ok(startedAfter.appendStartedAt);
+      assert.deepEqual(startedAfter.headerContract, ["Phone", "\u200b"]);
+      const liveAfter = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: insideLease.id } });
+      assert.equal(liveAfter.status, "running");
+      assert.equal(liveAfter.appendStartedAt, null);
+    } finally {
+      await db.companySheetsWorksheetLock.deleteMany({ where: { spreadsheetId: sheetId.camp, worksheetId: { in: [41, 42, 43] } } });
+      await db.companySheetsDeliveryJob.deleteMany({ where: { id: { in: [preAppend.id, appendStarted.id, insideLease.id] } } });
+    }
+  });
+
   it("exposes activation and explicit schedule on admin routes without calling Google", async () => {
     await reset(client.camp, sheetId.camp);
     const previous = process.env.ADMIN_API_KEY;

@@ -14,11 +14,11 @@ stays paused.
   written token. `ageUnavailableReason` is `no_valid_reference` or
   `future_date_of_birth`. The browser renders `sheet.values` and
   `sheet.dobAge`. It does not calculate age.
-- Worksheet headers are stored literally, including `""`. A header that is
-  only U+200B stays U+200B. Fingerprints, publication, and writer validation
-  compare those literals by column index. The old U+200B blank sentinel is
-  not decoded on read, so a leftover sentinel fails `exactHeader` against a
-  truly empty Google cell.
+- Worksheet headers are stored literally, including `""` and a header whose
+  only character is U+200B. Fingerprints, publication, and writer validation
+  compare those literals by column index. U+200B is not decoded and is not
+  rewritten. A remaining U+200B cell is the stored header text. It is not
+  labeled a sentinel or a defect by this migration.
 - Draft warnings come from `sheetsColumnMapIssues` on the current
   assignments. A saved issue list is not what the editor shows.
 - Campaign lead execution calls `leadJobMayAppend` before any worksheet lock
@@ -42,38 +42,110 @@ not edit them. Do not run them against production in this task.
 3. `20261102200000_client_sheet_header_literal`
 
 The first two are additive tables and columns. The third replaces
-`ClientSheetColumnMap_scope_chk` so a header cell may be length 0, then
-rewrites cells whose entire text is U+200B to `""` without reordering the
-array. Empty strings were invalid under the previous check, so the
-constraint change has to land before that rewrite.
+`ClientSheetColumnMap_scope_chk` so a header cell may be length 0 through
+200. It does not update `ClientSheetColumnMap` or any delivery job.
 
-The third migration is not sufficient by itself while the previous app is
-still serving. That app writes a new blank header as U+200B. This app does
-not decode it. A row written by the old app after the rewrite fails closed
-as `header_changed` until an operator republishes against the live header.
+Master stores `headerSnapshot` from the worksheet read
+(`column-maps.ts` on `73eac95d`). The writer that stored a blank header as
+U+200B is only on unmerged PR #262. It is not on master, so this migration
+does not convert U+200B cells. No separate repair is included. A later
+repair would have to name verified rows and keep the snapshot, assignments,
+revision, binding, and audit evidence together. A published map's header
+must not change meaning, and a job `headerContract` is not edited to satisfy
+a check.
+
+Empty strings were invalid under `client_onboarding_v2_string_array_ok`
+(length 1–200). After this migration, a new map can store `""`. A header
+that is already U+200B stays U+200B. The previous app on master also stores
+the Google text and cannot insert `""` until this check is in place. It does
+not encode blanks as U+200B.
+
+This file was corrected before any shared database applied it. Production
+has no `_prisma_migrations` row for it. Do not update a production checksum.
+An earlier draft of this same file rewrote every U+200B cell to `""`. That
+draft must not be applied.
 
 ## Execution window
 
+The worker does not append. It POSTs the drain. The API process appends.
+Setting `SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED` false does not stop
+every writer, and it does not change a process that already started.
+
+Appends from this API:
+
+- `executeCompanySheetsDeliveryJob` when the execution flag is `true`. That
+  is the lead, aged, and canary path, and the admin execute route.
+- `sendCompanySheetsCampaignTestRow` and
+  `sendCompanySheetsCapturedEventTestRow`. Both pass
+  `controlledCampaignTest` and append while the execution flag is false.
+  The captured-event test also requires
+  `SA360_CLIENT_ONBOARDING_V2_CAPTURED_TEST_ENABLED=true`. Both require
+  `SA360_COMPANY_GOOGLE_SHEETS_ENABLED=true`.
+- `appendOnboardingCapturedTestRow` appends while the execution flag is
+  false when `SA360_CLIENT_ONBOARDING_V2_CAPTURED_TEST_ENABLED` and
+  `SA360_CLIENT_ONBOARDING_GOOGLE_ONLY_PILOT_ENABLED` are both `true`.
+- `bindCompanySheetsTab` and `createMissingCompanySheetsTab` call
+  `provisionBlankSheetHeader`, which `values.append`s a header on an empty
+  sheet. They check `SA360_COMPANY_GOOGLE_SHEETS_ENABLED` only. A tab
+  contract in `setupState = 'creating'` is that claim, and it stays in
+  progress for 120 seconds.
+
 Disabling new intent creation does not stop a job that is already queued,
-retryable, or running. The execute guard exists only in this build.
+retryable, or running. `SA360_COMPANY_GOOGLE_SHEETS_DISPATCH_ENABLED` false
+stops the drain, including the settlement below. It does not stop
+`executeCompanySheetsDeliveryJob` or the test-row and tab-provision paths.
 
-1. Set `SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED` false.
-2. Wait until no lead job is `running`. A request that already passed the
-   execution-off check can still append. Do not deploy over that request.
-3. Apply the three migrations.
-4. Deploy this build.
-5. Leave execution off until the post-deploy checks below are read.
-6. Turning execution on is a separate decision. It is not part of this
-   integration. When it is turned on, `leadJobMayAppend` covers queued and
-   retryable lead jobs and a lead job whose claim is resumed. History and
-   transient assessment gaps go back to `queued` with no Google call. Other
-   holds become conclusive pre-send failures (`appendStartedAt` null,
-   `rowsWritten` 0) and are not indexed. An `uncertain` job returns
-   `uncertain` before the claim. Do not mark an uncertain append safe to
-   retry.
+Before the header migration:
 
-`SA360_COMPANY_GOOGLE_SHEETS_DISPATCH_ENABLED` false stops new intents. It
-does not stop `executeCompanySheetsDeliveryJob`.
+1. Set `SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED` false. Set
+   `SA360_CLIENT_ONBOARDING_V2_CAPTURED_TEST_ENABLED` false and
+   `SA360_CLIENT_ONBOARDING_GOOGLE_ONLY_PILOT_ENABLED` false. Leave Alex's
+   campaign dispatch paused. Do not call Send Test Row, captured-test
+   append, bind tab, or create tab.
+2. Restart every API instance so it loaded those values. Record each
+   instance's start time. A platform env edit does not prove an old process
+   stopped. A request that already passed its check can still append until
+   that process exits.
+3. Let an in-flight request finish before the process is killed. Then wait
+   one execution lease, 380 seconds.
+4. Read the rows. Migrate only when this is empty:
+
+```sql
+SELECT id, kind, "startedAt", "appendStartedAt"
+FROM "CompanySheetsDeliveryJob"
+WHERE status = 'running';
+```
+
+And this is empty:
+
+```sql
+SELECT id, role, "updatedAt"
+FROM "CompanySheetsTabContract"
+WHERE "setupState" = 'creating'
+  AND "updatedAt" > now() - interval '120 seconds';
+```
+
+5. If a restart aborted a request, the job can still say `running` after the
+   lease. Do not turn execution on to clear it. That can append. Do not
+   edit `headerContract`. Apply the two person migrations (they do not
+   change jobs or headers), deploy this build with execution still off,
+   and run one drain with dispatch enabled. That drain settles an expired
+   pre-append run back to `retryable` and an expired run with
+   `appendStartedAt` set to `uncertain` (`worker_lost`). It does not call
+   Google. A run still inside the lease stays `running`; wait, then drain
+   again. If the drain errors, read the running query and retry the drain.
+   Repeat the queries. Apply the header migration only after both are empty.
+6. If step 4 was already empty, apply all three migrations, then deploy
+   this build with execution still off, then run the same drain and read
+   the queries again.
+7. Leave execution off until the post-deploy checks below are read.
+   Turning execution on is a separate decision. When it is turned on,
+   `leadJobMayAppend` covers queued and retryable lead jobs and a lead job
+   whose claim is resumed. History and transient assessment gaps go back to
+   `queued` with no Google call. Other holds become conclusive pre-send
+   failures (`appendStartedAt` null, `rowsWritten` 0) and are not indexed.
+   An `uncertain` job returns `uncertain` before the claim. Do not mark an
+   uncertain append safe to retry.
 
 ## Queue reconciliation
 
@@ -95,14 +167,15 @@ never started an append, as a successful delivery.
 - The person tables are additive. Leaving them in place is compatible with
   the previous app. Dropping them while this app is running breaks the gate.
 - Do not restore the old header check while any `headerSnapshot` contains
-  `""`. The previous writer would also start storing new blanks as U+200B
-  again.
-- A U+200B cell left after the rewrite is a failed-closed header mismatch,
-  not a blank. Republish from the live header. Do not decode it in the app.
+  `""`. The master app stores the Google text and rejects length 0. It does
+  not encode a blank as U+200B.
+- Leave a U+200B header cell as stored. It matches a Google cell with that
+  same text. It is not rewritten to `""`.
 
 ## Post-deploy checks
 
-- Count maps that still contain a U+200B header cell:
+- A U+200B header cell is stored text. This count is not a defect count
+  and it is not a sentinel count:
 
 ```sql
 SELECT COUNT(*)

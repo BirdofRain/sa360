@@ -379,6 +379,17 @@ export async function processDueCompanySheetsDispatches(
   if (!executionEnabled) {
     const now = clock();
     const stale = new Date(now.getTime() - COMPANY_SHEETS_EXECUTION_LEASE_MS);
+    // Setting the flag false does not finish a claim the previous process
+    // already started. After the lease, a pre-append run returns to
+    // retryable and a run that started an append becomes uncertain. Neither
+    // path calls Google. A run still inside the lease stays running.
+    await db.$transaction(
+      async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${DRAIN_ADVISORY_KEY}))`;
+        await quarantineExpiredRuns(tx, now, stale);
+      },
+      { maxWait: CLAIM_MAX_WAIT_MS, timeout: CLAIM_TIMEOUT_MS }
+    );
     const due = await db.companySheetsDispatchIntent.findMany({
       where: {
         OR: [

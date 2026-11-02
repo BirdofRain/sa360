@@ -191,4 +191,4 @@ A pending `GhlAssociationDispatchOutbox` row means Sheets did not settle GHL. It
 
 - `20261102180000_client_sheets_person_admission` — `DuplicateRiskAssessmentFailure`, `ClientSheetsPersonAdmission`, `ClientSheetsDedupeDecision`.
 - `20261102190000_client_sheets_person_recovery` — `failureClass` and `updatedAt` on the failure table, `ClientSheetsHistoryCoverage`, `ClientSheetsPersonRelease`. Additive.
-- `20261102200000_client_sheet_header_literal` — header snapshots may contain empty strings. The migration does not rewrite cells. U+200B stays U+200B. The sentinel writer was not on master. Apply it after the two person migrations, and only after the execution-window queries in `docs/validation/sheets-setup-integration.md` are empty.
+- `20261102200000_client_sheet_header_literal` — header snapshots may contain empty strings. The migration does not rewrite cells. U+200B stays U+200B. The sentinel writer was not on master. A normal deploy applies it with the two person migrations in one pre-deploy job. The release sequence is `docs/validation/sheets-setup-integration.md`.

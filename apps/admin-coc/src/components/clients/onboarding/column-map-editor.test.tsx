@@ -346,6 +346,47 @@ test("a DOB column shows the sheet cell and lead-detail age status, and a source
   assert.match(screen.getByTestId("column-map-dob-age").textContent ?? "", /Missing DOB \/ reference information/);
 });
 
+test("preview names whether it used the unpublished draft or the published delivery map", async () => {
+  const record = mapRecord();
+  render(
+    <ColumnMapEditor
+      record={record}
+      campaignDispatchEnabled={false}
+      boundSchemaVersion="company_sheets_campaign_custom_v1"
+      actions={{
+        previewColumnMap: async (_mapId, input) => ({
+          ok: true,
+          data: previewData(record, input, "evt_draft", "04/12/1979", "derived_from_date_of_birth", false),
+        }),
+      }}
+      onChange={() => undefined}
+    />
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Preview received submission" }));
+  assert.match((await screen.findByTestId("column-map-preview-source")).textContent ?? "", /This preview uses the unpublished draft/);
+  cleanup();
+  const publishedRecord = { ...record, status: "published", revision: 3 };
+  render(
+    <ColumnMapEditor
+      record={publishedRecord}
+      campaignDispatchEnabled={false}
+      boundSchemaVersion="company_sheets_campaign_custom_v1"
+      actions={{
+        previewColumnMap: async (_mapId, input) => ({
+          ok: true,
+          data: {
+            ...previewData(publishedRecord, input, "evt_published", "04/12/1979", "derived_from_date_of_birth", false),
+            configuration: "published_map" as const,
+          },
+        }),
+      }}
+      onChange={() => undefined}
+    />
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Preview received submission" }));
+  assert.match((await screen.findByTestId("column-map-preview-source")).textContent ?? "", /This preview uses the published map that delivery uses/);
+});
+
 function previewData(
   record: ColumnMapRecord,
   input: { expectedRevision: number; previewToken: string },

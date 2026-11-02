@@ -19,6 +19,7 @@ import {
   activateCompanySheetsDispatch,
   recoverCompanySheetsPersonHold,
   releaseCompanySheetsPersonReservation,
+  prepareSheetsHistory,
   listCompanyClientSpreadsheets,
   prepareCompanyClientFolder,
   probeCompanySheetWrite,
@@ -34,6 +35,7 @@ import {
   type CompanySheetsFolderSpreadsheetList,
   type CompanySheetsResolvedSpreadsheet,
   type CompanySheetsWriteProbe,
+  type SheetsReleaseCensusView,
 } from "@/lib/admin-api/company-google-sheets";
 
 export type CompanySheetsActionResult<T> = { ok: true; data: T } | { ok: false; error: string };
@@ -85,6 +87,9 @@ const OPERATOR_ERRORS: Record<string, string> = {
   invalid_folder_intent: "Choose inspect, link, or create for the client folder.",
   unsupported_schema: "That column template is not a supported campaign schema.",
   destination_missing: "Save a destination before changing delivery.",
+  client_not_found: "That client was not found.",
+  invalid_batch_size: "History preparation accepts one batch from 1 to 500 jobs.",
+  client_mismatch: "The client in the request does not match this page.",
 };
 
 function fail(body: string): string {
@@ -310,6 +315,21 @@ export async function recoverCompanySheetsPersonHoldAction(
   const headline = res.data.headline;
   const detail = res.data.recovered ? `${headline}. ${res.data.detail}` : `${headline}. ${res.data.detail}`;
   return { ok: true, message: detail };
+}
+
+export async function prepareCompanySheetsHistoryAction(
+  clientAccountId: string
+): Promise<{ ok: true; message: string; census: SheetsReleaseCensusView } | { ok: false; error: string }> {
+  await requireAdminCocAdminSession();
+  const res = await prepareSheetsHistory(clientAccountId);
+  if (!res.ok) return { ok: false, error: fail(res.body) };
+  refresh(clientAccountId);
+  const history = res.data.census.history;
+  return {
+    ok: true,
+    census: res.data.census,
+    message: `Prepared one history batch. Status ${history.status}. Proof ${history.completenessProof}. No row was appended and delivery was not enabled.`,
+  };
 }
 
 export async function releaseCompanySheetsPersonReservationAction(

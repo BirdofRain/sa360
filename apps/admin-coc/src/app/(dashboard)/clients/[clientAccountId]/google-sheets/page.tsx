@@ -4,6 +4,7 @@ import { CompanySheetsAdminPanel } from "@/components/clients/company-sheets-adm
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import {
   activateCompanySheetsDispatchAction,
+  prepareCompanySheetsHistoryAction,
   recoverCompanySheetsPersonHoldAction,
   releaseCompanySheetsPersonReservationAction,
   bindCompanySheetsTabAction,
@@ -36,6 +37,7 @@ import {
   fetchCompanyGoogleConnection,
   fetchCompanySheetsDestination,
   fetchCompanySheetsDispatch,
+  fetchSheetsReleaseCensus,
   listCompanyClientSpreadsheets,
 } from "@/lib/admin-api/company-google-sheets";
 import { listOnboardingColumnMaps } from "@/lib/admin-api/client-onboarding-v2";
@@ -72,14 +74,21 @@ export default async function ClientCompanyGoogleSheetsPage({
     );
   }
 
-  const [connectionResult, destinationResult, detailResult, dispatchResult, folderResult] = await Promise.all([
-    fetchCompanyGoogleConnection(),
-    fetchCompanySheetsDestination(id),
-    fetchAdminClientDetail(id),
-    fetchCompanySheetsDispatch(id),
-    listCompanyClientSpreadsheets(id),
-  ]);
-  const mapsResult = await listOnboardingColumnMaps(id);
+  const [connectionResult, destinationResult, detailResult, dispatchResult, folderResult, mapsResult, historyResult] =
+    await Promise.all([
+      fetchCompanyGoogleConnection(),
+      fetchCompanySheetsDestination(id),
+      fetchAdminClientDetail(id),
+      fetchCompanySheetsDispatch(id),
+      listCompanyClientSpreadsheets(id),
+      listOnboardingColumnMaps(id),
+      fetchSheetsReleaseCensus(id),
+    ]);
+  const columnMaps = splitColumnMaps(
+    mapsResult.ok ? mapsResult.data : [],
+    destinationResult.ok ? destinationResult.data.destination?.spreadsheetId ?? null : null,
+    destinationResult.ok ? destinationResult.data.destination?.worksheetId ?? null : null
+  );
   const displayName = detailResult.data?.item.clientDisplayName?.trim() || id;
   const nicheKey = detailResult.data?.item.primaryNicheKeys?.find((key) => key.trim()) ?? null;
   const loadError = !connectionResult.ok
@@ -133,16 +142,17 @@ export default async function ClientCompanyGoogleSheetsPage({
             setDispatch: activateCompanySheetsDispatchAction,
             recoverPersonHold: recoverCompanySheetsPersonHoldAction,
             releasePersonReservation: releaseCompanySheetsPersonReservationAction,
+            prepareSheetsHistory: prepareCompanySheetsHistoryAction,
             saveSheetsTarget: saveOnboardingSheetsTargetAction,
             createColumnMap: createOnboardingColumnMapAction,
             saveAndPublishColumnMap: saveAndPublishOnboardingColumnMapAction,
             previewColumnMap: previewOnboardingColumnMapAction,
           }}
-          initialColumnMap={pickColumnMap(
-            mapsResult.ok ? mapsResult.data : [],
-            destinationResult.data.destination?.spreadsheetId ?? null,
-            destinationResult.data.destination?.worksheetId ?? null
-          )}
+          initialColumnMap={columnMaps.editor}
+          initialDeliveryMap={columnMaps.delivery}
+          initialUnpublishedMap={columnMaps.unpublished}
+          initialHistory={historyResult.ok ? historyResult.data.census : null}
+          historyLoadError={historyResult.ok ? null : "History status could not be loaded."}
           initialFolderList={folderResult.ok ? folderResult.data : undefined}
           folderLoadError={folderResult.ok ? null : "Saved folder could not be loaded."}
         />
@@ -151,11 +161,17 @@ export default async function ClientCompanyGoogleSheetsPage({
   );
 }
 
-function pickColumnMap(maps: ColumnMapRecord[], spreadsheetId: string | null, worksheetId: number | null): ColumnMapRecord | null {
+function splitColumnMaps(
+  maps: ColumnMapRecord[],
+  spreadsheetId: string | null,
+  worksheetId: number | null
+): { editor: ColumnMapRecord | null; delivery: ColumnMapRecord | null; unpublished: ColumnMapRecord | null } {
   const active = maps.filter((map) => map.status === "draft" || map.status === "published");
   const matched =
     spreadsheetId && worksheetId != null
       ? active.filter((map) => map.spreadsheetId === spreadsheetId && map.worksheetId === worksheetId)
       : active;
-  return matched.find((map) => map.status === "draft") ?? matched.find((map) => map.status === "published") ?? null;
+  const unpublished = matched.find((map) => map.status === "draft") ?? null;
+  const delivery = matched.find((map) => map.status === "published") ?? null;
+  return { editor: unpublished ?? delivery, delivery, unpublished };
 }

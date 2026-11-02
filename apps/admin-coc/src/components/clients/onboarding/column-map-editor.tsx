@@ -317,13 +317,15 @@ export function ColumnMapEditor({
       ) : null}
       {preview ? (
         <div data-testid="column-map-received-preview" className="space-y-2 rounded-md border border-slate-200 bg-white p-2">
-          <p className="text-xs font-medium text-slate-900">
-            {preview.configuration === "draft" ? "Draft preview" : "Preview of the published map"}
+          <p className="text-xs font-medium text-slate-900" data-testid="column-map-preview-source">
+            {preview.configuration === "draft"
+              ? "This preview uses the unpublished draft."
+              : "This preview uses the published map that delivery uses."}
           </p>
           <p className="text-xs text-slate-600">
-            {shown.status === "published"
-              ? "This read uses the published map. It does not send a row and does not enable delivery."
-              : "This is a draft preview. Published delivery configuration is unchanged. No row is sent and delivery stays off."}
+            {preview.configuration === "draft"
+              ? "Published delivery configuration is unchanged. No row is sent and delivery stays off."
+              : "This read uses the published map. It does not send a row and does not enable delivery."}
           </p>
           {preview.available && preview.sheet ? (
             <>

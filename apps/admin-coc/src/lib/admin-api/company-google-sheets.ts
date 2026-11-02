@@ -422,6 +422,73 @@ export function releaseCompanySheetsPersonReservation(clientAccountId: string, s
   );
 }
 
+export type SheetsReleaseCensusView = {
+  clientAccountId: string;
+  history: {
+    status: "unavailable" | "partial" | "complete";
+    completenessProof: "cursor_exhausted" | "no_eligible_jobs" | "cursor_open" | "not_started";
+    indexedCount: number;
+    observedJobCount: number;
+    countsAreNotProof: true;
+    cursor: { createdAt: string; jobId: string } | null;
+    updatedAt: string | null;
+    sa360JobHistoryComplete: boolean;
+  };
+  admissions: {
+    sa360JobIndex: { origin: string; total: number; byStatus: Record<string, number> };
+    liveReservation: { origin: string; total: number; byStatus: Record<string, number> };
+    importedZapHistory: { origin: string; total: number; byStatus: Record<string, number> };
+    unknownOrigins: Array<{ origin: string; total: number; byStatus: Record<string, number> }>;
+  };
+  jobs: {
+    byKindStatus: Array<{ kind: string; status: string; count: number }>;
+    open: Array<{
+      jobId: string;
+      kind: string;
+      status: string;
+      appendStartedAt: string | null;
+      uncertainReason: string | null;
+      rowsWritten: number;
+      claimHeld: boolean;
+      claimWithinLease: boolean;
+    }>;
+    openTruncated: boolean;
+  };
+  locks: Array<{ worksheetId: number; ownerJobId: string; lockedAt: string | null }>;
+  creatingTabs: Array<{ role: string; worksheetId: number | null; updatedAt: string }>;
+  quarantine: {
+    strategy: "quarantine_until_reconciled";
+    ran: false;
+    count: number;
+    truncated: boolean;
+  };
+  switches: {
+    readOnly: true;
+    campaignDispatchEnabled: boolean;
+    campaignDispatchNotBefore: string | null;
+    agedDispatchEnabled: boolean;
+    agedDispatchNotBefore: string | null;
+  };
+  incomplete: string[];
+};
+
+export function fetchSheetsReleaseCensus(clientAccountId: string) {
+  return adminRequestJson<{ ok: true; googleCalled: false; delivered: false; census: SheetsReleaseCensusView }>(
+    "GET",
+    clientPath(clientAccountId, "history")
+  );
+}
+
+export function prepareSheetsHistory(clientAccountId: string, input: { batchSize?: number } = {}) {
+  return adminRequestJson<{
+    ok: true;
+    googleCalled: false;
+    delivered: false;
+    batchSize: number;
+    census: SheetsReleaseCensusView;
+  }>("POST", clientPath(clientAccountId, "history/prepare"), input);
+}
+
 export function activateCompanySheetsDispatch(
   clientAccountId: string,
   input: { campaignEnabled?: boolean; agedEnabled?: boolean }

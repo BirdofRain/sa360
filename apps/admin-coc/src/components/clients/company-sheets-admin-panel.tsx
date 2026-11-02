@@ -19,6 +19,7 @@ import type {
   CompanySheetsDestinationView,
   CompanySheetsDispatchView,
   CompanySheetsFolderChoice,
+  SheetsReleaseCensusView,
   CompanySheetsFolderSpreadsheetList,
   CompanySheetsResolvedWorksheet,
 } from "@/lib/admin-api/company-google-sheets";
@@ -174,6 +175,9 @@ export type CompanySheetsAdminActions = {
     | { ok: true; data: { campaignDispatchEnabled: boolean; campaignDispatchNotBefore: string | null } }
     | { ok: false; error: string }
   >;
+  prepareSheetsHistory?: (
+    clientAccountId: string
+  ) => Promise<{ ok: true; message: string; census: SheetsReleaseCensusView } | { ok: false; error: string }>;
   saveSheetsTarget?: (
     clientAccountId: string,
     input: { spreadsheetId: string; worksheetId: number }
@@ -317,6 +321,84 @@ function ColumnMapping({
   );
 }
 
+function SheetsHistoryCensus({
+  clientAccountId,
+  history,
+  loadError,
+  busy,
+  prepare,
+  onRun,
+  onCensus,
+}: {
+  clientAccountId: string;
+  history: SheetsReleaseCensusView | null;
+  loadError: string | null;
+  busy: boolean;
+  prepare?: CompanySheetsAdminActions["prepareSheetsHistory"];
+  onRun: (task: () => Promise<{ ok: true; message?: string } | { ok: false; error: string }>) => void;
+  onCensus: (census: SheetsReleaseCensusView) => void;
+}) {
+  const claims = history?.jobs.open.filter((job) => job.claimWithinLease).length ?? 0;
+  return (
+    <div className="space-y-2 rounded-lg border border-slate-200 px-3 py-2" data-testid="sheets-history-census">
+      <p className="text-sm font-medium text-slate-900">History preparation</p>
+      {loadError ? <p className="text-sm text-amber-800">{loadError}</p> : null}
+      {history ? (
+        <>
+          <p className="text-sm text-slate-800">
+            SA360 job history {history.history.status}. Proof {history.history.completenessProof}.
+            {history.history.sa360JobHistoryComplete ? " SA360 job history is complete." : " SA360 job history is not complete."}
+          </p>
+          <p className="text-sm text-slate-700">
+            Cursor {history.history.cursor ? `${history.history.cursor.jobId} at ${formatEt(history.history.cursor.createdAt)}` : "not started"}.
+            Observed jobs {history.history.observedJobCount}. Indexed identifiers {history.history.indexedCount}. Counts are not proof.
+          </p>
+          <p className="text-sm text-slate-700">
+            SA360 job index {history.admissions.sa360JobIndex.total}. Live reservations {history.admissions.liveReservation.total}. Imported
+            Zap history {history.admissions.importedZapHistory.total}.
+            {history.admissions.unknownOrigins.length > 0
+              ? ` Unknown admission origins ${history.admissions.unknownOrigins.map((row) => `${row.origin} ${row.total}`).join(", ")}.`
+              : ""}
+          </p>
+          <p className="text-sm text-slate-700">
+            Open jobs {history.jobs.open.length}
+            {history.jobs.openTruncated ? " (list capped)" : ""}. Claims inside the execution lease {claims}. Worksheet locks {history.locks.length}.
+            Creating tabs {history.creatingTabs.length}. Quarantine plan {history.quarantine.count} (not run).
+          </p>
+          <ul className="space-y-1 text-xs text-slate-600">
+            {history.incomplete.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        </>
+      ) : loadError ? null : (
+        <p className="text-sm text-slate-600">History status was not loaded.</p>
+      )}
+      <p className="text-sm text-slate-600">
+        Preparation indexes one batch of existing lead jobs. It does not append a row and does not enable delivery. It stays available while
+        Sheets writes are disabled.
+      </p>
+      {prepare ? (
+        <Button
+          type="button"
+          variant="outline"
+          disabled={busy}
+          onClick={() =>
+            void onRun(async () => {
+              const result = await prepare(clientAccountId);
+              if (!result.ok) return result;
+              onCensus(result.census);
+              return { ok: true, message: result.message };
+            })
+          }
+        >
+          Prepare one history batch
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
 function SheetsIntentList({
   clientAccountId,
   intents,
@@ -422,6 +504,10 @@ export function CompanySheetsAdminPanel({
   initialFolderList,
   folderLoadError = null,
   initialColumnMap = null,
+  initialDeliveryMap = null,
+  initialUnpublishedMap = null,
+  initialHistory = null,
+  historyLoadError = null,
 }: {
   clientAccountId: string;
   clientDisplayName: string;
@@ -434,6 +520,10 @@ export function CompanySheetsAdminPanel({
   initialFolderList?: CompanySheetsFolderSpreadsheetList;
   folderLoadError?: string | null;
   initialColumnMap?: ColumnMapRecord | null;
+  initialDeliveryMap?: ColumnMapRecord | null;
+  initialUnpublishedMap?: ColumnMapRecord | null;
+  initialHistory?: SheetsReleaseCensusView | null;
+  historyLoadError?: string | null;
 }) {
   const [notes, setNotes] = useState<Partial<Record<SectionName, Note>>>({});
   const [pendingSection, setPendingSection] = useState<SectionName | null>(null);
@@ -452,7 +542,16 @@ export function CompanySheetsAdminPanel({
   const [candidate, setCandidate] = useState<SheetCandidate | null>(null);
   const [createdSheet, setCreatedSheet] = useState<SheetCandidate | null>(null);
   const [confirmReplace, setConfirmReplace] = useState(false);
-  const [columnMap, setColumnMap] = useState<ColumnMapRecord | null>(initialColumnMap);
+  const [deliveryMap, setDeliveryMap] = useState<ColumnMapRecord | null>(
+    initialDeliveryMap ?? (initialColumnMap?.status === "published" ? initialColumnMap : null)
+  );
+  const [unpublishedMap, setUnpublishedMap] = useState<ColumnMapRecord | null>(
+    initialUnpublishedMap ?? (initialColumnMap?.status === "draft" ? initialColumnMap : null)
+  );
+  const [columnMap, setColumnMap] = useState<ColumnMapRecord | null>(
+    initialUnpublishedMap ?? initialDeliveryMap ?? initialColumnMap
+  );
+  const [history, setHistory] = useState<SheetsReleaseCensusView | null>(initialHistory);
   const [readProbe, setReadProbe] = useState<{ spreadsheetId: string; text: string } | null>(null);
   const [writeProbe, setWriteProbe] = useState<{ spreadsheetId: string; text: string } | null>(null);
 
@@ -1169,6 +1268,16 @@ export function CompanySheetsAdminPanel({
           This is the only mapping editor. Setup & Delivery links here.
           {nicheKey ? ` Client niche on file: ${nicheKey}. That niche does not change these columns.` : " No niche is stored on this client."}
         </p>
+        <p className="text-sm text-slate-800" data-testid="delivery-map-state">
+          {deliveryMap
+            ? `Delivery uses published map version ${deliveryMap.mapVersion}, revision ${deliveryMap.revision}.`
+            : "No published map is used for delivery."}
+        </p>
+        {unpublishedMap ? (
+          <p className="text-sm text-amber-900" data-testid="unpublished-map-state">
+            Unpublished changes: draft revision {unpublishedMap.revision} is not the delivery map.
+          </p>
+        ) : null}
         <ColumnMapping
           clientAccountId={clientAccountId}
           spreadsheetId={spreadsheetId}
@@ -1177,7 +1286,18 @@ export function CompanySheetsAdminPanel({
           boundSchemaVersion={campaignTab?.schemaVersion ?? null}
           columnMap={columnMap}
           actions={actions}
-          onMap={setColumnMap}
+          onMap={(map) => {
+            setColumnMap(map);
+            if (!map) return;
+            if (map.status === "published") {
+              setDeliveryMap(map);
+              setUnpublishedMap((current) =>
+                current && current.spreadsheetId === map.spreadsheetId && current.worksheetId === map.worksheetId ? null : current
+              );
+            } else if (map.status === "draft") {
+              setUnpublishedMap(map);
+            }
+          }}
         />
       </section>
       <section aria-label="Delivery controls" aria-busy={busy("delivery")} className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
@@ -1202,6 +1322,15 @@ export function CompanySheetsAdminPanel({
             ? `${dispatch.lastCampaignDelivery.status} at ${formatEt(dispatch.lastCampaignDelivery.finishedAt ?? dispatch.lastCampaignDelivery.createdAt)} for ${dispatch.lastCampaignDelivery.worksheetTitle}`
             : "No campaign delivery is recorded."}
         </p>
+        <SheetsHistoryCensus
+          clientAccountId={clientAccountId}
+          history={history}
+          loadError={historyLoadError}
+          busy={busy("delivery")}
+          prepare={actions.prepareSheetsHistory}
+          onRun={(task) => void run("delivery", task)}
+          onCensus={setHistory}
+        />
         <SheetsIntentList
           clientAccountId={clientAccountId}
           intents={dispatch?.intents ?? []}

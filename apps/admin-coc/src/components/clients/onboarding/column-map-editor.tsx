@@ -9,6 +9,8 @@ import type {
   ColumnMapRecord,
   OnboardingWorkspaceActions,
   SheetsTargetSave,
+  StoredLeadColumnPreview,
+  StoredLeadPreviewLead,
 } from "@/lib/clients/onboarding/types";
 
 function normalizeHeader(value: string): string {
@@ -190,6 +192,14 @@ export function ColumnMapEditor({
           ))}
         </ol>
       </div>
+      {actions.listStoredLeadsForColumnPreview && actions.previewStoredLeadColumnMap ? (
+        <StoredLeadPreviewPanel
+          record={shown}
+          paused={paused || pending !== null}
+          listLeads={actions.listStoredLeadsForColumnPreview}
+          previewLead={actions.previewStoredLeadColumnMap}
+        />
+      ) : null}
       <div className="flex flex-wrap gap-2">
         <Button type="button" size="sm" variant="outline" disabled={paused || pending !== null} onClick={() => void save(shown.assignments)}>
           {pending === "save" ? "Saving mapping…" : "Save mapping"}
@@ -204,5 +214,175 @@ export function ColumnMapEditor({
         </p>
       ) : null}
     </div>
+  );
+}
+
+function StoredLeadPreviewPanel({
+  record,
+  paused,
+  listLeads,
+  previewLead,
+}: {
+  record: ColumnMapRecord;
+  paused: boolean;
+  listLeads: NonNullable<OnboardingWorkspaceActions["listStoredLeadsForColumnPreview"]>;
+  previewLead: NonNullable<OnboardingWorkspaceActions["previewStoredLeadColumnMap"]>;
+}) {
+  const [query, setQuery] = useState("");
+  const [leads, setLeads] = useState<StoredLeadPreviewLead[]>([]);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [preview, setPreview] = useState<StoredLeadColumnPreview | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState<string | null>(null);
+
+  async function load(nextCursor: string | null, replace: boolean) {
+    setPending("list");
+    setError(null);
+    const listed = await listLeads({ query, cursor: nextCursor });
+    setPending(null);
+    if (!listed.ok) {
+      setError(listed.error);
+      return;
+    }
+    setLeads((current) => (replace ? listed.data.leads : [...current, ...listed.data.leads]));
+    setCursor(listed.data.nextCursor);
+  }
+
+  async function runPreview(basis: "draft" | "published") {
+    if (!selectedId) return;
+    setPending(basis);
+    setError(null);
+    const result = await previewLead({
+      sourceLeadEventId: selectedId,
+      spreadsheetId: record.spreadsheetId,
+      worksheetId: record.worksheetId,
+      mapId: record.id,
+      basis,
+      assignments: basis === "draft" ? record.assignments : undefined,
+    });
+    setPending(null);
+    if (!result.ok) {
+      setPreview(null);
+      setError(result.error);
+      return;
+    }
+    setPreview(result.data);
+  }
+
+  const stale = preview?.reasons.some((reason) => reason === "header_fingerprint_mismatch" || reason === "binding_absent") === true;
+
+  return (
+    <section className="space-y-2 rounded-md border border-sky-200 bg-white p-2" data-testid="stored-lead-column-preview">
+      <p className="text-xs font-medium text-sky-950" role="status">
+        Preview only. This does not append a row, send a test lead, call Google, or call GoHighLevel.
+      </p>
+      <p className="text-xs text-slate-700">
+        Choose a stored lead for this client. Preview mapped row uses the dropdowns on this screen and does not save
+        them. Preview published map uses the saved published map only.
+      </p>
+      <label className="block text-xs text-slate-700" htmlFor={`stored-lead-search-${record.id}`}>
+        Search stored leads
+        <input
+          id={`stored-lead-search-${record.id}`}
+          className="mt-1 h-8 w-full rounded-lg border border-slate-200 px-2"
+          aria-label="Search stored leads"
+          value={query}
+          disabled={paused || pending !== null}
+          onChange={(event) => setQuery(event.target.value)}
+        />
+      </label>
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" size="sm" variant="outline" disabled={paused || pending !== null} onClick={() => void load(null, true)}>
+          {pending === "list" ? "Finding leads…" : "Find stored leads"}
+        </Button>
+        {cursor ? (
+          <Button type="button" size="sm" variant="outline" disabled={paused || pending !== null} onClick={() => void load(cursor, false)}>
+            Next stored leads
+          </Button>
+        ) : null}
+      </div>
+      {leads.length > 0 ? (
+        <ul className="space-y-1">
+          {leads.map((lead) => (
+            <li key={lead.id}>
+              <button
+                type="button"
+                className="w-full rounded-md border border-slate-200 px-2 py-1 text-left text-xs text-slate-800"
+                aria-pressed={selectedId === lead.id}
+                disabled={paused || pending !== null}
+                onClick={() => {
+                  setSelectedId(lead.id);
+                  setPreview(null);
+                }}
+              >
+                {lead.label}
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" size="sm" variant="outline" disabled={paused || pending !== null || !selectedId} onClick={() => void runPreview("draft")}>
+          {pending === "draft" ? "Previewing draft…" : "Preview mapped row"}
+        </Button>
+        <Button type="button" size="sm" variant="outline" disabled={paused || pending !== null || !selectedId} onClick={() => void runPreview("published")}>
+          {pending === "published" ? "Previewing published map…" : "Preview published map"}
+        </Button>
+      </div>
+      {preview ? (
+        <div className="space-y-2">
+          <p className="rounded-md border border-sky-300 bg-sky-50 px-2 py-1 text-xs text-sky-950" role="status">
+            Preview only. Not delivery-ready. Google headers were not reread.
+            {preview.basis === "draft" ? " Draft assignments were not saved." : " The published map was not changed."}
+          </p>
+          {stale ? (
+            <p className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-950" role="status">
+              The stored header does not match this spreadsheet and worksheet binding. These values are not delivery-ready.
+            </p>
+          ) : null}
+          <p className="text-xs text-slate-700">{preview.lead.label}</p>
+          {preview.operatorDecisions.length > 0 ? (
+            <ul className="space-y-1 text-xs text-amber-950">
+              {preview.operatorDecisions.map((decision) => (
+                <li key={decision.code}>Operator decision: {decision.message}</li>
+              ))}
+            </ul>
+          ) : null}
+          <table className="w-full text-left text-[11px] text-slate-800">
+            <thead>
+              <tr className="text-slate-600">
+                <th className="py-1 pr-2">Column</th>
+                <th className="py-1 pr-2">Header</th>
+                <th className="py-1 pr-2">Source field</th>
+                <th className="py-1 pr-2">Value</th>
+                <th className="py-1">Warning</th>
+              </tr>
+            </thead>
+            <tbody>
+              {preview.columns.map((column) => {
+                const missing = column.warnings.some((warning) => warning.code === "missing_source_value");
+                return (
+                  <tr key={`${column.position}-${column.sheetHeader}`} className={missing ? "bg-amber-50" : undefined} data-missing={missing ? "true" : "false"}>
+                    <td className="py-1 pr-2 font-mono">
+                      {column.columnLetter} · {column.position}
+                    </td>
+                    <td className="py-1 pr-2">{column.sheetHeader || "(blank)"}</td>
+                    <td className="py-1 pr-2">{column.sourceField ?? "unmapped"}</td>
+                    <td className="py-1 pr-2 font-mono">{column.formattedValue || "(blank)"}</td>
+                    <td className="py-1">{column.warnings.map((warning) => warning.code).join(", ")}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+      {error ? (
+        <p className="text-xs text-amber-800" role="status">
+          {actionErrorCopy(error)}
+        </p>
+      ) : null}
+    </section>
   );
 }

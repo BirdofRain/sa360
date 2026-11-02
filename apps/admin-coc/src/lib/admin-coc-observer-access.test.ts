@@ -210,6 +210,12 @@ test("admin API key allowlist is read-only and excludes secrets", () => {
     isObserverAdminApiGetAllowed("/admin/v1/clients/alex_gross/onboarding/google-only-pilot/preflight"),
     false
   );
+  assert.equal(
+    isObserverAdminApiGetAllowed("/admin/v1/clients/alex_gross/onboarding/column-map-preview/leads"),
+    false
+  );
+  assert.equal(isObserverReadServerAction("previewStoredLeadColumnMapAction"), false);
+  assert.equal(isObserverReadServerAction("listStoredLeadsForColumnPreviewAction"), false);
   assert.equal(isObserverAdminApiGetAllowed("/admin/v1/clients/c1/setup"), false);
   assert.equal(isObserverAdminApiGetAllowed("/admin/v1/ghl/oauth/debug"), false);
   assert.equal(isObserverAdminApiGetAllowed("/admin/v1/ghl/connections"), false);

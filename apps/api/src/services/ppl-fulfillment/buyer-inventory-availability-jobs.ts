@@ -14,8 +14,17 @@ import {
  */
 export const BUYER_AVAILABILITY_JOB_CONCURRENCY = 1;
 
-/** Browser polls refresh this. A silent job is cancelled so the connection returns. */
-export const BUYER_AVAILABILITY_JOB_POLL_IDLE_MS = 45_000;
+/**
+ * A hidden browser tab can delay timers for longer than a minute, and Safari
+ * can freeze them until the tab is visible again. This window is longer than
+ * the 300-second snapshot, so a throttled tab does not lose a count that is
+ * still running. The snapshot timeout, an explicit cancel, and a real failure
+ * still release the connection. This idle expiry is the backstop when polls
+ * never return and the snapshot has not ended.
+ */
+export const BUYER_AVAILABILITY_JOB_POLL_IDLE_MS = 10 * 60 * 1000;
+
+export const BUYER_AVAILABILITY_JOB_EXPIRED = "availability_job_expired";
 
 export const BUYER_AVAILABILITY_JOB_RESULT_TTL_MS = 15 * 60 * 1000;
 
@@ -155,7 +164,7 @@ export function sweepBuyerInventoryAvailabilityJobs(
 ) {
   for (const job of jobs.values()) {
     if (job.status === "running" && now - job.lastSeenAt > pollIdleMs) {
-      cancelRecord(job, now);
+      expireRecord(job, now);
     }
     if (job.finishedAt != null && now - job.finishedAt > BUYER_AVAILABILITY_JOB_RESULT_TTL_MS) {
       jobs.delete(job.id);
@@ -170,6 +179,15 @@ function cancelRecord(job: JobRecord, now: number) {
     job.failure = undefined;
     job.finishedAt = now;
   }
+  job.abort.abort();
+}
+
+function expireRecord(job: JobRecord, now: number) {
+  if (job.status !== "running") return;
+  job.status = "failed";
+  job.failure = { code: BUYER_AVAILABILITY_JOB_EXPIRED };
+  job.result = undefined;
+  job.finishedAt = now;
   job.abort.abort();
 }
 
@@ -266,9 +284,12 @@ async function runJob(job: JobRecord, lookup: AvailabilityLookup) {
       },
     });
     if (job.status !== "running" || job.abort.signal.aborted) {
-      job.status = "cancelled";
+      if (job.status === "running") {
+        job.status = "cancelled";
+        job.failure = undefined;
+        job.finishedAt = Date.now();
+      }
       job.result = undefined;
-      job.failure = undefined;
       job.finishedAt = job.finishedAt ?? Date.now();
       return;
     }
@@ -284,17 +305,21 @@ async function runJob(job: JobRecord, lookup: AvailabilityLookup) {
     job.failure = undefined;
     job.finishedAt = Date.now();
   } catch {
-    if (job.status === "running" && !job.abort.signal.aborted) {
-      job.status = "failed";
-      job.failure = { code: "availability_job_failed" };
+    if (job.status !== "running") {
       job.result = undefined;
-      job.finishedAt = Date.now();
       return;
     }
-    job.status = "cancelled";
+    if (job.abort.signal.aborted) {
+      job.status = "cancelled";
+      job.failure = undefined;
+      job.result = undefined;
+      job.finishedAt = job.finishedAt ?? Date.now();
+      return;
+    }
+    job.status = "failed";
+    job.failure = { code: "availability_job_failed" };
     job.result = undefined;
-    job.failure = undefined;
-    job.finishedAt = job.finishedAt ?? Date.now();
+    job.finishedAt = Date.now();
   } finally {
     releaseSlot(job);
   }
@@ -329,6 +354,10 @@ export function cancelBuyerInventoryAvailabilityJob(
 }
 
 export function resetBuyerInventoryAvailabilityJobsForTests() {
+  if (sweeper) {
+    clearInterval(sweeper);
+    sweeper = null;
+  }
   for (const job of jobs.values()) {
     job.abort.abort();
     job.slotHeld = false;

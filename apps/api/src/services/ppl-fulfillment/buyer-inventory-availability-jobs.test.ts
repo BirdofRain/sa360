@@ -155,7 +155,7 @@ test("cancel drops a late success so it is not an exact total", async () => {
   if (!view.ok) return;
   assert.equal(view.status, "cancelled");
   assert.equal(view.result, undefined);
-  assert.equal(JSON.stringify(view).includes("99"), false);
+  assert.equal(JSON.stringify(view.result ?? null).includes("99"), false);
   assert.equal(JSON.stringify(view).includes("eligibleTotal"), false);
 
   const next = startBuyerInventoryAvailabilityJob({
@@ -166,17 +166,33 @@ test("cancel drops a late success so it is not an exact total", async () => {
   assert.equal(next.ok, true);
 });
 
-test("a poll gap cancels the snapshot and does not keep a partial total", async () => {
-  const pending = deferredLookup();
+test("a throttled poll gap keeps the snapshot, and a real expiry is not an exact total", async () => {
+  const startedAt = 1_700_000_000_000;
+  let release: (result: BuyerInventoryAvailabilityResult) => void = () => undefined;
+  const lookup = () =>
+    new Promise<BuyerInventoryAvailabilityResult>((resolve) => {
+      release = resolve;
+    });
   const started = startBuyerInventoryAvailabilityJob({
     audience: { kind: "portal", clientAccountId: "buyer-a" },
     request: { clientAccountId: "buyer-a", nicheKey: "trucker" },
-    lookup: pending.lookup,
+    lookup,
+    now: startedAt,
   });
   assert.equal(started.ok, true);
   if (!started.ok) return;
-  pending.publish(10, 500);
-  sweepBuyerInventoryAvailabilityJobs(Date.now() + BUYER_AVAILABILITY_JOB_POLL_IDLE_MS + 1);
+  const duringThrottle = startBuyerInventoryAvailabilityJob({
+    audience: { kind: "admin" },
+    request: { clientAccountId: "buyer-b", nicheKey: "trucker" },
+    lookup,
+    now: startedAt + 2 * 60 * 1000,
+  });
+  assert.equal(duringThrottle.ok, false);
+  if (duringThrottle.ok) return;
+  assert.equal(duringThrottle.code, "availability_job_busy");
+
+  sweepBuyerInventoryAvailabilityJobs(startedAt + BUYER_AVAILABILITY_JOB_POLL_IDLE_MS + 1);
+  release(exactResult(99));
   await settled();
   const view = readBuyerInventoryAvailabilityJob(started.jobId, {
     kind: "portal",
@@ -184,8 +200,10 @@ test("a poll gap cancels the snapshot and does not keep a partial total", async 
   });
   assert.equal(view.ok, true);
   if (!view.ok) return;
-  assert.equal(view.status, "cancelled");
+  assert.equal(view.status, "failed");
+  assert.equal(view.failure?.code, "availability_job_expired");
   assert.equal(view.result, undefined);
+  assert.equal(JSON.stringify(view.result ?? null).includes("99"), false);
   assert.equal(JSON.stringify(view).includes("eligibleTotal"), false);
 });
 

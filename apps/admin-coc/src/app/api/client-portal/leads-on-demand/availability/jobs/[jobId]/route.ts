@@ -55,7 +55,7 @@ export async function GET(request: Request, context: { params: Promise<{ jobId: 
   });
   if (!job.ok) {
     return Response.json(
-      { ok: false, error: "Availability is temporarily unavailable." },
+      { ok: false, error: "Availability is temporarily unavailable.", code: job.code },
       { status: job.status || 502 }
     );
   }

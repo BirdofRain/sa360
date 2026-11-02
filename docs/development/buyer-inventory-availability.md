@@ -101,12 +101,18 @@ admin panel and the portal map `POST` a job, receive a job id immediately, and
 poll. The poll shows rows classified and the selectable-row total. It does not
 show a buyer-eligible total until the job status is `complete`. A completed
 report can still be a lower bound when the scan itself stopped early; that
-label comes from the report, not from an interrupted job. Cancel, a failed
-snapshot, and a poll gap of 45 seconds abort the transaction and return no
-result. One availability job runs at a time. A second start returns 503
-`availability_job_busy` instead of opening another snapshot. The synchronous
-`POST` remains for a caller that can hold the connection, and it still aborts
-when that request closes. Each page
+label comes from the report, not from an interrupted job. Cancel and a failed snapshot abort the transaction and return no result.
+Background tabs throttle timers, so a quiet poll gap does not cancel a count
+until 10 minutes have passed with no poll. That is longer than the 300-second
+snapshot. If that expiry happens, the job fails as `availability_job_expired`
+and the page explains that no exact total is available. A restart or a new
+deployment drops the in-memory job; the next poll is `404 job_not_found` and
+the page tells the operator to run the check again. Production `sa360-api` is
+one instance, so the poll reaches the process holding the job and the one-job
+limit is the whole API process. A second start returns 503
+`availability_job_busy` and the page says another count is still running. The
+synchronous `POST` remains for a caller that can hold the connection, and it
+still aborts when that request closes. Each page
 keysets 250 item ids, then loads payloads only for that page. The
 source-association cache is per request and is consistent because the snapshot
 does not change. Reconciliation rechecks the event provider before a confirmed

@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { loadPortalInventoryAvailabilityThroughJob } from "./portal-availability-job-client.ts";
+import {
+  PORTAL_AVAILABILITY_BUSY_MESSAGE,
+  PORTAL_AVAILABILITY_EXPIRED_MESSAGE,
+  loadPortalInventoryAvailabilityThroughJob,
+} from "./portal-availability-job-client.ts";
 
 const availability = {
   ok: true as const,
@@ -91,7 +95,58 @@ test("a cancelled portal job does not become an availability map", async () => {
         }),
       /temporarily unavailable/
     );
-    assert.equal(methods.includes("DELETE"), true);
+    assert.equal(methods.includes("DELETE"), false);
+  } finally {
+    globalThis.fetch = previous;
+  }
+});
+
+test("a busy portal count explains itself and an expired job is not a map", async () => {
+  const previous = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({ ok: false, code: "availability_job_busy" }),
+      { status: 503 }
+    )) as typeof fetch;
+  try {
+    await assert.rejects(
+      () =>
+        loadPortalInventoryAvailabilityThroughJob({
+          nicheKey: "trucker",
+          requestedAgeBucket: "COMMERCE_12_MO_PLUS",
+          requestedQuantity: 25,
+          signal: new AbortController().signal,
+        }),
+      new RegExp(PORTAL_AVAILABILITY_BUSY_MESSAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    );
+  } finally {
+    globalThis.fetch = previous;
+  }
+
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/jobs")) {
+      return new Response(
+        JSON.stringify({ ok: true, status: "running", jobId: "bav_55555555-5555-5555-5555-555555555555" }),
+        { status: 200 }
+      );
+    }
+    return new Response(
+      JSON.stringify({ ok: false, code: "availability_job_expired" }),
+      { status: 409 }
+    );
+  }) as typeof fetch;
+  try {
+    await assert.rejects(
+      () =>
+        loadPortalInventoryAvailabilityThroughJob({
+          nicheKey: "trucker",
+          requestedAgeBucket: "COMMERCE_12_MO_PLUS",
+          requestedQuantity: 25,
+          signal: new AbortController().signal,
+        }),
+      new RegExp(PORTAL_AVAILABILITY_EXPIRED_MESSAGE.slice(0, 24))
+    );
   } finally {
     globalThis.fetch = previous;
   }

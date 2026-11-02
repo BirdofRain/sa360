@@ -296,6 +296,12 @@ test("portal availability jobs return before the count and omit interrupted tota
         headers: { [CLIENT_PORTAL_KEY_HEADER]: "portal-secret" },
       });
       assert.equal(otherBuyer.statusCode, 404);
+      const otherCancel = await app.inject({
+        method: "DELETE",
+        url: `${PREFIX}/buyer-inventory-availability/jobs/${startBody.jobId}?clientAccountId=buyer-b`,
+        headers: { [CLIENT_PORTAL_KEY_HEADER]: "portal-secret" },
+      });
+      assert.equal(otherCancel.statusCode, 404);
 
       const cancelled = await app.inject({
         method: "DELETE",

@@ -433,6 +433,12 @@ export const BUYER_AVAILABILITY_STOPPED_MESSAGE =
 export const BUYER_AVAILABILITY_BUSY_MESSAGE =
   "Another availability count is still running. Wait for it to finish, then check again. No leads were reserved.";
 
+export const BUYER_AVAILABILITY_EXPIRED_MESSAGE =
+  "This check expired because the page stopped checking in. A background tab can delay polling. No exact total is available. No leads were reserved. Run the check again and keep this tab open until it finishes.";
+
+export const BUYER_AVAILABILITY_LOST_MESSAGE =
+  "This availability check is no longer running, so no exact total is available. A restart or deployment can cause that. No leads were reserved. Run the check again.";
+
 export type BuyerAvailabilityJobProgress = {
   phase: "starting" | "classifying";
   rowsClassified: number;
@@ -448,15 +454,29 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
       reject(new DOMException("Aborted", "AbortError"));
       return;
     }
-    const timer = setTimeout(() => {
+    const finish = () => {
+      clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVisible);
+      }
       resolve();
-    }, ms);
+    };
     const onAbort = () => {
       clearTimeout(timer);
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVisible);
+      }
       reject(new DOMException("Aborted", "AbortError"));
     };
+    const onVisible = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") finish();
+    };
+    const timer = setTimeout(finish, ms);
     signal?.addEventListener("abort", onAbort, { once: true });
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVisible);
+    }
   });
 }
 
@@ -561,13 +581,32 @@ async function pollBuyerAvailabilityJob(
         await cancelBuyerAvailabilityJob(jobId);
         return { ok: false, error: BUYER_AVAILABILITY_STOPPED_MESSAGE };
       }
-      const res = await fetch(url, { signal: options?.signal });
+      let res: Response;
+      try {
+        res = await fetch(url, { signal: options?.signal });
+      } catch (error) {
+        if (options?.signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) {
+          await cancelBuyerAvailabilityJob(jobId);
+          return { ok: false, error: BUYER_AVAILABILITY_STOPPED_MESSAGE };
+        }
+        await delay(BUYER_AVAILABILITY_POLL_MS, options?.signal);
+        continue;
+      }
       const payload = await parseJson(res);
       if (!res.ok) {
-        return { ok: false, error: BUYER_AVAILABILITY_RETRY_MESSAGE };
+        const code = availabilityFailureCode(payload);
+        if (res.status === 404 || code === "job_not_found") {
+          return { ok: false, error: BUYER_AVAILABILITY_LOST_MESSAGE };
+        }
+        if (res.status === 401 || res.status === 403) {
+          return { ok: false, error: BUYER_AVAILABILITY_RETRY_MESSAGE };
+        }
+        await delay(BUYER_AVAILABILITY_POLL_MS, options?.signal);
+        continue;
       }
       if (!isBuyerAvailabilityJob(payload)) {
-        return { ok: false, error: BUYER_AVAILABILITY_RETRY_MESSAGE };
+        await delay(BUYER_AVAILABILITY_POLL_MS, options?.signal);
+        continue;
       }
       if (payload.status === "complete" && isBuyerAvailabilityReport(payload.result)) {
         return { ok: true, data: payload.result };
@@ -580,14 +619,19 @@ async function pollBuyerAvailabilityJob(
         await delay(BUYER_AVAILABILITY_POLL_MS, options?.signal);
         continue;
       }
-      return { ok: false, error: BUYER_AVAILABILITY_STOPPED_MESSAGE };
+      if (payload.status === "failed" && payload.failure?.code === "availability_job_expired") {
+        return { ok: false, error: BUYER_AVAILABILITY_EXPIRED_MESSAGE };
+      }
+      if (payload.status === "cancelled") {
+        return { ok: false, error: BUYER_AVAILABILITY_STOPPED_MESSAGE };
+      }
+      return { ok: false, error: BUYER_AVAILABILITY_RETRY_MESSAGE };
     }
   } catch (error) {
     if (options?.signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) {
       await cancelBuyerAvailabilityJob(jobId);
       return { ok: false, error: BUYER_AVAILABILITY_STOPPED_MESSAGE };
     }
-    await cancelBuyerAvailabilityJob(jobId);
     return { ok: false, error: BUYER_AVAILABILITY_RETRY_MESSAGE };
   }
 }

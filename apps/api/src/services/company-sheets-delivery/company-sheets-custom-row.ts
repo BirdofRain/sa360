@@ -18,9 +18,16 @@
  *   with header_changed. That stop is not an uncertain append.
  */
 
-import { createHash } from "node:crypto";
+import { COMPANY_SHEETS_V3_COLUMNS, sheetsColumnMapIssues } from "@sa360/shared";
 
-import { COMPANY_SHEETS_V3_COLUMNS } from "@sa360/shared";
+import {
+  exactHeader,
+  headerFingerprint,
+  persistHeaderSnapshot,
+  readHeaderSnapshot,
+} from "../../lib/sheet-header-snapshot.js";
+
+export { exactHeader, headerFingerprint, persistHeaderSnapshot, readHeaderSnapshot };
 
 import { COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3 } from "../../lib/company-google-sheets-env.js";
 import {
@@ -101,38 +108,8 @@ export function mappableColumnTargets(): MappableTarget[] {
   );
 }
 
-/**
- * `ClientSheetColumnMap.headerSnapshot` rejects empty strings. A blank sheet
- * header is stored as this one-character marker and read back as "".
- */
-export const BLANK_HEADER_STORAGE = "\u200b";
-
-export function persistHeaderSnapshot(header: readonly string[]): string[] {
-  return header.map((cell) => (cell.length === 0 ? BLANK_HEADER_STORAGE : cell));
-}
-
-export function readHeaderSnapshot(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.map((item) => (typeof item === "string" ? decodeStoredHeaderCell(item) : ""));
-}
-
-function decodeStoredHeaderCell(cell: string): string {
-  return cell === BLANK_HEADER_STORAGE ? "" : cell;
-}
-
-export function headerFingerprint(header: readonly string[]): string {
-  return createHash("sha256").update(JSON.stringify(header.map(decodeStoredHeaderCell))).digest("hex");
-}
-
 export function normalizeSheetHeader(value: string): string {
   return value.trim().toLowerCase().replace(/\s*\/\s*/g, "/").replace(/\s+/g, " ");
-}
-
-export function exactHeader(actual: readonly string[], expected: readonly string[]): boolean {
-  return (
-    actual.length === expected.length &&
-    expected.every((cell, index) => decodeStoredHeaderCell(actual[index] ?? "") === decodeStoredHeaderCell(cell))
-  );
 }
 
 export function formulaColumnIndexes(header: readonly string[], sampleRow: readonly string[]): number[] {
@@ -258,27 +235,7 @@ export function suggestColumnAssignments(header: readonly string[], sampleRow: r
 }
 
 export function columnMapIssues(columns: readonly ColumnAssignment[]): ColumnMapIssue[] {
-  const issues: ColumnMapIssue[] = [];
-  for (const column of columns) {
-    if (column.code === "blank_header" && !column.explicit) {
-      issues.push(issue(column, "blank_header", "This header is blank. Leave it unmapped. It is not a lead field."));
-    } else if (column.code === "duplicate_header" || (column.decision === "ambiguous" && column.code === "duplicate_header")) {
-      issues.push(issue(column, "duplicate_header", "This header is duplicated. Map one column explicitly and leave the other unmapped, or choose different fields."));
-    } else if (column.code === "ambiguous_age_or_dob" || (column.decision === "ambiguous" && normalizeSheetHeader(column.sheetHeader) === "age/dob")) {
-      issues.push(issue(column, "ambiguous_age_or_dob", "Age/DOB is ambiguous. Choose Age, DOB, or leave it blank. Age is not calculated from DOB."));
-    } else if (!column.explicit) {
-      issues.push(issue(column, "mapping_unresolved", "Confirm this suggestion or mark the column unmapped."));
-    } else if (column.decision === "ambiguous") {
-      issues.push(issue(column, column.code ?? "mapping_unresolved", "This column is still ambiguous."));
-    }
-    if (column.formula) {
-      issues.push(issue(column, "formula_column_omitted", "This column has a formula. Appends skip it so the formula and existing rows stay intact."));
-    }
-    if (column.explicit && column.decision === "unmapped" && REQUIRED_NORMALIZED.has(normalizeSheetHeader(column.sheetHeader))) {
-      issues.push(issue(column, "required_field_unmapped", "Phone, email, and name columns must be mapped before publish."));
-    }
-  }
-  return issues;
+  return sheetsColumnMapIssues(columns);
 }
 
 export function applyOperatorAssignments(
@@ -665,10 +622,6 @@ function parseOperatorColumn(
 
 function assignment(input: ColumnAssignment): ColumnAssignment {
   return input;
-}
-
-function issue(column: ColumnAssignment, code: string, message: string): ColumnMapIssue {
-  return { columnIndex: column.columnIndex, sheetHeader: column.sheetHeader, code, message };
 }
 
 function cell(

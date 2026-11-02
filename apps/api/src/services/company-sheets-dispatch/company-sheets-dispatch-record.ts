@@ -5,7 +5,7 @@ import {
   isCompanyGoogleSheetsDispatchEnabled,
 } from "../../lib/company-google-sheets-env.js";
 import { findPublishedColumnMap } from "../client-onboarding-v2/column-maps.js";
-import { readHeaderSnapshot } from "../company-sheets-delivery/company-sheets-custom-row.js";
+import { readHeaderSnapshot } from "../../lib/sheet-header-snapshot.js";
 import { evaluateClientSheetsPersonGate } from "./client-sheets-person-gate.js";
 
 const CUSTOM_CAMPAIGN_SCHEMA = "company_sheets_campaign_custom_v1";

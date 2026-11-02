@@ -297,8 +297,10 @@ test("the header fingerprint changes when cells move and ignores a prefix match"
   assert.notEqual(headerFingerprint(["Phone", "Email"]), headerFingerprint(["Email", "Phone"]));
   assert.equal(exactHeader(["Phone", "Email", "Extra"], ["Phone", "Email"]), false);
   const stored = persistHeaderSnapshot(["Full Name", ""]);
-  assert.equal(stored[1]?.length, 1);
+  assert.equal(stored[1], "");
   assert.deepEqual(readHeaderSnapshot(stored), ["Full Name", ""]);
   assert.equal(headerFingerprint(stored), headerFingerprint(["Full Name", ""]));
+  assert.notEqual(headerFingerprint(["Full Name", ""]), headerFingerprint(["Full Name", "\u200b"]));
   assert.equal(exactHeader(stored, ["Full Name", ""]), true);
+  assert.equal(exactHeader(["Full Name", "\u200b"], ["Full Name", ""]), false);
 });

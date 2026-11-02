@@ -204,6 +204,8 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
   }
 
   async function reset(clientAccountId: string, spreadsheetId: string) {
+    await db.clientSheetsPersonAdmission.deleteMany({ where: { clientAccountId } });
+    await db.clientSheetsDedupeDecision.deleteMany({ where: { clientAccountId } });
     await db.companySheetsDeliveryJob.deleteMany({ where: { clientAccountId } });
     await db.companySheetsDispatchIntent.deleteMany({ where: { clientAccountId } });
     await db.companySheetsWorksheetLock.deleteMany({ where: { spreadsheetId } });
@@ -271,7 +273,7 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
         normalizedPayloadJson: {
           first_name: "Ada",
           last_name: "Lovelace",
-          email: "ada@example.com",
+          email: `ada.${leadIds.length}.${suffix}@example.com`,
           phone,
         },
         enrichmentMetadataJson: { source: "dispatch-test" },
@@ -408,6 +410,8 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
 
   async function cleanup() {
     const ids = Object.values(client);
+    await db.clientSheetsPersonAdmission.deleteMany({ where: { clientAccountId: { in: ids } } });
+    await db.clientSheetsDedupeDecision.deleteMany({ where: { clientAccountId: { in: ids } } });
     await db.companySheetsDeliveryJob.deleteMany({ where: { clientAccountId: { in: ids } } });
     await db.companySheetsDispatchIntent.deleteMany({ where: { clientAccountId: { in: ids } } });
     await db.companySheetsWorksheetLock.deleteMany({

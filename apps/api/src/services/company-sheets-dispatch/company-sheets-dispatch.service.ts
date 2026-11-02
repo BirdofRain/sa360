@@ -16,6 +16,7 @@ import {
   settleStaleCompanySheetsRun,
   type CompanySheetsDeliveryDeps,
 } from "../company-sheets-delivery/company-sheets-delivery.service.js";
+import { sheetsPersonDecisionKey } from "./client-sheets-person-gate.js";
 
 const DRAIN_ADVISORY_KEY = "company_sheets_dispatch_drain";
 const CLAIM_MAX_WAIT_MS = 2_000;
@@ -27,6 +28,13 @@ type DrainStopReason = "time_budget" | "execution_in_flight" | null;
  * Enqueue results that must not be retried automatically.
  * A later order-status change does not promote them; an operator schedules explicitly.
  */
+const PERSON_GATE_STATUS: Record<string, string> = {
+  person_duplicate: "duplicate_held",
+  person_review: "review_held",
+  assessment_missing: "assessment_held",
+  assessment_failed: "assessment_failed",
+};
+
 const BLOCKED_DISPATCH_CODES = new Set([
   "order_draft",
   "order_held",
@@ -116,6 +124,20 @@ async function handleClaimedIntent(
 ): Promise<{ executed: boolean }> {
   const queued = await enqueueForIntent(intent, { ...deps, env, db });
   if (!queued.ok) {
+    const personStatus = PERSON_GATE_STATUS[queued.code];
+    if (personStatus) {
+      const decision = intent.sourceLeadEventId
+        ? await db.clientSheetsDedupeDecision.findUnique({
+            where: { idempotencyKey: sheetsPersonDecisionKey(intent.clientAccountId, intent.sourceLeadEventId) },
+          })
+        : null;
+      await markIntent(db, intent.id, {
+        status: personStatus,
+        reason: decision?.reason ?? queued.code,
+        lastError: queued.code,
+      });
+      return { executed: false };
+    }
     const hold = terminalHold(intent, queued.code);
     const setup = campaignSetupHold(queued.code);
     await markIntent(db, intent.id, {

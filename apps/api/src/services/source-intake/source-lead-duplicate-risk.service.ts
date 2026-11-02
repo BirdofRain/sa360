@@ -77,6 +77,18 @@ export async function evaluateSourceLeadEventCorrelation(opts: {
   };
 }
 
+/** Missing persisted assessment does not block routing or GHL. Sheets dispatch holds separately. */
+export function missingPersistedDuplicateAssessmentSummary(): SourceLeadDuplicateRiskSummary {
+  return {
+    riskLevel: "none",
+    identityStatus: "known_lead",
+    blocksDelivery: false,
+    blocksLiveDelivery: false,
+    recommendedAction: "No duplicate risk assessment persisted.",
+    candidateCount: 0,
+  };
+}
+
 export async function evaluateSourceLeadDuplicateRisk(opts: {
   payload: LifecycleEventSchema;
   destinationClientAccountId: string | null;
@@ -101,14 +113,9 @@ export async function evaluateSourceLeadDuplicateRisk(opts: {
       candidateCount: persisted.candidateMatches?.length ?? 0,
     };
   } else {
-    summary = {
-      riskLevel: "none",
-      identityStatus: "known_lead",
-      blocksDelivery: false,
-      blocksLiveDelivery: false,
-      recommendedAction: "No duplicate risk assessment persisted.",
-      candidateCount: 0,
-    };
+    // Verified nonblocking fallback for the routing/GHL status. It does not
+    // admit a Sheets person. The Sheets gate holds when this row is missing.
+    summary = missingPersistedDuplicateAssessmentSummary();
   }
 
   if (

@@ -12,20 +12,24 @@ export async function upsertDuplicateRiskForRoutingDecision(
     where: { routingDryRunDecisionId },
   });
   if (existing) {
-    return prisma.leadDuplicateRiskAssessment.update({
+    const updated = await prisma.leadDuplicateRiskAssessment.update({
       where: { id: existing.id },
       data: {
         ...data,
         routingDryRunDecisionId,
       },
     });
+    await clearDuplicateRiskAssessmentFailure(routingDryRunDecisionId);
+    return updated;
   }
-  return prisma.leadDuplicateRiskAssessment.create({
+  const created = await prisma.leadDuplicateRiskAssessment.create({
     data: {
       ...data,
       routingDryRunDecision: { connect: { id: routingDryRunDecisionId } },
     },
   });
+  await clearDuplicateRiskAssessmentFailure(routingDryRunDecisionId);
+  return created;
 }
 
 export async function findDuplicateRiskByRoutingDecisionId(
@@ -134,4 +138,23 @@ export async function hasPriorLeadCreatedForIdentity(opts: {
     select: { id: true },
   });
   return row != null;
+}
+
+export async function recordDuplicateRiskAssessmentFailure(
+  routingDryRunDecisionId: string,
+  errorName: string
+): Promise<void> {
+  await prisma.duplicateRiskAssessmentFailure.upsert({
+    where: { routingDryRunDecisionId },
+    create: { routingDryRunDecisionId, errorName },
+    update: { errorName },
+  });
+}
+
+export async function clearDuplicateRiskAssessmentFailure(routingDryRunDecisionId: string): Promise<void> {
+  try {
+    await prisma.duplicateRiskAssessmentFailure.deleteMany({ where: { routingDryRunDecisionId } });
+  } catch {
+    // A leftover failure row does not outrank a persisted assessment.
+  }
 }

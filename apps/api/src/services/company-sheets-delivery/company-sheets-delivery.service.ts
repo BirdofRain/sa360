@@ -22,6 +22,11 @@ import { findCompanyGoogleConnection } from "../../repositories/company-google-c
 import { companySheetsCampaignRowValues, type CampaignSheetLeadInput } from "./company-sheets-campaign-row.js";
 import { sheetsEventAlreadyWritten, sheetsEventWriteDisposition } from "./sheets-event-write-guard.js";
 import {
+  evaluateClientSheetsPersonGate,
+  noteSheetsPersonDelivery,
+} from "../company-sheets-dispatch/client-sheets-person-gate.js";
+import { logger } from "../../lib/logger.js";
+import {
   applyOperatorAssignments,
   columnMapContentKey,
   COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA,
@@ -439,6 +444,11 @@ export async function enqueueConfirmedLeadSheetsDelivery(
     return { ok: true, job: priorWrite.job, created: false };
   }
   if (priorWrite.disposition === "hold") return fail("event_write_already_recorded", 409);
+  const person = await evaluateClientSheetsPersonGate(db, {
+    clientAccountId,
+    sourceLeadEventId: lead.id,
+  });
+  if (!person.ok) return fail(person.code, 409);
   const stableRowId = `lead:${clientAccountId}:${lead.id}`;
   const resolved = await resolveCampaignWrite(db, env, destination, contract, {
     stableRowId,
@@ -999,6 +1009,23 @@ async function finishJob(
   });
   if (updated.count !== 1) return false;
   await syncEvidence(db, job.id, status);
+  if (job.kind === "lead" && job.sourceLeadEventId && (status === "succeeded" || status === "uncertain")) {
+    try {
+      await noteSheetsPersonDelivery(db, {
+        clientAccountId: job.clientAccountId,
+        sourceLeadEventId: job.sourceLeadEventId,
+        jobId: job.id,
+        outcome: status,
+        spreadsheetId: job.spreadsheetId,
+        worksheetId: job.worksheetId,
+      });
+    } catch (err) {
+      logger.warn("sheets_person_admission.note_failed", {
+        jobId: job.id,
+        errorName: err instanceof Error ? err.name : "Error",
+      });
+    }
+  }
   return true;
 }
 
@@ -2105,6 +2132,23 @@ export async function releaseCompanySheetsDeliveryHold(
   if (updated.count !== 1) return fail("not_uncertain", 409);
   await releaseWorksheetLock(db, job);
   await syncEvidence(db, jobId, status);
+  if (status === "succeeded" && job.kind === "lead" && job.sourceLeadEventId) {
+    try {
+      await noteSheetsPersonDelivery(db, {
+        clientAccountId: job.clientAccountId,
+        sourceLeadEventId: job.sourceLeadEventId,
+        jobId: job.id,
+        outcome: "succeeded",
+        spreadsheetId: job.spreadsheetId,
+        worksheetId: job.worksheetId,
+      });
+    } catch (err) {
+      logger.warn("sheets_person_admission.note_failed", {
+        jobId: job.id,
+        errorName: err instanceof Error ? err.name : "Error",
+      });
+    }
+  }
   return { ok: true, status, appended: false };
 }
 

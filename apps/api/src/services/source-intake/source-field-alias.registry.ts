@@ -77,8 +77,17 @@ export const DEFAULT_SOURCE_FIELD_ALIASES: Record<
     "who_is_coverage_for",
     "coverage_for",
   ],
-  date_of_birth: ["date_of_birth", "dob", "birth_date"],
-  age: ["age"],
+  date_of_birth: [
+    "date_of_birth",
+    "dob",
+    "birth_date",
+    // CamelCase normalizes without inserting underscores (`dateOfBirth` → `dateofbirth`).
+    "dateOfBirth",
+    "birthDate",
+    "birthday",
+    "birth_day",
+  ],
+  age: ["age", "consumer_age", "consumerAge"],
   best_time_to_call: [
     "best_time_to_call",
     "best_time_to_review",

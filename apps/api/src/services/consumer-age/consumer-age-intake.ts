@@ -3,36 +3,21 @@
  * canonical normalized contract (`lead_details.consumer_age`,
  * `lead_details.date_of_birth`).
  *
- * Alias matching reuses `normalizeSourceFieldKey` so `DOB`, `Date of Birth`, and
- * `birth-date` all resolve. A recognized birthday also yields the derived
- * consumer age; an explicit age never fabricates a birthday. Raw source values
- * and their provenance are left untouched — this only fills canonical fields.
+ * Parsing and the replay reference live in `campaign-dob-age.ts`. A recognized
+ * birthday yields a date-only DOB and, when a reference instant is supplied,
+ * the derived consumer age. An explicit age never fabricates a birthday.
+ * Source bags are not mutated. A supplied age that disagrees with the DOB is
+ * kept and marked `consumer_age_conflict`.
  */
 
-import { normalizeSourceFieldKey } from "../source-intake/source-field-alias.registry.js";
 import {
-  EXPLICIT_CONSUMER_AGE_KEYS,
-  EXPLICIT_DATE_OF_BIRTH_KEYS,
-  normalizeConsumerAgeCell,
-  resolveConsumerAgeForFulfillment,
-} from "./consumer-age-policy.js";
+  resolveCampaignDobAgeFromBags,
+  type CampaignDobAgeFields,
+  type CampaignDobAgeOptions,
+} from "./campaign-dob-age.js";
+import { resolveConsumerAgeForFulfillment } from "./consumer-age-policy.js";
 
-export type IntakeConsumerAgeFields = {
-  consumer_age?: string;
-  date_of_birth?: string;
-};
-
-const DOB_ALIASES = new Set(
-  [...EXPLICIT_DATE_OF_BIRTH_KEYS, "Date of Birth", "Birth Date"].map(normalizeSourceFieldKey)
-);
-const AGE_ALIASES = new Set(
-  [...EXPLICIT_CONSUMER_AGE_KEYS, "Age", "Consumer Age"].map(normalizeSourceFieldKey)
-);
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
-}
+export type IntakeConsumerAgeFields = CampaignDobAgeFields;
 
 function cellText(value: unknown): string {
   if (typeof value === "string") return value.trim();
@@ -40,67 +25,47 @@ function cellText(value: unknown): string {
   return "";
 }
 
-function firstMatchingCell(bags: unknown[], aliases: Set<string>): string {
-  for (const bag of bags) {
-    const record = asRecord(bag);
-    if (!record) continue;
-    for (const [key, value] of Object.entries(record)) {
-      if (!aliases.has(normalizeSourceFieldKey(key))) continue;
-      const text = cellText(value);
-      if (text) return text;
-    }
-  }
-  return "";
-}
-
 /**
  * Canonical age/DOB fields for the supplied source bags, in bag order.
  * Returns an empty object when no usable explicit value exists — callers must
- * not write placeholder values.
+ * not write placeholder values. Derived age is omitted when no reference
+ * instant is supplied.
  */
 export function resolveIntakeConsumerAgeFields(
   bags: unknown[],
-  evaluatedAt: Date = new Date()
+  evaluatedAt: Date | CampaignDobAgeOptions = {}
 ): IntakeConsumerAgeFields {
-  const dobCell = firstMatchingCell(bags, DOB_ALIASES);
-  if (dobCell) {
-    const parsed = normalizeConsumerAgeCell(dobCell, evaluatedAt);
-    if (parsed.dateOfBirth && parsed.consumerAge) {
-      return { consumer_age: parsed.consumerAge, date_of_birth: parsed.dateOfBirth };
-    }
-  }
-
-  const ageCell = firstMatchingCell(bags, AGE_ALIASES);
-  if (ageCell) {
-    const parsed = normalizeConsumerAgeCell(ageCell, evaluatedAt);
-    if (parsed.consumerAge) {
-      return {
-        consumer_age: parsed.consumerAge,
-        ...(parsed.dateOfBirth ? { date_of_birth: parsed.dateOfBirth } : {}),
-      };
-    }
-  }
-
-  return {};
+  return resolveCampaignDobAgeFromBags(bags, evaluatedAt);
 }
 
 /**
  * Merge canonical age/DOB into an existing `lead_details` nest without
- * overwriting a non-blank canonical value already present.
+ * overwriting a non-blank canonical value already present. Provenance and a
+ * visible conflict flag are filled when the bags support them.
  */
 export function withIntakeConsumerAge(
   leadDetails: Record<string, unknown> | null | undefined,
   bags: unknown[],
-  evaluatedAt: Date = new Date()
+  evaluatedAt: Date | CampaignDobAgeOptions = {}
 ): Record<string, unknown> {
   const details: Record<string, unknown> = { ...(leadDetails ?? {}) };
   const resolved = resolveIntakeConsumerAgeFields(bags, evaluatedAt);
-  if (resolved.consumer_age && !cellText(details.consumer_age)) {
-    details.consumer_age = resolved.consumer_age;
+  const hadAge = Boolean(cellText(details.consumer_age));
+  for (const [key, value] of Object.entries(resolved)) {
+    if (value == null) continue;
+    if (key === "consumer_age_conflict") {
+      details.consumer_age_conflict = true;
+      continue;
+    }
+    if (key === "consumer_age_provenance" && hadAge && !cellText(details.consumer_age_provenance)) {
+      details.consumer_age_provenance = "supplied";
+      continue;
+    }
+    if (!cellText(details[key])) details[key] = value;
   }
-  if (resolved.date_of_birth && !cellText(details.date_of_birth)) {
-    details.date_of_birth = resolved.date_of_birth;
-  }
+  const storedAge = cellText(details.consumer_age);
+  const derived = cellText(details.consumer_age_derived);
+  if (storedAge && derived && storedAge !== derived) details.consumer_age_conflict = true;
   return details;
 }
 

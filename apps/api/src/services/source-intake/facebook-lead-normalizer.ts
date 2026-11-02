@@ -136,7 +136,9 @@ export function normalizeFacebookLeadToLifecyclePayload(
   const formName = trimOrUndefined(fields.formName);
   // Meta form questions arrive as custom fields. Promote an explicit
   // age / date-of-birth answer to the canonical nest commercial fulfillment reads.
-  const leadDetails = withIntakeConsumerAge(null, [fields.custom ?? {}]);
+  const leadDetails = withIntakeConsumerAge(null, [fields.custom ?? {}], {
+    referenceAt: trimOrUndefined(fields.createdTime) ?? null,
+  });
 
   return {
     schema_version: "MASTER 2.0",

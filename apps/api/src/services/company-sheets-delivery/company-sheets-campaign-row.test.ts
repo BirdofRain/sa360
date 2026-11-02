@@ -268,7 +268,8 @@ test("missing answers stay blank and excluded values are not copied", () => {
   assert.equal(mapped.last_name, "");
   assert.equal(mapped.state, "");
   assert.equal(mapped.provider_lead_id, "");
-  assert.equal(mapped.consumer_age, "");
+  // Stored DOB with no age cell derives the campaign age. The ISO date stays off v2.
+  assert.equal(mapped.consumer_age, "47");
   assert.equal(mapped.branch_of_service, "");
   assert.equal(mapped.coverage_amount, "");
   assert.equal(mapped.full_name, "Ada");

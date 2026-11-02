@@ -4,6 +4,7 @@
  * It does not call Google, publish a map, or change a delivery switch.
  */
 
+import type { CampaignDobAgePreview } from "../consumer-age/campaign-dob-age.js";
 import {
   applyOperatorAssignments,
   COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA,
@@ -63,6 +64,8 @@ export type CustomCampaignSheetPlan = {
   operatorDummy: boolean;
   warnings: string[];
   contentKey: string;
+  /** Structured Age/DOB preview for Agent B. The sheet cells stay the projected values. */
+  dobAge: CampaignDobAgePreview;
 };
 
 export function planCustomCampaignSheet(input: {
@@ -126,6 +129,7 @@ export function planCustomCampaignSheet(input: {
       operatorDummy: isOperatorCreatedDummyEvent(input.event),
       warnings: projected.warnings,
       contentKey: `column-map:${map.id}:v${map.mapVersion}`,
+      dobAge: projected.dobAge,
     },
   };
 }

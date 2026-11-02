@@ -23,6 +23,11 @@ import { createHash } from "node:crypto";
 import { COMPANY_SHEETS_V3_COLUMNS } from "@sa360/shared";
 
 import { COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3 } from "../../lib/company-google-sheets-env.js";
+import {
+  CAMPAIGN_DOB_AGE_CONFLICT_WARNING,
+  projectCampaignDobAge,
+  type CampaignDobAgePreview,
+} from "../consumer-age/campaign-dob-age.js";
 import { companySheetsCampaignRowValues, type CampaignSheetLeadInput } from "./company-sheets-campaign-row.js";
 
 export const COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA = "company_sheets_campaign_custom_v1";
@@ -317,6 +322,7 @@ export function publishBlocker(
 
 export const PRIMARY_CONCERN_FILLED_FROM_REASON = "primary_concern_filled_from_primary_reason";
 export const PRIMARY_CONCERN_OMITTED = "primary_concern_omitted";
+export { CAMPAIGN_DOB_AGE_CONFLICT_WARNING };
 
 /**
  * Projects a published map onto one lead.
@@ -326,7 +332,7 @@ export const PRIMARY_CONCERN_OMITTED = "primary_concern_omitted";
 export function customRowProjection(
   assignments: readonly ColumnAssignment[],
   lead: CampaignSheetLeadInput
-): { values: string[]; warnings: string[] } | null {
+): { values: string[]; warnings: string[]; dobAge: CampaignDobAgePreview } | null {
   const v3 = companySheetsCampaignRowValues({ ...lead, schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3 });
   if (!v3) return null;
   const byField = new Map(COMPANY_SHEETS_V3_COLUMNS.map((column, index) => [column.sourceField, v3[index] ?? ""]));
@@ -351,7 +357,12 @@ export function customRowProjection(
   const warnings: string[] = [];
   if (filledFromReason) warnings.push(PRIMARY_CONCERN_FILLED_FROM_REASON);
   if (omitted) warnings.push(PRIMARY_CONCERN_OMITTED);
-  return { values, warnings };
+  const dobAge = projectCampaignDobAge({
+    normalizedPayload: lead.normalizedPayload,
+    receivedAt: lead.receivedAt,
+  });
+  if (dobAge.conflict) warnings.push(CAMPAIGN_DOB_AGE_CONFLICT_WARNING);
+  return { values, warnings, dobAge };
 }
 
 export function customRowValues(

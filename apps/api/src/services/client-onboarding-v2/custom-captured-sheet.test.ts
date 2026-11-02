@@ -253,6 +253,13 @@ test("preview projects the published 15 headers, including blanks, DOB, and nich
   assert.equal(values[4], "sample.lead@example.invalid");
   assert.equal(values[5], "TX");
   assert.equal(values[6], "04/02/1990");
+  assert.equal(preview.plan.sheet?.dobAge?.dateOfBirth, "1990-04-02");
+  assert.equal(preview.plan.sheet?.dobAge?.dateOfBirthSheet, "04/02/1990");
+  assert.equal(preview.plan.sheet?.dobAge?.age, "36");
+  assert.equal(preview.plan.sheet?.dobAge?.ageProvenance, "derived_from_date_of_birth");
+  assert.equal(preview.plan.sheet?.dobAge?.referenceDate, "2026-10-29");
+  assert.equal(preview.plan.sheet?.dobAge?.referenceRule, "submitted_at_utc_date_else_received_at_utc_date");
+  assert.equal(preview.plan.sheet?.dobAge?.conflict, false);
   assert.equal(values[7], "Veteran");
   assert.equal(values[8], "Army");
   assert.equal(values[9], "Married");

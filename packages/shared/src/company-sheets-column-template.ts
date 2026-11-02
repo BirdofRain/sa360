@@ -73,14 +73,14 @@ export const COMPANY_SHEETS_V3_COLUMNS: readonly CompanySheetsTemplateColumn[] =
     sourceField: "consumer_age",
     group: "niche",
     systemRequired: false,
-    help: "Stored age only. Age is not calculated from date of birth.",
+    help: "Stored consumer age when present. When that cell is blank and a date of birth is stored, the completed whole-year age as of the lead submitted_at UTC date, otherwise received_at. Aged-inventory age limits are not applied. An age does not create a birthday.",
   },
   {
     header: "DOB",
     sourceField: "date_of_birth",
     group: "niche",
     systemRequired: false,
-    help: "First stored value among lead_details.date_of_birth, sourceAttributes.date_of_birth, and contact.date_of_birth. Blank when none of those are stored.",
+    help: "Date-only birthday. A stored ISO date, ISO datetime, US numeric date, or English month-name date is written as YYYY-MM-DD and the calendar date is not shifted into America/New_York. Blank when none of those are stored. An age does not create a birthday.",
   },
   {
     header: "Military Status",

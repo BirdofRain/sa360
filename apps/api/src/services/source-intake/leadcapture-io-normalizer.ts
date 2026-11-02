@@ -172,7 +172,12 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
       extracted.sourceAttributes as Record<string, string>,
       niche.nicheKey
     ),
-    [extracted.sourceAttributes, effective]
+    [extracted.sourceAttributes, effective, { unmappedSourceFieldsJson: extracted.unmappedSourceFields }],
+    {
+      // Replay uses the source submitted_at UTC date, not the worker clock.
+      referenceAt: sourceSubmittedAt ?? null,
+      routeAliasOverrides: opts?.routeAliasOverrides,
+    }
   );
 
   const complianceMetadata = {

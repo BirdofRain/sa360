@@ -3,6 +3,7 @@ import {
   COMPANY_SHEETS_DRAIN_SAFETY_CAP,
   COMPANY_SHEETS_EXECUTION_LEASE_MS,
   COMPANY_SHEETS_INTENT_BUDGET_MS,
+  companySheetsIntentOperatorCopy,
 } from "@sa360/shared";
 
 import { prisma } from "../../lib/db.js";
@@ -16,6 +17,8 @@ import {
   settleStaleCompanySheetsRun,
   type CompanySheetsDeliveryDeps,
 } from "../company-sheets-delivery/company-sheets-delivery.service.js";
+import { sheetsPersonDecisionKey } from "./client-sheets-person-gate.js";
+import { recoverDueSheetsPersonHolds } from "./client-sheets-person-recovery.js";
 
 const DRAIN_ADVISORY_KEY = "company_sheets_dispatch_drain";
 const CLAIM_MAX_WAIT_MS = 2_000;
@@ -27,6 +30,13 @@ type DrainStopReason = "time_budget" | "execution_in_flight" | null;
  * Enqueue results that must not be retried automatically.
  * A later order-status change does not promote them; an operator schedules explicitly.
  */
+const PERSON_GATE_STATUS: Record<string, string> = {
+  person_duplicate: "duplicate_held",
+  person_review: "review_held",
+  assessment_missing: "assessment_held",
+  assessment_failed: "assessment_failed",
+};
+
 const BLOCKED_DISPATCH_CODES = new Set([
   "order_draft",
   "order_held",
@@ -116,6 +126,20 @@ async function handleClaimedIntent(
 ): Promise<{ executed: boolean }> {
   const queued = await enqueueForIntent(intent, { ...deps, env, db });
   if (!queued.ok) {
+    const personStatus = PERSON_GATE_STATUS[queued.code];
+    if (personStatus) {
+      const decision = intent.sourceLeadEventId
+        ? await db.clientSheetsDedupeDecision.findUnique({
+            where: { idempotencyKey: sheetsPersonDecisionKey(intent.clientAccountId, intent.sourceLeadEventId) },
+          })
+        : null;
+      await markIntent(db, intent.id, {
+        status: personStatus,
+        reason: decision?.reason ?? queued.code,
+        lastError: queued.code,
+      });
+      return { executed: false };
+    }
     const hold = terminalHold(intent, queued.code);
     const setup = campaignSetupHold(queued.code);
     await markIntent(db, intent.id, {
@@ -350,10 +374,22 @@ export async function processDueCompanySheetsDispatches(
   if (!isCompanyGoogleSheetsDispatchEnabled(env)) return finish(0, 0, 0, null, "dispatch_disabled");
   const db = deps.db ?? prisma;
   const clock = () => deps.now?.() ?? new Date();
+  await recoverDueSheetsPersonHolds(db, clock(), limit);
   const executionEnabled = isCompanyGoogleSheetsExecutionEnabled(env);
   if (!executionEnabled) {
     const now = clock();
     const stale = new Date(now.getTime() - COMPANY_SHEETS_EXECUTION_LEASE_MS);
+    // Setting the flag false does not finish a claim the previous process
+    // already started. After the lease, a pre-append run returns to
+    // retryable and a run that started an append becomes uncertain. Neither
+    // path calls Google. A run still inside the lease stays running.
+    await db.$transaction(
+      async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${DRAIN_ADVISORY_KEY}))`;
+        await quarantineExpiredRuns(tx, now, stale);
+      },
+      { maxWait: CLAIM_MAX_WAIT_MS, timeout: CLAIM_TIMEOUT_MS }
+    );
     const due = await db.companySheetsDispatchIntent.findMany({
       where: {
         OR: [
@@ -544,21 +580,32 @@ export async function getCompanySheetsDispatchStatus(
     campaignDispatchNotBefore: destination?.campaignDispatchNotBefore?.toISOString() ?? null,
     agedDispatchEnabled: destination?.agedDispatchEnabled === true,
     agedDispatchNotBefore: destination?.agedDispatchNotBefore?.toISOString() ?? null,
-    intents: intents.map((intent) => ({
-      id: intent.id,
-      kind: intent.kind,
-      status: intent.status,
-      reason: intent.reason,
-      explicit: intent.explicit,
-      actor: intent.actor,
-      jobId: intent.jobId,
-      sourceLeadEventId: intent.sourceLeadEventId,
-      exportPackageId: intent.exportPackageId,
-      leadOrderId: intent.leadOrderId,
-      lastError: intent.lastError,
-      attemptCount: intent.attemptCount,
-      createdAt: intent.createdAt.toISOString(),
-    })),
+    intents: intents.map((intent) => {
+      const operator = companySheetsIntentOperatorCopy({
+        status: intent.status,
+        reason: intent.reason,
+        lastError: intent.lastError,
+      });
+      return {
+        id: intent.id,
+        kind: intent.kind,
+        status: intent.status,
+        reason: intent.reason,
+        explicit: intent.explicit,
+        actor: intent.actor,
+        jobId: intent.jobId,
+        sourceLeadEventId: intent.sourceLeadEventId,
+        exportPackageId: intent.exportPackageId,
+        leadOrderId: intent.leadOrderId,
+        lastError: intent.lastError,
+        attemptCount: intent.attemptCount,
+        createdAt: intent.createdAt.toISOString(),
+        headline: operator.headline,
+        detail: operator.detail,
+        delivered: operator.delivered,
+        recovered: operator.recovered,
+      };
+    }),
     lastCampaignDelivery: lastJob
       ? {
           jobId: lastJob.id,

@@ -5,6 +5,8 @@ import {
   isCompanyGoogleSheetsDispatchEnabled,
 } from "../../lib/company-google-sheets-env.js";
 import { findPublishedColumnMap } from "../client-onboarding-v2/column-maps.js";
+import { readHeaderSnapshot } from "../../lib/sheet-header-snapshot.js";
+import { evaluateClientSheetsPersonGate } from "./client-sheets-person-gate.js";
 
 const CUSTOM_CAMPAIGN_SCHEMA = "company_sheets_campaign_custom_v1";
 
@@ -57,9 +59,7 @@ export async function recordCompanySheetsCampaignIntent(
       worksheetId: tab.worksheetId,
       sourceFunnelId: null,
     });
-    const snapshot = Array.isArray(map?.headerSnapshot)
-      ? map.headerSnapshot.filter((cell): cell is string => typeof cell === "string")
-      : [];
+    const snapshot = readHeaderSnapshot(map?.headerSnapshot);
     const headerMatches =
       snapshot.length === storedHeader.length && snapshot.every((cell, index) => cell === storedHeader[index]);
     if (env.SA360_CLIENT_ONBOARDING_V2_CUSTOM_WRITER_ENABLED?.trim() !== "true") reason = "custom_writer_disabled";
@@ -70,18 +70,35 @@ export async function recordCompanySheetsCampaignIntent(
       reason = null;
     }
   }
-  await db.companySheetsDispatchIntent.upsert({
-    where: { idempotencyKey: `campaign:${clientAccountId}:${input.sourceLeadEventId}` },
-    create: {
-      idempotencyKey: `campaign:${clientAccountId}:${input.sourceLeadEventId}`,
-      kind: "campaign_lead",
-      status: ready ? "pending" : "awaiting_setup",
-      clientAccountId,
-      sourceLeadEventId: input.sourceLeadEventId,
-      reason,
-    },
-    update: {},
+  const idempotencyKey = `campaign:${clientAccountId}:${input.sourceLeadEventId}`;
+  const gate = await evaluateClientSheetsPersonGate(db, {
+    clientAccountId,
+    sourceLeadEventId: input.sourceLeadEventId,
   });
+  const gated = gate.ok
+    ? { status: ready ? "pending" : "awaiting_setup", reason: ready ? null : reason, lastError: null }
+    : { status: gate.intentStatus ?? "review_held", reason: gate.reason, lastError: gate.code };
+  const existing = await db.companySheetsDispatchIntent.findUnique({ where: { idempotencyKey } });
+  if (!existing) {
+    await db.companySheetsDispatchIntent.create({
+      data: {
+        idempotencyKey,
+        kind: "campaign_lead",
+        status: gated.status,
+        clientAccountId,
+        sourceLeadEventId: input.sourceLeadEventId,
+        reason: gated.reason,
+        lastError: gated.lastError,
+      },
+    });
+    return;
+  }
+  if (existing.status === "assessment_held" || existing.status === "assessment_failed") {
+    await db.companySheetsDispatchIntent.update({
+      where: { id: existing.id },
+      data: { status: gated.status, reason: gated.reason, lastError: gated.lastError },
+    });
+  }
 }
 
 /**

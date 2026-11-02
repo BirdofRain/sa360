@@ -1,0 +1,16 @@
+{
+  "provider": "leadcapture_io",
+  "sa360_source_system": "leadcapture_io_nextgen",
+  "lead_id": "11111111-2222-4333-8444-555555555555",
+  "submitted_at": "2026-10-26T15:04:00.000Z",
+  "parent_url": "https://go.lifeinsuranceforvets.com/learn-alex-gross?utm_source=redacted",
+  "funnel_name": "Redacted Vet Web Form",
+  "first_name": "Redacted",
+  "last_name": "Example",
+  "email": "redacted.example@example.test",
+  "phone": "5550100199",
+  "state": "TX",
+  "answers": {
+    "dateOfBirth": "04/12/1979"
+  }
+}

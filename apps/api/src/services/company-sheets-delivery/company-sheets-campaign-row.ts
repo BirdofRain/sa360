@@ -6,6 +6,7 @@ import {
   COMPANY_SHEETS_LEAD_HEADER_V2,
   companySheetsCampaignHeader,
 } from "../../lib/company-google-sheets-env.js";
+import { projectCampaignDobAge } from "../consumer-age/campaign-dob-age.js";
 import { normalizeSourceFieldKey } from "../source-intake/source-field-alias.registry.js";
 
 /**
@@ -14,8 +15,15 @@ import { normalizeSourceFieldKey } from "../source-intake/source-field-alias.reg
  * Precedence is first non-blank only. A missing value stays blank. v1 and v2
  * rows do not gain columns. v3 reads the same v2 values plus stored lead type,
  * date of birth, notes, and niche answers. This mapper does not read raw
- * payload JSON, IP address, user agent, fbclid, or a TrustedForm certificate,
- * and it does not derive age from a birthday.
+ * payload JSON, IP address, user agent, fbclid, or a TrustedForm certificate.
+ *
+ * Age is the stored consumer age when one is present. A blank age is the
+ * completed whole-year age of a recognized date of birth. The reference is
+ * the first valid documented timestamp among `submitted_at` and this lead's
+ * persisted `receivedAt`. An invalid `submitted_at` does not block that
+ * receipt time. Aged-inventory eligibility limits are not applied. An age
+ * never creates a birthday. DOB is written as a date-only `YYYY-MM-DD`
+ * value; a documented datetime keeps the calendar date before `T`.
  *
  * `completion_minutes` and `trustedform_status` are read only from
  * `routing.source_intake.unmappedSourceFieldsJson`. The entry `key` must be
@@ -75,7 +83,7 @@ export function companySheetsCampaignRowValues(input: CampaignSheetLeadInput & {
       COMPANY_SHEETS_LEAD_HEADER_V2.map((key, index) => [key, extended[index] ?? ""])
     );
     byKey.lead_type = readLeadType(payload);
-    byKey.date_of_birth = readDateOfBirth(payload);
+    byKey.date_of_birth = readDateOfBirth(payload, input.receivedAt);
     byKey.notes = unmappedNormalized(payload, "notes");
     for (const key of [
       "disability_rating",
@@ -123,7 +131,7 @@ function v2RowValues(input: CampaignSheetLeadInput): string[] | null {
     identity.lastName,
     readString(contact?.state ?? payload.state),
     providerLeadId(payload, input.sourceLeadId),
-    firstText(details?.consumer_age, attribute(payload, "age")),
+    projectCampaignDobAge({ normalizedPayload: payload, receivedAt: input.receivedAt }).age,
     attribute(payload, "best_time_to_call"),
     firstText(niche?.branch_of_service, attribute(payload, "branch_of_service")),
     attribute(payload, "military_status"),
@@ -180,10 +188,8 @@ function readLeadType(payload: Record<string, unknown>): string {
   return firstText(routing?.product_type, routing?.niche_key);
 }
 
-function readDateOfBirth(payload: Record<string, unknown>): string {
-  const details = asRecord(payload.lead_details);
-  const contact = asRecord(payload.contact);
-  return firstText(details?.date_of_birth, attribute(payload, "date_of_birth"), contact?.date_of_birth);
+function readDateOfBirth(payload: Record<string, unknown>, receivedAt: string): string {
+  return projectCampaignDobAge({ normalizedPayload: payload, receivedAt }).dateOfBirth;
 }
 
 function nicheAnswer(payload: Record<string, unknown>, key: string): string {

@@ -24,9 +24,11 @@ import {
   createColumnMapDraft,
   listColumnMaps,
   patchColumnMap,
+  previewColumnMapDraft,
   publishColumnMap,
   readExistingWorksheetSnapshot,
   retireColumnMap,
+  saveAndPublishColumnMap,
   saveExistingSheetsTarget,
   type ExistingWorksheetSnapshot,
 } from "../services/client-onboarding-v2/column-maps.js";
@@ -103,6 +105,24 @@ const columnMapPublishSchema = z
   })
   .strict();
 
+const columnMapSavePublishSchema = z
+  .object({
+    requestId: z.string().uuid(),
+    expectedRevision: z.number().int().nonnegative(),
+    assignments: z.array(z.unknown()).max(80),
+    clientAccountId: z.string().optional(),
+  })
+  .strict();
+
+const columnMapPreviewSchema = z
+  .object({
+    expectedRevision: z.number().int().nonnegative(),
+    assignments: z.array(z.unknown()).max(80).optional(),
+    previewToken: z.string().min(1).max(80),
+    clientAccountId: z.string().optional(),
+  })
+  .strict();
+
 const columnMapRetireSchema = z
   .object({
     requestId: z.string().uuid(),
@@ -127,6 +147,8 @@ export const adminClientOnboardingV2ConfigRoutes: FastifyPluginAsync<OnboardingC
   const env = opts.env ?? process.env;
   const readHeader = opts.readWorksheetHeader ?? (async () => null);
   const readExisting = opts.readExistingWorksheet ?? readExistingWorksheetSnapshot;
+  const worksheetRead = opts.readExistingWorksheet ? "controlled_fixture" : "live_google";
+  const googleProof = { cellsWritten: false as const, worksheetRead };
 
   app.put("/clients/:clientAccountId/onboarding/destination", async (request, reply) => {
     if (!(await authorize(request, reply, env))) return;
@@ -323,6 +345,86 @@ export const adminClientOnboardingV2ConfigRoutes: FastifyPluginAsync<OnboardingC
     });
     if (!saved.ok) return reply.status(saved.statusCode).send({ ok: false, error: saved.error, detail: saved.detail });
     return reply.send({ ok: true, map: saved.map, schemaRebound: saved.schemaRebound, headerRewritten: false, customMapping: true });
+  });
+
+  app.post("/clients/:clientAccountId/onboarding/column-maps/:mapId/save-and-publish", async (request, reply) => {
+    if (!(await authorize(request, reply, env))) return;
+    const clientAccountId = pathClient(request);
+    const mapId = (request.params as { mapId: string }).mapId;
+    const parsed = columnMapSavePublishSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.status(400).send({ ok: false, error: "invalid_body", published: false, deliveryEnabled: false });
+    if (parsed.data.clientAccountId && parsed.data.clientAccountId !== clientAccountId) {
+      return reply.status(400).send({ ok: false, error: "client_account_mismatch", published: false, deliveryEnabled: false });
+    }
+    const current = await listColumnMaps(clientAccountId, null);
+    if (!current.ok) {
+      return reply.status(current.statusCode).send({ ok: false, error: current.error, detail: current.detail, published: false, deliveryEnabled: false });
+    }
+    const map = current.maps.find((item) => item.id === mapId);
+    if (!map) {
+      return reply.status(404).send({ ok: false, error: "client_not_found", detail: "Column map not found for this client.", published: false, deliveryEnabled: false });
+    }
+    const read = await readExisting(clientAccountId, map.spreadsheetId, map.worksheetId);
+    if (!read.ok) {
+      return reply.status(read.statusCode).send({
+        ok: false,
+        error: read.error,
+        detail: read.detail,
+        published: false,
+        deliveryEnabled: false,
+        ...googleProof,
+      });
+    }
+    const saved = await saveAndPublishColumnMap({
+      clientAccountId,
+      mapId,
+      requestId: parsed.data.requestId,
+      expectedRevision: parsed.data.expectedRevision,
+      assignments: parsed.data.assignments,
+      actorLabel: actorLabel(request),
+      snapshot: read.snapshot,
+    });
+    if (!saved.ok) {
+      return reply.status(saved.statusCode).send({
+        ok: false,
+        error: saved.error,
+        detail: saved.detail,
+        published: false,
+        deliveryEnabled: false,
+        ...googleProof,
+        ...(saved.map ? { map: saved.map } : {}),
+      });
+    }
+    return reply.send({
+      ok: true,
+      map: saved.map,
+      schemaRebound: saved.schemaRebound,
+      headerRewritten: false,
+      customMapping: true,
+      published: true,
+      deliveryEnabled: false,
+      ...googleProof,
+    });
+  });
+
+  app.post("/clients/:clientAccountId/onboarding/column-maps/:mapId/preview", async (request, reply) => {
+    if (!(await authorize(request, reply, env))) return;
+    const clientAccountId = pathClient(request);
+    const mapId = (request.params as { mapId: string }).mapId;
+    const parsed = columnMapPreviewSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.status(400).send({ ok: false, error: "invalid_body" });
+    if (parsed.data.clientAccountId && parsed.data.clientAccountId !== clientAccountId) {
+      return reply.status(400).send({ ok: false, error: "client_account_mismatch" });
+    }
+    const preview = await previewColumnMapDraft({
+      clientAccountId,
+      mapId,
+      expectedRevision: parsed.data.expectedRevision,
+      assignments: parsed.data.assignments,
+      previewToken: parsed.data.previewToken,
+    });
+    if (!preview.ok) return reply.status(preview.statusCode).send({ ok: false, error: preview.error, detail: preview.detail });
+    return reply.send({ ok: true, preview: preview.preview, deliveryEnabled: false, sendsRow: false });
   });
 
   app.post("/clients/:clientAccountId/onboarding/column-maps/:mapId/retire", async (request, reply) => {

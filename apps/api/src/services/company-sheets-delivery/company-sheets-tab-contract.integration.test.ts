@@ -188,6 +188,8 @@ describe("company sheets tab contracts (local sa360_test)", { skip: !runIntegrat
   });
 
   async function cleanup() {
+    await db.clientSheetsPersonAdmission.deleteMany({ where: { clientAccountId: { in: [clientId, otherClientId] } } });
+    await db.clientSheetsDedupeDecision.deleteMany({ where: { clientAccountId: { in: [clientId, otherClientId] } } });
     await db.companySheetsDeliveryJob.deleteMany({ where: { clientAccountId: { in: [clientId, otherClientId] } } });
     await db.companySheetsWorksheetLock.deleteMany({ where: { spreadsheetId: sheet } });
     await db.companySheetsDestination.deleteMany({ where: { clientAccountId: { in: [clientId, otherClientId] } } });
@@ -602,7 +604,12 @@ describe("company sheets tab contracts (local sa360_test)", { skip: !runIntegrat
           rawPayloadJson: { untouched: true },
           clientAccountIdResolved: clientId,
           status: "approved",
-          normalizedPayloadJson: { first_name: "Ada", last_name: "Lovelace", email: "ada@example.com", phone },
+          normalizedPayloadJson: {
+            first_name: "Ada",
+            last_name: "Lovelace",
+            email: `ada.${phone.replace(/\D/g, "")}@example.com`,
+            phone,
+          },
           enrichmentMetadataJson: { source: "tab-test" },
         },
       });

@@ -114,7 +114,9 @@ export function buildFacebookCaptureNormalizedPayload(input: {
     fields.customFields && Object.keys(fields.customFields).length > 0 ? fields.customFields : null;
   // Form questions arrive as custom fields. Promote an explicit age /
   // date-of-birth answer to the canonical nest commercial fulfillment reads.
-  const leadDetails = withIntakeConsumerAge(null, [customFields ?? {}]);
+  const leadDetails = withIntakeConsumerAge(null, [customFields ?? {}], {
+    referenceAt: receivedAt,
+  });
   return {
     schema_version: FACEBOOK_CAPTURE_SCHEMA_VERSION,
     contact: omitEmpty([

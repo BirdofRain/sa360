@@ -75,6 +75,24 @@ test("column map routes reject a body before reading a worksheet when config is 
     });
     assert.equal(target.statusCode, 400);
     assert.equal(target.json().error, "invalid_body");
+    const savePublish = await ctx.app.inject({
+      method: "POST",
+      url: "/admin/v1/clients/client_one/onboarding/column-maps/map_1/save-and-publish",
+      headers: { "x-sa360-admin-key": ADMIN_KEY },
+      payload: {},
+    });
+    assert.equal(savePublish.statusCode, 400);
+    assert.equal(savePublish.json().error, "invalid_body");
+    assert.equal(savePublish.json().published, false);
+    assert.equal(savePublish.json().deliveryEnabled, false);
+    const preview = await ctx.app.inject({
+      method: "POST",
+      url: "/admin/v1/clients/client_one/onboarding/column-maps/map_1/preview",
+      headers: { "x-sa360-admin-key": ADMIN_KEY },
+      payload: {},
+    });
+    assert.equal(preview.statusCode, 400);
+    assert.equal(preview.json().error, "invalid_body");
     assert.equal(ctx.reads(), 0);
   } finally {
     await ctx.restore();

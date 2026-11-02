@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 
 import { verifyAdminApiKey } from "../lib/admin-auth.js";
+import { prisma } from "../lib/db.js";
 import { requireAuthenticatedPortalTenant } from "../lib/client-portal-session-assertion.js";
 import {
   enqueueAuthorizedAgedReleaseSheetsDelivery,
@@ -32,6 +33,9 @@ import {
   scheduleAgedReleaseExplicitly,
   setCompanySheetsDispatchActivation,
 } from "../services/company-sheets-dispatch/company-sheets-dispatch.service.js";
+import { releaseKnownDeadSheetsPersonReservation } from "../services/company-sheets-dispatch/client-sheets-person-gate.js";
+import { recoverClientSheetsPersonHold } from "../services/company-sheets-dispatch/client-sheets-person-recovery.js";
+import { companySheetsIntentOperatorCopy } from "@sa360/shared";
 
 export type CompanySheetsDeliveryRouteOptions = {
   deps?: CompanySheetsDeliveryDeps & CompanySheetsTabDeps & CompanySheetsPilotDeps;
@@ -250,6 +254,64 @@ export const adminCompanySheetsDeliveryRoutes: FastifyPluginAsync<CompanySheetsD
     if (!result.ok) return sendFailure(reply, result);
     return reply.send({ ...result, googleCalled: false });
   });
+
+  app.post("/clients/:clientAccountId/google-sheets/person-holds/:sourceLeadEventId/recover", async (request, reply) => {
+    if (!(await verifyAdminApiKey(request, reply))) return;
+    const { clientAccountId, sourceLeadEventId } = request.params as {
+      clientAccountId: string;
+      sourceLeadEventId: string;
+    };
+    const db = deps.db ?? prisma;
+    const lead = await db.sourceLeadEvent.findFirst({
+      where: { id: sourceLeadEventId, clientAccountIdResolved: clientAccountId },
+      select: { id: true },
+    });
+    if (!lead) return reply.status(404).send({ ok: false, error: "lead_not_found", googleCalled: false });
+    const result = await recoverClientSheetsPersonHold(db, lead.id, "operator");
+    if (!result.ok) return reply.status(409).send({ ok: false, error: result.code, googleCalled: false });
+    const copy = companySheetsIntentOperatorCopy({
+      status: result.status,
+      reason: result.reason,
+      lastError: null,
+    });
+    return reply.send({
+      ok: true,
+      status: result.status,
+      reason: result.reason,
+      promoted: result.promoted,
+      delivered: false,
+      recovered: copy.recovered,
+      headline: copy.headline,
+      detail: copy.detail,
+      googleCalled: false,
+    });
+  });
+
+  app.post(
+    "/clients/:clientAccountId/google-sheets/person-reservations/:sourceLeadEventId/release",
+    async (request, reply) => {
+      if (!(await verifyAdminApiKey(request, reply))) return;
+      const { clientAccountId, sourceLeadEventId } = request.params as {
+        clientAccountId: string;
+        sourceLeadEventId: string;
+      };
+      const db = deps.db ?? prisma;
+      const lead = await db.sourceLeadEvent.findFirst({
+        where: { id: sourceLeadEventId, clientAccountIdResolved: clientAccountId },
+        select: { id: true },
+      });
+      if (!lead) return reply.status(404).send({ ok: false, error: "lead_not_found", googleCalled: false });
+      const actor = request.headers["x-sa360-admin-actor"];
+      const actorLabel = typeof actor === "string" ? actor.trim().slice(0, 120) : null;
+      const result = await releaseKnownDeadSheetsPersonReservation(db, {
+        clientAccountId,
+        sourceLeadEventId: lead.id,
+        actor: actorLabel,
+      });
+      if (!result.ok) return reply.status(409).send({ ok: false, error: result.code, googleCalled: false });
+      return reply.send({ ok: true, released: result.released, googleCalled: false, delivered: false });
+    }
+  );
 
   app.post("/company-sheets/deliveries/aged-release/:exportPackageId/schedule", async (request, reply) => {
     if (!(await verifyAdminApiKey(request, reply))) return;

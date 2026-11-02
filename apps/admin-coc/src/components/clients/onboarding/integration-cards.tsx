@@ -21,7 +21,6 @@ import {
   validDriveQuery,
 } from "@/lib/clients/onboarding/view";
 import type {
-  ColumnMapRecord,
   CompanyConnectionIdentity,
   OnboardingCampaignBind,
   OnboardingDriveSearch,
@@ -37,12 +36,10 @@ import type {
   OnboardingWorkflowSave,
   OnboardingWorkspaceActions,
   OnboardingWorksheetPreview,
-  SheetsTargetSave,
 } from "@/lib/clients/onboarding/types";
 
 import { SpreadsheetIdentity } from "@/components/clients/spreadsheet-identity";
 
-import { ColumnMapEditor } from "./column-map-editor";
 import { StatusMark } from "./status-mark";
 
 type ChosenWorksheet = {
@@ -634,7 +631,7 @@ function SheetSelection({
           : "Finish save and bind in the existing Google Sheets setup. This workspace will not change an active destination."}
       </p>
       <Link
-        href={`/clients/${encodeURIComponent(clientAccountId)}/google-sheets`}
+        href={`/clients/${encodeURIComponent(clientAccountId)}/google-sheets#column-mapping`}
         className="text-sm text-sky-700 hover:underline"
       >
         Open the existing Google Sheets setup
@@ -664,12 +661,10 @@ function WorksheetPreview({
   actions: OnboardingWorkspaceActions;
   campaignDispatchEnabled: boolean;
 }) {
-  const [target, setTarget] = useState<SheetsTargetSave | null>(null);
-  const [map, setMap] = useState<ColumnMapRecord | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pendingId, setPendingId] = useState<number | null>(null);
 
-  async function selectTab(sheet: OnboardingWorksheetPreview, createMap: boolean) {
+  async function selectTab(sheet: OnboardingWorksheetPreview) {
     if (campaignDispatchEnabled) return;
     setPendingId(sheet.worksheetId);
     setError(null);
@@ -678,28 +673,13 @@ function WorksheetPreview({
         spreadsheetId: preview.spreadsheetId,
         worksheetId: sheet.worksheetId,
       });
-      if (!saved.ok) {
-        setPendingId(null);
-        setError(saved.error);
-        return;
-      }
-      setTarget(saved.data);
-    }
-    if (!createMap || !actions.createColumnMap) {
       setPendingId(null);
-      setMap(null);
-      return;
+      if (!saved.ok) {
+        setError(saved.error);
+      }
+    } else {
+      setPendingId(null);
     }
-    const created = await actions.createColumnMap({
-      spreadsheetId: preview.spreadsheetId,
-      worksheetId: sheet.worksheetId,
-    });
-    setPendingId(null);
-    if (!created.ok) {
-      setError(created.error);
-      return;
-    }
-    setMap(created.data);
   }
 
   return (
@@ -777,34 +757,15 @@ function WorksheetPreview({
                   variant="outline"
                   className="mt-2"
                   disabled={campaignDispatchEnabled || pendingId !== null}
-                  onClick={() => void selectTab(sheet, false)}
+                  onClick={() => void selectTab(sheet)}
                 >
                   {pendingId === sheet.worksheetId ? "Saving tab…" : "Select this tab"}
                 </Button>
               ) : null}
-              {mappable && actions.createColumnMap ? (
-                <div className="mt-2 space-y-1">
-                  <p className="text-xs text-slate-700">Map columns reads these headers. It does not overwrite them or apply the preset template.</p>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    disabled={campaignDispatchEnabled || pendingId !== null}
-                    onClick={() => void selectTab(sheet, true)}
-                  >
-                    {pendingId === sheet.worksheetId ? "Reading headers…" : "Map columns"}
-                  </Button>
-                </div>
-              ) : null}
-              {map && map.worksheetId === sheet.worksheetId && map.spreadsheetId === preview.spreadsheetId ? (
-                <ColumnMapEditor
-                  key={map.id}
-                  record={map}
-                  target={target}
-                  campaignDispatchEnabled={campaignDispatchEnabled}
-                  actions={actions}
-                  onChange={setMap}
-                />
+              {mappable ? (
+                <p className="mt-2 text-xs text-slate-700">
+                  Map columns in Google Sheets setup. This page does not keep a second mapping editor.
+                </p>
               ) : null}
             </li>
           );

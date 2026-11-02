@@ -8,7 +8,7 @@
 import { createHash } from "node:crypto";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { COMPANY_SHEETS_V3_HEADER } from "@sa360/shared";
-import { isCustomSheetsWriterEnabled } from "../company-sheets-delivery/company-sheets-custom-row.js";
+import { isCustomSheetsWriterEnabled, readHeaderSnapshot } from "../company-sheets-delivery/company-sheets-custom-row.js";
 import { findPublishedColumnMap } from "./column-maps.js";
 
 import { prisma } from "../../lib/db.js";
@@ -365,7 +365,7 @@ async function sheetsIntentReady(clientAccountId: string, db: PrismaClient): Pro
         });
   const snapshot = published?.headerSnapshot;
   const publishedHeader =
-    Array.isArray(snapshot) && snapshot.every((cell) => typeof cell === "string") ? snapshot : null;
+    Array.isArray(snapshot) && snapshot.every((cell) => typeof cell === "string") ? readHeaderSnapshot(snapshot) : null;
   const assessment = assessBoundCampaignHeader({
     schemaVersion: campaign?.schemaVersion ?? null,
     setupState: campaign?.setupState ?? null,

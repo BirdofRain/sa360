@@ -188,7 +188,9 @@ test("writer stays out of intake, release, inventory, and sharing paths", () => 
     if (
       path.endsWith(`${join("services", "client-onboarding-v2", "column-maps.ts")}`) ||
       path.endsWith(`${join("services", "client-onboarding-v2", "onboarding-config.service.ts")}`) ||
-      path.endsWith(`${join("services", "client-onboarding-v2", "readiness.ts")}`)
+      path.endsWith(`${join("services", "client-onboarding-v2", "readiness.ts")}`) ||
+      path.endsWith(`${join("services", "client-onboarding-v2", "captured-test-delivery.ts")}`) ||
+      path.endsWith(`${join("services", "client-onboarding-v2", "custom-captured-sheet.ts")}`)
     ) {
       assert.match(source, /company-sheets-custom-row/);
       assert.equal(source.includes("company-sheets-delivery.service"), false, path);

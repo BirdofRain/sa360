@@ -144,6 +144,19 @@ export type CompanySheetsDispatchView = {
   campaignDispatchNotBefore: string | null;
   agedDispatchEnabled: boolean;
   agedDispatchNotBefore: string | null;
+  intents?: Array<{
+    id: string;
+    kind: string;
+    status: string;
+    reason: string | null;
+    lastError: string | null;
+    sourceLeadEventId: string | null;
+    jobId: string | null;
+    headline: string;
+    detail: string;
+    delivered: boolean;
+    recovered: boolean;
+  }>;
   lastCampaignDelivery: {
     jobId: string;
     status: string;
@@ -381,6 +394,32 @@ export function reviewCompanySheetsColumns(
 
 export function fetchCompanySheetsDispatch(clientAccountId: string) {
   return adminRequestJson<CompanySheetsDispatchView>("GET", clientPath(clientAccountId, "dispatch"));
+}
+
+export function recoverCompanySheetsPersonHold(clientAccountId: string, sourceLeadEventId: string) {
+  return adminRequestJson<{
+    ok: true;
+    status: string;
+    reason: string | null;
+    promoted: boolean;
+    delivered: false;
+    recovered: boolean;
+    headline: string;
+    detail: string;
+    googleCalled: false;
+  }>(
+    "POST",
+    `${clientPath(clientAccountId, "person-holds")}/${encodeURIComponent(sourceLeadEventId)}/recover`,
+    {}
+  );
+}
+
+export function releaseCompanySheetsPersonReservation(clientAccountId: string, sourceLeadEventId: string) {
+  return adminRequestJson<{ ok: true; released: number; googleCalled: false; delivered: false }>(
+    "POST",
+    `${clientPath(clientAccountId, "person-reservations")}/${encodeURIComponent(sourceLeadEventId)}/release`,
+    {}
+  );
 }
 
 export function activateCompanySheetsDispatch(

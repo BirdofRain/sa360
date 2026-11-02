@@ -20,6 +20,10 @@ import {
 } from "./routing-matcher.service.js";
 import { evaluateAndPersistDuplicateRiskForRoutingDecision } from "./lead-identity/lead-identity-correlation.service.js";
 import {
+  classifyAssessmentFailure,
+  recordDuplicateRiskAssessmentFailure,
+} from "../repositories/lead-duplicate-risk.repository.js";
+import {
   resolveRoutingDestinationFromConfirmedSourceAssociation,
   ROUTING_AUTHORITY_CAMPAIGN_RULE,
   ROUTING_AUTHORITY_OPERATOR_DESTINATION,
@@ -244,8 +248,18 @@ export async function runRoutingDryRun(
       attribution: input,
       eventReceivedAt: now(),
     });
-  } catch {
-    /* duplicate-risk review must not block routing dry-run */
+  } catch (err) {
+    // Routing still succeeds. The Sheets person gate treats this marker as
+    // assessment_failed instead of the nonblocking missing-assessment fallback.
+    try {
+      await recordDuplicateRiskAssessmentFailure(
+        decision.id,
+        err instanceof Error ? err.name : "Error",
+        classifyAssessmentFailure(err)
+      );
+    } catch {
+      /* recording the failure must not block routing dry-run */
+    }
   }
 
   const eventsToEmit = lifecycleEventsToEmitForDryRun(match);
@@ -333,8 +347,16 @@ export async function runManualBulkImportRoutingDryRun(
       attribution,
       eventReceivedAt: new Date(),
     });
-  } catch {
-    /* duplicate-risk review must not block bulk import simulation */
+  } catch (err) {
+    try {
+      await recordDuplicateRiskAssessmentFailure(
+        decision.id,
+        err instanceof Error ? err.name : "Error",
+        classifyAssessmentFailure(err)
+      );
+    } catch {
+      /* recording the failure must not block bulk import simulation */
+    }
   }
 
   return {

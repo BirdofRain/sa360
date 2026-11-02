@@ -1968,7 +1968,7 @@ model CompanySheetsDispatchIntent {
   idempotencyKey    String    @unique
   /// campaign_lead | aged_release
   kind              String
-  /// pending | awaiting_setup | needs_explicit_schedule | processing | scheduled | retryable | completed
+  /// pending | awaiting_setup | needs_explicit_schedule | processing | scheduled | retryable | completed | duplicate_held | review_held | assessment_held | assessment_failed
   status            String
   clientAccountId   String
   sourceLeadEventId String?
@@ -1989,6 +1989,101 @@ model CompanySheetsDispatchIntent {
   @@index([clientAccountId, kind], map: "CompanySheetsDispatch_client_kind_idx")
   @@index([exportPackageId], map: "CompanySheetsDispatch_export_idx")
   @@index([sourceLeadEventId], map: "CompanySheetsDispatch_lead_idx")
+}
+
+/// A routing dry-run whose duplicate-risk evaluation threw.
+/// A persisted LeadDuplicateRiskAssessment outranks this row. Routing itself is not failed.
+/// failureClass transient is retried by the Sheets drain. review waits for an operator.
+model DuplicateRiskAssessmentFailure {
+  routingDryRunDecisionId String   @id
+  errorName               String
+  /// transient | review
+  failureClass            String   @default("review")
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+}
+
+/// Client-scoped person slot for Sheets delivery. Not a tab, not a GHL receipt, not an event id.
+/// One normalized phone or email is reserved for one owner inside one client.
+model ClientSheetsPersonAdmission {
+  id                  String   @id @default(cuid())
+  clientAccountId     String
+  /// phone | email
+  kind                String
+  normalizedValue     String
+  fingerprint         String
+  sourceLeadEventId   String?
+  /// zap:{client}:{importKey} for a verified historical baseline. Null for a live reservation.
+  historicalImportKey String?
+  /// reserved | admitted
+  status              String
+  policy              String
+  /// live_reservation | historical_baseline | delivery_index
+  origin              String
+  evidenceJson        Json?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@unique([clientAccountId, kind, normalizedValue], map: "ClientSheetsPersonAdmission_client_identifier_key")
+  @@index([clientAccountId, sourceLeadEventId], map: "ClientSheetsPersonAdmission_client_event_idx")
+  @@index([historicalImportKey], map: "ClientSheetsPersonAdmission_import_key_idx")
+}
+
+/// One Sheets person-gate outcome. Distinct from the event idempotency key and from channel receipts.
+model ClientSheetsDedupeDecision {
+  id                 String   @id @default(cuid())
+  idempotencyKey     String   @unique
+  clientAccountId    String
+  sourceLeadEventId  String?
+  /// sheets. This row is not a Sheets append receipt and not a GHL receipt.
+  channel            String   @default("sheets")
+  outcome            String
+  policy             String
+  reason             String
+  normalizedPhone    String?
+  normalizedEmail    String?
+  /// present | missing | failed | not_applicable | exempt
+  assessmentState    String
+  priorEvidenceJson  Json?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([clientAccountId, outcome], map: "ClientSheetsDedupeDecision_client_outcome_idx")
+  @@index([sourceLeadEventId], map: "ClientSheetsDedupeDecision_event_idx")
+}
+
+/// How much of this client's lead-job history is represented in ClientSheetsPersonAdmission.
+/// status is the completeness proof. indexedCount and observedJobCount are not.
+model ClientSheetsHistoryCoverage {
+  clientAccountId String    @id
+  /// unavailable | partial | complete
+  status          String
+  /// cursor_exhausted | no_eligible_jobs | cursor_open | not_started
+  completenessProof String
+  cursorCreatedAt DateTime?
+  cursorJobId     String?
+  indexedCount    Int       @default(0)
+  observedJobCount Int      @default(0)
+  updatedAt       DateTime  @updatedAt
+}
+
+/// Audit copy of a live reservation released because the send never reached Google.
+model ClientSheetsPersonRelease {
+  id                String   @id @default(cuid())
+  clientAccountId   String
+  kind              String
+  normalizedValue   String
+  fingerprint       String
+  sourceLeadEventId String?
+  admissionId       String
+  policy            String
+  reason            String
+  actor             String?
+  evidenceJson      Json?
+  releasedAt        DateTime @default(now())
+
+  @@index([clientAccountId, normalizedValue], map: "ClientSheetsPersonRelease_client_value_idx")
+  @@index([sourceLeadEventId], map: "ClientSheetsPersonRelease_event_idx")
 }
 
 /// Schedule row for association GHL delivery, committed with intake.

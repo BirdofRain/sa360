@@ -12,20 +12,24 @@ export async function upsertDuplicateRiskForRoutingDecision(
     where: { routingDryRunDecisionId },
   });
   if (existing) {
-    return prisma.leadDuplicateRiskAssessment.update({
+    const updated = await prisma.leadDuplicateRiskAssessment.update({
       where: { id: existing.id },
       data: {
         ...data,
         routingDryRunDecisionId,
       },
     });
+    await clearDuplicateRiskAssessmentFailure(routingDryRunDecisionId);
+    return updated;
   }
-  return prisma.leadDuplicateRiskAssessment.create({
+  const created = await prisma.leadDuplicateRiskAssessment.create({
     data: {
       ...data,
       routingDryRunDecision: { connect: { id: routingDryRunDecisionId } },
     },
   });
+  await clearDuplicateRiskAssessmentFailure(routingDryRunDecisionId);
+  return created;
 }
 
 export async function findDuplicateRiskByRoutingDecisionId(
@@ -134,4 +138,40 @@ export async function hasPriorLeadCreatedForIdentity(opts: {
     select: { id: true },
   });
   return row != null;
+}
+
+export function classifyAssessmentFailure(err: unknown): "transient" | "review" {
+  const name = err instanceof Error ? err.name : "Error";
+  const message = err instanceof Error ? err.message : "";
+  const code = typeof (err as { code?: unknown })?.code === "string" ? (err as { code: string }).code : "";
+  if (
+    name === "PrismaClientInitializationError" ||
+    name === "PrismaClientRustPanicError" ||
+    name === "TimeoutError"
+  ) {
+    return "transient";
+  }
+  if (/^(P1001|P1002|P1008|P1017|P2024)$/.test(code)) return "transient";
+  if (/ECONNRESET|ECONNREFUSED|ETIMEDOUT|timeout|timed out/i.test(`${name} ${code} ${message}`)) return "transient";
+  return "review";
+}
+
+export async function recordDuplicateRiskAssessmentFailure(
+  routingDryRunDecisionId: string,
+  errorName: string,
+  failureClass: "transient" | "review" = "review"
+): Promise<void> {
+  await prisma.duplicateRiskAssessmentFailure.upsert({
+    where: { routingDryRunDecisionId },
+    create: { routingDryRunDecisionId, errorName, failureClass },
+    update: { errorName, failureClass },
+  });
+}
+
+export async function clearDuplicateRiskAssessmentFailure(routingDryRunDecisionId: string): Promise<void> {
+  try {
+    await prisma.duplicateRiskAssessmentFailure.deleteMany({ where: { routingDryRunDecisionId } });
+  } catch {
+    // A leftover failure row does not outrank a persisted assessment.
+  }
 }

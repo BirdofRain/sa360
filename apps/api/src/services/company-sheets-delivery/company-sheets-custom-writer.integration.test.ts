@@ -914,11 +914,21 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
     assert.equal(again.externalCallExecuted, false);
     assert.equal(appends.filter((item) => item.spreadsheetId === capturedSheet).length, beforeAppends + 1);
     const secondLead = await sendCompanySheetsCapturedEventTestRow(capturedClient, dummyId, captured());
-    assert.equal(secondLead.ok, true);
-    if (!secondLead.ok) return;
-    assert.equal(secondLead.duplicate, false);
-    assert.equal(secondLead.externalCallExecuted, true);
-    assert.equal(appends.filter((item) => item.spreadsheetId === capturedSheet).length, beforeAppends + 2);
+    assert.equal(secondLead.ok, false);
+    if (secondLead.ok) return;
+    assert.equal(secondLead.code, "person_duplicate");
+    assert.equal(secondLead.externalCallExecuted, false);
+    assert.equal(appends.filter((item) => item.spreadsheetId === capturedSheet).length, beforeAppends + 1);
+    const campaign = await enqueueConfirmedLeadSheetsDelivery(plainId, {
+      ...deps(),
+      env: { ...env(true), SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED: "true" },
+    });
+    assert.equal(campaign.ok, true);
+    if (!campaign.ok) return;
+    assert.equal(campaign.created, false);
+    assert.equal(campaign.job.kind, "campaign_test");
+    assert.equal(campaign.job.idempotencyKey, capturedEventTestKey(capturedClient, plainId));
+    assert.equal(appends.filter((item) => item.spreadsheetId === capturedSheet).length, beforeAppends + 1);
     await db.sourceLeadEvent.create({
       data: {
         id: `synthetic_${suffix}`,
@@ -938,7 +948,7 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
     assert.equal(synthetic.ok, false);
     if (synthetic.ok) return;
     assert.equal(synthetic.code, "synthetic_campaign_test_refused");
-    assert.equal(appends.filter((item) => item.spreadsheetId === capturedSheet).length, beforeAppends + 2);
+    assert.equal(appends.filter((item) => item.spreadsheetId === capturedSheet).length, beforeAppends + 1);
     const store = createPrismaCapturedTestStore(db);
     const runId = randomUUID();
     const saved = await store.insert(

@@ -263,7 +263,7 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
         normalizedPayloadJson: {
           first_name: "Ada",
           last_name: "Lovelace",
-          email: "ada@example.com",
+          email: `ada.${leadIds.length}.${String(phone).replace(/[^0-9a-z]/gi, "")}@example.com`,
           phone,
         },
         enrichmentMetadataJson: { source: "writer-test" },
@@ -428,6 +428,8 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
   async function cleanup() {
     const ids = Object.values(client);
     const spreadsheets = [...Object.values(sheetId), leadRetarget, agedRetarget, canaryRetarget];
+    await db.clientSheetsPersonAdmission.deleteMany({ where: { clientAccountId: { in: ids } } });
+    await db.clientSheetsDedupeDecision.deleteMany({ where: { clientAccountId: { in: ids } } });
     await db.companySheetsDeliveryJob.deleteMany({ where: { clientAccountId: { in: ids } } });
     await db.companySheetsWorksheetLock.deleteMany({ where: { spreadsheetId: { in: spreadsheets } } });
     await db.companySheetsDestination.deleteMany({ where: { clientAccountId: { in: ids } } });
@@ -462,6 +464,8 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
     assert.equal(stored.attemptCount, 0);
     assert.equal(sheetFor(sheetId.lead).calls, 0);
     await db.companySheetsDeliveryJob.delete({ where: { id: queued.job.id } });
+    await db.clientSheetsPersonAdmission.deleteMany({ where: { clientAccountId: client.lead } });
+    await db.clientSheetsDedupeDecision.deleteMany({ where: { clientAccountId: client.lead } });
   });
 
   it("refuses an unconfirmed lead and an unauthorized or altered release", async () => {
@@ -890,6 +894,11 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
     if (timedOut.ok) return;
     assert.equal(timedOut.code, "uncertain");
     assert.equal(uncertainSheet.appends.length, 1);
+    const reserved = await db.clientSheetsPersonAdmission.findFirstOrThrow({
+      where: { clientAccountId: client.uncertain, sourceLeadEventId: lead.id },
+    });
+    assert.equal(reserved.status, "reserved");
+    assert.equal((reserved.evidenceJson as { outcome?: string }).outcome, "uncertain");
     const blocked = await executeCompanySheetsDeliveryJob(queued.job.id, deps());
     assert.equal(blocked.ok, false);
     if (!blocked.ok) assert.equal(blocked.code, "uncertain");
@@ -902,6 +911,10 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
     if (!released.ok) return;
     assert.equal(released.status, "succeeded");
     assert.equal(released.appended, false);
+    const admitted = await db.clientSheetsPersonAdmission.findFirstOrThrow({
+      where: { clientAccountId: client.uncertain, sourceLeadEventId: lead.id },
+    });
+    assert.equal(admitted.status, "admitted");
     const recovered = await executeCompanySheetsDeliveryJob(queued.job.id, deps());
     assert.equal(recovered.ok, false);
     if (!recovered.ok) assert.equal(recovered.code, "already_succeeded");

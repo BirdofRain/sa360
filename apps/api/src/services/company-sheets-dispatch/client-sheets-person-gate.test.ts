@@ -4,9 +4,12 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { classifyAssessmentFailure } from "../../repositories/lead-duplicate-risk.repository.js";
 import {
   classifySheetsPerson,
+  newPersonHeldForUnindexedHistory,
   normalizeSheetsPhone,
+  SHEETS_HISTORY_BATCH_LIMIT,
   sheetsPersonIdentifiers,
   type SheetsPersonOwner,
 } from "./client-sheets-person-gate.js";
@@ -53,7 +56,6 @@ test("classifySheetsPerson reserves, replays, blocks, and reviews without using 
       phone: null,
       email: null,
       owners: [],
-      historyIncomplete: false,
     }).reason,
     "no_normalized_phone_or_email"
   );
@@ -63,7 +65,6 @@ test("classifySheetsPerson reserves, replays, blocks, and reviews without using 
       phone: "+15551110002",
       email: "b@example.com",
       owners: [],
-      historyIncomplete: false,
     }).action,
     "admit"
   );
@@ -76,7 +77,6 @@ test("classifySheetsPerson reserves, replays, blocks, and reviews without using 
         owner({ kind: "phone", normalizedValue: "+15551110001", ownerEventId: "evt-a" }),
         owner({ kind: "email", normalizedValue: "a@example.com", ownerEventId: "evt-a" }),
       ],
-      historyIncomplete: false,
     }).action,
     "replay"
   );
@@ -84,9 +84,8 @@ test("classifySheetsPerson reserves, replays, blocks, and reviews without using 
     sourceLeadEventId: "evt-b",
     phone: "+15551110001",
     email: "fresh@example.com",
-    owners: [owner({ kind: "phone", normalizedValue: "+15551110001", ownerEventId: "evt-a" })],
-    historyIncomplete: false,
-  });
+      owners: [owner({ kind: "phone", normalizedValue: "+15551110001", ownerEventId: "evt-a" })],
+    });
   assert.equal(blocked.action, "block");
   assert.equal(blocked.reason, "normalized_identifier_already_admitted");
   const shared = classifySheetsPerson({
@@ -97,7 +96,6 @@ test("classifySheetsPerson reserves, replays, blocks, and reviews without using 
       owner({ kind: "phone", normalizedValue: "+15551110001", ownerEventId: "evt-a" }),
       owner({ kind: "email", normalizedValue: "b@example.com", ownerEventId: "evt-b", admissionId: "other" }),
     ],
-    historyIncomplete: false,
   });
   assert.equal(shared.action, "review");
   assert.equal(shared.reason, "shared_identifier_conflict");
@@ -115,20 +113,59 @@ test("classifySheetsPerson reserves, replays, blocks, and reviews without using 
         jobId: "job-1",
         worksheetId: 4,
       }),
-    ],
-    historyIncomplete: false,
-  });
+      ],
+    });
   assert.equal(delivery.reason, "sheets_delivery_already_recorded");
-  assert.equal(
-    classifySheetsPerson({
-      sourceLeadEventId: "evt-new",
-      phone: "+15551110008",
-      email: null,
-      owners: [],
-      historyIncomplete: true,
-    }).reason,
-    "delivery_history_incomplete"
-  );
+  const indexed = classifySheetsPerson({
+    sourceLeadEventId: "evt-new",
+    phone: "+15551110009",
+    email: null,
+    owners: [
+      owner({
+        kind: "phone",
+        normalizedValue: "+15551110009",
+        ownerEventId: "evt-old",
+        admissionId: "indexed",
+        origin: "delivery_index",
+        worksheetId: 4,
+      }),
+    ],
+  });
+  assert.equal(indexed.reason, "sheets_delivery_already_recorded");
+});
+
+test("more than one history batch holds a new person and does not treat counts as coverage", () => {
+  assert.equal(SHEETS_HISTORY_BATCH_LIMIT, 500);
+  const held = newPersonHeldForUnindexedHistory({
+    batchLimit: SHEETS_HISTORY_BATCH_LIMIT,
+    priorEligibleJobs: 501,
+    identifierMatched: false,
+  });
+  assert.equal(held.held, true);
+  assert.equal(held.status, "partial");
+  assert.equal(held.reason, "history_coverage_partial");
+  const matched = newPersonHeldForUnindexedHistory({
+    batchLimit: SHEETS_HISTORY_BATCH_LIMIT,
+    priorEligibleJobs: 501,
+    identifierMatched: true,
+  });
+  assert.equal(matched.held, false);
+  const fits = newPersonHeldForUnindexedHistory({
+    batchLimit: SHEETS_HISTORY_BATCH_LIMIT,
+    priorEligibleJobs: 500,
+    identifierMatched: false,
+  });
+  assert.equal(fits.held, false);
+  assert.equal(fits.status, "complete");
+});
+
+test("assessment failures split transient transport errors from operator review", () => {
+  const timeout = new Error("slow query");
+  timeout.name = "TimeoutError";
+  assert.equal(classifyAssessmentFailure(timeout), "transient");
+  const unreachable = Object.assign(new Error("can't reach database"), { code: "P1001" });
+  assert.equal(classifyAssessmentFailure(unreachable), "transient");
+  assert.equal(classifyAssessmentFailure(new Error("column missing")), "review");
 });
 
 test("zap import and sheets person gate stay off the live zap and bypass writers", () => {
@@ -163,10 +200,20 @@ test("zap import and sheets person gate stay off the live zap and bypass writers
   );
   const canary = delivery.slice(
     delivery.indexOf("export async function enqueueCompanySheetsCanary"),
-    delivery.indexOf("export async function executeCompanySheetsDeliveryJob")
+    delivery.indexOf("export async function sendCompanySheetsCampaignTestRow")
+  );
+  const capturedSend = delivery.slice(
+    delivery.indexOf("export async function sendCompanySheetsCapturedEventTestRow"),
+    delivery.indexOf("async function eventEffectCounts")
   );
   assert.equal(aged.includes("evaluateClientSheetsPersonGate"), false);
   assert.equal(canary.includes("evaluateClientSheetsPersonGate"), false);
+  assert.equal(capturedSend.includes("evaluateClientSheetsPersonGate"), true);
+  const execute = delivery.slice(
+    delivery.indexOf("export async function executeCompanySheetsDeliveryJob"),
+    delivery.indexOf("export async function releaseCompanySheetsDeliveryHold")
+  );
+  assert.equal(execute.includes("evaluateClientSheetsPersonGate"), false);
   const captured = readFileSync(
     join(here, "../company-sheets-delivery/onboarding-captured-test-append.ts"),
     "utf8"

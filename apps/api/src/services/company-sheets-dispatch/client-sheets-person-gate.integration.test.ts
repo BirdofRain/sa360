@@ -13,13 +13,21 @@ import {
 import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
 import { recordDuplicateRiskAssessmentFailure } from "../../repositories/lead-duplicate-risk.repository.js";
 import { enqueueConfirmedLeadSheetsDelivery } from "../company-sheets-delivery/company-sheets-delivery.service.js";
+import { processDueCompanySheetsDispatches } from "./company-sheets-dispatch.service.js";
+import { recoverClientSheetsPersonHold } from "./client-sheets-person-recovery.js";
 import { ROUTING_AUTHORITY_SOURCE_ASSOCIATION } from "../routing-source-association.service.js";
 import { recordGhlAssociationDispatchOutbox } from "../ghl-association-dispatch/ghl-association-dispatch.js";
 import { recordCompanySheetsCampaignIntent } from "./company-sheets-dispatch-record.js";
+import { COMPANY_SHEETS_PILOT_ROUTE_KEY } from "@sa360/shared";
+
 import {
   evaluateClientSheetsPersonGate,
   importVerifiedZapSheetsBaseline,
   noteSheetsPersonDelivery,
+  planPreMigrationLeadJobQuarantine,
+  prepareClientSheetsHistoryBaseline,
+  readClientSheetsHistoryCoverage,
+  releaseKnownDeadSheetsPersonReservation,
   SHEETS_PERSON_POLICY,
   sheetsPersonIdentifiers,
 } from "./client-sheets-person-gate.js";
@@ -110,6 +118,8 @@ describe("client sheets person gate (local sa360_test)", { skip: !runIntegration
     if (!db) return;
     const ids = Object.values(client);
     await db.clientSheetsPersonAdmission.deleteMany({ where: { clientAccountId: { in: ids } } });
+    await db.clientSheetsPersonRelease.deleteMany({ where: { clientAccountId: { in: ids } } });
+    await db.clientSheetsHistoryCoverage.deleteMany({ where: { clientAccountId: { in: ids } } });
     await db.clientSheetsDedupeDecision.deleteMany({ where: { clientAccountId: { in: ids } } });
     await db.companySheetsDispatchIntent.deleteMany({ where: { clientAccountId: { in: ids } } });
     await db.companySheetsDeliveryJob.deleteMany({ where: { clientAccountId: { in: ids } } });
@@ -422,6 +432,7 @@ describe("client sheets person gate (local sa360_test)", { skip: !runIntegration
       sourceLeadEventId: failedLead.id,
     });
     assert.equal(failed.code, "assessment_failed");
+    assert.equal(failed.reason, "assessment_needs_review");
     assert.equal(failed.intentStatus, "assessment_failed");
     assert.equal(await db.ghlAssociationDispatchOutbox.count({ where: { sourceLeadEventId: failedLead.id } }), 0);
   });
@@ -592,7 +603,7 @@ describe("client sheets person gate (local sa360_test)", { skip: !runIntegration
       clientAccountId: client.sheets,
       sourceLeadEventId: uncertainLead.id,
     });
-    assert.equal(reserved.code, "admitted");
+    assert.equal(reserved.code, "replay_allowed");
     const uncertainJob = await db.companySheetsDeliveryJob.findFirstOrThrow({
       where: { sourceLeadEventId: uncertainLead.id },
     });
@@ -614,11 +625,12 @@ describe("client sheets person gate (local sa360_test)", { skip: !runIntegration
       sourceLeadEventId: afterTabChange.id,
     });
     assert.equal(stillHeld.code, "person_duplicate");
-    assert.equal(stillHeld.reason, "normalized_identifier_already_admitted");
+    assert.equal(stillHeld.reason, "sheets_delivery_already_recorded");
     const surviving = await db.clientSheetsPersonAdmission.findFirstOrThrow({
       where: { sourceLeadEventId: uncertainLead.id, kind: "phone" },
     });
     assert.equal(surviving.status, "reserved");
+    assert.equal(surviving.origin, "delivery_index");
     await db.companySheetsTabContract.update({
       where: { destinationId_role: { destinationId: destination.id, role: "campaign" } },
       data: { worksheetId: 0, worksheetTitle: "Campaign Leads" },
@@ -741,5 +753,423 @@ describe("client sheets person gate (local sa360_test)", { skip: !runIntegration
       sourceLeadEventId: released.id,
     });
     assert.equal(allowed.code, "admitted");
+  });
+
+  it("holds a new person only while a history batch remains, then admits them when the cursor is exhausted", async () => {
+    await db.clientSheetsHistoryCoverage.deleteMany({ where: { clientAccountId: client.other } });
+    await db.companySheetsDeliveryJob.deleteMany({ where: { clientAccountId: client.other } });
+    const matchPhone = phone();
+    const destination = await db.companySheetsDestination.findUnique({ where: { clientAccountId: client.sheets } });
+    if (!destination) throw new Error("destination missing");
+    const planted: string[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      const lead = await makeLead({
+        clientAccountId: client.other,
+        phone: index === 2 ? matchPhone : phone(),
+        email: email(`hist-${index}`),
+      });
+      planted.push(lead.id);
+      await db.companySheetsDeliveryJob.create({
+        data: {
+          kind: "lead",
+          status: "succeeded",
+          clientAccountId: client.other,
+          companyConnectionId: connectionId,
+          destinationId: destination.id,
+          spreadsheetId: destination.spreadsheetId,
+          spreadsheetUrl: destination.spreadsheetUrl,
+          worksheetId: index + 1,
+          worksheetTitle: `Hist ${index}`,
+          controlBasis: "drive_owner_verified",
+          destinationUpdatedAt: destination.updatedAt,
+          headerContract: [...COMPANY_SHEETS_LEAD_HEADER],
+          schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION,
+          idempotencyKey: `lead:${client.other}:${lead.id}:hist`,
+          sourceLeadEventId: lead.id,
+          rowsTotal: 1,
+          rowsWritten: 1,
+          appendStartedAt: new Date(),
+          createdAt: new Date(Date.UTC(2024, 0, index + 1)),
+        },
+      });
+    }
+    const unseen = await readClientSheetsHistoryCoverage(db, client.other);
+    assert.equal(unseen.status, "unavailable");
+    assert.equal(unseen.completenessProof, "not_started");
+    const fresh = await makeLead({
+      clientAccountId: client.other,
+      phone: phone(),
+      email: email("brand-new"),
+    });
+    const held = await evaluateClientSheetsPersonGate(db, {
+      clientAccountId: client.other,
+      sourceLeadEventId: fresh.id,
+      historyBatchSize: 2,
+    });
+    assert.equal(held.code, "person_review");
+    assert.equal(held.reason, "history_coverage_partial");
+    assert.equal(held.historyCoverage, "partial");
+    assert.equal(await db.clientSheetsPersonAdmission.count({ where: { sourceLeadEventId: fresh.id } }), 0);
+    await db.clientSheetsHistoryCoverage.update({
+      where: { clientAccountId: client.other },
+      data: { indexedCount: 999 },
+    });
+    const inflated = await readClientSheetsHistoryCoverage(db, client.other);
+    assert.equal(inflated.indexedCount, 999);
+    assert.equal(inflated.status, "partial");
+    assert.notEqual(inflated.completenessProof, "cursor_exhausted");
+    const duplicate = await makeLead({
+      clientAccountId: client.other,
+      phone: matchPhone,
+      email: email("late-match"),
+    });
+    const stillUnproven = await evaluateClientSheetsPersonGate(db, {
+      clientAccountId: client.other,
+      sourceLeadEventId: duplicate.id,
+      historyBatchSize: 2,
+    });
+    assert.notEqual(stillUnproven.code, "admitted");
+    const finished = await prepareClientSheetsHistoryBaseline(db, { clientAccountId: client.other, batchSize: 2 });
+    assert.equal(finished.status, "complete");
+    assert.equal(finished.completenessProof, "cursor_exhausted");
+    const blocked = await evaluateClientSheetsPersonGate(db, {
+      clientAccountId: client.other,
+      sourceLeadEventId: duplicate.id,
+    });
+    assert.equal(blocked.code, "person_duplicate");
+    const admitted = await evaluateClientSheetsPersonGate(db, {
+      clientAccountId: client.other,
+      sourceLeadEventId: fresh.id,
+    });
+    assert.equal(admitted.code, "admitted");
+    assert.equal(admitted.historyCoverage, "complete");
+    void planted;
+  });
+
+  it("retries a transient assessment through the drain and lets an operator release a review hold", async () => {
+    const drainEnv = {
+      ...dispatchEnv,
+      SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED: "false",
+    };
+    const parkOtherDueIntents = async (exceptId: string) => {
+      await db.companySheetsDispatchIntent.updateMany({
+        where: {
+          id: { not: exceptId },
+          status: { in: ["pending", "scheduled", "retryable", "processing", "awaiting_setup"] },
+        },
+        data: { status: "completed", reason: "test_isolation" },
+      });
+      await db.companySheetsDispatchIntent.updateMany({
+        where: {
+          id: { not: exceptId },
+          status: { in: ["assessment_failed", "review_held"] },
+        },
+        data: { availableAt: new Date("2099-01-01T00:00:00.000Z") },
+      });
+    };
+    const transientDecision = await makeDecision(null);
+    await recordDuplicateRiskAssessmentFailure(transientDecision.id, "TimeoutError", "transient");
+    const transientPhone = phone();
+    const transientLead = await makeLead({
+      clientAccountId: client.sheets,
+      phone: transientPhone,
+      email: email("transient"),
+      decisionId: transientDecision.id,
+    });
+    await db.sourceLeadEvent.update({
+      where: { id: transientLead.id },
+      data: {
+        rawPayloadJson: {
+          schema_version: "1.0",
+          client_account_id: client.sheets,
+          contact: {
+            lead_uid: `lead_${suffix}_transient`,
+            first_name: "Ada",
+            last_name: "Lovelace",
+            phone_e164: transientPhone,
+            email: `transient.${suffix}@example.com`,
+          },
+          state: {},
+          event: {
+            event_uuid: `evt_${suffix}_transient`,
+            event_name_internal: "lead_created",
+            event_name_meta: "Lead",
+            send_to_meta: false,
+          },
+        },
+      },
+    });
+    await recordCompanySheetsCampaignIntent(
+      {
+        sourceLeadEventId: transientLead.id,
+        status: "routing_matched",
+        clientAccountId: client.sheets,
+        resolvedAt: new Date(),
+      },
+      db,
+      dispatchEnv
+    );
+    const held = await db.companySheetsDispatchIntent.findFirstOrThrow({ where: { sourceLeadEventId: transientLead.id } });
+    assert.equal(held.status, "assessment_failed");
+    assert.equal(held.reason, "assessment_failed_transient");
+    await parkOtherDueIntents(held.id);
+    const firstDrain = await processDueCompanySheetsDispatches({ db, env: drainEnv, now: () => new Date() });
+    assert.ok(firstDrain.processed >= 1);
+    const promoted = await db.companySheetsDispatchIntent.findUniqueOrThrow({ where: { id: held.id } });
+    assert.equal(promoted.status, "scheduled");
+    assert.equal(await db.companySheetsDeliveryJob.count({ where: { sourceLeadEventId: transientLead.id } }), 1);
+    assert.equal(await db.ghlAssociationDispatchOutbox.count({ where: { sourceLeadEventId: transientLead.id } }), 0);
+    assert.equal(await db.leadDuplicateRiskAssessment.count({ where: { routingDryRunDecisionId: transientDecision.id } }), 1);
+    const secondDrain = await processDueCompanySheetsDispatches({ db, env: drainEnv, now: () => new Date() });
+    void secondDrain;
+    assert.equal(await db.companySheetsDeliveryJob.count({ where: { sourceLeadEventId: transientLead.id } }), 1);
+    assert.equal(await db.companySheetsDispatchIntent.count({ where: { sourceLeadEventId: transientLead.id } }), 1);
+
+    const reviewDecision = await makeDecision(null);
+    await recordDuplicateRiskAssessmentFailure(reviewDecision.id, "Error", "review");
+    const reviewLead = await makeLead({
+      clientAccountId: client.sheets,
+      phone: phone(),
+      email: email("review-assess"),
+      decisionId: reviewDecision.id,
+    });
+    await recordCompanySheetsCampaignIntent(
+      {
+        sourceLeadEventId: reviewLead.id,
+        status: "routing_matched",
+        clientAccountId: client.sheets,
+        resolvedAt: new Date(),
+      },
+      db,
+      dispatchEnv
+    );
+    const reviewIntent = await db.companySheetsDispatchIntent.findFirstOrThrow({ where: { sourceLeadEventId: reviewLead.id } });
+    assert.equal(reviewIntent.reason, "assessment_needs_review");
+    await processDueCompanySheetsDispatches({ db, env: drainEnv, now: () => new Date() });
+    const untouched = await db.companySheetsDispatchIntent.findUniqueOrThrow({ where: { id: reviewIntent.id } });
+    assert.equal(untouched.status, "assessment_failed");
+    assert.equal(await db.companySheetsDeliveryJob.count({ where: { sourceLeadEventId: reviewLead.id } }), 0);
+    const refused = await recoverClientSheetsPersonHold(db, reviewLead.id, "operator");
+    assert.equal(refused.ok, true);
+    if (!refused.ok) return;
+    assert.equal(refused.promoted, false);
+    assert.equal(refused.reason, "assessment_needs_review");
+    await db.leadDuplicateRiskAssessment.create({
+      data: {
+        masterClientAccountId: client.sheets,
+        routingDryRunDecisionId: reviewDecision.id,
+        riskLevel: "none",
+        identityStatus: "linked",
+        sourceLeadUid: `uid_review_${suffix}`,
+      },
+    });
+    const released = await recoverClientSheetsPersonHold(db, reviewLead.id, "operator");
+    assert.equal(released.ok, true);
+    if (!released.ok) return;
+    assert.equal(released.promoted, true);
+    assert.equal(released.status, "pending");
+    const again = await recoverClientSheetsPersonHold(db, reviewLead.id, "operator");
+    assert.equal(again.ok, true);
+    if (!again.ok) return;
+    assert.equal(again.promoted, false);
+    await processDueCompanySheetsDispatches({ db, env: drainEnv, now: () => new Date() });
+    assert.equal(await db.companySheetsDeliveryJob.count({ where: { sourceLeadEventId: reviewLead.id } }), 1);
+    await processDueCompanySheetsDispatches({ db, env: drainEnv, now: () => new Date() });
+    assert.equal(await db.companySheetsDeliveryJob.count({ where: { sourceLeadEventId: reviewLead.id } }), 1);
+    assert.equal(await db.ghlAssociationDispatchOutbox.count({ where: { sourceLeadEventId: reviewLead.id } }), 0);
+
+    const heldDecision = await makeDecision(null);
+    const heldLead = await makeLead({
+      clientAccountId: client.sheets,
+      phone: phone(),
+      email: email("assessment-held"),
+      decisionId: heldDecision.id,
+    });
+    await recordCompanySheetsCampaignIntent(
+      {
+        sourceLeadEventId: heldLead.id,
+        status: "routing_matched",
+        clientAccountId: client.sheets,
+        resolvedAt: new Date(),
+      },
+      db,
+      dispatchEnv
+    );
+    const heldIntent = await db.companySheetsDispatchIntent.findFirstOrThrow({
+      where: { sourceLeadEventId: heldLead.id },
+    });
+    assert.equal(heldIntent.status, "assessment_held");
+    assert.equal(heldIntent.reason, "assessment_missing");
+    await processDueCompanySheetsDispatches({ db, env: drainEnv, now: () => new Date() });
+    const stillHeld = await db.companySheetsDispatchIntent.findUniqueOrThrow({ where: { id: heldIntent.id } });
+    assert.equal(stillHeld.status, "assessment_held");
+    assert.equal(await db.companySheetsDeliveryJob.count({ where: { sourceLeadEventId: heldLead.id } }), 0);
+    await db.leadDuplicateRiskAssessment.create({
+      data: {
+        masterClientAccountId: client.sheets,
+        routingDryRunDecisionId: heldDecision.id,
+        riskLevel: "none",
+        identityStatus: "linked",
+        sourceLeadUid: `uid_held_${suffix}`,
+      },
+    });
+    const promotedHeld = await recoverClientSheetsPersonHold(db, heldLead.id, "operator");
+    assert.equal(promotedHeld.ok, true);
+    if (!promotedHeld.ok) return;
+    assert.equal(promotedHeld.promoted, true);
+    assert.equal(promotedHeld.status, "pending");
+    await processDueCompanySheetsDispatches({ db, env: drainEnv, now: () => new Date() });
+    assert.equal(await db.companySheetsDeliveryJob.count({ where: { sourceLeadEventId: heldLead.id } }), 1);
+    await processDueCompanySheetsDispatches({ db, env: drainEnv, now: () => new Date() });
+    assert.equal(await db.companySheetsDeliveryJob.count({ where: { sourceLeadEventId: heldLead.id } }), 1);
+    assert.equal(await db.ghlAssociationDispatchOutbox.count({ where: { sourceLeadEventId: heldLead.id } }), 0);
+  });
+
+  it("releases a known-dead reservation under the client lock and refuses an uncertain append", async () => {
+    const shared = phone();
+    const ownerLead = await makeLead({ clientAccountId: client.gate, phone: shared, email: email("dead-owner") });
+    const reserved = await evaluateClientSheetsPersonGate(db, {
+      clientAccountId: client.gate,
+      sourceLeadEventId: ownerLead.id,
+    });
+    assert.equal(reserved.code, "admitted");
+    const destination = await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId: client.sheets } });
+    await db.companySheetsDeliveryJob.create({
+      data: {
+        kind: "lead",
+        status: "failed",
+        clientAccountId: client.gate,
+        companyConnectionId: connectionId,
+        destinationId: destination.id,
+        spreadsheetId: destination.spreadsheetId,
+        spreadsheetUrl: destination.spreadsheetUrl,
+        worksheetId: 0,
+        worksheetTitle: "Campaign Leads",
+        controlBasis: "drive_owner_verified",
+        destinationUpdatedAt: destination.updatedAt,
+        headerContract: [...COMPANY_SHEETS_LEAD_HEADER],
+        schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION,
+        idempotencyKey: `lead:${client.gate}:${ownerLead.id}`,
+        sourceLeadEventId: ownerLead.id,
+        rowsTotal: 1,
+        rowsWritten: 0,
+        appendStartedAt: null,
+      },
+    });
+    const challenger = await makeLead({ clientAccountId: client.gate, phone: shared, email: email("dead-challenger") });
+    const [released, raced] = await Promise.all([
+      db.$transaction((tx) =>
+        releaseKnownDeadSheetsPersonReservation(tx, {
+          clientAccountId: client.gate,
+          sourceLeadEventId: ownerLead.id,
+          actor: "operator",
+        })
+      ),
+      db.$transaction((tx) =>
+        evaluateClientSheetsPersonGate(tx, { clientAccountId: client.gate, sourceLeadEventId: challenger.id })
+      ),
+    ]);
+    assert.equal(released.ok, true);
+    const active = await db.clientSheetsPersonAdmission.count({
+      where: { clientAccountId: client.gate, normalizedValue: shared, status: { in: ["reserved", "admitted"] } },
+    });
+    assert.ok(active <= 1);
+    const follow = raced.code === "admitted" ? raced : await evaluateClientSheetsPersonGate(db, {
+      clientAccountId: client.gate,
+      sourceLeadEventId: challenger.id,
+    });
+    assert.equal(follow.code, "admitted");
+    assert.equal(
+      await db.clientSheetsPersonAdmission.count({
+        where: { clientAccountId: client.gate, normalizedValue: shared, sourceLeadEventId: challenger.id },
+      }),
+      1
+    );
+    assert.equal(await db.clientSheetsPersonRelease.count({ where: { sourceLeadEventId: ownerLead.id } }), 2);
+    const audit = await db.clientSheetsDedupeDecision.findUniqueOrThrow({
+      where: { idempotencyKey: `sheets:${client.gate}:${ownerLead.id}` },
+    });
+    assert.equal(audit.reason, "known_dead_presend_released");
+
+    const uncertainOwner = await makeLead({ clientAccountId: client.gate, phone: phone(), email: email("uncertain-owner") });
+    await evaluateClientSheetsPersonGate(db, { clientAccountId: client.gate, sourceLeadEventId: uncertainOwner.id });
+    await db.companySheetsDeliveryJob.create({
+      data: {
+        kind: "lead",
+        status: "uncertain",
+        clientAccountId: client.gate,
+        companyConnectionId: connectionId,
+        destinationId: destination.id,
+        spreadsheetId: destination.spreadsheetId,
+        spreadsheetUrl: destination.spreadsheetUrl,
+        worksheetId: 4,
+        worksheetTitle: "Open",
+        controlBasis: "drive_owner_verified",
+        destinationUpdatedAt: destination.updatedAt,
+        headerContract: [...COMPANY_SHEETS_LEAD_HEADER],
+        schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION,
+        idempotencyKey: `lead:${client.gate}:${uncertainOwner.id}:uncertain`,
+        sourceLeadEventId: uncertainOwner.id,
+        rowsTotal: 1,
+        rowsWritten: 0,
+        appendStartedAt: new Date(),
+        uncertainReason: "append_outcome_unknown",
+      },
+    });
+    const refused = await releaseKnownDeadSheetsPersonReservation(db, {
+      clientAccountId: client.gate,
+      sourceLeadEventId: uncertainOwner.id,
+    });
+    assert.equal(refused.ok, false);
+    if (refused.ok) return;
+    assert.equal(refused.code, "uncertain_append_held");
+    assert.equal(
+      await db.clientSheetsPersonAdmission.count({ where: { sourceLeadEventId: uncertainOwner.id, status: "reserved" } }),
+      2
+    );
+  });
+
+  it("plans a quarantine for queued lead jobs that have no admission and leaves them untouched", async () => {
+    const queuedLead = await makeLead({ clientAccountId: client.other, phone: phone(), email: email("queued-old") });
+    const destination = await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId: client.sheets } });
+    const job = await db.companySheetsDeliveryJob.create({
+      data: {
+        kind: "lead",
+        status: "queued",
+        clientAccountId: client.other,
+        companyConnectionId: connectionId,
+        destinationId: destination.id,
+        spreadsheetId: destination.spreadsheetId,
+        spreadsheetUrl: destination.spreadsheetUrl,
+        worksheetId: 0,
+        worksheetTitle: "Campaign Leads",
+        controlBasis: "drive_owner_verified",
+        destinationUpdatedAt: destination.updatedAt,
+        headerContract: [...COMPANY_SHEETS_LEAD_HEADER],
+        schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION,
+        idempotencyKey: `lead:${client.other}:${queuedLead.id}:pre`,
+        sourceLeadEventId: queuedLead.id,
+        rowsTotal: 1,
+        rowsWritten: 0,
+      },
+    });
+    const plan = await planPreMigrationLeadJobQuarantine(db, client.other);
+    assert.equal(plan.ran, false);
+    assert.equal(plan.strategy, "quarantine_until_reconciled");
+    assert.equal(plan.jobs.some((row) => row.jobId === job.id && row.reason === "no_person_admission"), true);
+    const stored = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: job.id } });
+    assert.equal(stored.status, "queued");
+    const pilot = await makeLead({
+      clientAccountId: client.other,
+      phone: phone(),
+      email: email("pilot"),
+      routeKey: COMPANY_SHEETS_PILOT_ROUTE_KEY,
+    });
+    const exempt = await evaluateClientSheetsPersonGate(db, {
+      clientAccountId: client.other,
+      sourceLeadEventId: pilot.id,
+    });
+    assert.equal(exempt.code, "exempt_synthetic_pilot");
+    assert.equal(await db.clientSheetsPersonAdmission.count({ where: { sourceLeadEventId: pilot.id } }), 0);
   });
 });

@@ -18,10 +18,12 @@ import { normalizeSourceFieldKey } from "../source-intake/source-field-alias.reg
  * payload JSON, IP address, user agent, fbclid, or a TrustedForm certificate.
  *
  * Age is the stored consumer age when one is present. A blank age is the
- * completed whole-year age of a recognized date of birth, using the campaign
- * reference in `campaign-dob-age.ts`. Aged-inventory eligibility limits are
- * not applied. An age never creates a birthday. DOB is written as a date-only
- * `YYYY-MM-DD` value; a datetime keeps the calendar date before `T`.
+ * completed whole-year age of a recognized date of birth. The reference is
+ * the first valid documented timestamp among `submitted_at` and this lead's
+ * persisted `receivedAt`. An invalid `submitted_at` does not block that
+ * receipt time. Aged-inventory eligibility limits are not applied. An age
+ * never creates a birthday. DOB is written as a date-only `YYYY-MM-DD`
+ * value; a documented datetime keeps the calendar date before `T`.
  *
  * `completion_minutes` and `trustedform_status` are read only from
  * `routing.source_intake.unmappedSourceFieldsJson`. The entry `key` must be

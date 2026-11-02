@@ -16,6 +16,7 @@ import {
 } from "./source-intake.types.js";
 import { resolveLeadCaptureNiche } from "./leadcapture-niche-resolver.js";
 import { leadCaptureSourceIdentitySignalsFromPayload } from "./leadcapture-source-identity-signals.js";
+import { campaignAgeReferenceDate, selectCampaignAgeReference } from "../consumer-age/campaign-dob-age.js";
 import { withIntakeConsumerAge } from "../consumer-age/consumer-age-intake.js";
 import { buildLeadDetailsFromCanonicalMap } from "../ppl-fulfillment/buyer-lead-fields.js";
 
@@ -99,6 +100,12 @@ export function inferLeadCaptureIoRoutingKeys(
 export type NormalizeLeadCaptureOptions = {
   routeKeyFromPath?: string;
   routeAliasOverrides?: Record<string, readonly string[]>;
+  /**
+   * Persisted `SourceLeadEvent.receivedAt`. Intake passes the timestamp it
+   * stored on the row. Replay and reconcile pass that same value. This is
+   * not a fresh clock, and the normalizer does not call `new Date()`.
+   */
+  receivedAt?: string | null;
 };
 
 /** Normalize LeadCapture.io webhook body to SA360 MASTER 2.0 lifecycle payload. */
@@ -122,6 +129,14 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
   );
   const sourceSubmittedAt = trimOrUndefined(effective.submitted_at);
   const submittedAtForEventUuid = sourceSubmittedAt ?? leadId;
+  const ageReference = selectCampaignAgeReference({
+    submittedAt: sourceSubmittedAt,
+    receivedAt: opts?.receivedAt,
+  });
+  const attributeReceivedAt =
+    (opts?.receivedAt && campaignAgeReferenceDate(opts.receivedAt) ? opts.receivedAt.trim() : null) ??
+    ageReference?.instant ??
+    "";
   const campaignName =
     trimOrUndefined(effective.sa360_campaign_name) ??
     trimOrUndefined(effective.campaign_name) ??
@@ -156,7 +171,7 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
 
   const extracted = extractSourceAttributesFromPayload(raw, {
     sourceSystem,
-    receivedAt: sourceSubmittedAt ?? new Date().toISOString(),
+    receivedAt: attributeReceivedAt,
     routeAliasOverrides: opts?.routeAliasOverrides,
     leadCaptureMaterialized: effective,
   });
@@ -174,8 +189,8 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
     ),
     [extracted.sourceAttributes, effective, { unmappedSourceFieldsJson: extracted.unmappedSourceFields }],
     {
-      // Replay uses the source submitted_at UTC date, not the worker clock.
-      referenceAt: sourceSubmittedAt ?? null,
+      // First valid documented timestamp: submitted_at, then the persisted receipt.
+      referenceAt: ageReference?.instant ?? null,
       routeAliasOverrides: opts?.routeAliasOverrides,
     }
   );

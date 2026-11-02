@@ -24,11 +24,18 @@ import { stripLeadCaptureInternalMetadata } from "../../lib/leadcapture-webhook-
 import { isLegacyLeadCaptureCampaignPausedForNextGen } from "./leadcapture-nextgen-canary-gate.service.js";
 import { resolveNextGenSourceIdentity } from "./leadcapture-nextgen-source-identity.js";
 import { observeNextGenSourceFunnelSafely } from "./source-funnel.service.js";
+import { campaignAgeReferenceDate } from "../consumer-age/campaign-dob-age.js";
 
 export type LeadCaptureIoIntakeInput = {
   rawPayload: Record<string, unknown>;
   routeKeyFromPath?: string;
   webhookRequestLogId?: string;
+  /**
+   * Stable receipt instant for this event. When omitted, one clock read is
+   * stored on the row and passed into normalization. Retries of the same
+   * row use that stored value rather than a new clock.
+   */
+  receivedAt?: string;
   trackCampaignInventoryImpl?: typeof trackCampaignInventorySafely;
   observeSourceFunnelImpl?: typeof observeNextGenSourceFunnelSafely;
 };
@@ -79,7 +86,9 @@ export async function processLeadCaptureIoWebhookIntake(
   }
 
   const raw = applyLeadCaptureEndpointDefaults(rawStored, input.routeKeyFromPath);
-  const now = new Date();
+  const requestedReceipt = input.receivedAt?.trim() ?? "";
+  const now =
+    requestedReceipt && campaignAgeReferenceDate(requestedReceipt) ? new Date(requestedReceipt) : new Date();
   const routingHints = inferLeadCaptureIoRoutingKeys(raw, input.routeKeyFromPath);
   const routeKey = resolveLeadCaptureRouteKey(raw, input.routeKeyFromPath);
   if (isLegacyLeadCaptureCampaignPausedForNextGen(routeKey)) {
@@ -107,6 +116,7 @@ export async function processLeadCaptureIoWebhookIntake(
 
   const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(raw, {
     routeKeyFromPath: input.routeKeyFromPath,
+    receivedAt: now.toISOString(),
   });
   const parsed = lifecycleEventSchema.safeParse(normalized);
   if (!parsed.success) {

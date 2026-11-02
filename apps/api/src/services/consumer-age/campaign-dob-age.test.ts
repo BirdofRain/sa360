@@ -14,13 +14,17 @@ import {
 } from "../company-sheets-delivery/company-sheets-custom-row.js";
 import { normalizeLeadCaptureIoWebhookToLifecyclePayload } from "../source-intake/leadcapture-io-normalizer.js";
 import { parseHistoricalConsumerAge } from "../aged-inventory-bulk/aged-inventory-bulk-consumer-age.js";
+import { planCustomCampaignSheet } from "../client-onboarding-v2/custom-captured-sheet.js";
 import {
   assessCampaignDobAgeRecovery,
   CAMPAIGN_AGE_REFERENCE_RULE,
+  CAMPAIGN_DOB_AGE_FUTURE_WARNING,
+  CAMPAIGN_DOB_AGE_REFERENCE_UNAVAILABLE_WARNING,
   deriveCampaignAge,
   parseCampaignDateOfBirth,
   parseCampaignSuppliedAge,
   projectCampaignDobAge,
+  selectCampaignAgeReference,
 } from "./campaign-dob-age.js";
 
 const REFERENCE = "2026-10-26T15:04:00.000Z";
@@ -55,6 +59,12 @@ test("campaign date-only parser preserves the written calendar date", () => {
   assert.equal(parseCampaignDateOfBirth("1979-04-12"), "1979-04-12");
   assert.equal(parseCampaignDateOfBirth("1979-04-12T00:00:00.000Z"), "1979-04-12");
   assert.equal(parseCampaignDateOfBirth("1979-04-12T03:30:00.000Z"), "1979-04-12");
+  assert.equal(parseCampaignDateOfBirth("1979-04-12T23:30:00-04:00"), "1979-04-12");
+  assert.equal(parseCampaignDateOfBirth("1979-04-12T00:00Z"), "1979-04-12");
+  assert.equal(parseCampaignDateOfBirth("1979-04-12T"), null);
+  assert.equal(parseCampaignDateOfBirth("1979-04-12Tanything"), null);
+  assert.equal(parseCampaignDateOfBirth("1979-04-12T25:00:00Z"), null);
+  assert.equal(parseCampaignDateOfBirth("1979-04-12T00:00:00.000Zjunk"), null);
   assert.equal(parseCampaignDateOfBirth("4/12/1979"), "1979-04-12");
   assert.equal(parseCampaignDateOfBirth("04/12/1979"), "1979-04-12");
   assert.equal(parseCampaignDateOfBirth("April 12, 1979"), "1979-04-12");
@@ -372,4 +382,222 @@ test("stored blanks are classified without writing or replaying", () => {
   assert.equal(objectAttributes?.date_of_birth, undefined);
   assert.equal(JSON.stringify(objectDob).includes("[object Object]"), false);
   assert.equal(leadDetails(objectDob as { lead_details?: Record<string, unknown> }).date_of_birth, undefined);
+});
+
+const BEFORE_BIRTHDAY = "2026-04-11T23:00:00.000Z";
+
+function dobPayload(input: { leadId: string; submittedAt?: string; dob: unknown }): Record<string, unknown> {
+  return {
+    provider: "leadcapture_io",
+    sa360_source_system: "leadcapture_io_nextgen",
+    lead_id: input.leadId,
+    ...(input.submittedAt === undefined ? {} : { submitted_at: input.submittedAt }),
+    first_name: "Redacted",
+    last_name: "Example",
+    email: "redacted.example@example.test",
+    phone: "5550100199",
+    state: "TX",
+    answers: { dateOfBirth: input.dob },
+  };
+}
+
+function ageDobMap(clientAccountId: string) {
+  const header = ["Age", "DOB"];
+  const assignments = [
+    {
+      sheetHeader: "Age",
+      columnIndex: 0,
+      formula: false,
+      target: { kind: "v3_column" as const, header: "Age", sourceField: "consumer_age" },
+      transform: "passthrough" as const,
+      decision: "mapped" as const,
+      explicit: true,
+      code: null,
+    },
+    {
+      sheetHeader: "DOB",
+      columnIndex: 1,
+      formula: false,
+      target: { kind: "v3_column" as const, header: "DOB", sourceField: "date_of_birth" },
+      transform: "date_america_new_york" as const,
+      decision: "mapped" as const,
+      explicit: true,
+      code: null,
+    },
+  ];
+  return { header, assignments, clientAccountId };
+}
+
+test("missing, invalid, and absent reference timestamps stay on one receipt", () => {
+  const missing = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+    dobPayload({ leadId: "11111111-2222-4333-8444-555555555561", dob: "04/12/1979" }),
+    { receivedAt: BEFORE_BIRTHDAY }
+  );
+  const missingDetails = leadDetails(missing as { lead_details?: Record<string, unknown> });
+  assert.equal((missing.routing as { source_intake?: { submitted_at?: string } }).source_intake?.submitted_at, undefined);
+  assert.equal(missingDetails.date_of_birth, "1979-04-12");
+  assert.equal(missingDetails.consumer_age, "46");
+  assert.equal(missingDetails.consumer_age_reference_date, "2026-04-11");
+  assert.equal(missingDetails.consumer_age_unavailable_reason, undefined);
+  const missingCells = sheetCells(missing, BEFORE_BIRTHDAY);
+  assert.equal(missingCells.Age, "46");
+  assert.equal(missingCells.DOB, "1979-04-12");
+  const replay = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+    dobPayload({ leadId: "11111111-2222-4333-8444-555555555561", dob: "04/12/1979" }),
+    { receivedAt: BEFORE_BIRTHDAY }
+  );
+  assert.equal(leadDetails(replay as { lead_details?: Record<string, unknown> }).consumer_age, "46");
+
+  const invalidSubmitted = "not-a-timestamp";
+  assert.equal(selectCampaignAgeReference({ submittedAt: invalidSubmitted, receivedAt: BEFORE_BIRTHDAY })?.source, "received_at");
+  const invalid = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+    dobPayload({ leadId: "11111111-2222-4333-8444-555555555562", submittedAt: invalidSubmitted, dob: "04/12/1979" }),
+    { receivedAt: BEFORE_BIRTHDAY }
+  );
+  const invalidIntake = (invalid.routing as { source_intake?: { submitted_at?: string } }).source_intake;
+  assert.equal(invalidIntake?.submitted_at, invalidSubmitted);
+  assert.equal(leadDetails(invalid as { lead_details?: Record<string, unknown> }).consumer_age, "46");
+  assert.equal(sheetCells(invalid, BEFORE_BIRTHDAY).Age, "46");
+
+  const neither = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+    dobPayload({ leadId: "11111111-2222-4333-8444-555555555563", submittedAt: invalidSubmitted, dob: "04/12/1979" })
+  );
+  const neitherDetails = leadDetails(neither as { lead_details?: Record<string, unknown> });
+  assert.equal(neitherDetails.date_of_birth, "1979-04-12");
+  assert.equal(neitherDetails.consumer_age, undefined);
+  assert.equal(neitherDetails.consumer_age_unavailable_reason, "no_valid_reference");
+  const neitherPreview = projectCampaignDobAge({ normalizedPayload: neither, receivedAt: "still-not-a-timestamp" });
+  assert.equal(neitherPreview.dateOfBirth, "1979-04-12");
+  assert.equal(neitherPreview.age, "");
+  assert.equal(neitherPreview.ageUnavailableReason, "no_valid_reference");
+  assert.equal(sheetCells(neither, "still-not-a-timestamp").Age, "");
+  assert.equal(sheetCells(neither, "still-not-a-timestamp").DOB, "1979-04-12");
+});
+
+test("a valid DOB timestamp keeps its written date and a malformed suffix stays raw", () => {
+  const valid = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+    dobPayload({
+      leadId: "11111111-2222-4333-8444-555555555564",
+      submittedAt: REFERENCE,
+      dob: "1979-04-12T00:00:00.000Z",
+    }),
+    { receivedAt: BEFORE_BIRTHDAY }
+  );
+  const validDetails = leadDetails(valid as { lead_details?: Record<string, unknown> });
+  assert.equal(validDetails.date_of_birth, "1979-04-12");
+  assert.equal(validDetails.consumer_age, "47");
+  assert.equal(sheetCells(valid, BEFORE_BIRTHDAY).DOB, "1979-04-12");
+  const offset = parseCampaignDateOfBirth("1979-04-12T23:30:00-04:00");
+  assert.equal(offset, "1979-04-12");
+
+  const malformed = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+    dobPayload({
+      leadId: "11111111-2222-4333-8444-555555555565",
+      submittedAt: REFERENCE,
+      dob: "1979-04-12Tanything",
+    })
+  );
+  const malformedDetails = leadDetails(malformed as { lead_details?: Record<string, unknown> });
+  const malformedAttributes = (malformed.routing as { source_intake?: { sourceAttributes?: Record<string, unknown> } }).source_intake?.sourceAttributes;
+  assert.equal(malformedDetails.date_of_birth, undefined);
+  assert.equal(malformedDetails.consumer_age, undefined);
+  assert.equal(malformedAttributes?.date_of_birth, "1979-04-12Tanything");
+  assert.equal(sheetCells(malformed, REFERENCE).DOB, "");
+  assert.equal(sheetCells(malformed, REFERENCE).Age, "");
+});
+
+test("a future DOB is kept and age is not derived", () => {
+  const future = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+    dobPayload({ leadId: "11111111-2222-4333-8444-555555555566", submittedAt: REFERENCE, dob: "2027-01-15" })
+  );
+  const details = leadDetails(future as { lead_details?: Record<string, unknown> });
+  assert.equal(details.date_of_birth, "2027-01-15");
+  assert.equal(details.consumer_age, undefined);
+  assert.equal(details.consumer_age_unavailable_reason, "future_date_of_birth");
+  assert.equal(details.consumer_age_reference_date, "2026-10-26");
+  const preview = projectCampaignDobAge({ normalizedPayload: future, receivedAt: BEFORE_BIRTHDAY });
+  assert.equal(preview.dateOfBirth, "2027-01-15");
+  assert.equal(preview.age, "");
+  assert.equal(preview.ageUnavailableReason, "future_date_of_birth");
+  assert.equal(preview.referenceDate, "2026-10-26");
+  const projected = customRowProjection(
+    ageDobMap("alex_gross").assignments,
+    {
+      stableRowId: "row",
+      clientAccountId: "alex_gross",
+      sourceLeadEventId: "evt_future",
+      receivedAt: BEFORE_BIRTHDAY,
+      sourceLeadId: "redacted",
+      normalizedPayload: future,
+    }
+  );
+  assert.equal(projected?.warnings.includes(CAMPAIGN_DOB_AGE_FUTURE_WARNING), true);
+  assert.equal(projected?.warnings.includes(CAMPAIGN_DOB_AGE_REFERENCE_UNAVAILABLE_WARNING), false);
+});
+
+test("preview and the sheet writer do not apply a route alias to a stored unmapped answer", () => {
+  const question = "What is your date of birth?";
+  const stored = {
+    contact: { first_name: "Redacted", last_name: "Example", email: "redacted.example@example.test" },
+    routing: {
+      source_intake: {
+        submitted_at: REFERENCE,
+        unmappedSourceFieldsJson: [{ key: question, value: "04/12/1979" }],
+      },
+    },
+  };
+  const direct = assessCampaignDobAgeRecovery({
+    normalizedPayload: stored,
+    receivedAt: RECEIVED_AT,
+    routeAliasOverrides: { date_of_birth: [question] },
+  });
+  assert.equal(direct.recovery, "derived_at_delivery");
+  assert.equal(direct.projectedAge, "47");
+
+  const exact = sheetCells(stored, RECEIVED_AT);
+  assert.equal(exact.Age, "");
+  assert.equal(exact.DOB, "");
+  const map = ageDobMap("alex_gross");
+  const custom = customRowProjection(map.assignments, {
+    stableRowId: "row",
+    clientAccountId: "alex_gross",
+    sourceLeadEventId: "evt_alias",
+    receivedAt: RECEIVED_AT,
+    sourceLeadId: "redacted",
+    normalizedPayload: stored,
+  });
+  assert.deepEqual(custom?.values, ["", ""]);
+  assert.equal(custom?.dobAge.dateOfBirth, "");
+  assert.equal(custom?.dobAge.age, "");
+  const preview = planCustomCampaignSheet({
+    clientAccountId: "alex_gross",
+    spreadsheetId: "copy_sheet_alex",
+    campaign: {
+      worksheetId: 7,
+      worksheetTitle: "VET Web Form",
+      schemaVersion: "company_sheets_campaign_custom_v1",
+      header: map.header,
+    },
+    publishedMap: {
+      id: "map_alias",
+      mapVersion: 1,
+      spreadsheetId: "copy_sheet_alex",
+      worksheetId: 7,
+      headerSnapshot: map.header,
+      assignments: map.assignments,
+    },
+    event: {
+      id: "evt_alias",
+      sourceLeadId: "redacted",
+      receivedAt: RECEIVED_AT,
+      normalizedPayloadJson: stored,
+      enrichmentMetadataJson: {},
+    },
+  });
+  assert.equal(preview.applies, true);
+  assert.equal(preview.ok, true);
+  if (!preview.ok) return;
+  assert.deepEqual(preview.plan.values, ["", ""]);
+  assert.equal(preview.plan.dobAge.ageUnavailableReason, null);
+  assert.equal(preview.plan.dobAge.dateOfBirth, "");
 });

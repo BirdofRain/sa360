@@ -8,19 +8,24 @@
  * numeric cell is never turned into a birthday.
  *
  * Age reference rule `submitted_at_utc_date_else_received_at_utc_date`:
- * completed whole years are measured against the UTC calendar date of the
- * lead's source `submitted_at`. When that instant is missing, the stored
- * event `receivedAt` is the reference. Wall-clock `new Date()` is not a
- * campaign age reference, so replaying the same payload and the same instant
- * yields the same age.
+ * completed whole years use the first valid timestamp. A source `submitted_at`
+ * is used only when it matches a documented timestamp. A nonempty invalid
+ * value is kept as raw evidence and is not a reference. The stored event
+ * `receivedAt` is the next candidate. That receipt time is the one written
+ * on the SourceLeadEvent row before normalization, and preview, delivery,
+ * and replay pass that same value. Wall-clock `new Date()` is not a campaign
+ * age reference. If neither instant is valid, a valid DOB is kept and age
+ * is reported as underivable.
  *
- * A date-only birthday keeps the calendar date written by the source. An
- * ISO datetime keeps the `YYYY-MM-DD` token before `T` and is not shifted
- * into America/New_York. The sheet Date column still formats generation
- * time in New York; that transform is not applied to a date-only DOB.
+ * Documented timestamps are `YYYY-MM-DD` and
+ * `YYYY-MM-DDTHH:mm[:ss[.fraction]](Z|±HH:mm)`. A date-only reference is
+ * already a UTC calendar date. A datetime reference uses its UTC calendar
+ * date. A DOB datetime keeps the written `YYYY-MM-DD` token and is not
+ * shifted into America/New_York. A malformed suffix is not a DOB. A DOB
+ * after the reference date is kept and age is not derived. The sheet Date
+ * column still formats generation time in New York.
  */
 
-import { completedWholeYearsAsOf } from "../aged-inventory-bulk/aged-inventory-bulk-consumer-age.js";
 import {
   DEFAULT_SOURCE_FIELD_ALIASES,
   normalizeSourceFieldKey,
@@ -37,7 +42,16 @@ export const CAMPAIGN_AGE_REFERENCE_RULE =
 export const CAMPAIGN_DOB_AGE_CONFLICT_WARNING =
   "consumer_age_conflicts_with_date_of_birth" as const;
 
+/** Valid DOB, and neither submitted_at nor receivedAt is a documented timestamp. */
+export const CAMPAIGN_DOB_AGE_REFERENCE_UNAVAILABLE_WARNING =
+  "consumer_age_reference_unavailable" as const;
+
+/** Valid DOB is after the reference UTC date, so completed years are not derived. */
+export const CAMPAIGN_DOB_AGE_FUTURE_WARNING = "consumer_age_future_date_of_birth" as const;
+
 export type CampaignAgeProvenance = "supplied" | "derived_from_date_of_birth";
+
+export type CampaignAgeUnavailableReason = "no_valid_reference" | "future_date_of_birth";
 
 export type CampaignDobAgeFields = {
   consumer_age?: string;
@@ -48,6 +62,7 @@ export type CampaignDobAgeFields = {
   consumer_age_reference_date?: string;
   consumer_age_reference_rule?: typeof CAMPAIGN_AGE_REFERENCE_RULE;
   consumer_age_conflict?: true;
+  consumer_age_unavailable_reason?: CampaignAgeUnavailableReason;
 };
 
 export type CampaignDobAgeOptions = {
@@ -69,6 +84,8 @@ export type CampaignDobAgePreview = {
   referenceDate: string;
   referenceRule: typeof CAMPAIGN_AGE_REFERENCE_RULE;
   conflict: boolean;
+  /** Null when age was supplied or derived. Set when a valid DOB cannot yield an age. */
+  ageUnavailableReason: CampaignAgeUnavailableReason | null;
 };
 
 export type CampaignDobAgeEvidence = {
@@ -150,12 +167,74 @@ function cellText(value: unknown): string {
   return "";
 }
 
-/** UTC calendar date `YYYY-MM-DD` for a parseable instant, or null. */
+/**
+ * Documented timestamp. Date-only is `YYYY-MM-DD`. Datetime is
+ * `YYYY-MM-DDTHH:mm[:ss[.fraction]](Z|±HH:mm)` with a real clock time.
+ * `writtenDate` is the calendar token before `T`. `utcDate` is that token
+ * for a date-only value, and the UTC calendar date of a datetime.
+ */
+const DOCUMENTED_TIMESTAMP =
+  /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(\.\d+)?)?(Z|[+-]\d{2}:\d{2}))?$/;
+
+type ParsedTimestamp = { writtenDate: string; utcDate: string };
+
+function parseDocumentedTimestamp(raw: string): ParsedTimestamp | null {
+  const match = DOCUMENTED_TIMESTAMP.exec(raw.trim());
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const writtenDate = isoDateOnly(year, month, day);
+  if (!writtenDate) return null;
+  if (match[4] == null) return { writtenDate, utcDate: writtenDate };
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = match[6] == null ? 0 : Number(match[6]);
+  const zone = match[8];
+  if (!zone || hour > 23 || minute > 59 || second > 59) return null;
+  let offsetMinutes = 0;
+  if (zone !== "Z") {
+    const sign = zone.startsWith("-") ? -1 : 1;
+    const zoneHour = Number(zone.slice(1, 3));
+    const zoneMinute = Number(zone.slice(4, 6));
+    if (zoneHour > 23 || zoneMinute > 59) return null;
+    offsetMinutes = sign * (zoneHour * 60 + zoneMinute);
+  }
+  const utc = new Date(Date.UTC(year, month - 1, day, hour, minute, second) - offsetMinutes * 60_000);
+  const utcDate = isoDateOnly(utc.getUTCFullYear(), utc.getUTCMonth() + 1, utc.getUTCDate());
+  if (!utcDate) return null;
+  return { writtenDate, utcDate };
+}
+
+/** UTC calendar date for a documented timestamp or an already-resolved Date. */
 export function campaignAgeReferenceDate(instant: string | Date | null | undefined): string | null {
   if (instant == null) return null;
-  const parsed = instant instanceof Date ? instant : new Date(instant.trim());
-  if (Number.isNaN(parsed.getTime())) return null;
-  return isoDateOnly(parsed.getUTCFullYear(), parsed.getUTCMonth() + 1, parsed.getUTCDate());
+  if (instant instanceof Date) {
+    if (Number.isNaN(instant.getTime())) return null;
+    return isoDateOnly(instant.getUTCFullYear(), instant.getUTCMonth() + 1, instant.getUTCDate());
+  }
+  return parseDocumentedTimestamp(instant)?.utcDate ?? null;
+}
+
+/**
+ * First valid reference. Invalid `submitted_at` does not block `receivedAt`.
+ * The returned instant is the original trimmed text, not a new clock.
+ */
+export function selectCampaignAgeReference(input: {
+  submittedAt?: string | null;
+  receivedAt?: string | null;
+}): { instant: string; referenceDate: string; source: "submitted_at" | "received_at" } | null {
+  const submitted = typeof input.submittedAt === "string" ? input.submittedAt.trim() : "";
+  const submittedDate = submitted ? campaignAgeReferenceDate(submitted) : null;
+  if (submitted && submittedDate) {
+    return { instant: submitted, referenceDate: submittedDate, source: "submitted_at" };
+  }
+  const received = typeof input.receivedAt === "string" ? input.receivedAt.trim() : "";
+  const receivedDate = received ? campaignAgeReferenceDate(received) : null;
+  if (received && receivedDate) {
+    return { instant: received, referenceDate: receivedDate, source: "received_at" };
+  }
+  return null;
 }
 
 export function referenceDateFromOptions(
@@ -184,16 +263,17 @@ function isoDateOnly(year: number, month: number, day: number): string | null {
 }
 
 /**
- * Calendar date written by the source. Datetime suffixes are ignored so a
- * date-only value serialized as midnight UTC is not moved to the previous
- * America/New_York day.
+ * Calendar date written by the source. A documented datetime keeps the date
+ * token before `T` after its clock and zone are validated. A malformed
+ * suffix is rejected. The date is not moved into America/New_York.
  */
 export function parseCampaignDateOfBirth(raw: string | null | undefined): string | null {
   const trimmed = (raw ?? "").trim();
   if (!trimmed) return null;
 
-  const iso = /^(\d{4})-(\d{2})-(\d{2})(?:T.*)?$/.exec(trimmed);
-  if (iso) return isoDateOnly(Number(iso[1]), Number(iso[2]), Number(iso[3]));
+  const documented = parseDocumentedTimestamp(trimmed);
+  if (documented) return documented.writtenDate;
+  if (/^\d{4}-\d{2}-\d{2}T/.test(trimmed)) return null;
 
   const us = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(trimmed);
   if (us) return isoDateOnly(Number(us[3]), Number(us[1]), Number(us[2]));
@@ -231,12 +311,26 @@ export function formatCampaignDobSheet(isoDate: string): string {
   return `${match[2]}/${match[3]}/${match[1]}`;
 }
 
+function wholeYears(isoDate: string, referenceDate: string): number | null {
+  const dob = isoDate.split("-").map(Number);
+  const ref = referenceDate.split("-").map(Number);
+  const year = dob[0];
+  const month = dob[1];
+  const day = dob[2];
+  const refYear = ref[0];
+  const refMonth = ref[1];
+  const refDay = ref[2];
+  if (!year || !month || !day || !refYear || !refMonth || !refDay) return null;
+  let age = refYear - year;
+  const birthdayReached = refMonth > month || (refMonth === month && refDay >= day);
+  if (!birthdayReached) age -= 1;
+  return age;
+}
+
 export function deriveCampaignAge(isoDate: string, referenceDate: string | null): string | null {
   if (!referenceDate) return null;
-  const [year, month, day] = referenceDate.split("-").map(Number);
-  if (!year || !month || !day) return null;
-  const age = completedWholeYearsAsOf(isoDate, new Date(Date.UTC(year, month - 1, day)));
-  if (age == null) return null;
+  const age = wholeYears(isoDate, referenceDate);
+  if (age == null || age < 0) return null;
   return String(age);
 }
 
@@ -315,18 +409,27 @@ function fieldsFromCells(cells: FlatCell[], options: CampaignDobAgeOptions): Cam
   const supplied = age ? parseCampaignSuppliedAge(age.text) : null;
   const referenceDate = referenceDateFromOptions(options);
   const derived = iso ? deriveCampaignAge(iso, referenceDate) : null;
+  const unavailable =
+    iso && !derived
+      ? !referenceDate
+        ? "no_valid_reference"
+        : iso > referenceDate
+          ? "future_date_of_birth"
+          : undefined
+      : undefined;
 
   const fields: CampaignDobAgeFields = {};
   if (iso) {
     fields.date_of_birth = iso;
     fields.date_of_birth_provenance = "supplied";
   }
+  if (iso && referenceDate) {
+    fields.consumer_age_reference_date = referenceDate;
+    fields.consumer_age_reference_rule = CAMPAIGN_AGE_REFERENCE_RULE;
+  }
+  if (unavailable) fields.consumer_age_unavailable_reason = unavailable;
   if (derived) {
     fields.consumer_age_derived = derived;
-    if (referenceDate) {
-      fields.consumer_age_reference_date = referenceDate;
-      fields.consumer_age_reference_rule = CAMPAIGN_AGE_REFERENCE_RULE;
-    }
   }
   if (supplied) {
     fields.consumer_age = supplied;
@@ -376,9 +479,12 @@ export function projectCampaignDobAge(input: {
 }): CampaignDobAgePreview {
   const root = asRecord(input.normalizedPayload);
   const intake = asRecord(asRecord(root?.routing)?.source_intake);
-  const referenceAt = cellText(intake?.submitted_at) || input.receivedAt || null;
+  const selected = selectCampaignAgeReference({
+    submittedAt: cellText(intake?.submitted_at) || null,
+    receivedAt: input.receivedAt,
+  });
   const fields = fieldsFromCells(normalizedPayloadCells(input.normalizedPayload), {
-    referenceAt,
+    referenceAt: selected?.instant ?? null,
     routeAliasOverrides: input.routeAliasOverrides,
   });
   const iso = fields.date_of_birth ?? "";
@@ -392,6 +498,7 @@ export function projectCampaignDobAge(input: {
     referenceDate: fields.consumer_age_reference_date ?? "",
     referenceRule: CAMPAIGN_AGE_REFERENCE_RULE,
     conflict: fields.consumer_age_conflict === true,
+    ageUnavailableReason: fields.consumer_age_unavailable_reason ?? null,
   };
 }
 

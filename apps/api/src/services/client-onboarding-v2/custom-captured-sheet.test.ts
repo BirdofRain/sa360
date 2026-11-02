@@ -260,6 +260,7 @@ test("preview projects the published 15 headers, including blanks, DOB, and nich
   assert.equal(preview.plan.sheet?.dobAge?.referenceDate, "2026-10-29");
   assert.equal(preview.plan.sheet?.dobAge?.referenceRule, "submitted_at_utc_date_else_received_at_utc_date");
   assert.equal(preview.plan.sheet?.dobAge?.conflict, false);
+  assert.equal(preview.plan.sheet?.dobAge?.ageUnavailableReason, null);
   assert.equal(values[7], "Veteran");
   assert.equal(values[8], "Army");
   assert.equal(values[9], "Married");

@@ -49,11 +49,20 @@ existing route `sourceFieldAliasOverridesJson` (`routeAliasOverrides`).
 
 ## Repair
 
-- Reference rule `submitted_at_utc_date_else_received_at_utc_date`. Completed
-  whole years use the UTC calendar date of `submitted_at`, then `receivedAt`.
-  The worker clock is not a reference.
-- DOB is stored and projected as `YYYY-MM-DD`. An ISO datetime keeps the date
-  token before `T`.
+- Reference rule `submitted_at_utc_date_else_received_at_utc_date`. The first
+  valid documented timestamp wins. `submitted_at` is used only when it
+  parses. A nonempty invalid value stays on `source_intake.submitted_at`
+  and does not block the stored event `receivedAt`. Intake writes that
+  receipt once, then passes the same value into normalization. Preview,
+  delivery, and reconcile pass that stored value again. The worker clock
+  is not read again on retry.
+- DOB is stored and projected as `YYYY-MM-DD`. A documented datetime
+  (`YYYY-MM-DDTHH:mm[:ss[.fraction]](Z|±HH:mm)`) keeps the written date
+  token. A malformed suffix is not a DOB; the raw answer stays on
+  `sourceAttributes`. A DOB after the reference date is kept and age is
+  not derived (`ageUnavailableReason: future_date_of_birth`). When neither
+  reference is valid, the DOB is kept and
+  `ageUnavailableReason` is `no_valid_reference`.
 - Supplied age never creates a DOB. Ages outside 18–86 still project. Excel
   serials stay on the aged-inventory parser only.
 - `lead_details.consumer_age_provenance` is `supplied` or
@@ -63,6 +72,35 @@ existing route `sourceFieldAliasOverridesJson` (`routeAliasOverrides`).
   `consumer_age_conflicts_with_date_of_birth`.
 - Raw answer text stays on `sourceAttributes` or `unmappedSourceFieldsJson`.
   The original webhook body is not rewritten.
+
+## Receipt time
+
+`processLeadCaptureIoWebhookIntake` inserts `SourceLeadEvent.receivedAt`
+before it normalizes. That same instant is the normalizer's `receivedAt`.
+Next-gen promotion and one-event reconcile pass the row's stored
+`receivedAt`, not a new clock. A DOB-only body with no `submitted_at`
+stores `lead_details.date_of_birth` and the derived `consumer_age` from
+that receipt. Later preview and row projection receive
+`event.receivedAt`. They do not call `new Date()`.
+
+## Route aliases and already stored answers
+
+Preview (`planCustomCampaignSheet`) and the campaign/custom writers
+(`companySheetsCampaignRowValues`, `customRowProjection`) do not load
+`sourceFieldAliasOverridesJson`. They read the stored normalized payload
+only. Configuring a route alias after the event is stored does not change
+an unmapped answer, and it does not fill Age or DOB.
+
+`assessCampaignDobAgeRecovery({ routeAliasOverrides })` can classify that
+answer as derivable. That helper is not on the preview or writer path.
+Calling it with overrides is not evidence that a sheet cell will fill.
+
+If the alias already existed when `persistRoutingAndDuplicate` ran,
+enrichment copies the answer onto `sourceAttributes` under the canonical
+key and removes it from the unmapped list. The writer then sees that
+stored attribute. It still does not read the alias. `lead_details` is not
+recomputed during that copy; a blank age is derived at projection from
+the stored attribute and the persisted receipt.
 
 ## Preview fields for Agent B
 
@@ -79,6 +117,7 @@ existing route `sourceFieldAliasOverridesJson` (`routeAliasOverrides`).
 | `referenceDate` | UTC `YYYY-MM-DD` used for that age |
 | `referenceRule` | `submitted_at_utc_date_else_received_at_utc_date` |
 | `conflict` | Supplied age and derived age both exist and differ |
+| `ageUnavailableReason` | `null`, `no_valid_reference`, or `future_date_of_birth` |
 
 The Admin C.O.C. UI is unchanged. Sheet `values` are still the cells that
 would be written.
@@ -97,7 +136,7 @@ or redacted export.
 | Age present, no DOB | `age_only` | Age cell kept, DOB stays blank |
 | Supplied age disagrees with DOB | `conflict_visible` | Both cells kept, preview flag set |
 | Supported alias with an unparseable value | `invalid_evidence` | Stays blank. Raw text remains on the attribute |
-| Custom question whose text is not on the route alias list | `needs_source_alias` | Stays blank until that source-scoped alias is configured. Not replayed here |
+| Custom question whose text is not already a stored canonical attribute | `needs_source_alias` | Stays blank. Preview and the sheet writer do not read route alias settings |
 | Object-typed DOB | not stored | Not projected. No production payload of this type was read |
 
 A production count requires the missing event export above. Do not infer that

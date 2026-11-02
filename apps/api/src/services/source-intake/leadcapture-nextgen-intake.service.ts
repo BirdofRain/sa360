@@ -38,6 +38,7 @@ import {
   nextGenStageAtLeast,
   type LeadCaptureNextGenIntakeStage,
 } from "./leadcapture-nextgen-stage.js";
+import { campaignAgeReferenceDate } from "../consumer-age/campaign-dob-age.js";
 import {
   assertNextGenLiveCanaryAllowed,
   recordNextGenLiveCanaryDeliveryAttempt,
@@ -108,6 +109,13 @@ export class LeadCaptureNextGenIntakeError extends Error {
     super(message);
     this.code = code;
   }
+}
+
+/** The row's receipt instant. A missing mock falls back to the clock used for that insert, not a later retry. */
+function persistedReceiptIso(value: unknown, fallback: Date): string {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString();
+  if (typeof value === "string" && campaignAgeReferenceDate(value)) return value.trim();
+  return fallback.toISOString();
 }
 
 function trimOrUndefined(v: unknown): string | undefined {
@@ -451,7 +459,9 @@ export async function processLeadCaptureNextGenLeadCreated(
     ...(trimOrUndefined(mergeBase.campaign_id) ? {} : { campaign_id: routingCampaignId }),
   };
 
-  const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(normalizeInput);
+  const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(normalizeInput, {
+    receivedAt: persistedReceiptIso(event.receivedAt, now),
+  });
   // Stage B+ routing match still uses campaign_id / route key.
   // Inventory identity uses the immutable funnel/form ID.
   if (normalized.attribution) {

@@ -25,6 +25,8 @@ import { COMPANY_SHEETS_V3_COLUMNS } from "@sa360/shared";
 import { COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3 } from "../../lib/company-google-sheets-env.js";
 import {
   CAMPAIGN_DOB_AGE_CONFLICT_WARNING,
+  CAMPAIGN_DOB_AGE_FUTURE_WARNING,
+  CAMPAIGN_DOB_AGE_REFERENCE_UNAVAILABLE_WARNING,
   projectCampaignDobAge,
   type CampaignDobAgePreview,
 } from "../consumer-age/campaign-dob-age.js";
@@ -322,7 +324,11 @@ export function publishBlocker(
 
 export const PRIMARY_CONCERN_FILLED_FROM_REASON = "primary_concern_filled_from_primary_reason";
 export const PRIMARY_CONCERN_OMITTED = "primary_concern_omitted";
-export { CAMPAIGN_DOB_AGE_CONFLICT_WARNING };
+export {
+  CAMPAIGN_DOB_AGE_CONFLICT_WARNING,
+  CAMPAIGN_DOB_AGE_FUTURE_WARNING,
+  CAMPAIGN_DOB_AGE_REFERENCE_UNAVAILABLE_WARNING,
+};
 
 /**
  * Projects a published map onto one lead.
@@ -362,6 +368,10 @@ export function customRowProjection(
     receivedAt: lead.receivedAt,
   });
   if (dobAge.conflict) warnings.push(CAMPAIGN_DOB_AGE_CONFLICT_WARNING);
+  if (dobAge.ageUnavailableReason === "no_valid_reference") {
+    warnings.push(CAMPAIGN_DOB_AGE_REFERENCE_UNAVAILABLE_WARNING);
+  }
+  if (dobAge.ageUnavailableReason === "future_date_of_birth") warnings.push(CAMPAIGN_DOB_AGE_FUTURE_WARNING);
   return { values, warnings, dobAge };
 }
 

@@ -73,7 +73,7 @@ export const COMPANY_SHEETS_V3_COLUMNS: readonly CompanySheetsTemplateColumn[] =
     sourceField: "consumer_age",
     group: "niche",
     systemRequired: false,
-    help: "Stored consumer age when present. When that cell is blank and a date of birth is stored, the completed whole-year age as of the lead submitted_at UTC date, otherwise received_at. Aged-inventory age limits are not applied. An age does not create a birthday.",
+    help: "Stored consumer age when present. When that cell is blank and a date of birth is stored, the completed whole-year age as of the first valid UTC date among submitted_at and received_at. An invalid submitted_at is skipped. Aged-inventory age limits are not applied. An age does not create a birthday.",
   },
   {
     header: "DOB",

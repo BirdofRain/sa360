@@ -198,6 +198,7 @@ export type LeadCaptureOneEventReconcileEventRow = {
   deliveredAt: Date | null;
   deliveryResultJson: Prisma.JsonValue | null;
   enrichmentMetadataJson: Prisma.JsonValue | null;
+  receivedAt: Date;
 };
 
 export type LeadCaptureOneEventReconcileStore = {
@@ -345,6 +346,7 @@ function planLegacyGeneratedIdentityRepair(input: {
 
   const normalizedPayload = normalizeLeadCaptureIoWebhookToLifecyclePayload(input.raw, {
     routeKeyFromPath: input.routeKey,
+    receivedAt: input.event.receivedAt.toISOString(),
   });
   const resolved = resolveLeadCaptureLeadId(input.raw, input.routeKey);
   if (
@@ -396,6 +398,7 @@ function createPrismaReconcileStore(db: PrismaClient): LeadCaptureOneEventReconc
           deliveredAt: true,
           deliveryResultJson: true,
           enrichmentMetadataJson: true,
+          receivedAt: true,
         },
       });
     },

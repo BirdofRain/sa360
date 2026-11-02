@@ -33,7 +33,12 @@ import {
   scheduleAgedReleaseExplicitly,
   setCompanySheetsDispatchActivation,
 } from "../services/company-sheets-dispatch/company-sheets-dispatch.service.js";
-import { releaseKnownDeadSheetsPersonReservation } from "../services/company-sheets-dispatch/client-sheets-person-gate.js";
+import {
+  prepareClientSheetsHistoryBaseline,
+  releaseKnownDeadSheetsPersonReservation,
+  SHEETS_HISTORY_BATCH_LIMIT,
+} from "../services/company-sheets-dispatch/client-sheets-person-gate.js";
+import { readClientSheetsReleaseCensus } from "../services/company-sheets-dispatch/client-sheets-release-census.js";
 import { recoverClientSheetsPersonHold } from "../services/company-sheets-dispatch/client-sheets-person-recovery.js";
 import { companySheetsIntentOperatorCopy } from "@sa360/shared";
 
@@ -49,6 +54,19 @@ function sendFailure(reply: FastifyReply, result: DeliveryFailure) {
 function clientAccountIdSupplied(source: unknown): boolean {
   if (!source || typeof source !== "object" || Array.isArray(source)) return false;
   return Object.prototype.hasOwnProperty.call(source, "clientAccountId");
+}
+
+function parseHistoryBatchSize(body: unknown): { ok: true; batchSize: number } | { ok: false } {
+  if (body == null) return { ok: true, batchSize: SHEETS_HISTORY_BATCH_LIMIT };
+  if (typeof body !== "object" || Array.isArray(body)) return { ok: false };
+  if (!Object.prototype.hasOwnProperty.call(body, "batchSize")) {
+    return { ok: true, batchSize: SHEETS_HISTORY_BATCH_LIMIT };
+  }
+  const value = (body as { batchSize?: unknown }).batchSize;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > SHEETS_HISTORY_BATCH_LIMIT) {
+    return { ok: false };
+  }
+  return { ok: true, batchSize: value };
 }
 
 export const adminCompanySheetsDeliveryRoutes: FastifyPluginAsync<CompanySheetsDeliveryRouteOptions> = async (
@@ -225,6 +243,46 @@ export const adminCompanySheetsDeliveryRoutes: FastifyPluginAsync<CompanySheetsD
     );
     if (!result.ok) return sendFailure(reply, result);
     return reply.send({ ok: true, status: result.status });
+  });
+
+  app.get("/clients/:clientAccountId/google-sheets/history", async (request, reply) => {
+    if (!(await verifyAdminApiKey(request, reply))) return;
+    const { clientAccountId } = request.params as { clientAccountId: string };
+    const db = deps.db ?? prisma;
+    const id = clientAccountId.trim();
+    const client = id ? await db.clientAccount.findUnique({ where: { clientAccountId: id }, select: { clientAccountId: true } }) : null;
+    if (!client) return reply.status(404).send({ ok: false, error: "client_not_found", googleCalled: false, delivered: false });
+    const census = await readClientSheetsReleaseCensus(db, client.clientAccountId);
+    return reply.send({ ok: true, googleCalled: false, delivered: false, census });
+  });
+
+  app.post("/clients/:clientAccountId/google-sheets/history/prepare", async (request, reply) => {
+    if (!(await verifyAdminApiKey(request, reply))) return;
+    const { clientAccountId } = request.params as { clientAccountId: string };
+    const body = request.body ?? {};
+    if (clientAccountIdSupplied(body)) {
+      const supplied = (body as { clientAccountId?: unknown }).clientAccountId;
+      if (supplied !== clientAccountId) {
+        return reply.status(400).send({ ok: false, error: "client_mismatch", googleCalled: false, delivered: false });
+      }
+    }
+    const batch = parseHistoryBatchSize(body);
+    if (!batch.ok) {
+      return reply.status(400).send({ ok: false, error: "invalid_batch_size", googleCalled: false, delivered: false });
+    }
+    const db = deps.db ?? prisma;
+    const id = clientAccountId.trim();
+    const client = id ? await db.clientAccount.findUnique({ where: { clientAccountId: id }, select: { clientAccountId: true } }) : null;
+    if (!client) return reply.status(404).send({ ok: false, error: "client_not_found", googleCalled: false, delivered: false });
+    await prepareClientSheetsHistoryBaseline(db, { clientAccountId: client.clientAccountId, batchSize: batch.batchSize });
+    const census = await readClientSheetsReleaseCensus(db, client.clientAccountId);
+    return reply.send({
+      ok: true,
+      googleCalled: false,
+      delivered: false,
+      batchSize: batch.batchSize,
+      census,
+    });
   });
 
   app.get("/clients/:clientAccountId/google-sheets/dispatch", async (request, reply) => {

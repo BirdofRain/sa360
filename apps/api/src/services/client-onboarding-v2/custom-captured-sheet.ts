@@ -11,6 +11,7 @@ import {
   customRowProjection,
   exactHeader,
   publishBlocker,
+  readHeaderSnapshot,
   type ColumnAssignment,
 } from "../company-sheets-delivery/company-sheets-custom-row.js";
 
@@ -64,7 +65,7 @@ export type CustomCampaignSheetPlan = {
   operatorDummy: boolean;
   warnings: string[];
   contentKey: string;
-  /** Structured Age/DOB preview for Agent B. The sheet cells stay the projected values. */
+  /** Age/DOB explanation from the campaign projection. The sheet cells stay `values`. */
   dobAge: CampaignDobAgePreview;
 };
 
@@ -94,11 +95,12 @@ export function planCustomCampaignSheet(input: {
   ) {
     return { applies: true, ok: false, statusCode: 409, error: "mapping_required" };
   }
-  if (!exactHeader(map.headerSnapshot, input.campaign.header)) {
+  const header = readHeaderSnapshot(map.headerSnapshot);
+  if (!exactHeader(header, input.campaign.header)) {
     return { applies: true, ok: false, statusCode: 409, error: "header_changed" };
   }
-  const sample = formulaSample(map.assignments, map.headerSnapshot.length);
-  const applied = applyOperatorAssignments(map.headerSnapshot, sample, map.assignments);
+  const sample = formulaSample(map.assignments, header.length);
+  const applied = applyOperatorAssignments(header, sample, map.assignments);
   if (!applied.ok) return { applies: true, ok: false, statusCode: applied.statusCode, error: applied.error };
   const blocked = publishBlocker(applied.assignments);
   if (!blocked.ok) return { applies: true, ok: false, statusCode: blocked.statusCode, error: blocked.error };
@@ -111,7 +113,7 @@ export function planCustomCampaignSheet(input: {
     sourceLeadId: input.event.sourceLeadId,
     normalizedPayload: input.event.normalizedPayloadJson,
   });
-  if (!projected || projected.values.length !== map.headerSnapshot.length) {
+  if (!projected || projected.values.length !== header.length) {
     return { applies: true, ok: false, statusCode: 409, error: "mapping_required" };
   }
   return {
@@ -122,7 +124,7 @@ export function planCustomCampaignSheet(input: {
       worksheetId: input.campaign.worksheetId,
       worksheetTitle: input.campaign.worksheetTitle,
       schemaVersion: COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA,
-      header: [...map.headerSnapshot],
+      header: [...header],
       values: projected.values,
       deliveryRowId,
       sourceLeadEventId: input.event.id,

@@ -2,10 +2,17 @@
 
 import Link from "next/link";
 import { useRef, useState } from "react";
-import { COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3, COMPANY_SHEETS_V3_COLUMNS } from "@sa360/shared";
 
 import { SpreadsheetIdentity } from "@/components/clients/spreadsheet-identity";
-import { SPREADSHEET_SAVED_CHOOSE_WORKSHEET } from "@/lib/clients/onboarding/view";
+import { ColumnMapEditor } from "@/components/clients/onboarding/column-map-editor";
+import { actionErrorCopy, SPREADSHEET_SAVED_CHOOSE_WORKSHEET } from "@/lib/clients/onboarding/view";
+import type {
+  ColumnMapAssignment,
+  ColumnMapDraftPreview,
+  ColumnMapRecord,
+  ColumnMapSavePublishResult,
+  OnboardingActionResult,
+} from "@/lib/clients/onboarding/types";
 
 import type {
   CompanyGoogleConnectionView,
@@ -161,6 +168,24 @@ export type CompanySheetsAdminActions = {
     | { ok: true; data: { campaignDispatchEnabled: boolean; campaignDispatchNotBefore: string | null } }
     | { ok: false; error: string }
   >;
+  saveSheetsTarget?: (
+    clientAccountId: string,
+    input: { spreadsheetId: string; worksheetId: number }
+  ) => Promise<{ ok: true } | { ok: false; error: string; detail?: string }>;
+  createColumnMap?: (
+    clientAccountId: string,
+    input: { spreadsheetId: string; worksheetId: number }
+  ) => Promise<{ ok: true; data: ColumnMapRecord } | { ok: false; error: string; detail?: string }>;
+  saveAndPublishColumnMap?: (
+    clientAccountId: string,
+    mapId: string,
+    input: { expectedRevision: number; assignments: ColumnMapAssignment[] }
+  ) => Promise<ColumnMapSavePublishResult>;
+  previewColumnMap?: (
+    clientAccountId: string,
+    mapId: string,
+    input: { expectedRevision: number; assignments: ColumnMapAssignment[]; previewToken: string }
+  ) => Promise<OnboardingActionResult<ColumnMapDraftPreview>>;
 };
 
 function controlLabel(basis: string): string {
@@ -194,6 +219,98 @@ function linkHistoryLabel(link: { status: string; recordedAt: string; superseded
   return `Previous · recorded ${formatEt(link.recordedAt)}${superseded}`;
 }
 
+function ColumnMapping({
+  clientAccountId,
+  spreadsheetId,
+  worksheetId,
+  campaignDispatchEnabled,
+  boundSchemaVersion,
+  columnMap,
+  actions,
+  onMap,
+}: {
+  clientAccountId: string;
+  spreadsheetId: string;
+  worksheetId: number | null;
+  campaignDispatchEnabled: boolean;
+  boundSchemaVersion: string | null;
+  columnMap: ColumnMapRecord | null;
+  actions: CompanySheetsAdminActions;
+  onMap: (map: ColumnMapRecord | null) => void;
+}) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const visible =
+    columnMap && columnMap.spreadsheetId === spreadsheetId && columnMap.worksheetId === worksheetId ? columnMap : null;
+
+  async function start() {
+    if (!spreadsheetId || worksheetId == null || !actions.createColumnMap || campaignDispatchEnabled) return;
+    setPending(true);
+    setError(null);
+    if (actions.saveSheetsTarget) {
+      const target = await actions.saveSheetsTarget(clientAccountId, { spreadsheetId, worksheetId });
+      if (!target.ok) {
+        setPending(false);
+        setError(target.detail || actionErrorCopy(target.error));
+        return;
+      }
+    }
+    const created = await actions.createColumnMap(clientAccountId, { spreadsheetId, worksheetId });
+    setPending(false);
+    if (!created.ok) {
+      setError(created.detail || actionErrorCopy(created.error));
+      return;
+    }
+    onMap(created.data);
+  }
+
+  if (!actions.createColumnMap && !visible) {
+    return <p className="text-sm text-slate-600">Column mapping is not available on this page.</p>;
+  }
+  return (
+    <div className="space-y-3">
+      {campaignDispatchEnabled ? (
+        <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950" role="status">
+          Pause campaign Sheets delivery before changing the target or the column map.
+        </p>
+      ) : null}
+      {visible ? (
+        <ColumnMapEditor
+          key={visible.id}
+          record={visible}
+          campaignDispatchEnabled={campaignDispatchEnabled}
+          boundSchemaVersion={boundSchemaVersion}
+          actions={{
+            saveAndPublishColumnMap: actions.saveAndPublishColumnMap
+              ? (mapId, input) => actions.saveAndPublishColumnMap!(clientAccountId, mapId, input)
+              : undefined,
+            previewColumnMap: actions.previewColumnMap
+              ? (mapId, input) => actions.previewColumnMap!(clientAccountId, mapId, input)
+              : undefined,
+          }}
+          onChange={onMap}
+        />
+      ) : (
+        <div className="space-y-2">
+          <p className="text-sm text-slate-700">
+            {spreadsheetId && worksheetId != null
+              ? `Selected spreadsheet ${spreadsheetId}, worksheet gid ${worksheetId}. Mapping reads the existing headers and does not rewrite them.`
+              : "Choose a spreadsheet and worksheet first. Mapping does not create a tab."}
+          </p>
+          <Button type="button" variant="outline" disabled={pending || campaignDispatchEnabled || !spreadsheetId || worksheetId == null || !actions.createColumnMap} onClick={() => void start()}>
+            {pending ? "Reading headers…" : "Map columns"}
+          </Button>
+        </div>
+      )}
+      {error ? (
+        <p className="text-sm text-amber-800" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function StatusRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0 rounded-lg border border-slate-200 px-3 py-2">
@@ -223,6 +340,7 @@ export function CompanySheetsAdminPanel({
   actions,
   initialFolderList,
   folderLoadError = null,
+  initialColumnMap = null,
 }: {
   clientAccountId: string;
   clientDisplayName: string;
@@ -234,6 +352,7 @@ export function CompanySheetsAdminPanel({
   actions: CompanySheetsAdminActions;
   initialFolderList?: CompanySheetsFolderSpreadsheetList;
   folderLoadError?: string | null;
+  initialColumnMap?: ColumnMapRecord | null;
 }) {
   const [notes, setNotes] = useState<Partial<Record<SectionName, Note>>>({});
   const [pendingSection, setPendingSection] = useState<SectionName | null>(null);
@@ -252,11 +371,7 @@ export function CompanySheetsAdminPanel({
   const [candidate, setCandidate] = useState<SheetCandidate | null>(null);
   const [createdSheet, setCreatedSheet] = useState<SheetCandidate | null>(null);
   const [confirmReplace, setConfirmReplace] = useState(false);
-  const [tabRole, setTabRole] = useState<"campaign" | "aged" | "canary">("campaign");
-  const [tabWorksheetId, setTabWorksheetId] = useState("");
-  const [exportPackageId, setExportPackageId] = useState("");
-  const [campaignSchema, setCampaignSchema] = useState(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3);
-  const [mapping, setMapping] = useState<CompanySheetsColumnMapping | null>(null);
+  const [columnMap, setColumnMap] = useState<ColumnMapRecord | null>(initialColumnMap);
   const [readProbe, setReadProbe] = useState<{ spreadsheetId: string; text: string } | null>(null);
   const [writeProbe, setWriteProbe] = useState<{ spreadsheetId: string; text: string } | null>(null);
 
@@ -966,225 +1081,24 @@ export function CompanySheetsAdminPanel({
           </p>
         ) : null}
       </section>
-      {destination ? (
-        <section aria-label="Delivery tabs" aria-busy={busy("tabs")} className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
-          <h2 className="text-sm font-semibold text-slate-900">Delivery tabs</h2>
-          <SectionFeedback section="tabs" />
-          <p className="text-sm text-slate-600">
-            One spreadsheet has a Campaign Leads tab and an Aged Orders tab. Inspect and bind do not
-            create, rename, or overwrite tabs. Create adds a missing tab and writes its header only when
-            the new tab is empty. A new Campaign Leads tab uses the selected template. A tab already
-            bound to v1 or v2 stays on that contract.
-          </p>
-          <div className="grid gap-2 sm:grid-cols-3">
-            {(["campaign", "aged", "canary"] as const).map((role) => {
-              const tab = (destination.tabContracts ?? []).find((item: CompanySheetsTabContractView) => item.role === role);
-              const label = role === "campaign" ? "Campaign Leads" : role === "aged" ? "Aged Orders" : "Canary";
-              return (
-                <StatusRow
-                  key={role}
-                  label={label}
-                  value={
-                    tab
-                      ? `${tab.setupState} / ${tab.deliveryState}${tab.schemaVersion ? ` / ${tab.schemaVersion}` : ""}${tab.worksheetId == null ? "" : ` / gid ${tab.worksheetId}`}`
-                      : "missing"
-                  }
-                />
-              );
-            })}
-          </div>
-          <div className="grid gap-3 sm:grid-cols-3">
-            <label className="block text-sm text-slate-700">
-              Tab role
-              <select
-                className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5"
-                value={tabRole}
-                onChange={(event) => setTabRole(event.target.value as "campaign" | "aged" | "canary")}
-              >
-                <option value="campaign">Campaign Leads</option>
-                <option value="aged">Aged Orders</option>
-                <option value="canary">Canary</option>
-              </select>
-            </label>
-            <label className="block text-sm text-slate-700">
-              Existing worksheet ID
-              <input
-                className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5"
-                value={tabWorksheetId}
-                onChange={(event) => setTabWorksheetId(event.target.value)}
-                inputMode="numeric"
-              />
-            </label>
-            <label className="block text-sm text-slate-700">
-              Authorized export package
-              <input
-                className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5"
-                value={exportPackageId}
-                onChange={(event) => setExportPackageId(event.target.value)}
-              />
-            </label>
-          </div>
-          <p className="text-sm text-slate-700">
-            <Link href={`/clients/${encodeURIComponent(clientAccountId)}/onboarding`} className="text-sky-700 underline">
-              Map existing columns
-            </Link>
-            . Setup & Delivery reads the worksheet that is already in the spreadsheet. That mapping editor does not apply this preset template and does not rewrite headers.
-          </p>
-          <details className="rounded-lg border border-slate-200 px-3 py-2">
-            <summary className="cursor-pointer text-sm font-medium text-slate-800">Preset template preview</summary>
-            <div className="mt-3 space-y-3">
-          {tabRole === "campaign" ? (
-            <div className="space-y-2">
-              <label className="block text-sm text-slate-700">
-                Header template
-                <select
-                  className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5"
-                  value={campaignSchema}
-                  onChange={(event) => setCampaignSchema(event.target.value)}
-                >
-                  <option value={COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3}>Shared campaign columns (v3)</option>
-                  <option value="company_sheets_campaign_v2">Existing machine columns (v2)</option>
-                </select>
-              </label>
-              {campaignSchema === COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3 ? (
-                <p className="min-w-0 break-words text-sm text-slate-700">
-                  Header preview: {COMPANY_SHEETS_V3_COLUMNS.map((column) => column.header).join(", ")}. Selecting a
-                  niche does not change these columns. They are written only on a newly created empty tab.
-                </p>
-              ) : (
-                <p className="text-sm text-slate-700">
-                  v2 keeps the existing machine headers. Choosing it does not rewrite a populated sheet.
-                </p>
-              )}
-            </div>
-          ) : null}
-              <Button
-                type="button"
-                variant="outline"
-                disabled={busy("tabs") || !actions.reviewColumns}
-                onClick={() =>
-                  void run("tabs", async () => {
-                    if (!actions.reviewColumns) return { ok: false, error: "Column mapping is unavailable." };
-                    const result = await actions.reviewColumns(clientAccountId, {
-                      schemaVersion: tabRole === "campaign" ? campaignSchema : "company_sheets_campaign_v2",
-                      ...(nicheKey ? { nicheKey } : {}),
-                    });
-                    if (!result.ok) return result;
-                    setMapping(result.data);
-                    return { ok: true, message: `Column mapping reviewed. Readiness: ${result.data.readiness}.` };
-                  })
-                }
-              >
-                Review column mapping
-              </Button>
-              {mapping ? (
-                <div className="space-y-2">
-                  <p className="min-w-0 break-words text-sm text-slate-700">
-                    Preset mapping for {mapping.schemaVersion}. Readiness {mapping.readiness} on{" "}
-                    {mapping.spreadsheetId ?? "no saved spreadsheet"} / worksheet {mapping.worksheetId ?? "none"}. This is
-                    the v1/v2/v3 template review. Legacy tabs are mapped in Setup & Delivery.
-                  </p>
-                  {mapping.warnings.map((warning) => (
-                    <p key={warning} className="text-sm text-amber-800">
-                      {warning}
-                    </p>
-                  ))}
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full text-left text-sm">
-                      <thead>
-                        <tr className="border-b border-slate-200 text-slate-500">
-                          <th className="py-1 pr-3 font-medium">Column</th>
-                          <th className="py-1 pr-3 font-medium">Source field</th>
-                          <th className="py-1 pr-3 font-medium">Example</th>
-                          <th className="py-1 font-medium">Missing source</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {mapping.columns.map((column) => (
-                          <tr key={column.header} className="border-b border-slate-100">
-                            <td className="py-1 pr-3">
-                              {column.header}
-                              {column.systemRequired ? " (required)" : ""}
-                              <span className="block text-xs text-slate-500">{column.help}</span>
-                            </td>
-                            <td className="py-1 pr-3">{column.sourceField}</td>
-                            <td className="py-1 pr-3">{column.example || "blank"}</td>
-                            <td className="py-1">{column.missingExample || "blank"}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          </details>
-          <p className="text-sm text-slate-600">
-            Client Name is the prospect, not the purchasing agent. Date is the
-            lead generation time in America/New_York. A missing source timestamp stays blank.
-            {nicheKey
-              ? ` Client niche on file: ${nicheKey}. That niche does not change the column template.`
-              : " No niche is stored on this client."}
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={busy("tabs") || !actions.inspectTabs}
-              onClick={() =>
-                void run("tabs", async () => {
-                  if (!actions.inspectTabs) return { ok: false, error: "Inspect is unavailable." };
-                  const result = await actions.inspectTabs(clientAccountId, exportPackageId.trim() || undefined);
-                  if (!result.ok) return result;
-                  return { ok: true, message: "Tabs inspected. No spreadsheet changes were made." };
-                })
-              }
-            >
-              Inspect tabs
-            </Button>
-            <Button
-              type="button"
-              disabled={busy("tabs") || !actions.bindTab}
-              onClick={() =>
-                void run("tabs", async () => {
-                  if (!actions.bindTab) return { ok: false, error: "Bind is unavailable." };
-                  const parsed = Number(tabWorksheetId);
-                  if (!Number.isInteger(parsed) || parsed < 0) return { ok: false, error: "Enter a worksheet ID." };
-                  const result = await actions.bindTab(clientAccountId, {
-                    role: tabRole,
-                    worksheetId: parsed,
-                    ...(tabRole === "campaign" ? { schemaVersion: campaignSchema } : {}),
-                    ...(exportPackageId.trim() ? { exportPackageId: exportPackageId.trim() } : {}),
-                  });
-                  if (!result.ok) return result;
-                  return { ok: true, message: "Tab selected. Existing tabs were not renamed." };
-                })
-              }
-            >
-              Bind selected tab
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={busy("tabs") || !actions.createTab}
-              onClick={() =>
-                void run("tabs", async () => {
-                  if (!actions.createTab) return { ok: false, error: "Create tab is unavailable." };
-                  const result = await actions.createTab(clientAccountId, {
-                    role: tabRole,
-                    ...(tabRole === "campaign" ? { schemaVersion: campaignSchema } : {}),
-                    ...(exportPackageId.trim() ? { exportPackageId: exportPackageId.trim() } : {}),
-                  });
-                  if (!result.ok) return result;
-                  return { ok: true, message: "Missing tab created with its standard header. Existing tabs were not changed." };
-                })
-              }
-            >
-              Create missing tab
-            </Button>
-          </div>
-        </section>
-      ) : null}
+      <section id="column-mapping" aria-label="Column mapping" className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
+        <h2 className="text-sm font-semibold text-slate-900">Column mapping</h2>
+        <p className="text-sm text-slate-600">
+          Select the spreadsheet tab, confirm the headers against a received submission, then save and publish the map.
+          This is the only mapping editor. Setup & Delivery links here.
+          {nicheKey ? ` Client niche on file: ${nicheKey}. That niche does not change these columns.` : " No niche is stored on this client."}
+        </p>
+        <ColumnMapping
+          clientAccountId={clientAccountId}
+          spreadsheetId={spreadsheetId}
+          worksheetId={worksheetId}
+          campaignDispatchEnabled={deliveryOn}
+          boundSchemaVersion={campaignTab?.schemaVersion ?? null}
+          columnMap={columnMap}
+          actions={actions}
+          onMap={setColumnMap}
+        />
+      </section>
       <section aria-label="Delivery controls" aria-busy={busy("delivery")} className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
         <h2 className="text-sm font-semibold text-slate-900">Delivery controls</h2>
         <SectionFeedback section="delivery" />

@@ -297,6 +297,7 @@ const ACTION_ERRORS: Record<string, string> = {
   request_failed: "The admin API did not return a usable onboarding response.",
   malformed_response: "The admin API response did not match the onboarding contract.",
   invalid_spreadsheet_ref: "That spreadsheet id is not a Google spreadsheet id.",
+  oauth_not_configured: "Google is not connected, so the live header was not read. Nothing was published and delivery was not enabled.",
   delivery_not_paused: "Pause campaign Sheets delivery before changing the target or the column map.",
   destination_not_configured: "This client has no Sheets destination yet. The target was not saved.",
   stats_tab_not_a_delivery_target: "Stats and non-grid tabs stay in place. They are not delivery targets.",

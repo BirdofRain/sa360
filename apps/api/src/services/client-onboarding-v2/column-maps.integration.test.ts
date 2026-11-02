@@ -13,8 +13,10 @@ import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
 import {
   createColumnMapDraft,
   patchColumnMap,
+  previewColumnMapDraft,
   publishColumnMap,
   retireColumnMap,
+  saveAndPublishColumnMap,
   saveExistingSheetsTarget,
   type ExistingWorksheetSnapshot,
 } from "./column-maps.js";
@@ -272,7 +274,9 @@ describe("existing tab column maps", { skip: !runIntegration }, () => {
     const intent = await db.clientOnboardingActivationIntent.findFirstOrThrow({ where: { clientAccountId } });
     assert.equal(intent.status, "blocked");
 
-    const blank = await createColumnMapDraft(
+    const longHeader = [...HEADER];
+    longHeader[4] = "S".repeat(201);
+    const long = await createColumnMapDraft(
       {
         clientAccountId,
         requestId: randomUUID(),
@@ -280,13 +284,13 @@ describe("existing tab column maps", { skip: !runIntegration }, () => {
         worksheetId: 15,
         sourceScope: "shared",
         baseSchemaVersion: "legacy_custom",
-        snapshot: legacySnapshot(existingSheet, [...HEADER, ""]),
+        snapshot: legacySnapshot(existingSheet, longHeader),
       },
       db
     );
-    assert.equal(blank.ok, false);
-    if (blank.ok) return;
-    assert.equal(blank.error, "blank_header");
+    assert.equal(long.ok, false);
+    if (long.ok) return;
+    assert.equal(long.error, "mapping_unresolved");
     assert.equal(await db.clientSheetColumnMap.count({ where: { clientAccountId } }), 0);
 
     const draft = await createColumnMapDraft(
@@ -463,8 +467,226 @@ describe("existing tab column maps", { skip: !runIntegration }, () => {
     assert.equal((await db.companySheetsDeliveryJob.count({ where: { id: historicalJobId, status: "succeeded" } })), 1);
   });
 
+  it("confirms suggestions, requires DOB, and previews the client's received submission", async () => {
+    const header = ["Full Name", "Phone Number", "E-mail", "Age/DOB", "Score", "Running Total", ""];
+    const sample = ["Pat Example", "5550001111", "pat@example.invalid", "", "9", "=F2", ""];
+    const snapshot = {
+      ...legacySnapshot(existingSheet, header),
+      worksheetId: 21,
+      sampleRow: sample,
+    };
+    const draft = await createColumnMapDraft(
+      {
+        clientAccountId,
+        requestId: randomUUID(),
+        spreadsheetId: existingSheet,
+        worksheetId: 21,
+        sourceScope: "shared",
+        baseSchemaVersion: "legacy_custom",
+        snapshot,
+      },
+      db
+    );
+    assert.equal(draft.ok, true);
+    if (!draft.ok) return;
+    const edited = draft.map.assignments.map((column) =>
+      column.sheetHeader === "Full Name"
+        ? {
+            ...column,
+            target: { kind: "v3_column" as const, header: "First Name", sourceField: "first_name" },
+            explicit: true,
+          }
+        : column
+    );
+    const blocked = await saveAndPublishColumnMap(
+      {
+        clientAccountId,
+        mapId: draft.map.id,
+        requestId: randomUUID(),
+        expectedRevision: draft.map.revision,
+        assignments: edited,
+        snapshot,
+      },
+      db
+    );
+    assert.equal(blocked.ok, false);
+    if (blocked.ok) return;
+    assert.equal(blocked.published, false);
+    assert.equal(blocked.deliveryEnabled, false);
+    assert.equal(blocked.error, "mapping_unresolved");
+    assert.match(blocked.detail ?? "", /Age\/DOB/);
+    assert.match(blocked.detail ?? "", /Score/);
+    assert.equal(blocked.map?.status, "draft");
+    const savedName = blocked.map?.assignments.find((column) => column.sheetHeader === "Full Name");
+    assert.equal(savedName?.explicit, true);
+    assert.equal(savedName?.target?.sourceField, "first_name");
+    const savedPhone = blocked.map?.assignments.find((column) => column.sheetHeader === "Phone Number");
+    assert.equal(savedPhone?.explicit, true);
+    assert.equal(savedPhone?.target?.sourceField, "phone");
+    const savedBlank = blocked.map?.assignments.find((column) => column.sheetHeader === "");
+    assert.equal(savedBlank?.explicit, true);
+    assert.equal(savedBlank?.target, null);
+    assert.equal(savedBlank?.code, "blank_header");
+    const savedFormula = blocked.map?.assignments.find((column) => column.sheetHeader === "Running Total");
+    assert.equal(savedFormula?.explicit, true);
+    assert.equal(savedFormula?.target, null);
+    assert.equal(savedFormula?.code, "formula_column_omitted");
+    assert.equal(blocked.map?.assignments.find((column) => column.sheetHeader === "Age/DOB")?.explicit, false);
+    const destination = await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId } });
+    assert.equal(destination.campaignDispatchEnabled, false);
+    assert.equal(destination.enabled, false);
+
+    const conflict = await saveAndPublishColumnMap(
+      {
+        clientAccountId,
+        mapId: draft.map.id,
+        requestId: randomUUID(),
+        expectedRevision: draft.map.revision,
+        assignments: edited,
+        snapshot,
+      },
+      db
+    );
+    assert.equal(conflict.ok, false);
+    if (conflict.ok) return;
+    assert.equal(conflict.error, "revision_conflict");
+    assert.equal(conflict.published, false);
+    assert.equal(conflict.deliveryEnabled, false);
+    assert.equal((await db.clientSheetColumnMap.findUniqueOrThrow({ where: { id: draft.map.id } })).status, "draft");
+
+    const chosen = (blocked.map?.assignments ?? []).map((column) =>
+      column.sheetHeader === "Age/DOB"
+        ? {
+            ...column,
+            decision: "mapped" as const,
+            explicit: true,
+            transform: "date_america_new_york" as const,
+            target: { kind: "v3_column" as const, header: "DOB", sourceField: "date_of_birth" },
+            code: null,
+          }
+        : column.sheetHeader === "Score"
+          ? { ...column, decision: "unmapped" as const, explicit: true, transform: "blank" as const, target: null, code: null }
+          : column
+    );
+    const published = await saveAndPublishColumnMap(
+      {
+        clientAccountId,
+        mapId: draft.map.id,
+        requestId: randomUUID(),
+        expectedRevision: blocked.map?.revision ?? 0,
+        assignments: chosen,
+        snapshot,
+      },
+      db
+    );
+    assert.equal(published.ok, true);
+    if (!published.ok) return;
+    assert.equal(published.published, true);
+    assert.equal(published.deliveryEnabled, false);
+    assert.equal(published.map.status, "published");
+    assert.equal(published.map.assignments.find((column) => column.sheetHeader === "Age/DOB")?.target?.sourceField, "date_of_birth");
+    const after = await db.companySheetsDestination.findUniqueOrThrow({
+      where: { clientAccountId },
+      include: { tabContracts: true },
+    });
+    assert.equal(after.campaignDispatchEnabled, false);
+    assert.equal(after.enabled, false);
+    assert.equal(after.tabContracts.find((tab) => tab.role === "campaign")?.schemaVersion, "company_sheets_campaign_custom_v1");
+    assert.equal(after.tabContracts.find((tab) => tab.role === "campaign")?.worksheetId, 21);
+
+    await db.sourceLeadEvent.create({
+      data: {
+        sourceProvider: "facebook",
+        sourceSystem: "meta_lead_ads",
+        sourceType: "lead_form",
+        sourceLeadUid: `uid_other_${suffix}`,
+        clientAccountIdResolved: otherClient,
+        status: "received",
+        rawPayloadJson: {},
+        normalizedPayloadJson: { contact: { first_name: "Other", last_name: "Tenant" } },
+        receivedAt: new Date("2026-11-02T18:00:00.000Z"),
+      },
+    });
+    await db.sourceLeadEvent.create({
+      data: {
+        sourceProvider: "facebook",
+        sourceSystem: "meta_lead_ads",
+        sourceType: "lead_form",
+        sourceLeadUid: `uid_synthetic_${suffix}`,
+        clientAccountIdResolved: clientAccountId,
+        status: "received",
+        rawPayloadJson: {},
+        normalizedPayloadJson: {
+          contact: { first_name: "SYNTHETIC", last_name: "TEST" },
+          routing: { source_intake: { lead_id: "synthetic-sheets-test" } },
+        },
+        receivedAt: new Date("2026-11-02T17:00:00.000Z"),
+      },
+    });
+    const received = await db.sourceLeadEvent.create({
+      data: {
+        sourceProvider: "facebook",
+        sourceSystem: "meta_lead_ads",
+        sourceType: "lead_form",
+        sourceLeadUid: `uid_received_${suffix}`,
+        clientAccountIdResolved: clientAccountId,
+        status: "received",
+        rawPayloadJson: { dob: "04/12/1979" },
+        normalizedPayloadJson: {
+          contact: { first_name: "Pat", last_name: "Example", email: "pat@example.invalid", phone: "5550001111" },
+          routing: { source_intake: { submitted_at: "2026-10-29T14:00:00.000Z", sourceAttributes: { date_of_birth: "1979-04-12" } } },
+        },
+        receivedAt: new Date("2026-11-02T16:00:00.000Z"),
+      },
+    });
+    const preview = await previewColumnMapDraft(
+      {
+        clientAccountId,
+        mapId: draft.map.id,
+        expectedRevision: published.map.revision,
+        previewToken: "preview_received",
+      },
+      db
+    );
+    assert.equal(preview.ok, true);
+    if (!preview.ok) return;
+    assert.equal(preview.preview.deliveryEnabled, false);
+    assert.equal(preview.preview.sendsRow, false);
+    assert.equal(preview.preview.configuration, "published_map");
+    assert.equal(preview.preview.sourceLeadEventId, received.id);
+    assert.equal(preview.preview.previewToken, "preview_received");
+    const dob = preview.preview.cells.find((cell) => cell.sheetHeader === "Age/DOB");
+    assert.equal(dob?.canonicalField, "date_of_birth");
+    assert.equal(dob?.receivedAnswer, "1979-04-12");
+    assert.equal(dob?.outputValue, "04/12/1979");
+    assert.equal(dob?.reason, null);
+    assert.ok(preview.preview.sheet);
+    assert.equal(preview.preview.sheet?.values[dob?.columnIndex ?? -1], "04/12/1979");
+    assert.equal(preview.preview.sheet?.header.length, preview.preview.sheet?.values.length);
+    assert.equal(preview.preview.sheet?.values.includes("47"), false);
+    assert.equal(preview.preview.sheet?.dobAge.derivedAge, "47");
+    assert.equal(preview.preview.sheet?.dobAge.dateOfBirth, "1979-04-12");
+    assert.equal(preview.preview.sheet?.dobAge.ageProvenance, "derived_from_date_of_birth");
+    assert.equal(preview.preview.sheet?.dobAge.conflict, false);
+    assert.equal(preview.preview.cells.find((cell) => cell.sheetHeader === "Full Name")?.receivedAnswer, "Pat");
+    assert.notEqual(preview.preview.cells.find((cell) => cell.sheetHeader === "Full Name")?.receivedAnswer, "Other Tenant");
+    const stale = await previewColumnMapDraft(
+      {
+        clientAccountId,
+        mapId: draft.map.id,
+        expectedRevision: draft.map.revision,
+        previewToken: "stale_revision",
+      },
+      db
+    );
+    assert.equal(stale.ok, false);
+    if (stale.ok) return;
+    assert.equal(stale.error, "revision_conflict");
+  });
+
   async function cleanup() {
     const ids = [clientAccountId, otherClient];
+    await db.sourceLeadEvent.deleteMany({ where: { clientAccountIdResolved: { in: ids } } });
     await db.clientOnboardingActivationIntent.deleteMany({ where: { clientAccountId: { in: ids } } });
     await db.companySheetsDeliveryJob.deleteMany({ where: { clientAccountId: { in: ids } } });
     await db.clientSheetColumnMap.deleteMany({ where: { clientAccountId: { in: ids } } });

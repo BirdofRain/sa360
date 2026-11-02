@@ -639,7 +639,7 @@ test("an existing client keeps the current switch and does not treat a linked so
   assert.equal((screen.getByTestId("bind-selected-worksheet") as HTMLButtonElement).disabled, true);
   assert.match(
     screen.getByRole("link", { name: "Open the existing Google Sheets setup" }).getAttribute("href") ?? "",
-    /\/clients\/existing_client\/google-sheets$/
+    /\/clients\/existing_client\/google-sheets#column-mapping$/
   );
   assert.ok(screen.getByText("form_existing"));
   assert.ok(screen.getByText("Linked does not mean this source is receiving leads."));

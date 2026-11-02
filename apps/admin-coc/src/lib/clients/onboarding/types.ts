@@ -359,6 +359,7 @@ export type OnboardingActionFailure = {
   ok: false;
   error: string;
   status: number;
+  detail?: string;
 };
 
 export type OnboardingActionSuccess<T> = { ok: true; data: T };
@@ -382,6 +383,7 @@ export type ColumnMapRecord = {
   mapVersion: number;
   status: string;
   sourceScope: string;
+  baseSchemaVersion: string;
   spreadsheetId: string;
   worksheetId: number;
   worksheetTitle: string | null;
@@ -398,6 +400,58 @@ export type ColumnMapRecord = {
     formulaColumns: string;
   };
 };
+
+export type ColumnMapDobAge = {
+  age: string;
+  dateOfBirth: string;
+  dateOfBirthSheet: string;
+  ageProvenance: "supplied" | "derived_from_date_of_birth" | "missing";
+  dateOfBirthProvenance: "supplied" | "missing";
+  derivedAge: string;
+  referenceDate: string;
+  referenceRule: "submitted_at_utc_date_else_received_at_utc_date";
+  conflict: boolean;
+};
+
+export type ColumnMapDraftPreview = {
+  configuration: "draft" | "published_map";
+  deliveryEnabled: false;
+  sendsRow: false;
+  available: boolean;
+  emptyReason: string | null;
+  sourceLeadEventId: string | null;
+  receivedAt: string | null;
+  mapId: string;
+  revision: number;
+  spreadsheetId: string;
+  worksheetId: number;
+  headerFingerprint: string;
+  schemaVersion: string;
+  boundSchemaVersion: string | null;
+  previewToken: string;
+  cells: Array<{
+    columnIndex: number;
+    sheetHeader: string;
+    canonicalField: string | null;
+    receivedAnswer: string;
+    outputValue: string;
+    reason: "missing" | "invalid" | "unmapped" | "blank_header" | "formula_omitted" | "ambiguous" | null;
+  }>;
+  warnings: string[];
+  sheet: { header: string[]; values: string[]; dobAge: ColumnMapDobAge } | null;
+};
+
+export type ColumnMapSavePublishResult =
+  | { ok: true; data: ColumnMapRecord; published: true; deliveryEnabled: false }
+  | {
+      ok: false;
+      error: string;
+      status: number;
+      detail?: string;
+      map?: ColumnMapRecord;
+      published: false;
+      deliveryEnabled: false;
+    };
 
 export type SheetsTargetSave = {
   spreadsheetId: string;
@@ -485,6 +539,14 @@ export type OnboardingWorkspaceActions = {
     input: { expectedRevision: number; assignments: ColumnMapAssignment[] }
   ) => Promise<OnboardingActionResult<ColumnMapRecord>>;
   publishColumnMap?: (mapId: string, expectedRevision: number) => Promise<OnboardingActionResult<ColumnMapRecord>>;
+  saveAndPublishColumnMap?: (
+    mapId: string,
+    input: { expectedRevision: number; assignments: ColumnMapAssignment[] }
+  ) => Promise<ColumnMapSavePublishResult>;
+  previewColumnMap?: (
+    mapId: string,
+    input: { expectedRevision: number; assignments: ColumnMapAssignment[]; previewToken: string }
+  ) => Promise<OnboardingActionResult<ColumnMapDraftPreview>>;
 };
 
 export type StoredTestRunView = {

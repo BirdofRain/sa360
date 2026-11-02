@@ -29,6 +29,7 @@ import {
   customRowValues,
   exactHeader,
   formulaColumnIndexes,
+  readHeaderSnapshot,
   isCustomSheetsWriterEnabled,
   publishBlocker,
   sourceFunnelIdFromLead,
@@ -346,7 +347,7 @@ async function resolveCampaignWrite(
       sourceFunnelId: lead.sourceFunnelId,
     });
     if (!map) return fail("mapping_required", 409);
-    const snapshot = stringList(map.headerSnapshot);
+    const snapshot = readHeaderSnapshot(map.headerSnapshot);
     if (!exactHeader(snapshot, contract.header)) return fail("header_changed", 409);
     const sample = Array.isArray(map.assignments)
       ? map.assignments.map((item) => {

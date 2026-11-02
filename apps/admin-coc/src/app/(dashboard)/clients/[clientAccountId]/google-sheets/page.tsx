@@ -25,11 +25,19 @@ import {
   unlinkCompanyClientFolderAction,
 } from "@/app/actions/company-google-sheets";
 import {
+  createOnboardingColumnMapAction,
+  previewOnboardingColumnMapAction,
+  saveAndPublishOnboardingColumnMapAction,
+  saveOnboardingSheetsTargetAction,
+} from "@/app/actions/client-onboarding-v2";
+import {
   fetchCompanyGoogleConnection,
   fetchCompanySheetsDestination,
   fetchCompanySheetsDispatch,
   listCompanyClientSpreadsheets,
 } from "@/lib/admin-api/company-google-sheets";
+import { listOnboardingColumnMaps } from "@/lib/admin-api/client-onboarding-v2";
+import type { ColumnMapRecord } from "@/lib/clients/onboarding/types";
 import { fetchAdminClientDetail, isAdminApiConfigured } from "@/lib/admin-api/server";
 
 export default async function ClientCompanyGoogleSheetsPage({
@@ -69,6 +77,7 @@ export default async function ClientCompanyGoogleSheetsPage({
     fetchCompanySheetsDispatch(id),
     listCompanyClientSpreadsheets(id),
   ]);
+  const mapsResult = await listOnboardingColumnMaps(id);
   const displayName = detailResult.data?.item.clientDisplayName?.trim() || id;
   const nicheKey = detailResult.data?.item.primaryNicheKeys?.find((key) => key.trim()) ?? null;
   const loadError = !connectionResult.ok
@@ -120,11 +129,29 @@ export default async function ClientCompanyGoogleSheetsPage({
             bindTab: bindCompanySheetsTabAction,
             createTab: createCompanySheetsTabAction,
             setDispatch: activateCompanySheetsDispatchAction,
+            saveSheetsTarget: saveOnboardingSheetsTargetAction,
+            createColumnMap: createOnboardingColumnMapAction,
+            saveAndPublishColumnMap: saveAndPublishOnboardingColumnMapAction,
+            previewColumnMap: previewOnboardingColumnMapAction,
           }}
+          initialColumnMap={pickColumnMap(
+            mapsResult.ok ? mapsResult.data : [],
+            destinationResult.data.destination?.spreadsheetId ?? null,
+            destinationResult.data.destination?.worksheetId ?? null
+          )}
           initialFolderList={folderResult.ok ? folderResult.data : undefined}
           folderLoadError={folderResult.ok ? null : "Saved folder could not be loaded."}
         />
       )}
     </div>
   );
+}
+
+function pickColumnMap(maps: ColumnMapRecord[], spreadsheetId: string | null, worksheetId: number | null): ColumnMapRecord | null {
+  const active = maps.filter((map) => map.status === "draft" || map.status === "published");
+  const matched =
+    spreadsheetId && worksheetId != null
+      ? active.filter((map) => map.spreadsheetId === spreadsheetId && map.worksheetId === worksheetId)
+      : active;
+  return matched.find((map) => map.status === "draft") ?? matched.find((map) => map.status === "published") ?? null;
 }

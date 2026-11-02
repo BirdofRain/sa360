@@ -15,6 +15,7 @@ import {
 } from "../company-sheets-dispatch/company-sheets-onboarding-read.js";
 import { projectCampaignDobAge, type CampaignDobAgePreview } from "../consumer-age/campaign-dob-age.js";
 import { COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA } from "../company-sheets-delivery/company-sheets-custom-row.js";
+import { projectCampaignDobAge, type CampaignDobAgePreview } from "../consumer-age/campaign-dob-age.js";
 import type {
   OnboardingGhlTestDeliveryReceipt,
   OnboardingGhlTestDeliveryRequest,
@@ -587,8 +588,8 @@ export type PlannedSheet = {
   /** One-shot Sheets test refuses a reread whose body is not empty. */
   bodyMustBeEmpty?: boolean;
   /**
-   * Age/DOB preview for Agent B. Same object the custom and exact-v3 planners
-   * attach. Sheet cells remain `values`. UI rendering stays with Agent B.
+   * Age/DOB explanation from `projectCampaignDobAge`. Sheet cells remain
+   * `values`. The browser renders this object and does not calculate age.
    */
   dobAge?: CampaignDobAgePreview;
 };

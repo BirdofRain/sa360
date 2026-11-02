@@ -101,8 +101,27 @@ export function mappableColumnTargets(): MappableTarget[] {
   );
 }
 
+/**
+ * `ClientSheetColumnMap.headerSnapshot` rejects empty strings. A blank sheet
+ * header is stored as this one-character marker and read back as "".
+ */
+export const BLANK_HEADER_STORAGE = "\u200b";
+
+export function persistHeaderSnapshot(header: readonly string[]): string[] {
+  return header.map((cell) => (cell.length === 0 ? BLANK_HEADER_STORAGE : cell));
+}
+
+export function readHeaderSnapshot(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => (typeof item === "string" ? decodeStoredHeaderCell(item) : ""));
+}
+
+function decodeStoredHeaderCell(cell: string): string {
+  return cell === BLANK_HEADER_STORAGE ? "" : cell;
+}
+
 export function headerFingerprint(header: readonly string[]): string {
-  return createHash("sha256").update(JSON.stringify([...header])).digest("hex");
+  return createHash("sha256").update(JSON.stringify(header.map(decodeStoredHeaderCell))).digest("hex");
 }
 
 export function normalizeSheetHeader(value: string): string {
@@ -110,7 +129,10 @@ export function normalizeSheetHeader(value: string): string {
 }
 
 export function exactHeader(actual: readonly string[], expected: readonly string[]): boolean {
-  return actual.length === expected.length && expected.every((cell, index) => actual[index] === cell);
+  return (
+    actual.length === expected.length &&
+    expected.every((cell, index) => decodeStoredHeaderCell(actual[index] ?? "") === decodeStoredHeaderCell(cell))
+  );
 }
 
 export function formulaColumnIndexes(header: readonly string[], sampleRow: readonly string[]): number[] {
@@ -238,7 +260,7 @@ export function suggestColumnAssignments(header: readonly string[], sampleRow: r
 export function columnMapIssues(columns: readonly ColumnAssignment[]): ColumnMapIssue[] {
   const issues: ColumnMapIssue[] = [];
   for (const column of columns) {
-    if (column.code === "blank_header") {
+    if (column.code === "blank_header" && !column.explicit) {
       issues.push(issue(column, "blank_header", "This header is blank. Leave it unmapped. It is not a lead field."));
     } else if (column.code === "duplicate_header" || (column.decision === "ambiguous" && column.code === "duplicate_header")) {
       issues.push(issue(column, "duplicate_header", "This header is duplicated. Map one column explicitly and leave the other unmapped, or choose different fields."));
@@ -291,18 +313,134 @@ export function applyOperatorAssignments(
   return { ok: true, assignments };
 }
 
+/**
+ * Confirms every visible, unambiguous selection.
+ * Age/DOB and any other ambiguous or still-unmapped column stay unresolved
+ * until the operator chooses. Blank headers and formula columns become an
+ * explicit skip. They are not given a lead field.
+ */
+export function confirmVisibleSelections(assignments: readonly ColumnAssignment[]): ColumnAssignment[] {
+  return assignments.map((column) => {
+    if (!column.sheetHeader.trim()) {
+      return assignment({
+        ...column,
+        target: null,
+        decision: "unmapped",
+        transform: "blank",
+        explicit: true,
+        code: "blank_header",
+      });
+    }
+    if (column.decision === "ambiguous" || column.code === "ambiguous_age_or_dob" || column.code === "duplicate_header") {
+      return column;
+    }
+    if (column.formula && (column.decision !== "mapped" || !column.target)) {
+      return assignment({
+        ...column,
+        target: null,
+        decision: "unmapped",
+        transform: "blank",
+        explicit: true,
+        code: "formula_column_omitted",
+      });
+    }
+    if (column.decision === "mapped" && column.target) {
+      return assignment({
+        ...column,
+        explicit: true,
+        code: column.formula ? "formula_column_omitted" : column.code,
+      });
+    }
+    return column;
+  });
+}
+
+export type DraftProjectionReason = "missing" | "invalid" | "unmapped" | "blank_header" | "formula_omitted" | "ambiguous";
+
+export type DraftProjectionCell = {
+  columnIndex: number;
+  sheetHeader: string;
+  canonicalField: string | null;
+  receivedAnswer: string;
+  outputValue: string;
+  reason: DraftProjectionReason | null;
+};
+
+export type DraftProjectionSheet = {
+  header: string[];
+  values: string[];
+  dobAge: CampaignDobAgePreview;
+};
+
+/**
+ * Draft preview of one lead through the writer projection.
+ * `sheet.values` are the cells the append would write. Formula columns are
+ * blanked the way `customAppendSegments` omits them. `sheet.dobAge` is the
+ * same object `customRowProjection` returns. It explains the age cell and is
+ * not an extra column.
+ */
+export function explainDraftProjection(
+  assignments: readonly ColumnAssignment[],
+  lead: CampaignSheetLeadInput
+): { cells: DraftProjectionCell[]; warnings: string[]; sheet: DraftProjectionSheet } | null {
+  const v3 = companySheetsCampaignRowValues({ ...lead, schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3 });
+  if (!v3) return null;
+  const projected = customRowProjection(assignments, lead);
+  if (!projected) return null;
+  const byField = new Map(COMPANY_SHEETS_V3_COLUMNS.map((column, index) => [column.sourceField, v3[index] ?? ""]));
+  const cells = assignments.map((column, index) => {
+    const canonicalField = column.decision === "mapped" && column.target ? column.target.sourceField : null;
+    const receivedAnswer = canonicalField ? (byField.get(canonicalField) ?? "") : "";
+    const written = projected.values[index] ?? "";
+    if (!column.sheetHeader.trim()) {
+      return cell(column, null, "", "", "blank_header");
+    }
+    if (column.decision === "ambiguous") {
+      return cell(column, null, "", "", "ambiguous");
+    }
+    if (column.formula) {
+      return cell(column, canonicalField, receivedAnswer, "", "formula_omitted");
+    }
+    if (column.decision !== "mapped" || !column.target) {
+      return cell(column, null, "", "", "unmapped");
+    }
+    if (!receivedAnswer.trim() && written.trim()) {
+      return cell(column, canonicalField, written, written, null);
+    }
+    if (!receivedAnswer.trim()) {
+      return cell(column, canonicalField, "", "", "missing");
+    }
+    if (column.transform === "date_america_new_york" && !written.trim()) {
+      return cell(column, canonicalField, receivedAnswer, "", "invalid");
+    }
+    return cell(column, canonicalField, receivedAnswer, written, null);
+  });
+  return {
+    cells,
+    warnings: projected.warnings,
+    sheet: {
+      header: assignments.map((column) => column.sheetHeader),
+      values: cells.map((item) => item.outputValue),
+      dobAge: projected.dobAge,
+    },
+  };
+}
+
 export function publishBlocker(
   assignments: readonly ColumnAssignment[]
 ): { ok: true } | { ok: false; statusCode: number; error: string; detail?: string } {
   if (assignments.some((column) => !column.explicit || column.decision === "ambiguous")) {
     const age = assignments.find((column) => column.decision === "ambiguous" && column.code === "ambiguous_age_or_dob");
+    const names = assignments
+      .filter((column) => !column.explicit || column.decision === "ambiguous")
+      .map((column) => column.sheetHeader.trim() || `column ${column.columnIndex + 1}`);
     return {
       ok: false,
       statusCode: 422,
-      error: age ? "mapping_unresolved" : "mapping_unresolved",
+      error: "mapping_unresolved",
       detail: age
-        ? "Age/DOB is still unresolved. Choose Age, DOB, or blank."
-        : "Every column needs an explicit mapped or unmapped decision.",
+        ? `Age/DOB is still unresolved. Choose Age, DOB, or blank. Unresolved: ${names.join(", ")}.`
+        : `Choose a field or leave unmapped: ${names.join(", ")}.`,
     };
   }
   const required = assignments.find(
@@ -531,6 +669,23 @@ function assignment(input: ColumnAssignment): ColumnAssignment {
 
 function issue(column: ColumnAssignment, code: string, message: string): ColumnMapIssue {
   return { columnIndex: column.columnIndex, sheetHeader: column.sheetHeader, code, message };
+}
+
+function cell(
+  column: ColumnAssignment,
+  canonicalField: string | null,
+  receivedAnswer: string,
+  outputValue: string,
+  reason: DraftProjectionReason | null
+): DraftProjectionCell {
+  return {
+    columnIndex: column.columnIndex,
+    sheetHeader: column.sheetHeader,
+    canonicalField,
+    receivedAnswer,
+    outputValue,
+    reason,
+  };
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

@@ -5,6 +5,7 @@ import {
   isCompanyGoogleSheetsDispatchEnabled,
 } from "../../lib/company-google-sheets-env.js";
 import { findPublishedColumnMap } from "../client-onboarding-v2/column-maps.js";
+import { readHeaderSnapshot } from "../company-sheets-delivery/company-sheets-custom-row.js";
 
 const CUSTOM_CAMPAIGN_SCHEMA = "company_sheets_campaign_custom_v1";
 
@@ -57,9 +58,7 @@ export async function recordCompanySheetsCampaignIntent(
       worksheetId: tab.worksheetId,
       sourceFunnelId: null,
     });
-    const snapshot = Array.isArray(map?.headerSnapshot)
-      ? map.headerSnapshot.filter((cell): cell is string => typeof cell === "string")
-      : [];
+    const snapshot = readHeaderSnapshot(map?.headerSnapshot);
     const headerMatches =
       snapshot.length === storedHeader.length && snapshot.every((cell, index) => cell === storedHeader[index]);
     if (env.SA360_CLIENT_ONBOARDING_V2_CUSTOM_WRITER_ENABLED?.trim() !== "true") reason = "custom_writer_disabled";

@@ -20,7 +20,7 @@ Setting `SourceLeadEvent.status` to `duplicate_blocked` would also suppress GHL,
 
 The first gate read the oldest 500 eligible lead jobs (`kind = lead`, excluding the current event and known pre-send failures) and treated `jobs.length >= 500` as incomplete. A genuinely new person was `review_held` / `delivery_history_incomplete` solely because the client had at least 500 prior eligible jobs, even when none of those jobs shared a phone or email. A duplicate that lived only in job 501 or later was held as incomplete. It was not admitted, and it was not matched. The sample length was not proof that history had ended.
 
-That scan is gone. Eligible lead jobs are indexed into `ClientSheetsPersonAdmission` with `origin = delivery_index`. A succeeded job is stored `admitted`. Any other eligible job is stored `reserved`, with evidence `jobId`, `spreadsheetId`, `worksheetId`, and `jobStatus`. An existing identifier owner is not overwritten. Known pre-send failures are not eligible. The index is client-scoped, not tab-scoped.
+That scan is gone. Eligible lead jobs are indexed into `ClientSheetsPersonAdmission` with `origin = delivery_index`. Eligible means `succeeded`, `uncertain`, `failed` with `appendStartedAt` or `rowsWritten > 0`, or `running` with `appendStartedAt`. Queued, retryable, and running jobs that have not started an append are not eligible. A `failed` job with no append and `rowsWritten = 0` is not eligible and is not a historical delivery. A succeeded job is stored `admitted`. Any other eligible job is stored `reserved`, with evidence `jobId`, `spreadsheetId`, `worksheetId`, and `jobStatus`. An existing identifier owner is not overwritten. The same event that owns the indexed row is `replay_allowed`, not a duplicate of itself. The index is client-scoped, not tab-scoped.
 
 `prepareClientSheetsHistoryBaseline` and the gate itself advance one batch under the client advisory lock. `SHEETS_HISTORY_BATCH_LIMIT` is 500. The cursor is `(createdAt, id)`. One batch is a few queries, not one query per job.
 
@@ -45,7 +45,7 @@ The check takes `pg_advisory_xact_lock(hashtextextended('client_sheets_person:' 
 
 A missing assessment is `assessment_held` / `assessment_missing` when the lead has a routing decision and neither an assessment nor a failure marker. A failure marker and no assessment is `assessment_failed`. `failureClass = transient` uses reason `assessment_failed_transient`. Any other failure uses `assessment_needs_review`. No routing decision (writer tests, direct scheduling) is `not_applicable`; only phone and email apply. `possible_duplicate` does not block. `likely_duplicate` / `source_duplicate` / `orphan_appointment` block through `applyOperatorOverrideToLiveBlock` and do not reserve. `separate_person` and `ignored_test` do not block.
 
-Every outcome writes `ClientSheetsDedupeDecision` (`sheets:{client}:{event}`) with policy, reason, normalized phone and email, assessment state, and prior evidence. History evidence includes `historyCoverage`, `completenessProof`, the two counts, and `countsAreNotProof: true`. Re-recording an `assessment_held` or `assessment_failed` intent may promote it. Other existing intent statuses are left as they are. The status API already returns intent `status`, `reason`, and `lastError`. No new HTTP field was added. `lastError` remains the gate code (`assessment_missing`, `assessment_failed`, `person_duplicate`, `person_review`).
+Every outcome writes `ClientSheetsDedupeDecision` (`sheets:{client}:{event}`) with policy, reason, normalized phone and email, assessment state, and prior evidence. History evidence includes `historyCoverage`, `completenessProof`, the two counts, and `countsAreNotProof: true`. Re-recording an `assessment_held` or `assessment_failed` intent may promote it. Other existing intent statuses are left as they are. The status API returns intent `status`, `reason`, and `lastError`, and the operator copy fields described below. `lastError` remains the gate code (`assessment_missing`, `assessment_failed`, `person_duplicate`, `person_review`).
 
 `noteSheetsPersonDelivery` runs after a lead job finishes `succeeded` or `uncertain`, and after an operator release resolves an uncertain lead job to `succeeded`. Succeeded updates `origin = live_reservation` to `admitted`. Uncertain keeps `reserved` and stores the job id, spreadsheet, and worksheet. Errors are logged and swallowed so a successful append is not reopened.
 
@@ -59,7 +59,7 @@ Synthetic internal pilot leads (`isCompanySheetsInternalPilotLead`, route key `c
 - Operator actor can also retry `assessment_needs_review` and `assessment_held` / `assessment_missing`.
 - A review-class failure, or a payload that does not parse as a lifecycle event, stays `assessment_needs_review`. The evaluator is not called for an unparseable payload.
 - A transient throw during retry sets `availableAt` 30 seconds ahead and stays `assessment_failed_transient`.
-- When an assessment row exists and the gate admits, the same intent becomes `pending` with a null reason. A second call sees `pending` and returns `promoted: false`.
+- When an assessment row exists and the gate admits, the same intent becomes `pending` with reason `person_hold_recovered`. A second call sees `pending` and returns `promoted: false`. The drain may then schedule that intent and clear the reason. The scheduled row is not labeled recovered and is not delivered.
 - `processDueCompanySheetsDispatches` runs `recoverDueSheetsPersonHolds` first, then the normal claim loop. With execution off, the promoted intent is enqueued with `scheduleWithoutExecution` and marked `scheduled`. A second drain does not create a second job. Google is not called until execution is on.
 
 `classifyAssessmentFailure` marks `PrismaClientInitializationError`, `PrismaClientRustPanicError`, `TimeoutError`, Prisma codes `P1001`, `P1002`, `P1008`, `P1017`, `P2024`, and connection-reset or timeout messages as `transient`. Everything else is `review`.
@@ -80,14 +80,11 @@ Preserved isolated synthetic tests:
 - Internal pilot route keys stay `exempt_synthetic_pilot` and do not take a reservation.
 - `enqueueOnboardingCapturedTestJob` remains the isolated onboarding worksheet path. Its idempotency key is `onboarding-test:{testRunId}:sheets`, and it is not a campaign lead job. Aged release and canary still do not call the gate.
 
-`executeCompanySheetsDeliveryJob` does not re-check admission. A lead job that was already `queued`, `retryable`, or `running` before this migration can still be sent by the executor.
+`executeCompanySheetsDeliveryJob` re-checks admission for `kind = lead` after the custom-writer check and before the worksheet lock or any Google call. `leadJobMayAppend` allows the job when that event already has a `reserved` or `admitted` row. Otherwise it calls `evaluateClientSheetsPersonGate`. `history_coverage_partial`, `history_coverage_unavailable`, and `assessment_failed_transient` return the claim to `queued` with no Google call. Any other hold becomes `failed`, `lastError` set to the gate code, `appendStartedAt` null, and `rowsWritten` 0. That failure is a conclusive pre-send result and is not indexed as a delivery. A job that is already `uncertain` returns `uncertain` before the claim and is not reclassified as safe to retry.
 
-`planPreMigrationLeadJobQuarantine` lists those jobs when the event has no `ClientSheetsPersonAdmission`. The result is `{ strategy: "quarantine_until_reconciled", ran: false, jobs }`. This change does not update the jobs, claim them, or call Google. The prepared rollout, which was not run:
+Turning off new intent creation does not stop this path. Turning execution off returns before the guard, so it also does not rewrite existing jobs. The guard runs only when execution is on. Aged release, canary, and the controlled campaign and onboarding test bypasses do not call it.
 
-1. Read the plan per client. Do not execute the listed jobs.
-2. Run `prepareClientSheetsHistoryBaseline` until `status = complete` and `completenessProof` is `cursor_exhausted` or `no_eligible_jobs`. Do not treat `indexedCount` as that proof.
-3. For each listed job, call the person gate for its event. A duplicate or review hold stays queued and must not be executed. An admit reserves the person; only then may a later, separate activation execute that job.
-4. Jobs with no normalized phone or email stay in the plan until an operator records a review decision.
+`planPreMigrationLeadJobQuarantine` still only lists jobs. The result is `{ strategy: "quarantine_until_reconciled", ran: false, jobs }`. It does not update jobs or call Google. The enforceable stop is the execute guard, not that list. Operators can still read the list before turning execution on. The rollout is in `docs/validation/sheets-setup-integration.md`.
 
 ## Contact index writers and readers
 
@@ -108,7 +105,9 @@ Not gated:
 - `enqueueCompanySheetsCanary`
 - `enqueueOnboardingCapturedTestJob` (isolated onboarding worksheet key)
 - synthetic internal pilot exemption
-- `executeCompanySheetsDeliveryJob` on a job that already exists
+- `executeCompanySheetsDeliveryJob` for aged, canary, and controlled test jobs
+
+Lead execution is gated. See the section above.
 
 The worker only asks the API to drain. It is not a second writer.
 
@@ -120,7 +119,7 @@ An operator exports Zap history and verifies it outside SA360, then passes recor
 
 ## Display for Agent B
 
-Use the existing intent `status` and `reason` from `getCompanySheetsDispatchStatus`. Do not add HTTP keys. `lastError` is the gate code. Do not describe `indexedCount` or a Zap coverage count as proof that all history was included. History completeness is not on this status payload; it lives on `ClientSheetsHistoryCoverage`.
+`getCompanySheetsDispatchStatus` returns each intent's `status`, `reason`, and `lastError`, plus `headline`, `detail`, `delivered`, and `recovered` from `companySheetsIntentOperatorCopy`. `lastError` is the gate code. Do not describe `indexedCount` or a Zap coverage count as proof that all history was included. History completeness is not on this status payload; it lives on `ClientSheetsHistoryCoverage`.
 
 | status | reason | Display |
 | --- | --- | --- |
@@ -134,7 +133,17 @@ Use the existing intent `status` and `reason` from `getCompanySheetsDispatchStat
 | `assessment_held` | `assessment_missing` | Assessment missing. The drain does not retry it. An operator can re-evaluate after the assessment exists. |
 | `assessment_failed` | `assessment_failed_transient` | Transient assessment failure. The drain retries it. |
 | `assessment_failed` | `assessment_needs_review` | Assessment needs an operator. The drain does not retry it. |
-| `pending` or `scheduled` | null | Recovered. Eligible for the existing dispatch drain. `scheduled` means a job exists and execution was off. |
+| `pending` | `person_hold_recovered` | Recovered from a hold. Waiting to schedule. Not delivered. |
+| `pending` | null or any other reason | Waiting to schedule. Not recovered and not delivered. |
+| `scheduled` | null | Scheduled. A job exists. Execution has not delivered a row. Not recovered. |
+| `scheduled` | `append_outcome_unresolved` | Scheduled, append outcome unknown. Not delivered and not safe to retry as a new row. |
+| `completed` | null | Sheets job succeeded. This is the only delivered state in this copy. |
+
+`companySheetsIntentOperatorCopy` is the wording used by `getCompanySheetsDispatchStatus` and the Google Sheets admin panel. `recovered` is true only for `pending` plus `person_hold_recovered`. `delivered` is true only for `completed`. `scheduled` is never delivered.
+
+Operator recovery is `POST /admin/v1/clients/:clientAccountId/google-sheets/person-holds/:sourceLeadEventId/recover` with the admin key. The lead must belong to that client. It calls `recoverClientSheetsPersonHold` with actor `operator`, does not call Google, and returns `googleCalled: false` plus the same headline. The panel button is "Re-evaluate hold".
+
+Known-dead release is `POST /admin/v1/clients/:clientAccountId/google-sheets/person-reservations/:sourceLeadEventId/release`. It calls `releaseKnownDeadSheetsPersonReservation`. An uncertain append returns `uncertain_append_held` and stays reserved. The panel button is "Release known-dead reservation". The actor header is `x-sa360-admin-actor`.
 
 A pending `GhlAssociationDispatchOutbox` row means Sheets did not settle GHL. It is channel independence. It is not deduplicated GHL delivery. GHL still follows the older duplicate-risk and contact-index policy, which misses sheets-only clients, email-only leads, and phones that never reached the index.
 
@@ -154,6 +163,8 @@ A pending `GhlAssociationDispatchOutbox` row means Sheets did not settle GHL. It
 | An operator can promote `assessment_needs_review` and `assessment_held` after an assessment exists, once, through the same intent | `recoverClientSheetsPersonHold`, then one job from the drain |
 | The drain does not promote a review-class assessment failure | Intent stays `assessment_failed` and job count stays 0 |
 | 501 prior jobs hold a new person; an inflated `indexedCount` stays `partial`; exhausting the cursor then admits and blocks the indexed phone | Integration with `historyBatchSize: 2` |
+| The production drain batch of 500 indexes 501 succeeded jobs to completion, schedules one new person without calling it delivered, and stops the phone that sat outside the first batch | Integration through `processDueCompanySheetsDispatches`, execution off |
+| The same indexed event is `replay_allowed`. A conclusive pre-send failure and a queued job are not historical deliveries | Same drain test |
 | A known-dead pre-send reservation can be released while another matching submission arrives, and an uncertain append cannot | Concurrent transactions; release audit rows kept; uncertain code `uncertain_append_held` |
 | A captured onboarding test and a later campaign enqueue of the same event append once; a second real lead with the same phone does not append | Custom-writer integration |
 | `likely_duplicate` blocks without a reservation; `separate_person` admits | Integration |
@@ -163,13 +174,13 @@ A pending `GhlAssociationDispatchOutbox` row means Sheets did not settle GHL. It
 | Dispatch flag off writes nothing | Intent count 0 and decision count 0 |
 | Verified Zap import is idempotent, skips name-only and unverified rows, and blocks a later live lead | Per-call counts plus a live gate match on `historical_baseline` |
 | Queued lead jobs with no admission are listed and left queued | `planPreMigrationLeadJobQuarantine` returns `ran: false` |
-| Aged, canary, the onboarding append module, GHL outbox, and job execution do not call the gate | Source guard in the unit test. Captured send does call it |
+| Aged, canary, the onboarding append module, and the GHL outbox do not call the gate. Lead execution does, through `leadJobMayAppend` | Source guard in the unit test. Captured send does call it |
 
 ## Remaining gaps
 
 - GHL person dedupe is unchanged. A pending GHL outbox proves the Sheets hold did not suppress GHL. It does not prove GHL deduplicated the person.
 - Aged release, canary, `enqueueOnboardingCapturedTestJob`, and the synthetic pilot do not pass the person gate.
-- `executeCompanySheetsDeliveryJob` does not re-check admission. The quarantine plan is prepared and was not run. Until that plan is applied, a pre-migration queued lead job can still be sent.
+- The quarantine planner remains read-only. Lead execution now refuses an unadmitted job. That guard exists only in this code. A process that already passed the execution-off check can still finish a write, so execution has to be off, and in-flight lead runs have to finish, before this build is the only writer. See `docs/validation/sheets-setup-integration.md`.
 - An identifier on a blocked duplicate is not merged onto the winning person.
 - Invalid or short phones are not identifiers. Two such leads match only when the email normalizes to the same value.
 - A name alone never blocks.
@@ -179,4 +190,5 @@ A pending `GhlAssociationDispatchOutbox` row means Sheets did not settle GHL. It
 ## Migrations
 
 - `20261102180000_client_sheets_person_admission` — `DuplicateRiskAssessmentFailure`, `ClientSheetsPersonAdmission`, `ClientSheetsDedupeDecision`.
-- `20261102190000_client_sheets_person_recovery` — `failureClass` and `updatedAt` on the failure table, `ClientSheetsHistoryCoverage`, `ClientSheetsPersonRelease`. Additive. A second deploy against the local test database applied nothing further.
+- `20261102190000_client_sheets_person_recovery` — `failureClass` and `updatedAt` on the failure table, `ClientSheetsHistoryCoverage`, `ClientSheetsPersonRelease`. Additive.
+- `20261102200000_client_sheet_header_literal` — header snapshots may contain empty strings, and stored U+200B blank sentinels are rewritten to `""` in column order. Apply it after the two person migrations. A later literal U+200B header is not rewritten. The app no longer decodes U+200B on read.

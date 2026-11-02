@@ -29,7 +29,9 @@ import {
   saveOnboardingWorkflow,
   searchOnboardingDrive,
   createOnboardingColumnMap,
+  previewOnboardingColumnMap,
   publishOnboardingColumnMap,
+  saveAndPublishOnboardingColumnMap,
   saveOnboardingSheetsTarget,
   updateOnboardingColumnMap,
 } from "@/lib/admin-api/client-onboarding-v2";
@@ -51,7 +53,9 @@ import type {
   OnboardingWorkflowMatch,
   OnboardingWorkflowSave,
   ColumnMapAssignment,
+  ColumnMapDraftPreview,
   ColumnMapRecord,
+  ColumnMapSavePublishResult,
   SheetsTargetSave,
 } from "@/lib/clients/onboarding/types";
 import {
@@ -495,4 +499,50 @@ export async function publishOnboardingColumnMapAction(
   });
   if (saved.ok) refresh(clientAccountId);
   return saved;
+}
+
+export async function saveAndPublishOnboardingColumnMapAction(
+  clientAccountId: string,
+  mapId: string,
+  input: { expectedRevision: number; assignments: ColumnMapAssignment[] }
+): Promise<ColumnMapSavePublishResult> {
+  await requireAdminCocAdminSession();
+  const rejected = rejectClient(clientAccountId);
+  if (rejected && !rejected.ok) {
+    return { ok: false, error: rejected.error, status: rejected.status, published: false, deliveryEnabled: false };
+  }
+  if (!mapId.trim() || !Number.isInteger(input.expectedRevision) || input.expectedRevision < 0) {
+    return { ok: false, error: "invalid_body", status: 400, published: false, deliveryEnabled: false };
+  }
+  if (!Array.isArray(input.assignments) || input.assignments.length === 0 || input.assignments.length > 80) {
+    return { ok: false, error: "mapping_unresolved", status: 422, published: false, deliveryEnabled: false };
+  }
+  const saved = await saveAndPublishOnboardingColumnMap(clientAccountId, mapId.trim(), {
+    requestId: crypto.randomUUID(),
+    expectedRevision: input.expectedRevision,
+    assignments: input.assignments,
+  });
+  if (saved.ok) refresh(clientAccountId);
+  return saved;
+}
+
+export async function previewOnboardingColumnMapAction(
+  clientAccountId: string,
+  mapId: string,
+  input: { expectedRevision: number; assignments: ColumnMapAssignment[]; previewToken: string }
+): Promise<OnboardingActionResult<ColumnMapDraftPreview>> {
+  await requireAdminCocAdminSession();
+  const rejected = rejectClient(clientAccountId);
+  if (rejected) return rejected;
+  if (!mapId.trim() || !Number.isInteger(input.expectedRevision) || input.expectedRevision < 0) {
+    return { ok: false, error: "invalid_body", status: 400 };
+  }
+  if (!input.previewToken.trim() || input.previewToken.length > 80) {
+    return { ok: false, error: "invalid_body", status: 400 };
+  }
+  return previewOnboardingColumnMap(clientAccountId, mapId.trim(), {
+    expectedRevision: input.expectedRevision,
+    assignments: input.assignments,
+    previewToken: input.previewToken,
+  });
 }

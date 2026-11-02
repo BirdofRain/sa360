@@ -17,6 +17,7 @@ import {
   COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA,
   exactHeader,
   headerFingerprint,
+  readHeaderSnapshot,
 } from "../company-sheets-delivery/company-sheets-custom-row.js";
 import {
   isCapturedTestEnabled,
@@ -281,7 +282,7 @@ export async function readClientOnboardingSummary(
         sourceFunnelId: null,
       })
     : null;
-  const publishedHeader = stringArray(publishedMap?.headerSnapshot);
+  const publishedHeader = publishedMap ? readHeaderSnapshot(publishedMap.headerSnapshot) : null;
   const headerAssessment = assessBoundCampaignHeader({
     schemaVersion: campaign?.schemaVersion ?? null,
     setupState: campaign?.setupState ?? null,

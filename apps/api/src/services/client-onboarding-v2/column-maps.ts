@@ -6,7 +6,9 @@
  * for the selected worksheet.
  */
 
-import type { Prisma, PrismaClient } from "@prisma/client";
+import { randomUUID } from "node:crypto";
+
+import { Prisma, type PrismaClient } from "@prisma/client";
 
 import { prisma } from "../../lib/db.js";
 import {
@@ -21,10 +23,15 @@ import {
   columnMapContentKey,
   columnMapIssues,
   COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA,
+  confirmVisibleSelections,
   CUSTOM_APPEND_CONTRACT,
   customRowValues,
   exactHeader,
+  explainDraftProjection,
+  type DraftProjectionSheet,
   headerFingerprint,
+  persistHeaderSnapshot,
+  readHeaderSnapshot,
   isCustomSheetsWriterEnabled,
   mappableColumnTargets,
   publishBlocker,
@@ -32,6 +39,7 @@ import {
   suggestColumnAssignments,
   syntheticCustomCampaignLead,
   type ColumnAssignment,
+  type DraftProjectionCell,
 } from "../company-sheets-delivery/company-sheets-custom-row.js";
 import { previewOnboardingSpreadsheet, type OnboardingSheetClassification } from "./sheet-preview.js";
 
@@ -123,12 +131,12 @@ export async function createColumnMapDraft(
   }
   const refused = refuseUnmappable(input.snapshot);
   if (refused) return refused;
-  if (input.snapshot.header.some((cell) => cell.trim().length === 0 || cell.length > 200)) {
+  if (input.snapshot.header.some((cell) => cell.length > 200)) {
     return {
       ok: false,
       statusCode: 422,
-      error: "blank_header",
-      detail: "A blank header cannot be stored on the column map. The sheet was not changed.",
+      error: "mapping_unresolved",
+      detail: "A header is longer than 200 characters. The sheet was not changed.",
     };
   }
   const destination = await db.companySheetsDestination.findUnique({ where: { clientAccountId: input.clientAccountId } });
@@ -156,7 +164,7 @@ export async function createColumnMapDraft(
         mapVersion: (latest?.mapVersion ?? 0) + 1,
         status: "draft",
         baseSchemaVersion: "legacy_custom",
-        headerSnapshot: input.snapshot.header,
+        headerSnapshot: persistHeaderSnapshot(input.snapshot.header),
         assignments,
         revision: 1,
       },
@@ -192,7 +200,7 @@ export async function patchColumnMap(
   if (!destination) return { ok: false, statusCode: 409, error: "destination_not_configured" };
   const paused = assertPaused(destination.campaignDispatchEnabled);
   if (paused) return paused;
-  const header = stringList(current.headerSnapshot);
+  const header = readHeaderSnapshot(current.headerSnapshot);
   const applied = applyOperatorAssignments(header, sampleFromStored(current.assignments), input.assignments);
   if (!applied.ok) return applied;
   const before = switchSnapshot(destination);
@@ -234,7 +242,7 @@ export async function publishColumnMap(
   if (current.spreadsheetId !== input.snapshot.spreadsheetId || current.worksheetId !== input.snapshot.worksheetId) {
     return { ok: false, statusCode: 409, error: "header_changed", detail: "The live worksheet does not match this map." };
   }
-  const header = stringList(current.headerSnapshot);
+  const header = readHeaderSnapshot(current.headerSnapshot);
   if (!exactHeader(input.snapshot.header, header)) {
     return { ok: false, statusCode: 409, error: "header_changed", detail: "The worksheet header changed. Publish was refused and no cells were written." };
   }
@@ -311,6 +319,316 @@ export async function publishColumnMap(
   if (drifted) return drifted;
   const row = await db.clientSheetColumnMap.findUniqueOrThrow({ where: { id: current.id } });
   return { ok: true, map: presentMap(row, input.snapshot.worksheetTitle), schemaRebound };
+}
+
+export type SaveAndPublishResult =
+  | {
+      ok: true;
+      map: ReturnType<typeof presentMap>;
+      schemaRebound: boolean;
+      published: true;
+      deliveryEnabled: false;
+    }
+  | (ColumnMapFailure & {
+      published: false;
+      deliveryEnabled: false;
+      map?: ReturnType<typeof presentMap>;
+    });
+
+/**
+ * Confirms visible unambiguous selections, saves that draft, then publishes
+ * the revision the save returned. A blocker, conflict, or header mismatch
+ * leaves the map unpublished and does not enable delivery.
+ */
+export async function saveAndPublishColumnMap(
+  input: {
+    clientAccountId: string;
+    mapId: string;
+    requestId: string;
+    expectedRevision: number;
+    assignments: unknown;
+    actorLabel?: string | null;
+    snapshot: ExistingWorksheetSnapshot;
+  },
+  db: PrismaClient = prisma
+): Promise<SaveAndPublishResult> {
+  const replay = await replayRequest(db, input.clientAccountId, input.requestId);
+  if (replay) {
+    if (!replay.ok) return { ...replay, published: false, deliveryEnabled: false };
+    if (replay.map.status === "published") {
+      return { ok: true, map: replay.map, schemaRebound: false, published: true, deliveryEnabled: false };
+    }
+    return finishPublish(db, input, replay.map.revision);
+  }
+  const prepared = await prepareConfirmedDraft(input, db);
+  if (!prepared.ok) return prepared;
+  if (!("blocked" in prepared)) return prepared;
+  if (prepared.blocked) {
+    return {
+      ok: false,
+      statusCode: prepared.blocked.statusCode,
+      error: prepared.blocked.error,
+      detail: prepared.blocked.detail,
+      map: prepared.map,
+      published: false,
+      deliveryEnabled: false,
+    };
+  }
+  return finishPublish(db, input, prepared.map.revision);
+}
+
+export type ColumnMapDraftPreview = {
+  configuration: "draft" | "published_map";
+  deliveryEnabled: false;
+  sendsRow: false;
+  available: boolean;
+  emptyReason: string | null;
+  sourceLeadEventId: string | null;
+  receivedAt: string | null;
+  mapId: string;
+  revision: number;
+  spreadsheetId: string;
+  worksheetId: number;
+  headerFingerprint: string;
+  schemaVersion: string;
+  boundSchemaVersion: string | null;
+  previewToken: string;
+  cells: DraftProjectionCell[];
+  warnings: string[];
+  sheet: DraftProjectionSheet | null;
+};
+
+/**
+ * Projects one recent received submission through the current draft.
+ * The read is tenant-scoped and does not write, publish, or enable delivery.
+ */
+export async function previewColumnMapDraft(
+  input: {
+    clientAccountId: string;
+    mapId: string;
+    expectedRevision: number;
+    assignments?: unknown;
+    previewToken: string;
+  },
+  db: PrismaClient = prisma
+): Promise<{ ok: true; preview: ColumnMapDraftPreview } | ColumnMapFailure> {
+  const current = await db.clientSheetColumnMap.findFirst({
+    where: { id: input.mapId, clientAccountId: input.clientAccountId },
+  });
+  if (!current) return { ok: false, statusCode: 404, error: "client_not_found", detail: "Column map not found for this client." };
+  if (current.revision !== input.expectedRevision) return { ok: false, statusCode: 409, error: "revision_conflict" };
+  const header = readHeaderSnapshot(current.headerSnapshot);
+  let assignments = Array.isArray(current.assignments) ? (current.assignments as ColumnAssignment[]) : [];
+  if (input.assignments !== undefined) {
+    const applied = applyOperatorAssignments(header, sampleFromStored(current.assignments), input.assignments);
+    if (!applied.ok) return applied;
+    assignments = applied.assignments;
+  }
+  const destination = await db.companySheetsDestination.findUnique({
+    where: { clientAccountId: input.clientAccountId },
+    include: { tabContracts: true },
+  });
+  const boundSchemaVersion = destination?.tabContracts.find((tab) => tab.role === "campaign")?.schemaVersion ?? null;
+  const event = await recentReceivedSubmission(db, input.clientAccountId);
+  const base = {
+    configuration: current.status === "published" ? ("published_map" as const) : ("draft" as const),
+    deliveryEnabled: false as const,
+    sendsRow: false as const,
+    mapId: current.id,
+    revision: current.revision,
+    spreadsheetId: current.spreadsheetId,
+    worksheetId: current.worksheetId,
+    headerFingerprint: headerFingerprint(header),
+    schemaVersion: current.baseSchemaVersion,
+    boundSchemaVersion,
+    previewToken: input.previewToken,
+  };
+  if (!event) {
+    return {
+      ok: true,
+      preview: {
+        ...base,
+        available: false,
+        emptyReason: "No received submission is stored for this client.",
+        sourceLeadEventId: null,
+        receivedAt: null,
+        cells: [],
+        warnings: [],
+        sheet: null,
+      },
+    };
+  }
+  const explained = explainDraftProjection(assignments, {
+    stableRowId: `draft-preview:${event.id}`,
+    clientAccountId: input.clientAccountId,
+    sourceLeadEventId: event.id,
+    receivedAt: event.receivedAt.toISOString(),
+    sourceLeadId: event.sourceLeadId,
+    normalizedPayload: event.normalizedPayloadJson,
+  });
+  if (!explained) {
+    return { ok: false, statusCode: 422, error: "mapping_unresolved", detail: "The stored submission could not be projected." };
+  }
+  return {
+    ok: true,
+    preview: {
+      ...base,
+      available: true,
+      emptyReason: null,
+      sourceLeadEventId: event.id,
+      receivedAt: event.receivedAt.toISOString(),
+      cells: explained.cells,
+      warnings: explained.warnings,
+      sheet: explained.sheet,
+    },
+  };
+}
+
+async function prepareConfirmedDraft(
+  input: {
+    clientAccountId: string;
+    mapId: string;
+    requestId: string;
+    expectedRevision: number;
+    assignments: unknown;
+    actorLabel?: string | null;
+    snapshot: ExistingWorksheetSnapshot;
+  },
+  db: PrismaClient
+): Promise<
+  | { ok: true; map: ReturnType<typeof presentMap>; blocked: { statusCode: number; error: string; detail?: string } | null }
+  | SaveAndPublishResult
+> {
+  const current = await db.clientSheetColumnMap.findFirst({
+    where: { id: input.mapId, clientAccountId: input.clientAccountId },
+  });
+  if (!current) {
+    return { ok: false, statusCode: 404, error: "client_not_found", detail: "Column map not found for this client.", published: false, deliveryEnabled: false };
+  }
+  if (current.status !== "draft") {
+    return {
+      ok: false,
+      statusCode: 409,
+      error: "revision_conflict",
+      detail: "Published maps are not edited. Retire the map and create a new draft.",
+      published: false,
+      deliveryEnabled: false,
+    };
+  }
+  if (current.revision !== input.expectedRevision) {
+    return { ok: false, statusCode: 409, error: "revision_conflict", published: false, deliveryEnabled: false };
+  }
+  if (current.spreadsheetId !== input.snapshot.spreadsheetId || current.worksheetId !== input.snapshot.worksheetId) {
+    return {
+      ok: false,
+      statusCode: 409,
+      error: "header_changed",
+      detail: "The live worksheet does not match this map. Nothing was published.",
+      published: false,
+      deliveryEnabled: false,
+    };
+  }
+  const header = readHeaderSnapshot(current.headerSnapshot);
+  if (!exactHeader(input.snapshot.header, header)) {
+    return {
+      ok: false,
+      statusCode: 409,
+      error: "header_changed",
+      detail: "The worksheet header changed. Nothing was published and no cells were written.",
+      published: false,
+      deliveryEnabled: false,
+    };
+  }
+  const destination = await db.companySheetsDestination.findUnique({ where: { clientAccountId: input.clientAccountId } });
+  if (!destination) return { ok: false, statusCode: 409, error: "destination_not_configured", published: false, deliveryEnabled: false };
+  const paused = assertPaused(destination.campaignDispatchEnabled);
+  if (paused) return { ...paused, published: false, deliveryEnabled: false };
+  const applied = applyOperatorAssignments(header, input.snapshot.sampleRow, input.assignments);
+  if (!applied.ok) return { ...applied, published: false, deliveryEnabled: false };
+  const confirmed = confirmVisibleSelections(applied.assignments);
+  const blocked = publishBlocker(confirmed);
+  const before = switchSnapshot(destination);
+  const updated = await db.clientSheetColumnMap.updateMany({
+    where: { id: current.id, clientAccountId: input.clientAccountId, status: "draft", revision: input.expectedRevision },
+    data: { assignments: confirmed, revision: { increment: 1 } },
+  });
+  if (updated.count !== 1) return { ok: false, statusCode: 409, error: "revision_conflict", published: false, deliveryEnabled: false };
+  await db.clientOnboardingV2AuditEvent.create({
+    data: audit(input, "column_map_save_and_publish", {
+      mapId: current.id,
+      revision: input.expectedRevision + 1,
+      published: false,
+      deliveryEnabled: false,
+    }),
+  });
+  const drifted = await switchesUnchanged(db, input.clientAccountId, before);
+  if (drifted) return { ...drifted, published: false, deliveryEnabled: false };
+  const row = await db.clientSheetColumnMap.findUniqueOrThrow({ where: { id: current.id } });
+  return {
+    ok: true,
+    map: presentMap(row, input.snapshot.worksheetTitle),
+    blocked: blocked.ok ? null : { statusCode: blocked.statusCode, error: blocked.error, detail: blocked.detail },
+  };
+}
+
+async function finishPublish(
+  db: PrismaClient,
+  input: {
+    clientAccountId: string;
+    mapId: string;
+    requestId: string;
+    actorLabel?: string | null;
+    snapshot: ExistingWorksheetSnapshot;
+  },
+  expectedRevision: number
+): Promise<SaveAndPublishResult> {
+  const published = await publishColumnMap(
+    {
+      clientAccountId: input.clientAccountId,
+      mapId: input.mapId,
+      requestId: randomRequestId(),
+      expectedRevision,
+      actorLabel: input.actorLabel,
+      snapshot: input.snapshot,
+    },
+    db
+  );
+  if (!published.ok) {
+    const row = await db.clientSheetColumnMap.findFirst({
+      where: { id: input.mapId, clientAccountId: input.clientAccountId },
+    });
+    return {
+      ...published,
+      published: false,
+      deliveryEnabled: false,
+      ...(row ? { map: presentMap(row, input.snapshot.worksheetTitle) } : {}),
+    };
+  }
+  return { ok: true, map: published.map, schemaRebound: published.schemaRebound, published: true, deliveryEnabled: false };
+}
+
+async function recentReceivedSubmission(db: PrismaClient, clientAccountId: string) {
+  const rows = await db.sourceLeadEvent.findMany({
+    where: { clientAccountIdResolved: clientAccountId, normalizedPayloadJson: { not: Prisma.DbNull } },
+    orderBy: [{ receivedAt: "desc" }, { id: "desc" }],
+    take: 8,
+    select: { id: true, receivedAt: true, sourceLeadId: true, normalizedPayloadJson: true },
+  });
+  return rows.find((row) => !isSyntheticSubmission(row.normalizedPayloadJson, row.sourceLeadId)) ?? null;
+}
+
+function isSyntheticSubmission(payload: Prisma.JsonValue, sourceLeadId: string | null): boolean {
+  if (sourceLeadId === "synthetic-sheets-test") return true;
+  const root = payload && typeof payload === "object" && !Array.isArray(payload) ? (payload as Record<string, unknown>) : null;
+  const routing = root?.routing && typeof root.routing === "object" && !Array.isArray(root.routing) ? (root.routing as Record<string, unknown>) : null;
+  const intake = routing?.source_intake && typeof routing.source_intake === "object" && !Array.isArray(routing.source_intake)
+    ? (routing.source_intake as Record<string, unknown>)
+    : null;
+  return intake?.lead_id === "synthetic-sheets-test";
+}
+
+function randomRequestId(): string {
+  return randomUUID();
 }
 
 export async function retireColumnMap(
@@ -414,7 +732,7 @@ export async function saveExistingSheetsTarget(
     worksheetId: input.snapshot.worksheetId,
     sourceFunnelId: null,
   });
-  const publishedHeader = published ? stringList(published.headerSnapshot) : [];
+  const publishedHeader = published ? readHeaderSnapshot(published.headerSnapshot) : [];
   const customMatch = Boolean(published && exactHeader(publishedHeader, input.snapshot.header));
   let schemaVersion = campaign?.schemaVersion ?? null;
   let setupState = "incompatible";
@@ -527,7 +845,7 @@ function presentMap(
   },
   worksheetTitle: string | null = null
 ) {
-  const header = stringList(row.headerSnapshot);
+  const header = readHeaderSnapshot(row.headerSnapshot);
   const assignments = Array.isArray(row.assignments) ? (row.assignments as ColumnAssignment[]) : [];
   const previewLead = syntheticCustomCampaignLead({
     stableRowId: "preview",

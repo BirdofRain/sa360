@@ -16,6 +16,7 @@ import type {
 } from "./captured-test-delivery.js";
 import { campaignLeadIdentityFromPayload } from "../company-sheets-dispatch/company-sheets-onboarding-read.js";
 import { findPublishedColumnMap } from "./column-maps.js";
+import { readHeaderSnapshot } from "../company-sheets-delivery/company-sheets-custom-row.js";
 import { sourceLeadOwnedByOtherClient } from "./google-only-quarantine.js";
 import { storedLeadFromNormalizedPayload } from "./onboarding-note-bridge.js";
 import { loadStoredWorkflowDiscovery } from "./onboarding-ghl-bindings.js";
@@ -124,7 +125,7 @@ export async function loadCapturedTestWorld(
                 mapVersion: publishedMap.mapVersion,
                 spreadsheetId: publishedMap.spreadsheetId,
                 worksheetId: publishedMap.worksheetId,
-                headerSnapshot: stringList(publishedMap.headerSnapshot),
+                headerSnapshot: readHeaderSnapshot(publishedMap.headerSnapshot),
                 assignments: publishedMap.assignments,
               }
             : null,

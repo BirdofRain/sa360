@@ -253,6 +253,11 @@ test("preview projects the published 15 headers, including blanks, DOB, and nich
   assert.equal(values[4], "sample.lead@example.invalid");
   assert.equal(values[5], "TX");
   assert.equal(values[6], "04/02/1990");
+  assert.equal(preview.plan.sheet?.dobAge?.dateOfBirth, "1990-04-02");
+  assert.equal(preview.plan.sheet?.dobAge?.dateOfBirthSheet, "04/02/1990");
+  assert.equal(preview.plan.sheet?.dobAge?.derivedAge, "36");
+  assert.equal(preview.plan.sheet?.dobAge?.ageProvenance, "derived_from_date_of_birth");
+  assert.equal(values.includes(preview.plan.sheet?.dobAge?.derivedAge ?? "36"), false);
   assert.equal(values[7], "Veteran");
   assert.equal(values[8], "Army");
   assert.equal(values[9], "Married");
@@ -402,6 +407,8 @@ test("the mounted route accepts the custom contract and still refuses the google
   assert.equal(preview.statusCode, 200);
   assert.equal(preview.json().preview.sheet.values.length, 15);
   assert.equal(preview.json().preview.sheet.values[6], "04/02/1990");
+  assert.equal(preview.json().preview.sheet.dobAge.derivedAge, "36");
+  assert.equal(preview.json().preview.sheet.dobAge.dateOfBirthSheet, "04/02/1990");
   assert.equal(preview.json().preview.sheet.values[11], "Burial");
   assert.equal(preview.json().warningCodes.includes("primary_concern_filled_from_primary_reason"), true);
   const pilot = await app.inject({

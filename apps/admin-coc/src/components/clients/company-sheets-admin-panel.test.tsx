@@ -2,8 +2,6 @@ import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 
-import { COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3 } from "@sa360/shared";
-
 import { SPREADSHEET_SAVED_CHOOSE_WORKSHEET } from "@/lib/clients/onboarding/view";
 
 import { CompanySheetsAdminPanel } from "./company-sheets-admin-panel.tsx";
@@ -176,53 +174,92 @@ describe("CompanySheetsAdminPanel", () => {
     assert.equal(createdFolder, "1clientFolder0001");
   });
 
-  it("requests the selected campaign template when binding or creating Campaign Leads", async () => {
-    const bound: Array<Record<string, unknown>> = [];
-    const created: Array<Record<string, unknown>> = [];
-    render(panelWithTabs(bound, created));
-    assert.match(screen.getByText(/Header preview/).textContent ?? "", /Desired Coverage/);
-    fireEvent.change(screen.getByLabelText("Existing worksheet ID"), { target: { value: "11" } });
-    fireEvent.click(screen.getByRole("button", { name: "Bind selected tab" }));
-    await screen.findByText("Tab selected. Existing tabs were not renamed.");
-    assert.deepEqual(bound, [
-      { role: "campaign", worksheetId: 11, schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3 },
-    ]);
-    fireEvent.click(screen.getByRole("button", { name: "Create missing tab" }));
-    await screen.findByText("Missing tab created with its standard header. Existing tabs were not changed.");
-    assert.deepEqual(created, [{ role: "campaign", schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3 }]);
-  });
-
-  it("omits schemaVersion when binding or creating an aged tab", async () => {
-    const bound: Array<Record<string, unknown>> = [];
-    const created: Array<Record<string, unknown>> = [];
-    render(panelWithTabs(bound, created));
-    fireEvent.change(screen.getByLabelText("Tab role"), { target: { value: "aged" } });
-    fireEvent.change(screen.getByLabelText("Existing worksheet ID"), { target: { value: "11" } });
-    fireEvent.click(screen.getByRole("button", { name: "Bind selected tab" }));
-    await screen.findByText("Tab selected. Existing tabs were not renamed.");
-    assert.deepEqual(bound, [{ role: "aged", worksheetId: 11 }]);
-    assert.equal(Object.hasOwn(bound[0] ?? {}, "schemaVersion"), false);
-    fireEvent.click(screen.getByRole("button", { name: "Create missing tab" }));
-    await screen.findByText("Missing tab created with its standard header. Existing tabs were not changed.");
-    assert.deepEqual(created, [{ role: "aged" }]);
-    assert.equal(Object.hasOwn(created[0] ?? {}, "schemaVersion"), false);
-  });
-
-  it("shows Inspect tabs inside Delivery tabs and keeps unsaved form state", async () => {
-    render(panelWithTabs([], []));
-    const tabs = screen.getByRole("region", { name: "Delivery tabs" });
+  it("keeps mapping in Google Sheets setup and drops ordinary campaign controls", () => {
+    render(panelWithTabs());
+    const mapping = screen.getByRole("region", { name: "Column mapping" });
+    assert.equal(screen.queryByRole("region", { name: "Delivery tabs" }), null);
+    assert.equal(within(mapping).queryByText("Aged Orders"), null);
+    assert.equal(within(mapping).queryByText("Canary"), null);
+    assert.equal(screen.queryByLabelText("Existing worksheet ID"), null);
+    assert.equal(screen.queryByLabelText("Authorized export package"), null);
+    assert.equal(screen.queryByText("Missing source"), null);
+    assert.equal(screen.queryByRole("button", { name: "Review column mapping" }), null);
+    assert.ok(within(mapping).getByRole("button", { name: "Map columns" }));
     const spreadsheet = screen.getByRole("region", { name: "Client spreadsheet" });
     fireEvent.change(within(spreadsheet).getByLabelText(/Client Google email/), {
       target: { value: "buyer@example.com" },
     });
-    fireEvent.change(within(tabs).getByLabelText("Authorized export package"), {
-      target: { value: "pkg-1" },
-    });
-    fireEvent.click(within(tabs).getByRole("button", { name: "Inspect tabs" }));
-    assert.equal((await within(tabs).findByText(/Tabs inspected/)).getAttribute("role"), "status");
-    assert.equal(within(spreadsheet).queryByText(/Tabs inspected/), null);
-    assert.equal(within(spreadsheet).getByLabelText(/Client Google email/).getAttribute("value") ?? (within(spreadsheet).getByLabelText(/Client Google email/) as HTMLInputElement).value, "buyer@example.com");
-    assert.equal((within(tabs).getByLabelText("Authorized export package") as HTMLInputElement).value, "pkg-1");
+    fireEvent.click(within(mapping).getByRole("button", { name: "Map columns" }));
+    assert.equal(
+      (within(spreadsheet).getByLabelText(/Client Google email/) as HTMLInputElement).value,
+      "buyer@example.com"
+    );
+  });
+
+  it("restores an existing custom map after refresh", () => {
+    render(
+      <CompanySheetsAdminPanel
+        clientAccountId="acme"
+        clientDisplayName="Acme Insurance"
+        connection={connection}
+        destination={destination}
+        notice={null}
+        actions={idleActions()}
+        initialColumnMap={{
+          id: "map_custom",
+          revision: 4,
+          mapVersion: 2,
+          status: "published",
+          sourceScope: "shared",
+          baseSchemaVersion: "legacy_custom",
+          spreadsheetId: "sheet1",
+          worksheetId: 0,
+          worksheetTitle: "Leads",
+          headerFingerprint: "fp_custom",
+          headerSnapshot: ["Full Name", "Phone Number"],
+          assignments: [
+            {
+              sheetHeader: "Full Name",
+              columnIndex: 0,
+              formula: false,
+              target: { kind: "v3_column", header: "Client Name", sourceField: "full_name" },
+              transform: "passthrough",
+              decision: "mapped",
+              explicit: true,
+              code: null,
+            },
+            {
+              sheetHeader: "Phone Number",
+              columnIndex: 1,
+              formula: false,
+              target: { kind: "v3_column", header: "Phone", sourceField: "phone" },
+              transform: "passthrough",
+              decision: "mapped",
+              explicit: true,
+              code: null,
+            },
+          ],
+          issues: [],
+          preview: [],
+          targets: [
+            { header: "Client Name", sourceField: "full_name" },
+            { header: "Phone", sourceField: "phone" },
+          ],
+          append: {
+            behavior: "new_row_only",
+            headerRow: "not_rewritten",
+            existingRows: "not_rewritten",
+            formulaColumns: "omitted_when_header_or_row2_starts_with_equals",
+          },
+        }}
+      />
+    );
+    const mapping = screen.getByRole("region", { name: "Column mapping" });
+    assert.ok(within(mapping).getByTestId("column-map-editor"));
+    assert.match(within(mapping).getByTestId("column-map-state").textContent ?? "", /Published delivery configuration/);
+    assert.match(within(mapping).getByTestId("column-map-state").textContent ?? "", /revision 4/);
+    assert.equal(within(mapping).queryByText("Missing source"), null);
+    assert.equal(screen.queryByRole("button", { name: "Map columns" }), null);
   });
 
   it("creates a sheet without saving it and asks before replacing a destination", async () => {
@@ -414,7 +451,7 @@ describe("CompanySheetsAdminPanel", () => {
   });
 });
 
-function panelWithTabs(bound: Array<Record<string, unknown>>, created: Array<Record<string, unknown>>) {
+function panelWithTabs() {
   return (
     <CompanySheetsAdminPanel
       clientAccountId="acme"
@@ -424,15 +461,7 @@ function panelWithTabs(bound: Array<Record<string, unknown>>, created: Array<Rec
       notice={null}
       actions={{
         ...idleActions(),
-        inspectTabs: async () => ({ ok: true }),
-        bindTab: async (_clientId, input) => {
-          bound.push(input);
-          return { ok: true };
-        },
-        createTab: async (_clientId, input) => {
-          created.push(input);
-          return { ok: true };
-        },
+        createColumnMap: async () => ({ ok: false, error: "mapping_unresolved", detail: "not in this test" }),
       }}
     />
   );

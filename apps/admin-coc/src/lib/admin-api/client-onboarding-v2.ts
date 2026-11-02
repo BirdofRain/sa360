@@ -23,7 +23,10 @@ import type {
   OnboardingWorkflowMatch,
   OnboardingWorkflowSave,
   ColumnMapAssignment,
+  ColumnMapDobAge,
+  ColumnMapDraftPreview,
   ColumnMapRecord,
+  ColumnMapSavePublishResult,
   SheetsTargetSave,
 } from "../clients/onboarding/types";
 
@@ -33,11 +36,15 @@ function clientPath(clientAccountId: string, suffix: string): string {
   return `/admin/v1/clients/${encodeURIComponent(clientAccountId)}/onboarding${suffix}`;
 }
 
-export function readOnboardingFailure(status: number, body: string): { error: string; status: number } {
+export function readOnboardingFailure(
+  status: number,
+  body: string
+): { error: string; status: number; detail?: string } {
   try {
-    const parsed = JSON.parse(body) as { error?: unknown };
+    const parsed = JSON.parse(body) as { error?: unknown; detail?: unknown };
     if (typeof parsed.error === "string" && ERROR_CODE.test(parsed.error)) {
-      return { error: parsed.error, status };
+      const detail = typeof parsed.detail === "string" && parsed.detail.length > 0 && parsed.detail.length <= 500 ? parsed.detail : undefined;
+      return { error: parsed.error, status, ...(detail ? { detail } : {}) };
     }
   } catch {
     // Non-JSON bodies stay a generic code so tokens and HTML are not shown.
@@ -718,6 +725,57 @@ export function updateOnboardingColumnMap(
   return request("PATCH", clientPath(clientAccountId, `/column-maps/${encodeURIComponent(mapId)}`), input, projectColumnMap);
 }
 
+export function listOnboardingColumnMaps(clientAccountId: string): Promise<OnboardingActionResult<ColumnMapRecord[]>> {
+  return request("GET", clientPath(clientAccountId, "/column-maps"), undefined, (value) => {
+    const record = asRecord(value);
+    if (!record || record.ok !== true || !Array.isArray(record.maps)) return null;
+    return record.maps.flatMap((item) => {
+      const projected = projectColumnMap({ map: item });
+      return projected ? [projected] : [];
+    });
+  });
+}
+
+export function saveAndPublishOnboardingColumnMap(
+  clientAccountId: string,
+  mapId: string,
+  input: { requestId: string; expectedRevision: number; assignments: unknown[] }
+): Promise<ColumnMapSavePublishResult> {
+  return requestColumnMapWrite(
+    "POST",
+    clientPath(clientAccountId, `/column-maps/${encodeURIComponent(mapId)}/save-and-publish`),
+    input
+  );
+}
+
+export function previewOnboardingColumnMap(
+  clientAccountId: string,
+  mapId: string,
+  input: { expectedRevision: number; assignments: unknown[]; previewToken: string }
+): Promise<OnboardingActionResult<ColumnMapDraftPreview>> {
+  return request("POST", clientPath(clientAccountId, `/column-maps/${encodeURIComponent(mapId)}/preview`), input, projectColumnMapPreview);
+}
+
+async function requestColumnMapWrite(
+  method: "POST",
+  path: string,
+  body: unknown
+): Promise<ColumnMapSavePublishResult> {
+  const res = await adminRequestJson<unknown>(method, path, body);
+  if (!res.ok) {
+    const failure = readOnboardingFailure(res.status, res.body);
+    const map = projectColumnMap(readJson(res.body));
+    return { ok: false, ...failure, published: false, deliveryEnabled: false, ...(map ? { map } : {}) };
+  }
+  const data = projectColumnMap(res.data);
+  if (!data) return { ok: false, error: "malformed_response", status: 502, published: false, deliveryEnabled: false };
+  const record = asRecord(res.data);
+  if (record?.published !== true || record.deliveryEnabled !== false) {
+    return { ok: false, error: "malformed_response", status: 502, published: false, deliveryEnabled: false };
+  }
+  return { ok: true, data, published: true, deliveryEnabled: false };
+}
+
 export function publishOnboardingColumnMap(
   clientAccountId: string,
   mapId: string,
@@ -781,6 +839,7 @@ function projectColumnMap(value: unknown): ColumnMapRecord | null {
     mapVersion: typeof record.mapVersion === "number" ? record.mapVersion : 1,
     status: typeof record.status === "string" ? record.status : "draft",
     sourceScope: typeof record.sourceScope === "string" ? record.sourceScope : "shared",
+    baseSchemaVersion: typeof record.baseSchemaVersion === "string" ? record.baseSchemaVersion : "legacy_custom",
     spreadsheetId: record.spreadsheetId,
     worksheetId: record.worksheetId,
     worksheetTitle: typeof record.worksheetTitle === "string" ? record.worksheetTitle : null,
@@ -815,6 +874,114 @@ function projectColumnMap(value: unknown): ColumnMapRecord | null {
       formulaColumns: "omitted_when_header_or_row2_starts_with_equals",
     },
   };
+}
+
+function projectColumnMapPreview(value: unknown): ColumnMapDraftPreview | null {
+  const root = asRecord(value);
+  const preview = asRecord(root?.preview);
+  if (!preview || typeof preview.mapId !== "string" || typeof preview.revision !== "number") return null;
+  if (preview.deliveryEnabled !== false || preview.sendsRow !== false) return null;
+  if (preview.configuration !== "draft" && preview.configuration !== "published_map") return null;
+  const cells: ColumnMapDraftPreview["cells"] = Array.isArray(preview.cells)
+    ? preview.cells.flatMap((item) => {
+        const cell = asRecord(item);
+        const reason = previewCellReason(cell?.reason);
+        if (!cell || typeof cell.sheetHeader !== "string" || typeof cell.columnIndex !== "number" || reason === undefined) return [];
+        return [
+          {
+            columnIndex: cell.columnIndex,
+            sheetHeader: cell.sheetHeader,
+            canonicalField: typeof cell.canonicalField === "string" ? cell.canonicalField : null,
+            receivedAnswer: typeof cell.receivedAnswer === "string" ? cell.receivedAnswer : "",
+            outputValue: typeof cell.outputValue === "string" ? cell.outputValue : "",
+            reason,
+          },
+        ];
+      })
+    : [];
+  const available = preview.available === true;
+  const sheet = projectDraftPreviewSheet(preview.sheet, available, cells.length);
+  if (available && !sheet) return null;
+  return {
+    configuration: preview.configuration,
+    deliveryEnabled: false,
+    sendsRow: false,
+    available,
+    emptyReason: typeof preview.emptyReason === "string" ? preview.emptyReason : null,
+    sourceLeadEventId: typeof preview.sourceLeadEventId === "string" ? preview.sourceLeadEventId : null,
+    receivedAt: typeof preview.receivedAt === "string" ? preview.receivedAt : null,
+    mapId: preview.mapId,
+    revision: preview.revision,
+    spreadsheetId: typeof preview.spreadsheetId === "string" ? preview.spreadsheetId : "",
+    worksheetId: typeof preview.worksheetId === "number" ? preview.worksheetId : 0,
+    headerFingerprint: typeof preview.headerFingerprint === "string" ? preview.headerFingerprint : "",
+    schemaVersion: typeof preview.schemaVersion === "string" ? preview.schemaVersion : "",
+    boundSchemaVersion: typeof preview.boundSchemaVersion === "string" ? preview.boundSchemaVersion : null,
+    previewToken: typeof preview.previewToken === "string" ? preview.previewToken : "",
+    cells: sheet ? cells.map((cell, index) => ({ ...cell, outputValue: sheet.values[index] ?? "" })) : cells,
+    warnings: stringList(preview.warnings),
+    sheet,
+  };
+}
+
+function projectDraftPreviewSheet(
+  value: unknown,
+  available: boolean,
+  cellCount: number
+): ColumnMapDraftPreview["sheet"] | null {
+  if (!available) return null;
+  const sheet = asRecord(value);
+  const dobAge = projectDobAge(sheet?.dobAge);
+  const header = stringList(sheet?.header);
+  const values = stringList(sheet?.values);
+  if (!sheet || !dobAge || header.length !== values.length || values.length !== cellCount) return null;
+  return { header, values, dobAge };
+}
+
+const PREVIEW_CELL_REASONS = ["missing", "invalid", "unmapped", "blank_header", "formula_omitted", "ambiguous"] as const;
+
+function previewCellReason(value: unknown): ColumnMapDraftPreview["cells"][number]["reason"] | undefined {
+  if (value === null) return null;
+  if (typeof value === "string" && (PREVIEW_CELL_REASONS as readonly string[]).includes(value)) {
+    return value as ColumnMapDraftPreview["cells"][number]["reason"];
+  }
+  return undefined;
+}
+
+function projectDobAge(value: unknown): ColumnMapDobAge | null {
+  const record = asRecord(value);
+  if (!record || typeof record.conflict !== "boolean") return null;
+  if (record.referenceRule !== "submitted_at_utc_date_else_received_at_utc_date") return null;
+  const ageProvenance = record.ageProvenance;
+  if (ageProvenance !== "supplied" && ageProvenance !== "derived_from_date_of_birth" && ageProvenance !== "missing") return null;
+  const dateOfBirthProvenance = record.dateOfBirthProvenance;
+  if (dateOfBirthProvenance !== "supplied" && dateOfBirthProvenance !== "missing") return null;
+  const text = (key: string) => (typeof record[key] === "string" ? record[key] : null);
+  const age = text("age");
+  const dateOfBirth = text("dateOfBirth");
+  const dateOfBirthSheet = text("dateOfBirthSheet");
+  const derivedAge = text("derivedAge");
+  const referenceDate = text("referenceDate");
+  if (age == null || dateOfBirth == null || dateOfBirthSheet == null || derivedAge == null || referenceDate == null) return null;
+  return {
+    age,
+    dateOfBirth,
+    dateOfBirthSheet,
+    ageProvenance,
+    dateOfBirthProvenance,
+    derivedAge,
+    referenceDate,
+    referenceRule: "submitted_at_utc_date_else_received_at_utc_date",
+    conflict: record.conflict,
+  };
+}
+
+function readJson(body: string): unknown {
+  try {
+    return JSON.parse(body) as unknown;
+  } catch {
+    return null;
+  }
 }
 
 function stringList(value: unknown): string[] {

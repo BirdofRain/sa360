@@ -14,6 +14,7 @@ import {
   companySheetsCampaignRowValues,
 } from "../company-sheets-dispatch/company-sheets-onboarding-read.js";
 import { COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA } from "../company-sheets-delivery/company-sheets-custom-row.js";
+import { projectCampaignDobAge, type CampaignDobAgePreview } from "../consumer-age/campaign-dob-age.js";
 import type {
   OnboardingGhlTestDeliveryReceipt,
   OnboardingGhlTestDeliveryRequest,
@@ -585,6 +586,8 @@ export type PlannedSheet = {
   headerCompatible: boolean;
   /** One-shot Sheets test refuses a reread whose body is not empty. */
   bodyMustBeEmpty?: boolean;
+  /** Age/DOB explanation. Sheet cells remain `values`. */
+  dobAge?: CampaignDobAgePreview;
 };
 
 export type PlannedNotePart = { part: number; body: string; idempotencyKey: string };
@@ -2011,6 +2014,7 @@ function plannedCustomSheet(
     valuesSha256: sha256Text(JSON.stringify(plan.values)),
     kind: "onboarding_captured_test",
     headerCompatible: true,
+    dobAge: plan.dobAge,
   };
 }
 
@@ -2066,14 +2070,16 @@ function planSheet(
   if ("ok" in selected) return { sheet: null, error: selected };
   const deliveryRowId = capturedTestKey(testRunId, "sheets");
   const sourceLeadEventId = event?.id ?? "synthetic-preview";
+  const receivedAt = event?.receivedAt ?? "2026-10-26T15:00:00.000Z";
+  const normalizedPayload = event?.normalizedPayloadJson ?? syntheticPreviewPayload(sheets);
   const values = companySheetsCampaignRowValues({
     schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3,
     stableRowId: deliveryRowId,
     clientAccountId: input.clientAccountId,
     sourceLeadEventId,
-    receivedAt: event?.receivedAt ?? "2026-10-26T15:00:00.000Z",
+    receivedAt,
     sourceLeadId: event?.sourceLeadId ?? null,
-    normalizedPayload: event?.normalizedPayloadJson ?? syntheticPreviewPayload(sheets),
+    normalizedPayload,
   });
   if (!values) return { sheet: null, error: failure(409, "worksheet_blocked", { detail: "campaign row mapper returned no values" }) };
   if (values.length === EXACT_V3_HEADER.length && isCanaryHeader(selected.header)) {
@@ -2105,6 +2111,7 @@ function planSheet(
       valuesSha256: sha256Text(JSON.stringify(values)),
       kind: "onboarding_captured_test",
       headerCompatible: true,
+      dobAge: projectCampaignDobAge({ normalizedPayload, receivedAt }),
     },
     error: null,
   };
@@ -2594,6 +2601,7 @@ function previewPayload(plan: CapturedTestPlan): unknown {
           sourceLeadEventId: plan.sheet.sourceLeadEventId,
           values: plan.sheet.values,
           valuesSha256: plan.sheet.valuesSha256,
+          dobAge: plan.sheet.dobAge ?? null,
         }
       : null,
     noteBodySha256: plan.note?.bodySha256 ?? null,

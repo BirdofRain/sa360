@@ -4,13 +4,17 @@ import test from "node:test";
 import {
   applyOperatorAssignments,
   columnLabel,
+  confirmVisibleSelections,
   customAppendSegments,
   customRowProjection,
   customRowValues,
   exactHeader,
+  explainDraftProjection,
   formatDateAmericaNewYork,
   formulaColumnIndexes,
   headerFingerprint,
+  persistHeaderSnapshot,
+  readHeaderSnapshot,
   publishBlocker,
   suggestColumnAssignments,
   syntheticCustomCampaignLead,
@@ -196,8 +200,105 @@ test("a blank Primary Concern is filled from primary_reason and labeled", () => 
   assert.deepEqual(omitted?.warnings, ["primary_concern_omitted"]);
 });
 
+test("save confirmation accepts unchanged suggestions and still requires Age/DOB, blanks, and formulas", () => {
+  const header = ["Full Name", "Phone Number", "Age/DOB", "Score", "Running Total", ""];
+  const sample = ["Pat", "555", "4/2/1990", "9", "=E2", ""];
+  const suggested = suggestColumnAssignments(header, sample);
+  assert.equal(suggested.every((column) => column.explicit === false), true);
+  const confirmed = confirmVisibleSelections(suggested);
+  assert.equal(confirmed[0]?.explicit, true);
+  assert.equal(confirmed[0]?.target?.sourceField, "full_name");
+  assert.equal(confirmed[1]?.explicit, true);
+  assert.equal(confirmed[1]?.target?.sourceField, "phone");
+  assert.equal(confirmed[2]?.explicit, false);
+  assert.equal(confirmed[2]?.decision, "ambiguous");
+  assert.equal(confirmed[2]?.code, "ambiguous_age_or_dob");
+  assert.equal(confirmed[3]?.explicit, false);
+  assert.equal(confirmed[3]?.decision, "unmapped");
+  assert.equal(confirmed[4]?.explicit, true);
+  assert.equal(confirmed[4]?.decision, "unmapped");
+  assert.equal(confirmed[4]?.target, null);
+  assert.equal(confirmed[4]?.code, "formula_column_omitted");
+  assert.equal(confirmed[5]?.explicit, true);
+  assert.equal(confirmed[5]?.target, null);
+  assert.equal(confirmed[5]?.code, "blank_header");
+  const blocked = publishBlocker(confirmed);
+  assert.equal(blocked.ok, false);
+  if (blocked.ok) return;
+  assert.match(blocked.detail ?? "", /Age\/DOB/);
+  assert.match(blocked.detail ?? "", /Score/);
+
+  const chosen = confirmed.map((column) =>
+    column.sheetHeader === "Age/DOB"
+      ? {
+          ...column,
+          decision: "mapped" as const,
+          explicit: true,
+          transform: "date_america_new_york" as const,
+          target: { kind: "v3_column" as const, header: "DOB", sourceField: "date_of_birth" },
+          code: null,
+        }
+      : column.sheetHeader === "Score"
+        ? { ...column, decision: "unmapped" as const, explicit: true, transform: "blank" as const, target: null }
+        : column
+  );
+  assert.equal(publishBlocker(chosen).ok, true);
+  const lead = {
+    stableRowId: "row_received",
+    clientAccountId: "client_a",
+    sourceLeadEventId: "evt_received",
+    receivedAt: "2026-10-29T15:00:00.000Z",
+    sourceLeadId: "lead_received",
+    normalizedPayload: {
+      contact: { first_name: "Pat", last_name: "Example", email: "pat@example.invalid", phone: "5550001111" },
+      routing: {
+        source_intake: {
+          submitted_at: "2026-10-29T14:00:00.000Z",
+          sourceAttributes: { date_of_birth: "not-a-date", dob: "1979-04-12" },
+        },
+      },
+    },
+  };
+  const explained = explainDraftProjection(chosen, lead);
+  const writer = customRowValues(chosen, lead);
+  assert.ok(explained);
+  assert.equal(explained?.cells.find((item) => item.sheetHeader === "Full Name")?.receivedAnswer, "Pat Example");
+  assert.equal(explained?.cells.find((item) => item.sheetHeader === "Full Name")?.outputValue, writer?.[0]);
+  const dob = explained?.cells.find((item) => item.canonicalField === "date_of_birth");
+  assert.equal(dob?.receivedAnswer, "1979-04-12");
+  assert.equal(dob?.outputValue, "04/12/1979");
+  assert.equal(dob?.reason, null);
+  assert.equal(explained?.sheet.header.length, chosen.length);
+  assert.equal(explained?.sheet.values.length, chosen.length);
+  assert.equal(explained?.sheet.values[dob?.columnIndex ?? -1], "04/12/1979");
+  assert.equal(explained?.sheet.values.includes("47"), false);
+  assert.equal(explained?.sheet.dobAge.dateOfBirth, "1979-04-12");
+  assert.equal(explained?.sheet.dobAge.dateOfBirthSheet, "04/12/1979");
+  assert.equal(explained?.sheet.dobAge.derivedAge, "47");
+  assert.equal(explained?.sheet.dobAge.ageProvenance, "derived_from_date_of_birth");
+  assert.equal(explained?.sheet.dobAge.referenceDate, "2026-10-29");
+  assert.equal(explained?.sheet.dobAge.conflict, false);
+  assert.equal(explained?.warnings.includes("consumer_age_conflicts_with_date_of_birth"), false);
+  assert.equal(explained?.cells.find((item) => item.sheetHeader === "Running Total")?.reason, "formula_omitted");
+  assert.equal(explained?.cells.find((item) => item.sheetHeader === "Running Total")?.outputValue, "");
+  assert.equal(explained?.cells.find((item) => item.sheetHeader === "")?.reason, "blank_header");
+  assert.equal(explained?.cells.find((item) => item.sheetHeader === "Score")?.reason, "unmapped");
+  const phone = explained?.cells.find((item) => item.canonicalField === "phone");
+  assert.equal(phone?.receivedAnswer, "5550001111");
+  assert.equal(phone?.reason, null);
+  explained?.cells.forEach((item, index) => {
+    if (item.reason === "formula_omitted") return;
+    assert.equal(item.outputValue, writer?.[index]);
+  });
+});
+
 test("the header fingerprint changes when cells move and ignores a prefix match", () => {
   assert.equal(headerFingerprint(["Phone", "Email"]), headerFingerprint(["Phone", "Email"]));
   assert.notEqual(headerFingerprint(["Phone", "Email"]), headerFingerprint(["Email", "Phone"]));
   assert.equal(exactHeader(["Phone", "Email", "Extra"], ["Phone", "Email"]), false);
+  const stored = persistHeaderSnapshot(["Full Name", ""]);
+  assert.equal(stored[1]?.length, 1);
+  assert.deepEqual(readHeaderSnapshot(stored), ["Full Name", ""]);
+  assert.equal(headerFingerprint(stored), headerFingerprint(["Full Name", ""]));
+  assert.equal(exactHeader(stored, ["Full Name", ""]), true);
 });

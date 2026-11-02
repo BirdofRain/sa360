@@ -42,7 +42,7 @@ test("intake consumer-age promotion", async (t) => {
     for (const key of ["age", "Age", "consumer_age", "Consumer Age"]) {
       assert.deepEqual(
         resolveIntakeConsumerAgeFields([{ [key]: "71" }], EVALUATED_AT),
-        { consumer_age: "71" },
+        { consumer_age: "71", consumer_age_provenance: "supplied" },
         `alias ${key}`
       );
     }
@@ -52,7 +52,15 @@ test("intake consumer-age promotion", async (t) => {
     for (const key of ["dob", "DOB", "date_of_birth", "Date of Birth", "birth-date"]) {
       assert.deepEqual(
         resolveIntakeConsumerAgeFields([{ [key]: "1955-03-04" }], EVALUATED_AT),
-        { consumer_age: "71", date_of_birth: "1955-03-04" },
+        {
+          consumer_age: "71",
+          date_of_birth: "1955-03-04",
+          consumer_age_provenance: "derived_from_date_of_birth",
+          date_of_birth_provenance: "supplied",
+          consumer_age_derived: "71",
+          consumer_age_reference_date: "2026-10-06",
+          consumer_age_reference_rule: "submitted_at_utc_date_else_received_at_utc_date",
+        },
         `alias ${key}`
       );
     }
@@ -150,6 +158,7 @@ function metaLeadFields(
   custom: Record<string, string>
 ): FacebookLeadFields {
   return {
+    createdTime: EVALUATED_AT.toISOString(),
     leadgenId,
     pageId: "page_1",
     formId: "form_9",

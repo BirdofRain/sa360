@@ -24,9 +24,11 @@ function coerceAttributeValue(
   if (raw === null || raw === undefined) return null;
   if (canonical === "age") {
     if (typeof raw === "number" && Number.isFinite(raw)) return raw;
-    const n = Number(String(raw).trim());
+    if (typeof raw !== "string") return null;
+    const n = Number(raw.trim());
     return Number.isFinite(n) ? n : null;
   }
+  if (canonical === "date_of_birth" && (typeof raw !== "string" || !raw.trim())) return null;
   if (canonical === "phone_verified" || canonical === "email_verified") {
     if (typeof raw === "boolean") return raw;
     const s = String(raw).trim().toLowerCase();
@@ -106,7 +108,8 @@ export function extractSourceAttributesFromPayload(
     if (sourceAttributes[canonical] !== undefined) continue;
     const direct = materialized[canonical];
     if (direct !== undefined && direct !== null && String(direct).trim() !== "") {
-      sourceAttributes[canonical] = coerceAttributeValue(canonical, direct);
+      const coerced = coerceAttributeValue(canonical, direct);
+      if (coerced !== null) sourceAttributes[canonical] = coerced;
     }
   }
 

@@ -480,4 +480,230 @@ describe("BuyerAvailabilityPanel", () => {
       globalThis.fetch = previous;
     }
   });
+
+  it("shows classified progress and only then an exact total", async () => {
+    const previous = globalThis.fetch;
+    let polls = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/jobs")) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            jobId: "bav_11111111-1111-1111-1111-111111111111",
+            status: "running",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      }
+      polls += 1;
+      if (polls === 1) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            jobId: "bav_11111111-1111-1111-1111-111111111111",
+            status: "running",
+            progress: {
+              phase: "classifying",
+              rowsClassified: 250,
+              selectableRowsExact: 1000,
+              pagesRead: 1,
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          jobId: "bav_11111111-1111-1111-1111-111111111111",
+          status: "complete",
+          result: exactReport,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }) as typeof fetch;
+    try {
+      render(<BuyerAvailabilityPanel enabled clients={[]} />);
+      fireEvent.change(screen.getByTestId("buyer-availability-client-id"), {
+        target: { value: "client_jr_laird" },
+      });
+      fireEvent.click(screen.getByTestId("buyer-availability-submit"));
+      const progress = await screen.findByText(/Classified 250 of 1,000 selectable rows/);
+      assert.match(progress.textContent ?? "", /not ready/);
+      assert.equal(screen.queryByTestId("buyer-availability-total"), null);
+      const total = await screen.findByTestId(
+        "buyer-availability-total",
+        {},
+        { timeout: 4_000 }
+      );
+      assert.match(total.textContent ?? "", /4 buyer-eligible/);
+      assert.match(total.textContent ?? "", /\(exact\)/);
+    } finally {
+      globalThis.fetch = previous;
+    }
+  });
+
+  it("does not show a total when the job is cancelled", async () => {
+    const previous = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (init?.method === "DELETE") {
+        return new Response(JSON.stringify({ ok: true, status: "cancelled" }), { status: 200 });
+      }
+      if (url.endsWith("/jobs")) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            jobId: "bav_22222222-2222-2222-2222-222222222222",
+            status: "running",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          jobId: "bav_22222222-2222-2222-2222-222222222222",
+          status: "cancelled",
+          progress: {
+            phase: "classifying",
+            rowsClassified: 10,
+            selectableRowsExact: 100,
+            pagesRead: 1,
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }) as typeof fetch;
+    try {
+      render(<BuyerAvailabilityPanel enabled clients={[]} />);
+      fireEvent.change(screen.getByTestId("buyer-availability-client-id"), {
+        target: { value: "client_jr_laird" },
+      });
+      fireEvent.click(screen.getByTestId("buyer-availability-submit"));
+      const error = await screen.findByTestId("buyer-availability-error");
+      assert.match(error.textContent ?? "", /stopped before it finished/);
+      assert.match(error.textContent ?? "", /No exact total/);
+      assert.equal(screen.queryByTestId("buyer-availability-result"), null);
+      assert.equal(screen.queryByText(/10 buyer-eligible/), null);
+    } finally {
+      globalThis.fetch = previous;
+    }
+  });
+
+  it("explains when another count is already running", async () => {
+    const previous = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          ok: false,
+          error: "buyer_availability_failed",
+          details: { ok: false, code: "availability_job_busy" },
+        }),
+        { status: 503, headers: { "content-type": "application/json" } }
+      )) as typeof fetch;
+    try {
+      render(<BuyerAvailabilityPanel enabled clients={[]} />);
+      fireEvent.change(screen.getByTestId("buyer-availability-client-id"), {
+        target: { value: "client_jr_laird" },
+      });
+      fireEvent.click(screen.getByTestId("buyer-availability-submit"));
+      const error = await screen.findByTestId("buyer-availability-error");
+      assert.match(error.textContent ?? "", /Another availability count is still running/);
+      assert.match(error.textContent ?? "", /No leads were reserved/);
+      assert.equal(screen.queryByTestId("buyer-availability-result"), null);
+    } finally {
+      globalThis.fetch = previous;
+    }
+  });
+
+  it("explains poll expiry and a missing job without showing a total", async () => {
+    const previous = globalThis.fetch;
+    const scripts = [
+      async () =>
+        new Response(
+          JSON.stringify({
+            ok: true,
+            jobId: "bav_33333333-3333-3333-3333-333333333333",
+            status: "running",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        ),
+      async () =>
+        new Response(
+          JSON.stringify({
+            ok: true,
+            jobId: "bav_33333333-3333-3333-3333-333333333333",
+            status: "failed",
+            failure: { code: "availability_job_expired" },
+            progress: {
+              phase: "classifying",
+              rowsClassified: 40,
+              selectableRowsExact: 900,
+              pagesRead: 1,
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        ),
+    ];
+    let call = 0;
+    globalThis.fetch = (async () => {
+      const next = scripts[Math.min(call, scripts.length - 1)]!;
+      call += 1;
+      return next();
+    }) as typeof fetch;
+    try {
+      render(<BuyerAvailabilityPanel enabled clients={[]} />);
+      fireEvent.change(screen.getByTestId("buyer-availability-client-id"), {
+        target: { value: "client_jr_laird" },
+      });
+      fireEvent.click(screen.getByTestId("buyer-availability-submit"));
+      const expired = await screen.findByTestId("buyer-availability-error");
+      assert.match(expired.textContent ?? "", /expired because the page stopped checking in/);
+      assert.match(expired.textContent ?? "", /background tab/);
+      assert.match(expired.textContent ?? "", /No exact total/);
+      assert.equal(screen.queryByText(/40 buyer-eligible/), null);
+      assert.equal(screen.queryByTestId("buyer-availability-result"), null);
+    } finally {
+      globalThis.fetch = previous;
+      cleanup();
+    }
+
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/jobs")) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            jobId: "bav_44444444-4444-4444-4444-444444444444",
+            status: "running",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          error: "buyer_availability_failed",
+          details: { ok: false, code: "job_not_found" },
+        }),
+        { status: 404, headers: { "content-type": "application/json" } }
+      );
+    }) as typeof fetch;
+    try {
+      render(<BuyerAvailabilityPanel enabled clients={[]} />);
+      fireEvent.change(screen.getByTestId("buyer-availability-client-id"), {
+        target: { value: "client_jr_laird" },
+      });
+      fireEvent.click(screen.getByTestId("buyer-availability-submit"));
+      const lost = await screen.findByTestId("buyer-availability-error");
+      assert.match(lost.textContent ?? "", /no longer running/);
+      assert.match(lost.textContent ?? "", /restart or deployment/);
+      assert.match(lost.textContent ?? "", /Run the check again/);
+      assert.equal(screen.queryByTestId("buyer-availability-result"), null);
+    } finally {
+      globalThis.fetch = previous;
+    }
+  });
 });

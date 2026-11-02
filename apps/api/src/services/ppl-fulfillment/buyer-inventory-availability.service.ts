@@ -512,6 +512,29 @@ function bump(map: Record<string, number>, key: string) {
   map[key] = (map[key] ?? 0) + 1;
 }
 
+export function validateBuyerInventoryAvailabilityRequest(input: {
+  nicheKey: string;
+  states?: readonly string[] | null;
+  commerceAgeBucketKeys?: unknown;
+}):
+  | { ok: true }
+  | {
+      ok: false;
+      code: "invalid_niche" | "invalid_states" | "invalid_age_buckets";
+      reasons: ["invalid_niche"] | ["invalid_states"] | ["invalid_age_buckets"];
+    } {
+  if (!canonicalizeCommerceNicheKey(input.nicheKey)) {
+    return { ok: false, code: "invalid_niche", reasons: ["invalid_niche"] };
+  }
+  if (!parseBuyerAvailabilityStates(input.states).ok) {
+    return { ok: false, code: "invalid_states", reasons: ["invalid_states"] };
+  }
+  if (!parseBuyerAvailabilityBuckets(input.commerceAgeBucketKeys).ok) {
+    return { ok: false, code: "invalid_age_buckets", reasons: ["invalid_age_buckets"] };
+  }
+  return { ok: true };
+}
+
 export async function lookupBuyerInventoryAvailability(
   input: {
     clientAccountId: string;
@@ -540,9 +563,21 @@ export async function lookupBuyerInventoryAvailability(
     }) => Promise<void>;
     /**
      * When aborted, the snapshot transaction throws and Prisma releases the
-     * connection. Not accepted on HTTP. The route sets this from client disconnect.
+     * connection. Not accepted on HTTP. The synchronous route sets this from
+     * client disconnect. A background job sets it from explicit cancel or
+     * when the browser stops polling.
      */
     signal?: AbortSignal;
+    /**
+     * Classification progress only. Never an eligible total. Not accepted
+     * on HTTP. Background jobs use it to show rows classified so far.
+     */
+    onProgress?: (progress: {
+      phase: "classifying";
+      pagesRead: number;
+      rowsClassified: number;
+      selectableRowsExact: number;
+    }) => void;
   },
   db: AvailabilityDb = prisma
 ): Promise<BuyerInventoryAvailabilityResult> {
@@ -585,6 +620,12 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
       rowsClassified: number;
     }) => Promise<void>;
     signal?: AbortSignal;
+    onProgress?: (progress: {
+      phase: "classifying";
+      pagesRead: number;
+      rowsClassified: number;
+      selectableRowsExact: number;
+    }) => void;
   },
   db: PrismaClient
 ): Promise<BuyerInventoryAvailabilityResult> {
@@ -714,6 +755,16 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
   let cursor: { generatedAt: Date; id: string } | null = null;
   let classificationPasses = 0;
   let stoppedOnPassCeiling = false;
+
+  const publishProgress = () => {
+    input.onProgress?.({
+      phase: "classifying",
+      pagesRead,
+      rowsClassified,
+      selectableRowsExact,
+    });
+  };
+  publishProgress();
 
   while (rowsClassified < selectableRowsExact) {
     const passStart = rowsClassified;
@@ -891,6 +942,7 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
     if (input.afterClassificationPage) {
       await input.afterClassificationPage({ pagesRead, rowsClassified });
     }
+    publishProgress();
     throwIfAvailabilityAborted(input.signal);
     if (idRows.length < take) {
       cohortExhausted = true;

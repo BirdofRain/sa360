@@ -59,6 +59,11 @@ import {
   previewExternalDeliveryReceipts,
 } from "../services/ppl-fulfillment/external-delivery-receipt.service.js";
 import { lookupBuyerInventoryAvailability } from "../services/ppl-fulfillment/buyer-inventory-availability.service.js";
+import {
+  cancelBuyerInventoryAvailabilityJob,
+  readBuyerInventoryAvailabilityJob,
+  startBuyerInventoryAvailabilityJob,
+} from "../services/ppl-fulfillment/buyer-inventory-availability-jobs.js";
 import { findLeadOrderById, listLeadOrders } from "../repositories/lead-order.repository.js";
 
 async function requireAdmin(request: FastifyRequest, reply: FastifyReply): Promise<boolean> {
@@ -233,7 +238,20 @@ const protectedAgentBodySchema = z.object({
   active: z.boolean().optional(),
 });
 
-export const adminFulfillmentOpsRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
+const buyerAvailabilityJobIdSchema = z.object({
+  jobId: z.string().trim().regex(/^bav_[0-9a-f-]{36}$/i),
+});
+
+export type AdminFulfillmentOpsOptions = {
+  lookupBuyerInventoryAvailabilityImpl?: typeof lookupBuyerInventoryAvailability;
+};
+
+export const adminFulfillmentOpsRoutes: FastifyPluginAsync<AdminFulfillmentOpsOptions> = async (
+  app,
+  opts
+) => {
+  const lookupAvailability =
+    opts.lookupBuyerInventoryAvailabilityImpl ?? lookupBuyerInventoryAvailability;
   app.get("/fulfillment-ops/safety", async (request, reply) => {
     if (!(await requireAdmin(request, reply))) return;
     return reply.send({ ok: true, safety: buildFulfillmentOpsSafetyPosture() });
@@ -259,7 +277,7 @@ export const adminFulfillmentOpsRoutes: FastifyPluginAsync = async (app: Fastify
     request.raw.on("aborted", onClientGone);
     let result;
     try {
-      result = await lookupBuyerInventoryAvailability({
+      result = await lookupAvailability({
         clientAccountId: body.data.clientAccountId,
         nicheKey: body.data.nicheKey,
         states: body.data.states,
@@ -288,6 +306,76 @@ export const adminFulfillmentOpsRoutes: FastifyPluginAsync = async (app: Fastify
       return reply.status(409).send(result);
     }
     return reply.send(result);
+  });
+
+  app.post("/fulfillment-ops/buyer-availability/jobs", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    if (!isBuyerInventoryAvailabilityEnabled()) {
+      return reply.status(404).send({
+        ok: false,
+        error: "buyer_inventory_availability_disabled",
+      });
+    }
+    const body = buyerAvailabilityBodySchema.safeParse(request.body ?? {});
+    if (!body.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_request" });
+    }
+    const started = startBuyerInventoryAvailabilityJob({
+      audience: { kind: "admin" },
+      request: {
+        clientAccountId: body.data.clientAccountId,
+        nicheKey: body.data.nicheKey,
+        states: body.data.states,
+        commerceAgeBucketKeys: body.data.commerceAgeBucketKeys,
+      },
+      lookup: lookupAvailability,
+    });
+    if (!started.ok) {
+      const status =
+        started.code === "availability_job_busy"
+          ? 503
+          : started.code === "invalid_niche" ||
+              started.code === "invalid_states" ||
+              started.code === "invalid_age_buckets"
+            ? 400
+            : 409;
+      return reply.status(status).send(started);
+    }
+    return reply.status(202).send(started);
+  });
+
+  app.get("/fulfillment-ops/buyer-availability/jobs/:jobId", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    if (!isBuyerInventoryAvailabilityEnabled()) {
+      return reply.status(404).send({
+        ok: false,
+        error: "buyer_inventory_availability_disabled",
+      });
+    }
+    const params = buyerAvailabilityJobIdSchema.safeParse(request.params ?? {});
+    if (!params.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_request" });
+    }
+    const job = readBuyerInventoryAvailabilityJob(params.data.jobId, { kind: "admin" });
+    if (!job.ok) return reply.status(404).send(job);
+    return reply.send(job);
+  });
+
+  app.delete("/fulfillment-ops/buyer-availability/jobs/:jobId", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    if (!isBuyerInventoryAvailabilityEnabled()) {
+      return reply.status(404).send({
+        ok: false,
+        error: "buyer_inventory_availability_disabled",
+      });
+    }
+    const params = buyerAvailabilityJobIdSchema.safeParse(request.params ?? {});
+    if (!params.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_request" });
+    }
+    const cancelled = cancelBuyerInventoryAvailabilityJob(params.data.jobId, { kind: "admin" });
+    if (!cancelled.ok) return reply.status(404).send(cancelled);
+    return reply.send({ ...cancelled, readOnly: true });
   });
 
   app.get("/fulfillment-ops/bootstrap", async (request, reply) => {

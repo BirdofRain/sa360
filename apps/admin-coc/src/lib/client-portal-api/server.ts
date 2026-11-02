@@ -8,6 +8,7 @@ import {
   clientLeadOrderLeadsPath,
   parseClientLeadOrderLeadsPayload,
 } from "../client-portal/portal-order-leads-api.ts";
+import { canonicalPortalMapStates } from "../client-portal/portal-buyer-availability-cache.ts";
 import type { PortalBuyerAvailabilitySnapshot } from "../client-portal/portal-inventory-map.ts";
 import { resolveRangeBounds } from "../client-portal/range.ts";
 import type { ClientPortalDashboard, ClientPortalRangeKey } from "../client-portal/types.ts";
@@ -312,6 +313,140 @@ export async function fetchPortalBuyerInventorySnapshot(query: {
       eligibleByState: data.eligibleByState,
     },
   };
+}
+
+export async function startPortalBuyerAvailabilityJob(input: {
+  clientAccountId: string;
+  nicheKey: string;
+  commerceAgeBucketKey: string;
+}): Promise<
+  | { ok: true; jobId: string }
+  | { ok: false; status: number; code: string | null }
+> {
+  const res = await clientPortalFetchJson<{ jobId?: string; code?: string; error?: string }>(
+    "/client/v1/buyer-inventory-availability/jobs",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        clientAccountId: input.clientAccountId,
+        nicheKey: input.nicheKey,
+        commerceAgeBucketKey: input.commerceAgeBucketKey,
+        states: canonicalPortalMapStates(),
+      }),
+    }
+  );
+  if (!res.ok) {
+    let code: string | null = null;
+    try {
+      const parsed = JSON.parse(res.body) as { code?: string; error?: string };
+      code = parsed.code ?? parsed.error ?? null;
+    } catch {
+      code = null;
+    }
+    return { ok: false, status: res.status, code };
+  }
+  if (typeof res.data.jobId !== "string") {
+    return { ok: false, status: 502, code: "invalid_availability_job" };
+  }
+  return { ok: true, jobId: res.data.jobId };
+}
+
+type PortalBuyerAvailabilityJobProgress = {
+  phase: "starting" | "classifying";
+  rowsClassified: number;
+  selectableRowsExact: number | null;
+  pagesRead: number;
+};
+
+export type PortalBuyerAvailabilityJobPoll =
+  | {
+      ok: true;
+      status: "running";
+      progress: PortalBuyerAvailabilityJobProgress;
+    }
+  | { ok: true; status: "complete"; snapshot: PortalBuyerAvailabilitySnapshot }
+  | { ok: false; status: number; code: string | null };
+
+export async function readPortalBuyerAvailabilityJob(input: {
+  clientAccountId: string;
+  jobId: string;
+  commerceAgeBucketKey: PortalBuyerAvailabilitySnapshot["commerceAgeBucketKey"];
+}): Promise<PortalBuyerAvailabilityJobPoll> {
+  const params = new URLSearchParams({ clientAccountId: input.clientAccountId });
+  const res = await clientPortalFetchJson<{
+    status?: string;
+    progress?: PortalBuyerAvailabilityJobProgress;
+    failure?: { code?: string };
+    result?: {
+      ok?: boolean;
+      clientAccountId?: string;
+      policyVersion?: string;
+      nicheKey?: string;
+      commerceAgeBucketKey?: string;
+      states?: string[];
+      evaluatedAt?: string;
+      eligibleByState?: PortalBuyerAvailabilitySnapshot["eligibleByState"];
+    };
+  }>(
+    `/client/v1/buyer-inventory-availability/jobs/${encodeURIComponent(input.jobId)}?${params.toString()}`
+  );
+  if (!res.ok) {
+    let code: string | null = null;
+    try {
+      const parsed = JSON.parse(res.body) as { code?: string; error?: string };
+      code = parsed.code ?? parsed.error ?? null;
+    } catch {
+      code = null;
+    }
+    return { ok: false, status: res.status, code };
+  }
+  if (res.data.status === "running" && res.data.progress) {
+    return { ok: true, status: "running", progress: res.data.progress };
+  }
+  if (res.data.status === "complete" && res.data.result) {
+    const data = res.data.result;
+    if (
+      data.ok !== true ||
+      data.clientAccountId !== input.clientAccountId ||
+      typeof data.policyVersion !== "string" ||
+      typeof data.nicheKey !== "string" ||
+      data.commerceAgeBucketKey !== input.commerceAgeBucketKey ||
+      typeof data.evaluatedAt !== "string" ||
+      !Array.isArray(data.states) ||
+      !Array.isArray(data.eligibleByState)
+    ) {
+      return { ok: false, status: 502, code: "invalid_availability_snapshot" };
+    }
+    return {
+      ok: true,
+      status: "complete",
+      snapshot: {
+        clientAccountId: data.clientAccountId,
+        policyVersion: data.policyVersion,
+        nicheKey: data.nicheKey,
+        commerceAgeBucketKey: input.commerceAgeBucketKey,
+        states: data.states,
+        evaluatedAt: data.evaluatedAt,
+        eligibleByState: data.eligibleByState,
+      },
+    };
+  }
+  return {
+    ok: false,
+    status: 409,
+    code: res.data.failure?.code ?? res.data.status ?? "availability_job_incomplete",
+  };
+}
+
+export async function cancelPortalBuyerAvailabilityJob(input: {
+  clientAccountId: string;
+  jobId: string;
+}): Promise<void> {
+  const params = new URLSearchParams({ clientAccountId: input.clientAccountId });
+  await clientPortalFetchJson(
+    `/client/v1/buyer-inventory-availability/jobs/${encodeURIComponent(input.jobId)}?${params.toString()}`,
+    { method: "DELETE" }
+  );
 }
 
 export async function fetchClientLeadsOnDemandAvailability(opts: {

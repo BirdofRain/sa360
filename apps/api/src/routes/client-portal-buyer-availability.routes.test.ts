@@ -8,6 +8,7 @@ import { CLIENT_PORTAL_KEY_HEADER } from "../lib/client-portal-auth.js";
 import { createEmptyPrismaMock } from "../test/empty-prisma-mock.js";
 import { clientPortalRoutes } from "./client-portal.js";
 import type { BuyerInventoryAvailabilityResult } from "../services/ppl-fulfillment/buyer-inventory-availability.service.js";
+import { resetBuyerInventoryAvailabilityJobsForTests } from "../services/ppl-fulfillment/buyer-inventory-availability-jobs.js";
 
 const PREFIX = "/client/v1";
 const PRICED_KEYS = [
@@ -244,5 +245,88 @@ test("portal buyer availability queries each priced range directly and rejects 6
       true
     );
     await app.close();
+  });
+});
+
+test("portal availability jobs return before the count and omit interrupted totals", async () => {
+  await withPortalEnv("true", async () => {
+    let release: (result: BuyerInventoryAvailabilityResult) => void = () => undefined;
+    const app = await buildApp(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        })
+    );
+    try {
+      const started = await app.inject({
+        method: "POST",
+        url: `${PREFIX}/buyer-inventory-availability/jobs`,
+        headers: { [CLIENT_PORTAL_KEY_HEADER]: "portal-secret" },
+        payload: {
+          clientAccountId: "buyer-a",
+          nicheKey: "trucker",
+          commerceAgeBucketKey: "COMMERCE_12_MO_PLUS",
+          states: [...CANONICAL_US_STATE_CODES],
+        },
+      });
+      assert.equal(started.statusCode, 202);
+      const startBody = started.json() as {
+        jobId: string;
+        status: string;
+        effects: { reservationCreated: boolean };
+      };
+      assert.equal(startBody.status, "running");
+      assert.equal(startBody.effects.reservationCreated, false);
+      assert.equal(JSON.stringify(startBody).includes("eligibleTotal"), false);
+
+      const running = await app.inject({
+        method: "GET",
+        url: `${PREFIX}/buyer-inventory-availability/jobs/${startBody.jobId}?clientAccountId=buyer-a`,
+        headers: { [CLIENT_PORTAL_KEY_HEADER]: "portal-secret" },
+      });
+      assert.equal(running.statusCode, 200);
+      const runningBody = running.json() as { status: string; result?: unknown };
+      assert.equal(runningBody.status, "running");
+      assert.equal(runningBody.result, undefined);
+      assert.equal(JSON.stringify(runningBody).includes("eligible"), false);
+
+      const otherBuyer = await app.inject({
+        method: "GET",
+        url: `${PREFIX}/buyer-inventory-availability/jobs/${startBody.jobId}?clientAccountId=buyer-b`,
+        headers: { [CLIENT_PORTAL_KEY_HEADER]: "portal-secret" },
+      });
+      assert.equal(otherBuyer.statusCode, 404);
+      const otherCancel = await app.inject({
+        method: "DELETE",
+        url: `${PREFIX}/buyer-inventory-availability/jobs/${startBody.jobId}?clientAccountId=buyer-b`,
+        headers: { [CLIENT_PORTAL_KEY_HEADER]: "portal-secret" },
+      });
+      assert.equal(otherCancel.statusCode, 404);
+
+      const cancelled = await app.inject({
+        method: "DELETE",
+        url: `${PREFIX}/buyer-inventory-availability/jobs/${startBody.jobId}?clientAccountId=buyer-a`,
+        headers: { [CLIENT_PORTAL_KEY_HEADER]: "portal-secret" },
+      });
+      assert.equal(cancelled.statusCode, 200);
+      assert.equal(cancelled.json().status, "cancelled");
+      release({
+        ok: false,
+        code: "availability_snapshot_unavailable",
+        reasons: ["availability_snapshot_unavailable"],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const after = await app.inject({
+        method: "GET",
+        url: `${PREFIX}/buyer-inventory-availability/jobs/${startBody.jobId}?clientAccountId=buyer-a`,
+        headers: { [CLIENT_PORTAL_KEY_HEADER]: "portal-secret" },
+      });
+      assert.equal(after.json().status, "cancelled");
+      assert.equal(after.json().result, undefined);
+      assert.equal(JSON.stringify(after.json()).includes("eligibleTotal"), false);
+    } finally {
+      resetBuyerInventoryAvailabilityJobsForTests();
+      await app.close();
+    }
   });
 });

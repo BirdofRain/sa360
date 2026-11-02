@@ -107,9 +107,9 @@ async function promoteFromGate(
   }
   await db.companySheetsDispatchIntent.update({
     where: { id: intentId },
-    data: { status: "pending", reason: null, lastError: null, availableAt: now },
+    data: { status: "pending", reason: "person_hold_recovered", lastError: null, availableAt: now },
   });
-  return { ok: true as const, status: "pending", reason: null, promoted: true };
+  return { ok: true as const, status: "pending", reason: "person_hold_recovered", promoted: true };
 }
 
 async function retryDuplicateRiskAssessment(

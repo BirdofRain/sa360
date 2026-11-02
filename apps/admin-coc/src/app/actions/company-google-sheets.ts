@@ -17,6 +17,8 @@ import {
   saveCompanySheetsDestination,
   startCompanyGoogleOAuth,
   activateCompanySheetsDispatch,
+  recoverCompanySheetsPersonHold,
+  releaseCompanySheetsPersonReservation,
   listCompanyClientSpreadsheets,
   prepareCompanyClientFolder,
   probeCompanySheetWrite,
@@ -295,6 +297,33 @@ export async function reviewCompanySheetsColumnsAction(
   const res = await reviewCompanySheetsColumns(clientAccountId, input);
   if (!res.ok) return { ok: false, error: fail(res.body) };
   return { ok: true, data: res.data };
+}
+
+export async function recoverCompanySheetsPersonHoldAction(
+  clientAccountId: string,
+  sourceLeadEventId: string
+): Promise<{ ok: true; message: string } | { ok: false; error: string }> {
+  await requireAdminCocAdminSession();
+  const res = await recoverCompanySheetsPersonHold(clientAccountId, sourceLeadEventId);
+  if (!res.ok) return { ok: false, error: fail(res.body) };
+  refresh(clientAccountId);
+  const headline = res.data.headline;
+  const detail = res.data.recovered ? `${headline}. ${res.data.detail}` : `${headline}. ${res.data.detail}`;
+  return { ok: true, message: detail };
+}
+
+export async function releaseCompanySheetsPersonReservationAction(
+  clientAccountId: string,
+  sourceLeadEventId: string
+): Promise<{ ok: true; message: string } | { ok: false; error: string }> {
+  await requireAdminCocAdminSession();
+  const res = await releaseCompanySheetsPersonReservation(clientAccountId, sourceLeadEventId);
+  if (!res.ok) return { ok: false, error: fail(res.body) };
+  refresh(clientAccountId);
+  return {
+    ok: true,
+    message: `Released ${res.data.released} known-dead reservation${res.data.released === 1 ? "" : "s"}. No row was written.`,
+  };
 }
 
 export async function activateCompanySheetsDispatchAction(

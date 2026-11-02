@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useRef, useState } from "react";
 
 import { SpreadsheetIdentity } from "@/components/clients/spreadsheet-identity";
@@ -22,7 +21,6 @@ import type {
   CompanySheetsFolderChoice,
   CompanySheetsFolderSpreadsheetList,
   CompanySheetsResolvedWorksheet,
-  CompanySheetsTabContractView,
 } from "@/lib/admin-api/company-google-sheets";
 import { Button } from "@/components/ui/button";
 
@@ -161,6 +159,14 @@ export type CompanySheetsAdminActions = {
     clientAccountId: string,
     input: { role: "campaign" | "aged" | "canary"; exportPackageId?: string; schemaVersion?: string }
   ) => Promise<{ ok: true } | { ok: false; error: string }>;
+  recoverPersonHold?: (
+    clientAccountId: string,
+    sourceLeadEventId: string
+  ) => Promise<{ ok: true; message: string } | { ok: false; error: string }>;
+  releasePersonReservation?: (
+    clientAccountId: string,
+    sourceLeadEventId: string
+  ) => Promise<{ ok: true; message: string } | { ok: false; error: string }>;
   setDispatch?: (
     clientAccountId: string,
     input: { campaignEnabled?: boolean; agedEnabled?: boolean }
@@ -308,6 +314,81 @@ function ColumnMapping({
         </p>
       ) : null}
     </div>
+  );
+}
+
+function SheetsIntentList({
+  clientAccountId,
+  intents,
+  busy,
+  recover,
+  release,
+  onRun,
+}: {
+  clientAccountId: string;
+  intents: NonNullable<CompanySheetsDispatchView["intents"]>;
+  busy: boolean;
+  recover?: CompanySheetsAdminActions["recoverPersonHold"];
+  release?: CompanySheetsAdminActions["releasePersonReservation"];
+  onRun: (task: () => Promise<{ ok: true; message?: string } | { ok: false; error: string }>) => void;
+}) {
+  if (intents.length === 0) {
+    return <p className="text-sm text-slate-600">No campaign Sheets intents are recorded for this client.</p>;
+  }
+  return (
+    <ul className="space-y-2" data-testid="sheets-intent-list">
+      {intents.slice(0, 8).map((intent) => {
+        const held = intent.status === "duplicate_held" || intent.status === "review_held" || intent.status === "assessment_held" || intent.status === "assessment_failed";
+        return (
+          <li key={intent.id} className="rounded-lg border border-slate-200 px-3 py-2 text-sm">
+            <p className="font-medium text-slate-900">{intent.headline}</p>
+            <p className="text-slate-700">{intent.detail}</p>
+            <p className="mt-1 font-mono text-[11px] text-slate-500">
+              {intent.status}
+              {intent.reason ? ` · ${intent.reason}` : ""}
+              {intent.lastError ? ` · ${intent.lastError}` : ""}
+              {intent.delivered ? "" : " · not delivered"}
+            </p>
+            {held && intent.sourceLeadEventId && (recover || release) ? (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {recover ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() =>
+                      onRun(async () => {
+                        const result = await recover(clientAccountId, intent.sourceLeadEventId as string);
+                        return result.ok ? { ok: true, message: result.message } : result;
+                      })
+                    }
+                  >
+                    Re-evaluate hold
+                  </Button>
+                ) : null}
+                {release ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() =>
+                      onRun(async () => {
+                        const result = await release(clientAccountId, intent.sourceLeadEventId as string);
+                        return result.ok ? { ok: true, message: result.message } : result;
+                      })
+                    }
+                  >
+                    Release known-dead reservation
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
@@ -1121,6 +1202,14 @@ export function CompanySheetsAdminPanel({
             ? `${dispatch.lastCampaignDelivery.status} at ${formatEt(dispatch.lastCampaignDelivery.finishedAt ?? dispatch.lastCampaignDelivery.createdAt)} for ${dispatch.lastCampaignDelivery.worksheetTitle}`
             : "No campaign delivery is recorded."}
         </p>
+        <SheetsIntentList
+          clientAccountId={clientAccountId}
+          intents={dispatch?.intents ?? []}
+          busy={busy("delivery")}
+          recover={actions.recoverPersonHold}
+          release={actions.releasePersonReservation}
+          onRun={(task) => void run("delivery", task)}
+        />
         <p className="text-sm text-slate-600">
           {dispatch?.campaignDispatchNotBefore
             ? `Campaign cutoff ${formatEt(dispatch.campaignDispatchNotBefore)}. Enabling delivery does not move an existing cutoff earlier.`

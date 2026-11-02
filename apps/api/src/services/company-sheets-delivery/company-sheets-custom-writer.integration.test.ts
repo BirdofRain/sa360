@@ -76,6 +76,35 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
     return rows;
   }
 
+  async function admitFixture(label: string): Promise<string> {
+    const email = `${label}.${suffix}@example.invalid`;
+    const lead = await db.sourceLeadEvent.create({
+      data: {
+        sourceProvider: "manual_import",
+        sourceSystem: "external_vendor",
+        sourceType: "manual_entry",
+        clientAccountIdResolved: customClient,
+        status: "approved",
+        rawPayloadJson: { fixture: true },
+        normalizedPayloadJson: { first_name: label, last_name: "Fixture", email },
+        receivedAt: new Date(),
+      },
+    });
+    await db.clientSheetsPersonAdmission.create({
+      data: {
+        clientAccountId: customClient,
+        kind: "email",
+        normalizedValue: email,
+        fingerprint: `fixture:${label}:${suffix}`,
+        sourceLeadEventId: lead.id,
+        status: "reserved",
+        policy: "client_normalized_phone_email_v1",
+        origin: "live_reservation",
+      },
+    });
+    return lead.id;
+  }
+
   function env(custom: boolean): NodeJS.ProcessEnv {
     return {
       ...process.env,
@@ -518,11 +547,13 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
     mode = "second_append_invalid";
     customAppendsThisMode = 0;
     const destination = await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId: customClient } });
+    const batchLeadId = await admitFixture("batch");
     const batch = await db.companySheetsDeliveryJob.create({
       data: {
         kind: "lead",
         status: "queued",
         clientAccountId: customClient,
+        sourceLeadEventId: batchLeadId,
         companyConnectionId: connectionId,
         destinationId: destination.id,
         spreadsheetId: customSheet,
@@ -634,11 +665,13 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
     await db.companySheetsWorksheetLock.deleteMany({ where: { spreadsheetId: customSheet } });
 
     const snapshot = ["Snapshot Name", "5551112222", "04/02/1990", "", "snapshot@example.invalid"];
+    const snapshotLeadId = await admitFixture("snapshot");
     const leadJob = await db.companySheetsDeliveryJob.create({
       data: {
         kind: "lead",
         status: "queued",
         clientAccountId: customClient,
+        sourceLeadEventId: snapshotLeadId,
         companyConnectionId: connectionId,
         destinationId: destination.id,
         spreadsheetId: customSheet,
@@ -673,35 +706,38 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
       where: { id: map.id },
       data: { mapVersion: map.mapVersion + 1, headerSnapshot: ["Moved"] },
     });
-    const lead = await executeCompanySheetsDeliveryJob(leadJob.id, {
-      ...deps(),
-      env: { ...env(true), SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED: "true" },
-    });
-    assert.equal(lead.ok, true);
-    if (!lead.ok) return;
-    const leadAppend = appends.filter((item) => item.spreadsheetId === customSheet).at(-1);
-    const leadUpdate = updates.filter((item) => item.spreadsheetId === customSheet).at(-1);
-    assert.match(leadAppend?.range ?? "", /VET Web Form'!A1/);
-    assert.deepEqual(leadAppend?.values, [["Snapshot Name", "5551112222", "04/02/1990"]]);
-    assert.deepEqual(leadUpdate?.values, [["snapshot@example.invalid"]]);
-    const stored = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: leadJob.id } });
-    assert.equal(stored.worksheetId, GID);
-    assert.equal(stored.contentSha256, "column-map:snapshot:v1");
-    assert.equal(stored.spreadsheetId, customSheet);
-    await db.companySheetsTabContract.update({
-      where: { destinationId_role: { destinationId: destination.id, role: "campaign" } },
-      data: {
-        worksheetId: GID,
-        worksheetTitle: "VET Web Form",
-        schemaVersion: COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA,
-        headerContract: HEADER,
-        setupState: "bound",
-      },
-    });
-    await db.clientSheetColumnMap.update({
-      where: { id: map.id },
-      data: { mapVersion: map.mapVersion, headerSnapshot: HEADER, assignments: originalAssignments ?? [] },
-    });
+    try {
+      const lead = await executeCompanySheetsDeliveryJob(leadJob.id, {
+        ...deps(),
+        env: { ...env(true), SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED: "true" },
+      });
+      assert.equal(lead.ok, true);
+      if (!lead.ok) return;
+      const leadAppend = appends.filter((item) => item.spreadsheetId === customSheet).at(-1);
+      const leadUpdate = updates.filter((item) => item.spreadsheetId === customSheet).at(-1);
+      assert.match(leadAppend?.range ?? "", /VET Web Form'!A1/);
+      assert.deepEqual(leadAppend?.values, [["Snapshot Name", "5551112222", "04/02/1990"]]);
+      assert.deepEqual(leadUpdate?.values, [["snapshot@example.invalid"]]);
+      const stored = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: leadJob.id } });
+      assert.equal(stored.worksheetId, GID);
+      assert.equal(stored.contentSha256, "column-map:snapshot:v1");
+      assert.equal(stored.spreadsheetId, customSheet);
+    } finally {
+      await db.companySheetsTabContract.update({
+        where: { destinationId_role: { destinationId: destination.id, role: "campaign" } },
+        data: {
+          worksheetId: GID,
+          worksheetTitle: "VET Web Form",
+          schemaVersion: COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA,
+          headerContract: HEADER,
+          setupState: "bound",
+        },
+      });
+      await db.clientSheetColumnMap.update({
+        where: { id: map.id },
+        data: { mapVersion: map.mapVersion, headerSnapshot: HEADER, assignments: originalAssignments ?? [] },
+      });
+    }
   });
 
   it("retries an invalid append, then stops on header drift before another append", async () => {
@@ -759,11 +795,13 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
     if (again.ok) return;
     assert.equal(again.code, "campaign_test_unresolved");
     assert.equal(appends.length, before + 1);
+    const blockedLeadId = await admitFixture("blocked");
     const blockedLead = await db.companySheetsDeliveryJob.create({
       data: {
         kind: "lead",
         status: "queued",
         clientAccountId: customClient,
+        sourceLeadEventId: blockedLeadId,
         companyConnectionId: connectionId,
         destinationId: (await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId: customClient } })).id,
         spreadsheetId: customSheet,
@@ -1156,6 +1194,8 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
     const ids = [customClient, v3Client, reorderClient, capturedClient];
     const spreadsheets = [customSheet, v3Sheet, reorderSheet, capturedSheet];
     await db.clientOnboardingTestRun.deleteMany({ where: { clientAccountId: { in: ids } } });
+    await db.clientSheetsPersonAdmission.deleteMany({ where: { clientAccountId: { in: ids } } });
+    await db.clientSheetsDedupeDecision.deleteMany({ where: { clientAccountId: { in: ids } } });
     await db.companySheetsDeliveryJob.deleteMany({ where: { clientAccountId: { in: ids } } });
     await db.sourceLeadEvent.deleteMany({ where: { clientAccountIdResolved: { in: ids } } });
     await db.companySheetsWorksheetLock.deleteMany({ where: { spreadsheetId: { in: spreadsheets } } });

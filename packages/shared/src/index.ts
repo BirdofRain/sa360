@@ -19,3 +19,4 @@ export * from "./company-sheets-pilot-isolation.js";
 export * from "./company-sheets-drain-budget.js";
 export * from "./company-sheets-column-template.js";
 export * from "./company-sheets-column-map-issues.js";
+export * from "./company-sheets-intent-copy.js";

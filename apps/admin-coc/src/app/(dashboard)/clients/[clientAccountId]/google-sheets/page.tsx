@@ -4,6 +4,8 @@ import { CompanySheetsAdminPanel } from "@/components/clients/company-sheets-adm
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import {
   activateCompanySheetsDispatchAction,
+  recoverCompanySheetsPersonHoldAction,
+  releaseCompanySheetsPersonReservationAction,
   bindCompanySheetsTabAction,
   clearCompanyGoogleFolderAction,
   createCompanySheetsTabAction,
@@ -129,6 +131,8 @@ export default async function ClientCompanyGoogleSheetsPage({
             bindTab: bindCompanySheetsTabAction,
             createTab: createCompanySheetsTabAction,
             setDispatch: activateCompanySheetsDispatchAction,
+            recoverPersonHold: recoverCompanySheetsPersonHoldAction,
+            releasePersonReservation: releaseCompanySheetsPersonReservationAction,
             saveSheetsTarget: saveOnboardingSheetsTargetAction,
             createColumnMap: createOnboardingColumnMapAction,
             saveAndPublishColumnMap: saveAndPublishOnboardingColumnMapAction,

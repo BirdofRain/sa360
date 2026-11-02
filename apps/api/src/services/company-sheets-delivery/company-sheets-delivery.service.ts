@@ -1328,6 +1328,16 @@ export async function executeCompanySheetsDeliveryJob(
     if (held) return held;
     return fail("custom_writer_disabled", 409);
   }
+  if (job.kind === "lead") {
+    const admission = await leadJobMayAppend(db, job);
+    if (!admission.ok) {
+      const held = await finishOwned(db, job, claimToken, admission.retry ? "queued" : "failed", {
+        lastError: admission.code,
+      });
+      if (held) return held;
+      return fail(admission.code, 409);
+    }
+  }
   const locked = await acquireWorksheetLock(db, job, now);
   if (!locked) {
     const lost = await finishOwned(db, job, claimToken, "queued", { lastError: "worksheet_busy" });
@@ -1346,6 +1356,42 @@ export async function executeCompanySheetsDeliveryJob(
   } finally {
     await releaseFinishedClaimLock(db, job, claimToken);
   }
+}
+
+const LEAD_ADMISSION_RETRY = new Set([
+  "history_coverage_partial",
+  "history_coverage_unavailable",
+  "assessment_failed_transient",
+]);
+
+/**
+ * A campaign lead job cannot append until this event has a live reservation
+ * or the person gate admits it now. History and transient assessment gaps
+ * return the claim to queued without a Google call. A duplicate, review, or
+ * missing assessment becomes a conclusive pre-send failure. Uncertain jobs
+ * never reach this function's write path.
+ */
+async function leadJobMayAppend(
+  db: PrismaClient,
+  job: CompanySheetsDeliveryJob
+): Promise<{ ok: true } | { ok: false; code: string; retry: boolean }> {
+  const sourceLeadEventId = job.sourceLeadEventId?.trim() ?? "";
+  if (!sourceLeadEventId) return { ok: false, code: "person_admission_required", retry: false };
+  const existing = await db.clientSheetsPersonAdmission.findFirst({
+    where: {
+      clientAccountId: job.clientAccountId,
+      sourceLeadEventId,
+      status: { in: ["reserved", "admitted"] },
+    },
+    select: { id: true },
+  });
+  if (existing) return { ok: true };
+  const gate = await evaluateClientSheetsPersonGate(db, {
+    clientAccountId: job.clientAccountId,
+    sourceLeadEventId,
+  });
+  if (gate.ok) return { ok: true };
+  return { ok: false, code: gate.code, retry: LEAD_ADMISSION_RETRY.has(gate.reason) };
 }
 
 async function worksheetAppendBlocked(db: PrismaClient, job: CompanySheetsDeliveryJob) {

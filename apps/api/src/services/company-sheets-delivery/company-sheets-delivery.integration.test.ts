@@ -1418,4 +1418,131 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
       else process.env.ADMIN_API_KEY = previous;
     }
   });
+
+  it("guards a queued lead that has no admission and leaves an uncertain append held", async () => {
+    const phone = "+15553600001";
+    const sharedEmail = `guard.${suffix}@example.com`;
+    const firstLead = await createLead(client.lead, phone);
+    await db.sourceLeadEvent.update({
+      where: { id: firstLead.id },
+      data: {
+        normalizedPayloadJson: {
+          first_name: "Ada",
+          last_name: "Lovelace",
+          email: sharedEmail,
+          phone,
+        },
+      },
+    });
+    const queued = await enqueueConfirmedLeadSheetsDelivery(firstLead.id, deps());
+    assert.equal(queued.ok, true);
+    if (!queued.ok) return;
+    await db.clientSheetsPersonAdmission.deleteMany({
+      where: { clientAccountId: client.lead, sourceLeadEventId: firstLead.id },
+    });
+    const leadSheet = sheetFor(sheetId.lead);
+    const beforeAppends = leadSheet.appends.length;
+    const executed = await executeCompanySheetsDeliveryJob(queued.job.id, deps());
+    assert.equal(executed.ok, true);
+    if (!executed.ok) return;
+    assert.equal(executed.rowsWritten, 1);
+    assert.equal(leadSheet.appends.length, beforeAppends + 1);
+    assert.ok(
+      (await db.clientSheetsPersonAdmission.count({
+        where: { sourceLeadEventId: firstLead.id, status: { in: ["reserved", "admitted"] } },
+      })) >= 1
+    );
+
+    const second = await createLead(client.lead, phone);
+    await db.sourceLeadEvent.update({
+      where: { id: second.id },
+      data: {
+        normalizedPayloadJson: {
+          first_name: "Ada",
+          last_name: "Lovelace",
+          email: sharedEmail,
+          phone,
+        },
+      },
+    });
+    const priorRow = await db.companySheetsDeliveryRow.findFirstOrThrow({ where: { jobId: queued.job.id } });
+    const cloned = await db.companySheetsDeliveryJob.create({
+      data: {
+        kind: "lead",
+        status: "queued",
+        clientAccountId: queued.job.clientAccountId,
+        companyConnectionId: queued.job.companyConnectionId,
+        destinationId: queued.job.destinationId,
+        spreadsheetId: queued.job.spreadsheetId,
+        spreadsheetUrl: queued.job.spreadsheetUrl,
+        worksheetId: queued.job.worksheetId,
+        worksheetTitle: queued.job.worksheetTitle,
+        controlBasis: queued.job.controlBasis,
+        destinationUpdatedAt: queued.job.destinationUpdatedAt,
+        headerContract: queued.job.headerContract ?? [],
+        schemaVersion: queued.job.schemaVersion,
+        destinationRevision: queued.job.destinationRevision,
+        idempotencyKey: `lead:${client.lead}:${second.id}`,
+        sourceLeadEventId: second.id,
+        rowsTotal: 1,
+        rowsWritten: 0,
+        appendStartedAt: null,
+      },
+    });
+    await db.companySheetsDeliveryRow.create({
+      data: {
+        jobId: cloned.id,
+        spreadsheetId: queued.job.spreadsheetId,
+        worksheetId: queued.job.worksheetId,
+        stableRowId: `lead:${client.lead}:${second.id}`,
+        ordinal: 0,
+        valuesJson: priorRow.valuesJson ?? [],
+        status: "pending",
+      },
+    });
+    const blocked = await executeCompanySheetsDeliveryJob(cloned.id, deps());
+    assert.equal(blocked.ok, false);
+    if (blocked.ok) return;
+    assert.equal(blocked.code, "person_duplicate");
+    assert.equal(leadSheet.appends.length, beforeAppends + 1);
+    const storedDuplicate = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: cloned.id } });
+    assert.equal(storedDuplicate.status, "failed");
+    assert.equal(storedDuplicate.lastError, "person_duplicate");
+    assert.equal(storedDuplicate.rowsWritten, 0);
+    assert.equal(storedDuplicate.appendStartedAt, null);
+
+    const uncertainLead = await createLead(client.lead, "+15553600002");
+    const uncertainJob = await db.companySheetsDeliveryJob.create({
+      data: {
+        kind: "lead",
+        status: "uncertain",
+        clientAccountId: queued.job.clientAccountId,
+        companyConnectionId: queued.job.companyConnectionId,
+        destinationId: queued.job.destinationId,
+        spreadsheetId: queued.job.spreadsheetId,
+        spreadsheetUrl: queued.job.spreadsheetUrl,
+        worksheetId: queued.job.worksheetId,
+        worksheetTitle: queued.job.worksheetTitle,
+        controlBasis: queued.job.controlBasis,
+        destinationUpdatedAt: queued.job.destinationUpdatedAt,
+        headerContract: queued.job.headerContract ?? [],
+        schemaVersion: queued.job.schemaVersion,
+        destinationRevision: queued.job.destinationRevision,
+        idempotencyKey: `lead:${client.lead}:${uncertainLead.id}:uncertain-guard`,
+        sourceLeadEventId: uncertainLead.id,
+        rowsTotal: 1,
+        rowsWritten: 0,
+        appendStartedAt: new Date(),
+        uncertainReason: "append_outcome_unknown",
+      },
+    });
+    const held = await executeCompanySheetsDeliveryJob(uncertainJob.id, deps());
+    assert.equal(held.ok, false);
+    if (held.ok) return;
+    assert.equal(held.code, "uncertain");
+    const stillUncertain = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: uncertainJob.id } });
+    assert.equal(stillUncertain.status, "uncertain");
+    assert.equal(stillUncertain.uncertainReason, "append_outcome_unknown");
+    assert.equal(leadSheet.appends.length, beforeAppends + 1);
+  });
 });

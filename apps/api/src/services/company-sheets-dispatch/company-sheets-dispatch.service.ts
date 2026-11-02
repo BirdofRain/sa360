@@ -3,6 +3,7 @@ import {
   COMPANY_SHEETS_DRAIN_SAFETY_CAP,
   COMPANY_SHEETS_EXECUTION_LEASE_MS,
   COMPANY_SHEETS_INTENT_BUDGET_MS,
+  companySheetsIntentOperatorCopy,
 } from "@sa360/shared";
 
 import { prisma } from "../../lib/db.js";
@@ -568,21 +569,32 @@ export async function getCompanySheetsDispatchStatus(
     campaignDispatchNotBefore: destination?.campaignDispatchNotBefore?.toISOString() ?? null,
     agedDispatchEnabled: destination?.agedDispatchEnabled === true,
     agedDispatchNotBefore: destination?.agedDispatchNotBefore?.toISOString() ?? null,
-    intents: intents.map((intent) => ({
-      id: intent.id,
-      kind: intent.kind,
-      status: intent.status,
-      reason: intent.reason,
-      explicit: intent.explicit,
-      actor: intent.actor,
-      jobId: intent.jobId,
-      sourceLeadEventId: intent.sourceLeadEventId,
-      exportPackageId: intent.exportPackageId,
-      leadOrderId: intent.leadOrderId,
-      lastError: intent.lastError,
-      attemptCount: intent.attemptCount,
-      createdAt: intent.createdAt.toISOString(),
-    })),
+    intents: intents.map((intent) => {
+      const operator = companySheetsIntentOperatorCopy({
+        status: intent.status,
+        reason: intent.reason,
+        lastError: intent.lastError,
+      });
+      return {
+        id: intent.id,
+        kind: intent.kind,
+        status: intent.status,
+        reason: intent.reason,
+        explicit: intent.explicit,
+        actor: intent.actor,
+        jobId: intent.jobId,
+        sourceLeadEventId: intent.sourceLeadEventId,
+        exportPackageId: intent.exportPackageId,
+        leadOrderId: intent.leadOrderId,
+        lastError: intent.lastError,
+        attemptCount: intent.attemptCount,
+        createdAt: intent.createdAt.toISOString(),
+        headline: operator.headline,
+        detail: operator.detail,
+        delivered: operator.delivered,
+        recovered: operator.recovered,
+      };
+    }),
     lastCampaignDelivery: lastJob
       ? {
           jobId: lastJob.id,

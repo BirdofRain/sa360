@@ -211,7 +211,11 @@ async function inClientLock<T>(
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`client_sheets_person:${clientAccountId}`}, 0))`;
     return fn(tx);
   };
-  if (isRootClient(db)) return db.$transaction((tx) => run(tx));
+  // A production history batch is 500 jobs. The default 5s interactive
+  // transaction is not enough for that insert, and a timeout would leave
+  // coverage partial while a later retry could still be safe. 60s bounds
+  // one batch without splitting the lock.
+  if (isRootClient(db)) return db.$transaction((tx) => run(tx), { maxWait: 20_000, timeout: 60_000 });
   return run(db);
 }
 
@@ -332,12 +336,22 @@ function evidenceJson(owners: readonly SheetsPersonOwner[]): Prisma.InputJsonVal
   };
 }
 
+/**
+ * Historical delivery evidence only. Queued, retryable, and running jobs that
+ * have not started an append are not deliveries. A conclusive pre-send failure
+ * is not a delivery. Uncertain and failed-after-append stay reserved, not admitted.
+ */
 function eligibleLeadJobWhere(clientAccountId: string): Prisma.CompanySheetsDeliveryJobWhereInput {
   return {
     clientAccountId,
     kind: "lead",
     sourceLeadEventId: { not: null },
-    NOT: { AND: [{ status: "failed" }, { appendStartedAt: null }, { rowsWritten: 0 }] },
+    OR: [
+      { status: "succeeded" },
+      { status: "uncertain" },
+      { status: "failed", OR: [{ appendStartedAt: { not: null } }, { rowsWritten: { gt: 0 } }] },
+      { status: "running", appendStartedAt: { not: null } },
+    ],
   };
 }
 
@@ -882,8 +896,10 @@ export async function releaseKnownDeadSheetsPersonReservation(
 }
 
 /**
- * Lists lead jobs created before person admission that execution would still send.
- * This does not update jobs, claim them, or call Google.
+ * Lists queued, retryable, and running lead jobs that have no admission row.
+ * The list is read-only. `executeCompanySheetsDeliveryJob` refuses to append
+ * a lead job until the person gate admits that event, so this plan is not
+ * what stops the write.
  */
 export async function planPreMigrationLeadJobQuarantine(
   db: SheetsPersonDb,

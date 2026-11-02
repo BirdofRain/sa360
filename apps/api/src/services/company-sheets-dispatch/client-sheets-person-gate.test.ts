@@ -4,6 +4,8 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { companySheetsIntentOperatorCopy } from "@sa360/shared";
+
 import { classifyAssessmentFailure } from "../../repositories/lead-duplicate-risk.repository.js";
 import {
   classifySheetsPerson,
@@ -159,6 +161,38 @@ test("more than one history batch holds a new person and does not treat counts a
   assert.equal(fits.status, "complete");
 });
 
+test("pending and scheduled intents are not called recovered or delivered", () => {
+  const pending = companySheetsIntentOperatorCopy({ status: "pending", reason: null, lastError: null });
+  assert.equal(pending.recovered, false);
+  assert.equal(pending.delivered, false);
+  assert.match(pending.headline, /Waiting to schedule/);
+  const scheduled = companySheetsIntentOperatorCopy({ status: "scheduled", reason: null, lastError: null });
+  assert.equal(scheduled.recovered, false);
+  assert.equal(scheduled.delivered, false);
+  assert.match(scheduled.detail, /not delivered/i);
+  const uncertain = companySheetsIntentOperatorCopy({
+    status: "scheduled",
+    reason: "append_outcome_unresolved",
+    lastError: "uncertain",
+  });
+  assert.equal(uncertain.delivered, false);
+  assert.match(uncertain.detail, /not safe to retry/);
+  const recovered = companySheetsIntentOperatorCopy({
+    status: "pending",
+    reason: "person_hold_recovered",
+    lastError: null,
+  });
+  assert.equal(recovered.recovered, true);
+  assert.equal(recovered.delivered, false);
+  const duplicate = companySheetsIntentOperatorCopy({
+    status: "duplicate_held",
+    reason: "normalized_identifier_already_admitted",
+    lastError: "person_duplicate",
+  });
+  assert.match(duplicate.headline, /Duplicate hold/);
+  assert.match(duplicate.detail, /person_duplicate/);
+});
+
 test("assessment failures split transient transport errors from operator review", () => {
   const timeout = new Error("slow query");
   timeout.name = "TimeoutError";
@@ -213,7 +247,12 @@ test("zap import and sheets person gate stay off the live zap and bypass writers
     delivery.indexOf("export async function executeCompanySheetsDeliveryJob"),
     delivery.indexOf("export async function releaseCompanySheetsDeliveryHold")
   );
-  assert.equal(execute.includes("evaluateClientSheetsPersonGate"), false);
+  assert.match(execute, /leadJobMayAppend/);
+  const guard = delivery.slice(
+    delivery.indexOf("async function leadJobMayAppend"),
+    delivery.indexOf("async function worksheetAppendBlocked")
+  );
+  assert.match(guard, /evaluateClientSheetsPersonGate/);
   const captured = readFileSync(
     join(here, "../company-sheets-delivery/onboarding-captured-test-append.ts"),
     "utf8"

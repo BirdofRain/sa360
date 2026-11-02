@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient, type SourceLeadProvider } from "@prisma/client";
 
 import {
   COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION,
@@ -18,7 +18,7 @@ import { recoverClientSheetsPersonHold } from "./client-sheets-person-recovery.j
 import { ROUTING_AUTHORITY_SOURCE_ASSOCIATION } from "../routing-source-association.service.js";
 import { recordGhlAssociationDispatchOutbox } from "../ghl-association-dispatch/ghl-association-dispatch.js";
 import { recordCompanySheetsCampaignIntent } from "./company-sheets-dispatch-record.js";
-import { COMPANY_SHEETS_PILOT_ROUTE_KEY } from "@sa360/shared";
+import { COMPANY_SHEETS_PILOT_ROUTE_KEY, companySheetsIntentOperatorCopy } from "@sa360/shared";
 
 import {
   evaluateClientSheetsPersonGate,
@@ -28,6 +28,7 @@ import {
   prepareClientSheetsHistoryBaseline,
   readClientSheetsHistoryCoverage,
   releaseKnownDeadSheetsPersonReservation,
+  SHEETS_HISTORY_BATCH_LIMIT,
   SHEETS_PERSON_POLICY,
   sheetsPersonIdentifiers,
 } from "./client-sheets-person-gate.js";
@@ -42,6 +43,7 @@ describe("client sheets person gate (local sa360_test)", { skip: !runIntegration
     gate: `cspg_${suffix}`,
     other: `cspg_other_${suffix}`,
     sheets: `cspg_sheets_${suffix}`,
+    history: `cspg_hist_${suffix}`,
   };
   let sequence = 0;
   const leadIds: string[] = [];
@@ -146,7 +148,7 @@ describe("client sheets person gate (local sa360_test)", { skip: !runIntegration
     name?: string;
     decisionId?: string | null;
     routeKey?: string;
-    sourceProvider?: string;
+    sourceProvider?: SourceLeadProvider;
   }) {
     const lead = await db.sourceLeadEvent.create({
       data: {
@@ -1171,5 +1173,255 @@ describe("client sheets person gate (local sa360_test)", { skip: !runIntegration
     });
     assert.equal(exempt.code, "exempt_synthetic_pilot");
     assert.equal(await db.clientSheetsPersonAdmission.count({ where: { sourceLeadEventId: pilot.id } }), 0);
+  });
+
+  it("drains more than 500 historical jobs, resumes a new person, and stops a duplicate outside the first batch", async () => {
+    assert.equal(SHEETS_HISTORY_BATCH_LIMIT, 500);
+    const total = SHEETS_HISTORY_BATCH_LIMIT + 1;
+    const duplicatePhone = "+15554999999";
+    const destination = await db.companySheetsDestination.create({
+      data: {
+        clientAccountId: client.history,
+        companyConnectionId: connectionId,
+        spreadsheetId: `sheetHist${suffix}`,
+        spreadsheetTitle: "History",
+        spreadsheetUrl: `https://docs.google.com/spreadsheets/d/sheetHist${suffix}`,
+        worksheetId: 0,
+        worksheetTitle: "Campaign Leads",
+        controlBasis: "drive_owner_verified",
+        accessStatus: "readable",
+        sharingStatus: "missing_recipient",
+        enabled: false,
+        campaignDispatchEnabled: true,
+        campaignDispatchNotBefore: new Date("2020-01-01T00:00:00.000Z"),
+      },
+    });
+    await db.companySheetsTabContract.create({
+      data: {
+        destinationId: destination.id,
+        role: "campaign",
+        setupState: "bound",
+        worksheetId: 0,
+        worksheetTitle: "Campaign Leads",
+        schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION,
+        headerContract: [...COMPANY_SHEETS_LEAD_HEADER],
+        boundAt: new Date("2020-01-01T00:00:00.000Z"),
+      },
+    });
+    await db.sourceLeadEvent.createMany({
+      data: Array.from({ length: total }, (_, index) => ({
+        sourceProvider: "manual_import" as const,
+        sourceSystem: "external_vendor" as const,
+        sourceType: "manual_entry" as const,
+        sourceLeadUid: `hist_${suffix}_${index}`,
+        clientAccountIdResolved: client.history,
+        status: "routing_matched" as const,
+        rawPayloadJson: { fixture: true },
+        normalizedPayloadJson: {
+          first_name: "Hist",
+          last_name: String(index),
+          full_name: `Hist ${index}`,
+          email: `hist.${index}.${suffix}@example.com`,
+          phone: index === SHEETS_HISTORY_BATCH_LIMIT ? duplicatePhone : `+15554${String(index).padStart(6, "0")}`,
+        },
+        receivedAt: new Date(Date.UTC(2020, 0, 1) + index * 1000),
+      })),
+    });
+    const planted = await db.sourceLeadEvent.findMany({
+      where: { sourceLeadUid: { startsWith: `hist_${suffix}_` } },
+      select: { id: true, sourceLeadUid: true },
+    });
+    assert.equal(planted.length, total);
+    planted.sort(
+      (left, right) =>
+        Number(left.sourceLeadUid?.split("_").at(-1)) - Number(right.sourceLeadUid?.split("_").at(-1))
+    );
+    leadIds.push(...planted.map((lead) => lead.id));
+    await db.companySheetsDeliveryJob.createMany({
+      data: planted.map((lead, index) => ({
+        kind: "lead",
+        status: "succeeded",
+        clientAccountId: client.history,
+        companyConnectionId: connectionId,
+        destinationId: destination.id,
+        spreadsheetId: destination.spreadsheetId,
+        spreadsheetUrl: destination.spreadsheetUrl,
+        worksheetId: 0,
+        worksheetTitle: "Campaign Leads",
+        controlBasis: "drive_owner_verified",
+        destinationUpdatedAt: destination.updatedAt,
+        headerContract: [...COMPANY_SHEETS_LEAD_HEADER],
+        schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION,
+        idempotencyKey: `lead:${client.history}:${lead.id}:hist`,
+        sourceLeadEventId: lead.id,
+        rowsTotal: 1,
+        rowsWritten: 1,
+        appendStartedAt: new Date(Date.UTC(2020, 0, 1) + index * 1000),
+        createdAt: new Date(Date.UTC(2020, 0, 1) + index * 1000),
+      })),
+    });
+    const fresh = await makeLead({
+      clientAccountId: client.history,
+      phone: "+15554888888",
+      email: email("drain-new"),
+    });
+    await recordCompanySheetsCampaignIntent(
+      {
+        sourceLeadEventId: fresh.id,
+        status: "routing_matched",
+        clientAccountId: client.history,
+        resolvedAt: new Date(),
+      },
+      db,
+      dispatchEnv
+    );
+    const held = await db.companySheetsDispatchIntent.findFirstOrThrow({ where: { sourceLeadEventId: fresh.id } });
+    assert.equal(held.status, "review_held");
+    assert.equal(held.reason, "history_coverage_partial");
+    const partial = await readClientSheetsHistoryCoverage(db, client.history);
+    assert.equal(partial.status, "partial");
+    assert.equal(partial.observedJobCount, SHEETS_HISTORY_BATCH_LIMIT);
+    assert.equal(
+      await db.clientSheetsPersonAdmission.count({
+        where: { clientAccountId: client.history, normalizedValue: duplicatePhone },
+      }),
+      0
+    );
+    await db.companySheetsDispatchIntent.updateMany({
+      where: {
+        id: { not: held.id },
+        status: { in: ["pending", "scheduled", "retryable", "processing", "awaiting_setup"] },
+      },
+      data: { status: "completed", reason: "test_isolation" },
+    });
+    await db.companySheetsDispatchIntent.updateMany({
+      where: {
+        id: { not: held.id },
+        status: { in: ["assessment_failed", "review_held"] },
+      },
+      data: { availableAt: new Date("2099-01-01T00:00:00.000Z") },
+    });
+    const drainEnv = {
+      ...dispatchEnv,
+      SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED: "false",
+    };
+    const drained = await processDueCompanySheetsDispatches({ db, env: drainEnv, now: () => new Date() });
+    assert.ok(drained.processed >= 1);
+    const coverage = await readClientSheetsHistoryCoverage(db, client.history);
+    assert.equal(coverage.status, "complete");
+    assert.equal(coverage.completenessProof, "cursor_exhausted");
+    assert.equal(coverage.observedJobCount, total);
+    const resumed = await db.companySheetsDispatchIntent.findUniqueOrThrow({ where: { id: held.id } });
+    assert.equal(resumed.status, "scheduled");
+    assert.notEqual(resumed.reason, "person_hold_recovered");
+    const resumedCopy = companySheetsIntentOperatorCopy({
+      status: resumed.status,
+      reason: resumed.reason,
+      lastError: resumed.lastError,
+    });
+    assert.equal(resumedCopy.recovered, false);
+    assert.equal(resumedCopy.delivered, false);
+    const resumedJob = await db.companySheetsDeliveryJob.findFirstOrThrow({ where: { sourceLeadEventId: fresh.id } });
+    assert.equal(resumedJob.status, "queued");
+    assert.notEqual(resumedJob.status, "succeeded");
+    assert.equal(resumedJob.rowsWritten, 0);
+    const duplicate = await makeLead({
+      clientAccountId: client.history,
+      phone: duplicatePhone,
+      email: email("outside-batch"),
+    });
+    const stopped = await evaluateClientSheetsPersonGate(db, {
+      clientAccountId: client.history,
+      sourceLeadEventId: duplicate.id,
+    });
+    assert.equal(stopped.code, "person_duplicate");
+    assert.equal(await db.companySheetsDeliveryJob.count({ where: { sourceLeadEventId: duplicate.id } }), 0);
+    const owner = planted[0];
+    if (!owner) throw new Error("historical owner missing");
+    const replay = await evaluateClientSheetsPersonGate(db, {
+      clientAccountId: client.history,
+      sourceLeadEventId: owner.id,
+    });
+    assert.equal(replay.code, "replay_allowed");
+    const unsentPhone = "+15554700001";
+    const queuedPhone = "+15554700002";
+    const unsent = await makeLead({
+      clientAccountId: client.history,
+      phone: unsentPhone,
+      email: email("unsent-owner"),
+    });
+    const queuedOwner = await makeLead({
+      clientAccountId: client.history,
+      phone: queuedPhone,
+      email: email("queued-owner"),
+    });
+    await db.companySheetsDeliveryJob.createMany({
+      data: [
+        {
+          kind: "lead",
+          status: "failed",
+          clientAccountId: client.history,
+          companyConnectionId: connectionId,
+          destinationId: destination.id,
+          spreadsheetId: destination.spreadsheetId,
+          spreadsheetUrl: destination.spreadsheetUrl,
+          worksheetId: 0,
+          worksheetTitle: "Campaign Leads",
+          controlBasis: "drive_owner_verified",
+          destinationUpdatedAt: destination.updatedAt,
+          headerContract: [...COMPANY_SHEETS_LEAD_HEADER],
+          schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION,
+          idempotencyKey: `lead:${client.history}:${unsent.id}:unsent`,
+          sourceLeadEventId: unsent.id,
+          rowsTotal: 1,
+          rowsWritten: 0,
+          appendStartedAt: null,
+          lastError: "person_duplicate",
+        },
+        {
+          kind: "lead",
+          status: "queued",
+          clientAccountId: client.history,
+          companyConnectionId: connectionId,
+          destinationId: destination.id,
+          spreadsheetId: destination.spreadsheetId,
+          spreadsheetUrl: destination.spreadsheetUrl,
+          worksheetId: 0,
+          worksheetTitle: "Campaign Leads",
+          controlBasis: "drive_owner_verified",
+          destinationUpdatedAt: destination.updatedAt,
+          headerContract: [...COMPANY_SHEETS_LEAD_HEADER],
+          schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION,
+          idempotencyKey: `lead:${client.history}:${queuedOwner.id}:queued`,
+          sourceLeadEventId: queuedOwner.id,
+          rowsTotal: 1,
+          rowsWritten: 0,
+          appendStartedAt: null,
+        },
+      ],
+    });
+    const afterUnsent = await readClientSheetsHistoryCoverage(db, client.history);
+    assert.equal(afterUnsent.status, "complete");
+    assert.equal(afterUnsent.observedJobCount, total);
+    const samePhoneAsUnsent = await makeLead({
+      clientAccountId: client.history,
+      phone: unsentPhone,
+      email: email("unsent-next"),
+    });
+    const notADelivery = await evaluateClientSheetsPersonGate(db, {
+      clientAccountId: client.history,
+      sourceLeadEventId: samePhoneAsUnsent.id,
+    });
+    assert.equal(notADelivery.code, "admitted");
+    const samePhoneAsQueued = await makeLead({
+      clientAccountId: client.history,
+      phone: queuedPhone,
+      email: email("queued-next"),
+    });
+    const queuedIsNotHistory = await evaluateClientSheetsPersonGate(db, {
+      clientAccountId: client.history,
+      sourceLeadEventId: samePhoneAsQueued.id,
+    });
+    assert.equal(queuedIsNotHistory.code, "admitted");
   });
 });

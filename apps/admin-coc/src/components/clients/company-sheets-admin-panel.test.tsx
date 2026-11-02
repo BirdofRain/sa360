@@ -5,7 +5,12 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { SPREADSHEET_SAVED_CHOOSE_WORKSHEET } from "@/lib/clients/onboarding/view";
 
 import { CompanySheetsAdminPanel } from "./company-sheets-admin-panel.tsx";
-import type { CompanyGoogleConnectionView, CompanySheetsDestinationView } from "@/lib/admin-api/company-google-sheets";
+import type {
+  CompanyGoogleConnectionView,
+  CompanySheetsDestinationView,
+  SheetsReleaseCensusView,
+} from "@/lib/admin-api/company-google-sheets";
+import type { ColumnMapRecord } from "@/lib/clients/onboarding/types";
 
 afterEach(() => cleanup());
 
@@ -449,6 +454,63 @@ describe("CompanySheetsAdminPanel", () => {
     assert.equal(id.className.includes("break-all"), true);
     assert.equal(spreadsheet.contains(id), true);
   });
+
+  it("labels the published map as delivery and the newer draft as unpublished", () => {
+    render(
+      <CompanySheetsAdminPanel
+        clientAccountId="acme"
+        clientDisplayName="Acme Insurance"
+        connection={connection}
+        destination={destination}
+        notice={null}
+        actions={idleActions()}
+        initialDeliveryMap={columnMap("published", 3, 1)}
+        initialUnpublishedMap={columnMap("draft", 4, 2)}
+      />
+    );
+    const mapping = screen.getByRole("region", { name: "Column mapping" });
+    assert.match(within(mapping).getByTestId("delivery-map-state").textContent ?? "", /Delivery uses published map version 1, revision 3/);
+    assert.match(
+      within(mapping).getByTestId("unpublished-map-state").textContent ?? "",
+      /Unpublished changes: draft revision 4 is not the delivery map/
+    );
+    assert.match(within(mapping).getByTestId("column-map-state").textContent ?? "", /Draft revision 4/);
+  });
+
+  it("prepares one history batch without treating counts as proof", async () => {
+    let calls = 0;
+    render(
+      <CompanySheetsAdminPanel
+        clientAccountId="acme"
+        clientDisplayName="Acme Insurance"
+        connection={connection}
+        destination={destination}
+        notice={null}
+        actions={{
+          ...idleActions(),
+          prepareSheetsHistory: async () => {
+            calls += 1;
+            return {
+              ok: true,
+              message: "Prepared one history batch. Status complete. Proof cursor_exhausted. No row was appended and delivery was not enabled.",
+              census: census({ status: "complete", completenessProof: "cursor_exhausted", complete: true }),
+            };
+          },
+        }}
+        initialHistory={census({ status: "partial", completenessProof: "cursor_open", complete: false })}
+      />
+    );
+    const section = screen.getByTestId("sheets-history-census");
+    assert.match(section.textContent ?? "", /SA360 job history partial/);
+    assert.match(section.textContent ?? "", /Proof cursor_open/);
+    assert.match(section.textContent ?? "", /Imported Zap history 2/);
+    assert.match(section.textContent ?? "", /Counts are not proof/);
+    assert.match(section.textContent ?? "", /does not append a row/);
+    fireEvent.click(within(section).getByRole("button", { name: "Prepare one history batch" }));
+    assert.match((await screen.findByText(/Prepared one history batch/)).textContent ?? "", /cursor_exhausted/);
+    assert.equal(calls, 1);
+    assert.match(screen.getByTestId("sheets-history-census").textContent ?? "", /SA360 job history complete/);
+  });
 });
 
 function panelWithTabs() {
@@ -465,6 +527,70 @@ function panelWithTabs() {
       }}
     />
   );
+}
+
+function columnMap(status: string, revision: number, mapVersion: number): ColumnMapRecord {
+  return {
+    id: `map_${status}`,
+    revision,
+    mapVersion,
+    status,
+    sourceScope: "shared",
+    baseSchemaVersion: "legacy_custom",
+    spreadsheetId: "sheet1",
+    worksheetId: 0,
+    worksheetTitle: "Leads",
+    headerFingerprint: "fp",
+    headerSnapshot: ["Age/ DOB"],
+    assignments: [],
+    issues: [],
+    preview: [],
+    targets: [],
+    append: {
+      behavior: "new_row_only",
+      headerRow: "not_rewritten",
+      existingRows: "not_rewritten",
+      formulaColumns: "omitted_when_header_or_row2_starts_with_equals",
+    },
+  };
+}
+
+function census(input: {
+  status: SheetsReleaseCensusView["history"]["status"];
+  completenessProof: SheetsReleaseCensusView["history"]["completenessProof"];
+  complete: boolean;
+}): SheetsReleaseCensusView {
+  return {
+    clientAccountId: "acme",
+    history: {
+      status: input.status,
+      completenessProof: input.completenessProof,
+      indexedCount: 1,
+      observedJobCount: 1,
+      countsAreNotProof: true,
+      cursor: { createdAt: "2026-11-02T12:00:00.000Z", jobId: "job_1" },
+      updatedAt: "2026-11-02T12:00:00.000Z",
+      sa360JobHistoryComplete: input.complete,
+    },
+    admissions: {
+      sa360JobIndex: { origin: "delivery_index", total: 1, byStatus: { admitted: 1 } },
+      liveReservation: { origin: "live_reservation", total: 0, byStatus: {} },
+      importedZapHistory: { origin: "historical_baseline", total: 2, byStatus: { admitted: 2 } },
+      unknownOrigins: [],
+    },
+    jobs: { byKindStatus: [], open: [], openTruncated: false },
+    locks: [],
+    creatingTabs: [],
+    quarantine: { strategy: "quarantine_until_reconciled", ran: false, count: 0, truncated: false },
+    switches: {
+      readOnly: true,
+      campaignDispatchEnabled: false,
+      campaignDispatchNotBefore: "2026-10-27T14:43:39.233Z",
+      agedDispatchEnabled: false,
+      agedDispatchNotBefore: null,
+    },
+    incomplete: ["Unimported Zap deliveries are not counted. Imported Zap history is historical_baseline and is separate from SA360 delivery_index history."],
+  };
 }
 
 function idleActions() {

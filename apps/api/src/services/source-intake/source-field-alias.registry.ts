@@ -471,11 +471,292 @@ export const CONFIRMED_JAMES_LAIRD_SOURCE_FUNNEL_ID = "cmvcejoyo01nzjh0u0jh07us0
 export const CONFIRMED_JAMES_LAIRD_PROVIDER_FUNNEL_ID = "aa7e4196-c8f8-4f84-abc0-5526f903460e";
 
 /**
+ * Confirmed next-gen page. The public DOB step webhooks `date`.
+ * The unassociated source is `go.lifeinsuranceforvets.com/learn-ryan-wooldridge`.
+ * No receiving client is stored on this binding.
+ */
+export const CONFIRMED_RYAN_WOOLDRIDGE_PARENT_URL_KEY =
+  "go.lifeinsuranceforvets.com/learn-ryan-wooldridge";
+
+export const CONFIRMED_RYAN_WOOLDRIDGE_SOURCE_FUNNEL_ID = "cmtwxk42200vcj50usrthhi2e";
+
+export const CONFIRMED_RYAN_WOOLDRIDGE_PROVIDER_FUNNEL_ID = "39d7cc47-07f9-47ca-b3a3-2c421bd0cdb9";
+
+/**
+ * Confirmed next-gen page `learn-robby-wells`. The public DOB step webhooks `date`.
+ * The typo host `go.lifeinsuranceforvet.com` is a different source and is not this binding.
+ */
+export const CONFIRMED_ROBBY_WELLS_PARENT_URL_KEY = "go.lifeinsuranceforvets.com/learn-robby-wells";
+
+export const CONFIRMED_ROBBY_WELLS_SOURCE_FUNNEL_ID = "cmuo20w7c02tvdz0vf6luhl8d";
+
+export const CONFIRMED_ROBBY_WELLS_PROVIDER_FUNNEL_ID = "f422264d-acc5-40fd-b82d-f9462db19f27";
+
+/**
  * Legacy James Torrey veteran form. Retained fixtures send `branch` and use
  * `date` + `time` as the submission calendar, not a birthday.
  */
 export const CONFIRMED_LEGACY_JAMES_TORREY_ROUTE_KEY =
   "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX";
+
+/**
+ * Pages whose public DOB step was read in the catalog pass.
+ * `alias` is the webhook key on that step. No receiving client is stored here.
+ * A shared provider UUID is the form embedded on more than one page.
+ */
+export const CONFIRMED_CATALOG_DOB_FORMS: readonly {
+  id: string;
+  parentUrlKey: string;
+  sourceFunnelId: string;
+  providerFunnelId: string;
+  alias: "date" | "date_copy";
+}[] = [
+  {
+    id: "leadcapture_io_nextgen_vet_andrew_walters",
+    parentUrlKey: "go.lifeinsuranceforvets.com/learn-andrew-walters",
+    sourceFunnelId: "cmuc51ou10896m00v55041omy",
+    providerFunnelId: "d83b52ea-6443-42cc-9ba3-967f98a3c47e",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_vet_caleb_farina",
+    parentUrlKey: "go.lifeinsuranceforvets.com/learn-caleb-farina",
+    sourceFunnelId: "cmubub4l207nrm00vbihrzt5s",
+    providerFunnelId: "a361494a-c698-4c64-8501-d3528e7ee5b4",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_vet_dom_green",
+    parentUrlKey: "go.lifeinsuranceforvets.com/learn-dom-green",
+    sourceFunnelId: "cmubvzbjg07pzm00vr9szpicc",
+    providerFunnelId: "8e1e24c0-01d0-4ddf-ae88-bb0e560d501e",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_vet_domenic_boselli",
+    parentUrlKey: "go.lifeinsuranceforvets.com/learn-domenic-boselli",
+    sourceFunnelId: "cmtw96s120090j50uaohj8vff",
+    providerFunnelId: "bef47ea9-a089-47f4-b6bc-3512983eb84e",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_vet_jake_donnelly",
+    parentUrlKey: "go.lifeinsuranceforvets.com/learn-jake-donnelly",
+    sourceFunnelId: "cmucy27qs0906m00vz99w0z30",
+    providerFunnelId: "5cf9f74a-52fb-4207-b7ac-b491b8602e11",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_vet_logan_carlisle",
+    parentUrlKey: "go.lifeinsuranceforvets.com/learn-logan-carlisle",
+    sourceFunnelId: "cmvehzsfq07fhjh0u20pk617w",
+    providerFunnelId: "14ad9c9a-7558-43c9-9a95-ffb37630ed59",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_vet_louie_mezzone",
+    parentUrlKey: "go.lifeinsuranceforvets.com/learn-louie-mezzone",
+    sourceFunnelId: "cmuc2n4d1084jm00v5jpeva93",
+    providerFunnelId: "016f5ddb-499b-412b-987e-5e0e50f70012",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_vet_marcus_turo",
+    parentUrlKey: "go.lifeinsuranceforvets.com/learn-marcus-turo",
+    sourceFunnelId: "cmtw50cn10022j50uppu0xe86",
+    providerFunnelId: "69504d6d-7b9b-4e5e-82af-2ef5754049e4",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_vet_marissa_preslar",
+    parentUrlKey: "go.lifeinsuranceforvets.com/learn-marissa-preslar",
+    sourceFunnelId: "cmubr358c07iom00vpy7vk7mp",
+    providerFunnelId: "bcba7b64-3b2a-4767-a547-7fc7c5a78b23",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_vet_matt_mandeville",
+    parentUrlKey: "go.lifeinsuranceforvets.com/learn-matt-mandeville",
+    sourceFunnelId: "cmvlhd9gq00e1kg0u300lar2j",
+    providerFunnelId: "50d5488d-cd21-4e20-8034-8d539d8ba74d",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_vet_matt_wilson",
+    parentUrlKey: "go.lifeinsuranceforvets.com/learn-matt-wilson",
+    sourceFunnelId: "cmubrx6ho07kkm00v85r2evau",
+    providerFunnelId: "573ba578-f5d5-4d92-9319-9712eee7a503",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_vet_michael_coulter",
+    parentUrlKey: "go.lifeinsuranceforvets.com/learn-michael-coulter",
+    sourceFunnelId: "cmubu9sto07nlm00vearmlnup",
+    providerFunnelId: "3ce8467f-2a3b-407b-a9dd-494b7f05dc02",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_vet_nick_richmond",
+    parentUrlKey: "go.lifeinsuranceforvets.com/learn-nick-richmond",
+    sourceFunnelId: "cmubsvmp407m2m00vcu75e34l",
+    providerFunnelId: "80b7cd3c-0f81-4c3b-b972-4360dff70029",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_vet_reid_mazzuco",
+    parentUrlKey: "go.lifeinsuranceforvets.com/learn-reid-mazzuco",
+    sourceFunnelId: "cmubndr0b07frm00vb4dv25bh",
+    providerFunnelId: "26a47233-753e-4162-8fac-76ac5502bf35",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_vet_ryan_okeefe",
+    parentUrlKey: "go.lifeinsuranceforvets.com/learn-ryan-okeefe",
+    sourceFunnelId: "cmubrjexo07jjm00vkl5887x9",
+    providerFunnelId: "5a909ecf-dc08-484b-958f-efe4532e5ffc",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_nurse_abdel_zubi",
+    parentUrlKey: "healthcareworker.familylegacyprotection.com/learn-abdel-zubi",
+    sourceFunnelId: "cmvdy0ra705adjh0ucqwkrtbs",
+    providerFunnelId: "07ac67a6-8bd0-4cc8-8605-3224ed6bab18",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_nurse_aleksandre_vayshelboym",
+    parentUrlKey: "healthcareworker.familylegacyprotection.com/learn-aleksandre-vayshelboym",
+    sourceFunnelId: "cmvxwnuoc05icm40uwf7bd69k",
+    providerFunnelId: "0417fe5a-97fd-4833-a897-4b490147aaae",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_nurse_andrew_hearn",
+    parentUrlKey: "healthcareworker.familylegacyprotection.com/learn-andrew-hearn",
+    sourceFunnelId: "cmtw8tgc4008hj50u998vl8ms",
+    providerFunnelId: "5164ed76-dadf-40ac-b148-1863f52c0e1a",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_nurse_daniel_saenz",
+    parentUrlKey: "healthcareworker.familylegacyprotection.com/learn-daniel-saenz",
+    sourceFunnelId: "cmvlfqleb007nkg0u9lsw8wlz",
+    providerFunnelId: "2d8dbf90-3f7f-4ea5-9135-bf0f5667ecfb",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_nurse_domenic_boselli",
+    parentUrlKey: "healthcareworker.familylegacyprotection.com/learn-domenic-boselli",
+    sourceFunnelId: "cmvfrw9jv003xmv0ueo9n3ikn",
+    providerFunnelId: "345daf8b-1381-48c1-88d7-d77545d66ff3",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_nurse_jackson_randall",
+    parentUrlKey: "healthcareworker.familylegacyprotection.com/learn-jackson-randall",
+    sourceFunnelId: "cmvb8xfu400o8jo0ubeqesm76",
+    providerFunnelId: "fb917dcc-6887-4123-a74e-8bf00f1199a3",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_nurse_jordan_montero",
+    parentUrlKey: "healthcareworker.familylegacyprotection.com/learn-jordan-montero",
+    sourceFunnelId: "cmvlfkdnf007ckg0uymx2c113",
+    providerFunnelId: "30449bc9-5987-4a3f-9ffd-f2ec81350ac0",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_nurse_josh_petley",
+    parentUrlKey: "healthcareworker.familylegacyprotection.com/learn-josh-petley",
+    sourceFunnelId: "cmvdxmnxx058pjh0uaogzn17w",
+    providerFunnelId: "3af72d73-b35e-459b-9048-20b9b2d8e0c8",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_nurse_julia_dodge",
+    parentUrlKey: "healthcareworker.familylegacyprotection.com/learn-julia-dodge",
+    sourceFunnelId: "cmu6wgqj302d2m00vnpz58inh",
+    providerFunnelId: "5164ed76-dadf-40ac-b148-1863f52c0e1a",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_nurse_michael_fediw",
+    parentUrlKey: "healthcareworker.familylegacyprotection.com/learn-michael-fediw",
+    sourceFunnelId: "cmtw5jm4g003vj50uryi4b84b",
+    providerFunnelId: "0ce82c35-20cc-4053-8606-af344387e932",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_nurse_michael_panza",
+    parentUrlKey: "healthcareworker.familylegacyprotection.com/learn-michael-panza",
+    sourceFunnelId: "cmvi7ujpi02dvgt0vivze782r",
+    providerFunnelId: "c5121b9f-20b3-4eb8-ac6a-59cf6e8d2264",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_nurse_simon_marte",
+    parentUrlKey: "healthcareworker.familylegacyprotection.com/learn-simon-marte",
+    sourceFunnelId: "cmvdy4dz705aojh0umifpvzjk",
+    providerFunnelId: "f3e79e12-1b05-493b-a7a0-4d67499559c1",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_nurse_trey_tyree",
+    parentUrlKey: "healthcareworker.familylegacyprotection.com/learn-trey-tyree",
+    sourceFunnelId: "cmtw4dn3p0002j50u3fj237b6",
+    providerFunnelId: "898d1946-ee60-4da4-b4b4-ceac96724266",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_hosted_madison_v2",
+    parentUrlKey: "my.leadcapture.io/p/dn_omzoj",
+    sourceFunnelId: "cmtx512kk000wmp0uzhh5hubt",
+    providerFunnelId: "5a26bb9d-1dcf-4dc0-9202-44a62a941975",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_hosted_domenic_boselli",
+    parentUrlKey: "my.leadcapture.io/p/046y3ex0",
+    sourceFunnelId: "cmun0lx5001ejdz0v7syapnih",
+    providerFunnelId: "bef47ea9-a089-47f4-b6bc-3512983eb84e",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_hosted_trey_tyree",
+    parentUrlKey: "my.leadcapture.io/p/2jhvao_r",
+    sourceFunnelId: "cmumqxxif0101dz0vlg8ufjcv",
+    providerFunnelId: "898d1946-ee60-4da4-b4b4-ceac96724266",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_hosted_julia_dodge",
+    parentUrlKey: "my.leadcapture.io/p/6khoj2_q",
+    sourceFunnelId: "cmumqzd2m0105dz0vs2d54ilg",
+    providerFunnelId: "5164ed76-dadf-40ac-b148-1863f52c0e1a",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_hosted_eriks_veidemanis",
+    parentUrlKey: "my.leadcapture.io/p/iexkkbgh",
+    sourceFunnelId: "cmuqzbbkr010zjn0vur4cmirs",
+    providerFunnelId: "c12cf351-0bc4-4127-8786-50a67643eadb",
+    alias: "date",
+  },
+  {
+    id: "leadcapture_io_nextgen_sehi_chandler_conrad",
+    parentUrlKey: "go.selfemployedhi.com/chandler-bigagency",
+    sourceFunnelId: "cmuc2z56g085bm00vcn3eki25",
+    providerFunnelId: "f4e7acac-a55e-4cfe-963c-f992edf0dccb",
+    alias: "date_copy",
+  },
+  {
+    id: "leadcapture_io_nextgen_sehi_zach_busch",
+    parentUrlKey: "go.selfemployedhi.com/zach-busch",
+    sourceFunnelId: "cmueeuvki0b1tm00vyyl4d4et",
+    providerFunnelId: "168f00d0-99a5-44bb-9356-bf5129b69393",
+    alias: "date_copy",
+  },
+];
 
 export const SCOPED_INCOMING_FIELD_BINDINGS: readonly ScopedIncomingFieldBinding[] = [
   {
@@ -631,6 +912,39 @@ export const SCOPED_INCOMING_FIELD_BINDINGS: readonly ScopedIncomingFieldBinding
       date: "date_of_birth",
     },
   },
+  {
+    id: "leadcapture_io_nextgen_vet_ryan_wooldridge",
+    provider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    sourceFunnelId: CONFIRMED_RYAN_WOOLDRIDGE_SOURCE_FUNNEL_ID,
+    providerFunnelId: CONFIRMED_RYAN_WOOLDRIDGE_PROVIDER_FUNNEL_ID,
+    parentUrlKey: CONFIRMED_RYAN_WOOLDRIDGE_PARENT_URL_KEY,
+    aliases: {
+      date: "date_of_birth",
+    },
+  },
+  {
+    id: "leadcapture_io_nextgen_vet_robby_wells",
+    provider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    sourceFunnelId: CONFIRMED_ROBBY_WELLS_SOURCE_FUNNEL_ID,
+    providerFunnelId: CONFIRMED_ROBBY_WELLS_PROVIDER_FUNNEL_ID,
+    parentUrlKey: CONFIRMED_ROBBY_WELLS_PARENT_URL_KEY,
+    aliases: {
+      date: "date_of_birth",
+    },
+  },
+  ...CONFIRMED_CATALOG_DOB_FORMS.map(
+    (form): ScopedIncomingFieldBinding => ({
+      id: form.id,
+      provider: "leadcapture_io",
+      sourceSystem: "leadcapture_io_nextgen",
+      sourceFunnelId: form.sourceFunnelId,
+      providerFunnelId: form.providerFunnelId,
+      parentUrlKey: form.parentUrlKey,
+      aliases: { [form.alias]: "date_of_birth" },
+    })
+  ),
   {
     id: "leadcapture_io_legacy_vet_james_torrey",
     provider: "leadcapture_io",

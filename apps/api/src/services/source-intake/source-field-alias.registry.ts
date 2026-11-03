@@ -357,6 +357,12 @@ export const CONFIRMED_JULIA_DODGE_PARENT_URL_KEY =
 
 export const CONFIRMED_JULIA_DODGE_SOURCE_FUNNEL_ID = "cmv8k6uui00q0lc0uyto17ld1";
 
+/**
+ * External LeadCapture funnel UUID for Julia's page, from the public funnel
+ * config. The embed short id is not this UUID.
+ */
+export const CONFIRMED_JULIA_DODGE_PROVIDER_FUNNEL_ID = "b002eb13-43cc-4d90-99fd-e23bc02ac822";
+
 /** Confirmed next-gen veteran page. `date` on this form is the birthday. */
 export const CONFIRMED_ERIKS_VEIDEMANIS_PARENT_URL_KEY =
   "go.lifeinsuranceforvets.com/learn-eriks-veidemanis";
@@ -372,6 +378,32 @@ export const CONFIRMED_ERIKS_VEIDEMANIS_PROVIDER_FUNNEL_ID =
 export const CONFIRMED_ERIKS_VEIDEMANIS_SOURCE_LEAD_ID =
   "e452eaed-92c8-4916-9dd1-fbd001dafaac";
 
+/** Confirmed next-gen veteran page. The public form's DOB step webhooks `date`. */
+export const CONFIRMED_ALEX_GROSS_PARENT_URL_KEY = "go.lifeinsuranceforvets.com/learn-alex-gross";
+
+/** External LeadCapture funnel UUID. The SA360 SourceFunnel id was not verified. */
+export const CONFIRMED_ALEX_GROSS_PROVIDER_FUNNEL_ID = "68d9c95b-e186-4c99-8fc9-5b86b17d8eee";
+
+/** Confirmed next-gen veteran page. The public form's DOB step webhooks `date`. */
+export const CONFIRMED_JEAN_PEREZ_PARENT_URL_KEY = "go.lifeinsuranceforvets.com/learn-jean-perez";
+
+/** External LeadCapture funnel UUID. The SA360 SourceFunnel id was not verified. */
+export const CONFIRMED_JEAN_PEREZ_PROVIDER_FUNNEL_ID = "181b0e69-fd55-44e3-be68-a284c96435b0";
+
+/** Confirmed next-gen nurse page. The public form's DOB step webhooks `date`. */
+export const CONFIRMED_ANDRU_DURANSO_PARENT_URL_KEY =
+  "healthcareworker.familylegacyprotection.com/learn-andru-duranso";
+
+/** External LeadCapture funnel UUID. The SA360 SourceFunnel id was not verified. */
+export const CONFIRMED_ANDRU_DURANSO_PROVIDER_FUNNEL_ID = "18c28feb-5c3d-4bd0-94d8-1ed33a6fa718";
+
+/** Confirmed next-gen nurse page. The public form's DOB step webhooks `date`. */
+export const CONFIRMED_ALEX_FEUERSTEIN_PARENT_URL_KEY =
+  "healthcareworker.familylegacyprotection.com/learn-alex-feuerstein";
+
+/** External LeadCapture funnel UUID. The SA360 SourceFunnel id was not verified. */
+export const CONFIRMED_ALEX_FEUERSTEIN_PROVIDER_FUNNEL_ID = "22ac7ad2-97a3-4fce-bd4d-02124b6e4520";
+
 /**
  * Legacy James Torrey veteran form. Retained fixtures send `branch` and use
  * `date` + `time` as the submission calendar, not a birthday.
@@ -385,6 +417,7 @@ export const SCOPED_INCOMING_FIELD_BINDINGS: readonly ScopedIncomingFieldBinding
     provider: "leadcapture_io",
     sourceSystem: "leadcapture_io_nextgen",
     sourceFunnelId: CONFIRMED_JULIA_DODGE_SOURCE_FUNNEL_ID,
+    providerFunnelId: CONFIRMED_JULIA_DODGE_PROVIDER_FUNNEL_ID,
     parentUrlKey: CONFIRMED_JULIA_DODGE_PARENT_URL_KEY,
     aliases: {
       date: "date_of_birth",
@@ -400,6 +433,46 @@ export const SCOPED_INCOMING_FIELD_BINDINGS: readonly ScopedIncomingFieldBinding
     providerFunnelId: CONFIRMED_ERIKS_VEIDEMANIS_PROVIDER_FUNNEL_ID,
     parentUrlKey: CONFIRMED_ERIKS_VEIDEMANIS_PARENT_URL_KEY,
     knownSourceLeadIds: [CONFIRMED_ERIKS_VEIDEMANIS_SOURCE_LEAD_ID],
+    aliases: {
+      date: "date_of_birth",
+    },
+  },
+  {
+    id: "leadcapture_io_nextgen_vet_alex_gross",
+    provider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    providerFunnelId: CONFIRMED_ALEX_GROSS_PROVIDER_FUNNEL_ID,
+    parentUrlKey: CONFIRMED_ALEX_GROSS_PARENT_URL_KEY,
+    aliases: {
+      date: "date_of_birth",
+    },
+  },
+  {
+    id: "leadcapture_io_nextgen_vet_jean_perez",
+    provider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    providerFunnelId: CONFIRMED_JEAN_PEREZ_PROVIDER_FUNNEL_ID,
+    parentUrlKey: CONFIRMED_JEAN_PEREZ_PARENT_URL_KEY,
+    aliases: {
+      date: "date_of_birth",
+    },
+  },
+  {
+    id: "leadcapture_io_nextgen_nurse_andru_duranso",
+    provider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    providerFunnelId: CONFIRMED_ANDRU_DURANSO_PROVIDER_FUNNEL_ID,
+    parentUrlKey: CONFIRMED_ANDRU_DURANSO_PARENT_URL_KEY,
+    aliases: {
+      date: "date_of_birth",
+    },
+  },
+  {
+    id: "leadcapture_io_nextgen_nurse_alex_feuerstein",
+    provider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    providerFunnelId: CONFIRMED_ALEX_FEUERSTEIN_PROVIDER_FUNNEL_ID,
+    parentUrlKey: CONFIRMED_ALEX_FEUERSTEIN_PARENT_URL_KEY,
     aliases: {
       date: "date_of_birth",
     },

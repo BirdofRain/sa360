@@ -1,5 +1,5 @@
 /**
- * Confirmed Julia Dodge DOB correction.
+ * Confirmed campaign DOB correction.
  *
  * Reuses `assessIncomingDobRecoveryRow` and
  * `normalizeLeadCaptureIoWebhookToLifecyclePayload`. A confirmed blank
@@ -12,8 +12,12 @@
  *
  * The durable audit is `IncomingDobCorrectionAudit`, inserted in the same
  * transaction as the payload update. Auth/Account owns that migration. Until
- * the relation exists, apply and rollback refuse and write nothing. A local
- * JSONL file may supplement the table after commit. Rollback reads the table.
+ * the table matches the documented schema, apply and rollback refuse and
+ * write nothing. A table name alone is not enough. A local JSONL file may
+ * supplement the table after commit. Rollback reads the table.
+ *
+ * Apply requires an explicit reviewed id list and expected count. It does
+ * not scan the window and add rows.
  */
 
 import { randomUUID } from "node:crypto";
@@ -30,8 +34,8 @@ import {
 } from "./incoming-field-dob-recovery.js";
 
 export const INCOMING_DOB_CORRECTION_VERSION = "incoming_field_dob_correction_v1" as const;
-export const INCOMING_DOB_CORRECTION_APPLY_CONFIRMATION = "APPLY CONFIRMED JULIA DOB CORRECTION";
-export const INCOMING_DOB_CORRECTION_ROLLBACK_CONFIRMATION = "ROLLBACK CONFIRMED JULIA DOB CORRECTION";
+export const INCOMING_DOB_CORRECTION_APPLY_CONFIRMATION = "APPLY CONFIRMED CAMPAIGN DOB CORRECTION";
+export const INCOMING_DOB_CORRECTION_ROLLBACK_CONFIRMATION = "ROLLBACK CONFIRMED CAMPAIGN DOB CORRECTION";
 export const INCOMING_DOB_CORRECTION_BATCH_SIZE = 25;
 export const INCOMING_DOB_CORRECTION_AUDIT_SUFFIX = ".dob-correction-audit.jsonl";
 export const INCOMING_DOB_CORRECTION_AUDIT_RELATION = "IncomingDobCorrectionAudit";
@@ -53,6 +57,7 @@ export const INCOMING_DOB_CORRECTION_AUDIT_DDL = [
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
 )`,
   `CREATE INDEX "IncomingDobCorrectionAudit_eventId_createdAt_idx" ON "IncomingDobCorrectionAudit" ("eventId", "createdAt")`,
+  `ALTER TABLE "IncomingDobCorrectionAudit" ADD CONSTRAINT "IncomingDobCorrectionAudit_action_check" CHECK ("action" IN ('apply', 'rollback'))`,
 ] as const;
 
 const DETAIL_KEYS = [
@@ -356,13 +361,81 @@ export function readDobCorrectionAudits(file: string): DobCorrectionAudit[] {
   return records;
 }
 
-export async function incomingDobCorrectionAuditReady(
+export type IncomingDobCorrectionAuditSchemaStatus = "missing" | "ready" | "incompatible";
+
+const AUDIT_COLUMN_TYPES = [
+  ["id", "text"],
+  ["version", "text"],
+  ["action", "text"],
+  ["operator", "text"],
+  ["eventId", "text"],
+  ["previousUpdatedAt", "timestamp without time zone"],
+  ["newUpdatedAt", "timestamp without time zone"],
+  ["alreadyDelivered", "boolean"],
+  ["beforeJson", "jsonb"],
+  ["afterJson", "jsonb"],
+  ["externalDestinations", "text"],
+  ["createdAt", "timestamp without time zone"],
+] as const;
+
+/**
+ * Name presence is not readiness. Apply and rollback require the documented
+ * columns, nullability, primary key, event index, and action check.
+ */
+export async function incomingDobCorrectionAuditSchemaStatus(
   db: PrismaClient | Prisma.TransactionClient
-): Promise<boolean> {
-  const rows = await db.$queryRaw<Array<{ present: string | null }>>(
+): Promise<IncomingDobCorrectionAuditSchemaStatus> {
+  const present = await db.$queryRaw<Array<{ present: string | null }>>(
     Prisma.sql`SELECT to_regclass('public."IncomingDobCorrectionAudit"')::text AS present`
   );
-  return rows[0]?.present != null;
+  if (present[0]?.present == null) return "missing";
+
+  const columns = await db.$queryRaw<Array<{ column_name: string; data_type: string; is_nullable: string }>>(
+    Prisma.sql`
+      SELECT column_name, data_type, is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'IncomingDobCorrectionAudit'
+    `
+  );
+  const byName = new Map(columns.map((column) => [column.column_name, column]));
+  for (const [name, dataType] of AUDIT_COLUMN_TYPES) {
+    const column = byName.get(name);
+    if (!column || column.is_nullable !== "NO" || column.data_type !== dataType) return "incompatible";
+  }
+
+  const primary = await db.$queryRaw<Array<{ ok: boolean }>>(Prisma.sql`
+    SELECT EXISTS (
+      SELECT 1
+      FROM pg_constraint
+      WHERE conrelid = 'public."IncomingDobCorrectionAudit"'::regclass
+        AND contype = 'p'
+    ) AS ok
+  `);
+  if (primary[0]?.ok !== true) return "incompatible";
+
+  const indexes = await db.$queryRaw<Array<{ indexdef: string }>>(Prisma.sql`
+    SELECT indexdef
+    FROM pg_indexes
+    WHERE schemaname = 'public' AND tablename = 'IncomingDobCorrectionAudit'
+  `);
+  if (!indexes.some((row) => row.indexdef.includes('"eventId"') && row.indexdef.includes('"createdAt"'))) {
+    return "incompatible";
+  }
+
+  const checks = await db.$queryRaw<Array<{ def: string }>>(Prisma.sql`
+    SELECT pg_get_constraintdef(oid) AS def
+    FROM pg_constraint
+    WHERE conrelid = 'public."IncomingDobCorrectionAudit"'::regclass
+      AND contype = 'c'
+  `);
+  if (!checks.some((row) => row.def.includes("'apply'") && row.def.includes("'rollback'"))) return "incompatible";
+  return "ready";
+}
+
+async function assertAuditSchemaInTransaction(tx: Prisma.TransactionClient): Promise<void> {
+  const status = await incomingDobCorrectionAuditSchemaStatus(tx);
+  if (status === "ready") return;
+  throw new Error(status === "missing" ? "audit_relation_required" : "audit_relation_incompatible");
 }
 
 async function insertDobCorrectionAudit(
@@ -650,12 +723,39 @@ function exportSupplementalAudit(file: string, records: DobCorrectionAudit[]): b
 }
 
 async function requireAuditRelation(db: PrismaClient): Promise<GuardFailure | null> {
-  if (await incomingDobCorrectionAuditReady(db)) return null;
+  const status = await incomingDobCorrectionAuditSchemaStatus(db);
+  if (status === "ready") return null;
+  if (status === "missing") {
+    return {
+      ok: false,
+      reasonCode: "audit_relation_required",
+      reason: `${INCOMING_DOB_CORRECTION_AUDIT_RELATION}_missing`,
+    };
+  }
   return {
     ok: false,
-    reasonCode: "audit_relation_required",
-    reason: `${INCOMING_DOB_CORRECTION_AUDIT_RELATION}_missing`,
+    reasonCode: "audit_relation_incompatible",
+    reason: `${INCOMING_DOB_CORRECTION_AUDIT_RELATION}_incompatible`,
   };
+}
+
+function reviewedCorrectionIds(
+  ids: string[],
+  expectedCount: number,
+  limit: number
+): { ok: true; ids: string[] } | GuardFailure {
+  const trimmed = ids.map((id) => id.trim());
+  const unique = [...new Set(trimmed)];
+  if (
+    !Number.isInteger(expectedCount) ||
+    trimmed.some((id) => id.length === 0) ||
+    trimmed.length !== unique.length ||
+    expectedCount !== unique.length ||
+    unique.length > limit
+  ) {
+    return { ok: false, reasonCode: "reviewed_count_mismatch", reason: "reviewed_count_mismatch" };
+  }
+  return { ok: true, ids: unique };
 }
 
 function timestampsUntouched(
@@ -680,6 +780,7 @@ export async function applyIncomingDobCorrections(
     limit: number;
     auditFile: string;
     ids: string[];
+    expectedCount: number;
     receivedFrom: string;
     receivedTo: string | null;
     expectedBeforeById?: ReadonlyMap<string, CanonicalDobAgeState> | Record<string, CanonicalDobAgeState>;
@@ -691,11 +792,13 @@ export async function applyIncomingDobCorrections(
     confirmation: INCOMING_DOB_CORRECTION_APPLY_CONFIRMATION,
   });
   if (!guard.ok) return refusedResult(guard);
+  const reviewed = reviewedCorrectionIds(args.ids, args.expectedCount, guard.limit);
+  if (!reviewed.ok) return refusedResult(reviewed);
   const missingAudit = await requireAuditRelation(db);
   if (missingAudit) return refusedResult(missingAudit);
 
   const window = { receivedFrom: args.receivedFrom, receivedTo: args.receivedTo };
-  const ids = [...new Set(args.ids)].slice(0, guard.limit);
+  const ids = reviewed.ids;
   const writtenIds: string[] = [];
   const pendingIds: string[] = [];
   const skipped: Array<{ id: string; reason: string }> = [];
@@ -703,9 +806,7 @@ export async function applyIncomingDobCorrections(
 
   for (const group of chunk(ids, INCOMING_DOB_CORRECTION_BATCH_SIZE)) {
     const committed = await db.$transaction(async (tx) => {
-      if (!(await incomingDobCorrectionAuditReady(tx))) {
-        throw new Error("audit_relation_required");
-      }
+      await assertAuditSchemaInTransaction(tx);
       const audits: DobCorrectionAudit[] = [];
       const batchSkipped: Array<{ id: string; reason: string }> = [];
       const seen = new Set<string>();
@@ -810,9 +911,7 @@ export async function rollbackIncomingDobCorrections(
 
   for (const group of chunk(targets, INCOMING_DOB_CORRECTION_BATCH_SIZE)) {
     const committed = await db.$transaction(async (tx) => {
-      if (!(await incomingDobCorrectionAuditReady(tx))) {
-        throw new Error("audit_relation_required");
-      }
+      await assertAuditSchemaInTransaction(tx);
       const audits: DobCorrectionAudit[] = [];
       const batchSkipped: Array<{ id: string; reason: string }> = [];
       const seen = new Set<string>();

@@ -18,6 +18,7 @@ import {
   INCOMING_DOB_RECOVERY_WINDOW_START,
   KNOWN_DOB_RECOVERY_EVENT_ID,
   RELEASE_WINDOW_INSPECTION_EVENT_IDS,
+  matchConfirmedSourceLeadEvents,
   scanAdminSourceLeadWindow,
   type IncomingDobRecoverySnapshot,
 } from "./incoming-field-dob-recovery.js";
@@ -338,6 +339,61 @@ test("admin list scan stops at the window and does not invent sheet delivery", a
   assert.equal(printed.includes("hidden@example.test"), false);
 });
 
+test("Eriks's provider lead id resolves only from raw lead_id", () => {
+  const sourceLeadId = CONFIRMED_ERIKS_VEIDEMANIS_SOURCE_LEAD_ID;
+  const row = snapshot({
+    id: "evt_internal",
+    receivedAt: "2026-11-03T09:53:33.092Z",
+    rawPayload: {
+      provider: "leadcapture_io",
+      sa360_source_system: "leadcapture_io_nextgen",
+      lead_id: sourceLeadId,
+      submitted_at: "2026-11-03T09:53:33.092Z",
+      parent_url: "https://go.lifeinsuranceforvets.com/learn-eriks-veidemanis?utm_source=ad",
+      date: "01/27/1949",
+    },
+    enrichment: { sourceFunnelId: "cmobservedfunnel0000000000" },
+  });
+  const assessed = assessIncomingDobRecoveryRow(row, {
+    receivedFrom: INCOMING_DOB_RECOVERY_WINDOW_START,
+    receivedTo: INCOMING_DOB_RECOVERY_WINDOW_END,
+  });
+  assert.equal(assessed.recoveryClass, "eligible");
+  assert.equal(assessed.dateMeansBirthday, true);
+  assert.notEqual(assessed.id, sourceLeadId);
+
+  const decoy = snapshot({
+    id: sourceLeadId,
+    rawPayload: {
+      ...(snapshot().rawPayload as Record<string, unknown>),
+      lead_id: "11111111-2222-4333-8444-555555555555",
+    },
+  });
+  const missed = matchConfirmedSourceLeadEvents([decoy]);
+  assert.equal(missed[0]?.status, "pending");
+  assert.equal(missed[0]?.eventId, null);
+  assert.equal(missed[0]?.reason, "not_in_fetched_details");
+
+  const resolved = matchConfirmedSourceLeadEvents([row, decoy]);
+  assert.equal(resolved[0]?.status, "resolved");
+  assert.equal(resolved[0]?.eventId, "evt_internal");
+  assert.notEqual(resolved[0]?.eventId, sourceLeadId);
+
+  const duplicated = matchConfirmedSourceLeadEvents([
+    row,
+    snapshot({ id: "evt_other", rawPayload: row.rawPayload }),
+  ]);
+  assert.equal(duplicated[0]?.status, "pending");
+  assert.equal(duplicated[0]?.reason, "multiple_matches");
+  assert.equal(duplicated[0]?.eventId, null);
+
+  const partial = matchConfirmedSourceLeadEvents([row], { paginationComplete: false });
+  assert.equal(partial[0]?.status, "pending");
+  assert.equal(partial[0]?.reason, "pagination_incomplete");
+  assert.equal(partial[0]?.eventId, null);
+  assert.equal(partial[0]?.matchCount, 1);
+});
+
 test("admin recovery command refuses writes and a missing key before any request", () => {
   const script = readFileSync(resolve(repoRoot, "scripts/incoming-field-dob-recovery-admin.ts"), "utf8");
   assert.equal(script.includes('method: "GET"'), true);
@@ -349,6 +405,9 @@ test("admin recovery command refuses writes and a missing key before any request
   assert.equal(script.includes("RELEASE_WINDOW_INSPECTION_EVENT_IDS"), true);
   assert.equal(script.includes("missingInspectionIds"), true);
   assert.equal(script.includes("KNOWN_DOB_RECOVERY_EVENT_ID"), true);
+  assert.equal(script.includes("sourceLeadLookups"), true);
+  assert.equal(script.includes("matchConfirmedSourceLeadEvents"), true);
+  assert.equal(script.includes(CONFIRMED_ERIKS_VEIDEMANIS_SOURCE_LEAD_ID), false);
   assert.equal(INCOMING_DOB_RECOVERY_WINDOW_END, "2026-11-03T15:36:00.000Z");
   assert.deepEqual(
     [...RELEASE_WINDOW_INSPECTION_EVENT_IDS],

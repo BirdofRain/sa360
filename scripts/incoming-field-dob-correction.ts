@@ -1,36 +1,46 @@
 /**
- * Confirmed Julia Dodge historical DOB correction.
+ * Confirmed campaign historical DOB correction.
+ *
+ * The reviewed forms are the date-of-birth bindings in
+ * SCOPED_INCOMING_FIELD_BINDINGS. Apply does not scan the window and add
+ * rows. Pass every reviewed SourceLeadEvent id with --id, or a manifest
+ * `{ "ids": [...], "expectedCount": N }`, and the same count.
  *
  * Dry run (read-only; localhost, or a host named by --expected-db-host):
  *
  *   pnpm source-intake:dob-correction -- --limit 100
  *
  * Apply on the database named by DATABASE_URL. This does not call GHL or Sheets.
- * Apply and rollback refuse until IncomingDobCorrectionAudit exists. The
- * audit row commits with the payload change. --audit-file is an optional
- * local JSONL supplement and is not the source of rollback.
+ * Apply and rollback refuse until IncomingDobCorrectionAudit matches the
+ * documented schema. A table name alone is not enough. The audit row commits
+ * with the payload change. --audit-file is an optional local JSONL
+ * supplement and is not the source of rollback.
  *
  *   pnpm source-intake:dob-correction -- \
  *     --apply \
  *     --expected-db-host 127.0.0.1:5432 \
  *     --operator <name> \
+ *     --id <source-lead-event-id> \
+ *     --expected-count 1 \
  *     --limit 25 \
- *     --audit-file ./julia-dob.dob-correction-audit.jsonl \
- *     --confirm "APPLY CONFIRMED JULIA DOB CORRECTION"
+ *     --audit-file ./campaign-dob.dob-correction-audit.jsonl \
+ *     --confirm "APPLY CONFIRMED CAMPAIGN DOB CORRECTION"
  *
  * Roll back open audit rows from IncomingDobCorrectionAudit. A lock skip
- * exits 3 and stays in pendingIds.
+ * exits 3 and stays in pendingIds. Rollback does not discover new ids.
  *
  *   pnpm source-intake:dob-correction -- \
  *     --rollback \
  *     --expected-db-host 127.0.0.1:5432 \
  *     --operator <name> \
  *     --limit 25 \
- *     --confirm "ROLLBACK CONFIRMED JULIA DOB CORRECTION"
+ *     --confirm "ROLLBACK CONFIRMED CAMPAIGN DOB CORRECTION"
  *
  * Do not commit a JSONL supplement. Do not pass a production host until a
- * separate review authorizes that write.
+ * separate review authorizes that write. This command is not
+ * production-executable until Auth/Account ships the audit migration.
  */
+import { readFileSync } from "node:fs";
 import { config } from "dotenv";
 
 import { isLocalhostTarget, parseDatabaseTarget } from "../apps/api/src/services/aged-inventory-bulk/aged-inventory-bulk-db-guard.ts";
@@ -66,6 +76,55 @@ function parseArgs(argv: string[]): Record<string, string> {
     }
   }
   return out;
+}
+
+function sameIds(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((id, index) => id === right[index]);
+}
+
+function reviewedScope(args: Record<string, string>): { ids: string[]; expectedCount: number } {
+  const flagIds = repeated("--id");
+  const manifestPath = args.manifest?.trim() || "";
+  let manifestIds: string[] | null = null;
+  let manifestCount: number | null = null;
+  if (manifestPath) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(manifestPath, "utf8")) as unknown;
+    } catch {
+      refuse("manifest_unreadable", "manifest");
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) refuse("manifest_unreadable", "manifest");
+    const body = parsed as { ids?: unknown; expectedCount?: unknown };
+    if (
+      !Array.isArray(body.ids) ||
+      !body.ids.every((id) => typeof id === "string" && id.trim()) ||
+      typeof body.expectedCount !== "number" ||
+      !Number.isInteger(body.expectedCount)
+    ) {
+      refuse("manifest_unreadable", "manifest");
+    }
+    manifestIds = body.ids.map((id) => id.trim());
+    manifestCount = body.expectedCount;
+  }
+  if (flagIds.length === 0 && manifestIds == null) refuse("reviewed_scope_required");
+  if (manifestIds && flagIds.length > 0 && !sameIds(flagIds, manifestIds)) refuse("reviewed_scope_mismatch");
+  const ids = manifestIds ?? flagIds;
+  const countText = args["expected-count"]?.trim() || "";
+  let expectedCount: number;
+  if (countText) {
+    if (!/^[1-9]\d*$/.test(countText)) refuse("reviewed_count_mismatch", "expected-count");
+    expectedCount = Number(countText);
+  } else if (manifestCount != null) {
+    expectedCount = manifestCount;
+  } else {
+    refuse("reviewed_count_mismatch", "expected-count");
+  }
+  if (manifestCount != null && expectedCount !== manifestCount) refuse("reviewed_count_mismatch", "expected-count");
+  if (expectedCount !== ids.length || new Set(ids).size !== ids.length) {
+    refuse("reviewed_count_mismatch", "expected-count");
+  }
+  return { ids, expectedCount };
 }
 
 function repeated(flag: string): string[] {
@@ -134,6 +193,46 @@ async function main(): Promise<void> {
     if (!/^[1-9]\d*$/.test(limitText)) refuse("invalid_limit", "limit");
     const limit = Number(limitText);
     if (!args.apply && limit > recovery.INCOMING_DOB_RECOVERY_MAX_LIMIT) refuse("limit_exceeds_maximum", "limit");
+    const window = { receivedFrom: from.toISOString(), receivedTo: to.toISOString() };
+
+    if (args.apply) {
+      if ((args.confirm?.trim() || "") !== correction.INCOMING_DOB_CORRECTION_APPLY_CONFIRMATION) {
+        refuse("confirmation_mismatch", "confirm");
+      }
+      const reviewed = reviewedScope(args);
+      if (limit < reviewed.expectedCount) refuse("reviewed_count_mismatch", "limit");
+      const loaded = await recovery.readIncomingDobRecoverySnapshots(db, {
+        receivedFrom: from,
+        receivedTo: to,
+        knownEventId: recovery.KNOWN_DOB_RECOVERY_EVENT_ID,
+        limit: reviewed.ids.length,
+        onlyIds: reviewed.ids,
+      });
+      const byId = new Map(loaded.rows.map((row) => [row.id, row]));
+      const plans = reviewed.ids.map((id) => {
+        const row = byId.get(id);
+        return row ? correction.planIncomingDobCorrection(row, window) : null;
+      });
+      if (plans.some((plan) => plan == null || plan.action !== "apply")) refuse("reviewed_scope_mismatch");
+      const applyPlans = plans.filter((plan): plan is NonNullable<typeof plan> => plan != null);
+      const result = await correction.applyIncomingDobCorrections(db, {
+        databaseUrl,
+        expectedDbHost: expectedHost,
+        operator: args.operator?.trim() || "",
+        confirm: args.confirm?.trim() || "",
+        limit,
+        auditFile: args["audit-file"]?.trim() || "",
+        ids: reviewed.ids,
+        expectedCount: reviewed.expectedCount,
+        receivedFrom: window.receivedFrom,
+        receivedTo: window.receivedTo,
+        expectedBeforeById: Object.fromEntries(applyPlans.map((plan) => [plan.eventId, plan.before])),
+      });
+      console.log(JSON.stringify({ ...result, writes: result.writtenIds.length > 0 }));
+      const code = correction.incomingDobCorrectionExitCode(result);
+      if (code !== 0) process.exit(code);
+      return;
+    }
 
     const loaded = await recovery.readIncomingDobRecoverySnapshots(db, {
       receivedFrom: from,
@@ -141,47 +240,24 @@ async function main(): Promise<void> {
       knownEventId: recovery.KNOWN_DOB_RECOVERY_EVENT_ID,
       limit,
     });
-    const window = { receivedFrom: from.toISOString(), receivedTo: to.toISOString() };
-    const requestedIds = new Set(repeated("--id"));
-    const plans = loaded.rows
-      .filter((row) => requestedIds.size === 0 || requestedIds.has(row.id))
-      .map((row) => correction.planIncomingDobCorrection(row, window));
+    const plans = loaded.rows.map((row) => correction.planIncomingDobCorrection(row, window));
     const applyPlans = plans.filter((plan) => plan.action === "apply");
-
-    if (!args.apply) {
-      console.log(JSON.stringify({
-        version: correction.INCOMING_DOB_CORRECTION_VERSION,
-        mode: "dry_run",
-        writes: false,
-        externalDestinations: "unchanged",
-        truncated: loaded.truncated,
-        window,
-        counts: {
-          rows: plans.length,
-          apply: applyPlans.length,
-          skip: plans.length - applyPlans.length,
-          alreadyDeliveredApply: applyPlans.filter((plan) => plan.alreadyDelivered).length,
-        },
-        plans: plans.filter((plan) => plan.action === "apply" || plan.recoveryClass === "conflicting" || plan.eventId === recovery.KNOWN_DOB_RECOVERY_EVENT_ID),
-      }));
-      return;
-    }
-
-    const result = await correction.applyIncomingDobCorrections(db, {
-      databaseUrl,
-      expectedDbHost: expectedHost,
-      operator: args.operator?.trim() || "",
-      confirm: args.confirm?.trim() || "",
-      limit,
-      auditFile: args["audit-file"]?.trim() || "",
-      ids: applyPlans.map((plan) => plan.eventId),
-      receivedFrom: window.receivedFrom,
-      receivedTo: window.receivedTo,
-      expectedBeforeById: Object.fromEntries(applyPlans.map((plan) => [plan.eventId, plan.before])),
-    });
-    console.log(JSON.stringify({ ...result, writes: result.writtenIds.length > 0 }));
-    const code = correction.incomingDobCorrectionExitCode(result);
-    if (code !== 0) process.exit(code);
+    console.log(JSON.stringify({
+      version: correction.INCOMING_DOB_CORRECTION_VERSION,
+      mode: "dry_run",
+      writes: false,
+      externalDestinations: "unchanged",
+      truncated: loaded.truncated,
+      window,
+      confirmedDateOfBirthBindingIds: recovery.listConfirmedDateOfBirthBindingIds(),
+      counts: {
+        rows: plans.length,
+        apply: applyPlans.length,
+        skip: plans.length - applyPlans.length,
+        alreadyDeliveredApply: applyPlans.filter((plan) => plan.alreadyDelivered).length,
+      },
+      plans: plans.filter((plan) => plan.action === "apply" || plan.recoveryClass === "conflicting" || plan.eventId === recovery.KNOWN_DOB_RECOVERY_EVENT_ID),
+    }));
   } finally {
     await db.$disconnect();
   }

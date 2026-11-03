@@ -137,6 +137,43 @@ test("a blank confirmed canonical DOB is filled and a supplied age disagreement 
   assert.equal(preservedAttribute.after.source_attribute_date_of_birth, "keep-raw");
 });
 
+test("Eriks's confirmed page plans 1949-01-27 and age 77", () => {
+  const plan = planIncomingDobCorrection(
+    snapshot({
+      id: "evt_internal_eriks",
+      receivedAt: "2026-11-03T09:53:33.092Z",
+      rawPayload: {
+        provider: "leadcapture_io",
+        sa360_source_system: "leadcapture_io_nextgen",
+        lead_id: "e452eaed-92c8-4916-9dd1-fbd001dafaac",
+        submitted_at: "2026-11-03T09:53:33.092Z",
+        parent_url: "https://go.lifeinsuranceforvets.com/learn-eriks-veidemanis?utm=1",
+        first_name: "Pat",
+        email: EMAIL,
+        date: "01/27/1949",
+      },
+      normalizedPayload: {
+        contact: { email: EMAIL, first_name: "Pat" },
+        lead_details: {},
+        routing: {
+          niche_key: "vet",
+          source_intake: {
+            submitted_at: "2026-11-03T09:53:33.092Z",
+            sourceAttributes: {},
+          },
+        },
+      },
+      enrichment: { sourceFunnelId: "cmobservedfunnel0000000000" },
+    }),
+    WINDOW
+  );
+  assert.equal(plan.action, "apply");
+  assert.equal(plan.after.date_of_birth, "1949-01-27");
+  assert.equal(plan.after.consumer_age, "77");
+  assert.equal(plan.after.consumer_age_reference_date, "2026-11-03");
+  assert.notEqual(plan.eventId, "e452eaed-92c8-4916-9dd1-fbd001dafaac");
+});
+
 test("rows outside the fixed window are not corrections", () => {
   const afterEnd = planIncomingDobCorrection(snapshot({ receivedAt: "2026-11-03T15:36:00.001Z" }), WINDOW);
   assert.equal(afterEnd.action, "skip");
@@ -297,12 +334,25 @@ test("apply fills only blank canonical fields, is idempotent, and rolls back", a
       ...base,
       expectedDbHost: "db.example.com",
       ids: [eligible.id],
+      expectedCount: 1,
     });
     assert.equal(hostMismatch.ok, false);
     assert.equal(hostMismatch.writesAttempted, false);
     assert.equal(hostMismatch.reasonCode, "db_host_mismatch");
 
-    const refused = await applyIncomingDobCorrections(db, { ...base, ids: [eligible.id] });
+    const counted = await applyIncomingDobCorrections(db, {
+      ...base,
+      ids: [eligible.id, eligible.id],
+      expectedCount: 2,
+    });
+    assert.equal(counted.ok, false);
+    assert.equal(counted.writesAttempted, false);
+    assert.equal(counted.reasonCode, "reviewed_count_mismatch");
+    assert.equal(readCanonicalDobAgeState(
+      (await db.sourceLeadEvent.findUniqueOrThrow({ where: { id: eligible.id } })).normalizedPayloadJson
+    ).date_of_birth, null);
+
+    const refused = await applyIncomingDobCorrections(db, { ...base, ids: [eligible.id], expectedCount: 1 });
     assert.equal(refused.ok, false);
     assert.equal(refused.writesAttempted, false);
     assert.equal(refused.reasonCode, "audit_relation_required");
@@ -310,11 +360,26 @@ test("apply fills only blank canonical fields, is idempotent, and rolls back", a
       (await db.sourceLeadEvent.findUniqueOrThrow({ where: { id: eligible.id } })).normalizedPayloadJson
     ).date_of_birth, null);
 
+    await db.$executeRawUnsafe('CREATE TABLE "IncomingDobCorrectionAudit" (id TEXT PRIMARY KEY)');
+    const incompatible = await applyIncomingDobCorrections(db, {
+      ...base,
+      ids: [eligible.id],
+      expectedCount: 1,
+    });
+    assert.equal(incompatible.ok, false);
+    assert.equal(incompatible.writesAttempted, false);
+    assert.equal(incompatible.reasonCode, "audit_relation_incompatible");
+    assert.equal(readCanonicalDobAgeState(
+      (await db.sourceLeadEvent.findUniqueOrThrow({ where: { id: eligible.id } })).normalizedPayloadJson
+    ).date_of_birth, null);
+    await dropAuditTable(db);
+
     await createAuditTable(db);
     await assert.rejects(
       () => applyIncomingDobCorrections(db, {
         ...base,
         ids: [eligible.id],
+        expectedCount: 1,
         expectedBeforeById: { [eligible.id]: blank },
         beforeCommit: () => {
           throw new Error("terminated_before_commit");
@@ -330,6 +395,7 @@ test("apply fills only blank canonical fields, is idempotent, and rolls back", a
     const applied = await applyIncomingDobCorrections(db, {
       ...base,
       ids: [eligible.id, conflict.id],
+      expectedCount: 2,
       expectedBeforeById: {
         [eligible.id]: blank,
         [conflict.id]: { ...blank, consumer_age: "40" },
@@ -369,7 +435,7 @@ test("apply fills only blank canonical fields, is idempotent, and rolls back", a
     assert.equal(readCanonicalDobAgeState(conflictStored.normalizedPayloadJson).consumer_age, "40");
     assert.equal(readCanonicalDobAgeState(conflictStored.normalizedPayloadJson).date_of_birth, null);
 
-    const again = await applyIncomingDobCorrections(db, { ...base, ids: [eligible.id] });
+    const again = await applyIncomingDobCorrections(db, { ...base, ids: [eligible.id], expectedCount: 1 });
     assert.deepEqual(again.writtenIds, []);
     assert.equal(again.skipped[0]?.reason, "already_canonical");
     const audits = readDobCorrectionAudits(auditFile);
@@ -399,6 +465,7 @@ test("apply fills only blank canonical fields, is idempotent, and rolls back", a
     const blocked = await applyIncomingDobCorrections(db, {
       ...base,
       ids: [lockedRow.id],
+      expectedCount: 1,
       expectedBeforeById: { [lockedRow.id]: blank },
     });
     assert.deepEqual(blocked.writtenIds, []);
@@ -415,6 +482,7 @@ test("apply fills only blank canonical fields, is idempotent, and rolls back", a
     const afterLock = await applyIncomingDobCorrections(db, {
       ...base,
       ids: [lockedRow.id],
+      expectedCount: 1,
       expectedBeforeById: { [lockedRow.id]: blank },
     });
     assert.equal(afterLock.complete, true);
@@ -435,6 +503,7 @@ test("apply fills only blank canonical fields, is idempotent, and rolls back", a
     const editedApply = await applyIncomingDobCorrections(db, {
       ...base,
       ids: [edited.id],
+      expectedCount: 1,
       expectedBeforeById: { [edited.id]: blank },
     });
     assert.deepEqual(editedApply.writtenIds, [edited.id]);
@@ -491,6 +560,7 @@ test("apply fills only blank canonical fields, is idempotent, and rolls back", a
     const scope = await applyIncomingDobCorrections(db, {
       ...base,
       ids: [outside.id, drifted.id],
+      expectedCount: 2,
       expectedBeforeById: {
         [outside.id]: blank,
         [drifted.id]: { ...blank, date_of_birth: "1900-01-01" },
@@ -508,6 +578,7 @@ test("apply fills only blank canonical fields, is idempotent, and rolls back", a
       ...base,
       auditFile: join(blockedExport, "lost.dob-correction-audit.jsonl"),
       ids: [exportRow.id],
+      expectedCount: 1,
       expectedBeforeById: { [exportRow.id]: blank },
     });
     assert.equal(exported.ok, true);
@@ -623,9 +694,17 @@ test("correction command dry-run does not write and refuses a remote host", () =
 
   const dry = run(["--limit", "5"], databaseUrl);
   assert.equal(dry.status, 0, `${dry.stdout}\n${dry.stderr}`);
-  const report = JSON.parse(dry.stdout) as { mode: string; writes: boolean };
+  const report = JSON.parse(dry.stdout) as {
+    mode: string;
+    writes: boolean;
+    confirmedDateOfBirthBindingIds: string[];
+  };
   assert.equal(report.mode, "dry_run");
   assert.equal(report.writes, false);
+  assert.deepEqual(report.confirmedDateOfBirthBindingIds, [
+    "leadcapture_io_nextgen_vet_julia_dodge",
+    "leadcapture_io_nextgen_vet_eriks_veidemanis",
+  ]);
 
   const remote = run([], "postgresql://user:secret@db.example.com:25060/defaultdb");
   assert.equal(remote.status, 2);
@@ -635,4 +714,14 @@ test("correction command dry-run does not write and refuses a remote host", () =
   const apply = run(["--apply", "--expected-db-host", "127.0.0.1:5432", "--limit", "1"], databaseUrl);
   assert.equal(apply.status, 2);
   assert.match(`${apply.stdout}\n${apply.stderr}`, /confirmation_phrase_mismatch|confirmation_mismatch/);
+
+  const unscoped = run([
+    "--apply",
+    "--expected-db-host", "127.0.0.1:5432",
+    "--limit", "1",
+    "--operator", "correction-test",
+    "--confirm", `"${INCOMING_DOB_CORRECTION_APPLY_CONFIRMATION}"`,
+  ], databaseUrl);
+  assert.equal(unscoped.status, 2);
+  assert.match(`${unscoped.stdout}\n${unscoped.stderr}`, /reviewed_scope_required/);
 });

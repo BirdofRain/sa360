@@ -145,7 +145,10 @@ count from the fixture classifications.
 ## Scoped incoming `date`
 
 `date` is not a global date-of-birth alias, and it is not mapped on
-`UNKNOWN_ROUTE`. The reusable registry is `SCOPED_INCOMING_FIELD_BINDINGS`.
+`UNKNOWN_ROUTE`. The reusable registry is `SCOPED_INCOMING_FIELD_BINDINGS`
+in `source-field-alias.registry.ts`. Historical recovery uses that same file.
+It does not keep a second allowlist or DOB parser.
+
 A binding maps `date` to `date_of_birth` only when that form is explicitly
 confirmed. `SourceFunnel.id` and the LeadCapture funnel UUID
 (`providerFunnelId`) are different identifiers. A binding that names an
@@ -170,7 +173,10 @@ provider lead id, not a `SourceLeadEvent` id. Its raw `date` is `01/27/1949`
 and its `submitted_at` is `2026-11-03T09:53:33.092Z` (4:53 AM America/New_York).
 The canonical DOB is `1949-01-27` and the age at that submission is 77. That
 lead arrived before the Julia-only release and stays historically blank until
-a separate correction runs.
+a separate correction runs. The GET-only reader reports `sourceLeadLookups`.
+It matches raw `lead_id` on details it already fetched and does not request
+that UUID as an event id. Until an authorized read finds exactly one event,
+that lookup stays pending.
 
 Other LeadCapture forms found in this repository are not guessed from the
 veteran domain, an old-looking date, or `submitted_at` alone. Production
@@ -217,36 +223,35 @@ ids seen in the post-release API log. Each inspection separates
 `proposedRecovery` (recomputed; `proposedRecoveryIsProductionVerification`
 is false). `missingInspectionIds` lists requested ids the API did not
 return. Pagination reports `complete`, `stoppedReason`, `pages`, and
-`listItemsSeen`. Sheets jobs and lead allocations stay unresolved.
+`listItemsSeen`. `sourceLeadLookups` matches confirmed provider lead ids
+from raw `lead_id` on those fetched details. An incomplete page, a missing
+match, or more than one match stays `pending` and does not invent an event
+id. Sheets jobs and lead allocations stay unresolved.
 
 `pnpm source-intake:dob-correction` plans that fill from the same normalizer.
-The default is a dry run over that same fixed window. `--apply` requires the
-database host, an operator name, a limit, and the confirmation
-`APPLY CONFIRMED JULIA DOB CORRECTION`. It also requires the
-`IncomingDobCorrectionAudit` table. That table is an Auth/Account migration
-and is not created by this command. Until `to_regclass` finds it, apply and
-rollback return `audit_relation_required` and write nothing. The migration is:
+The default is a dry run over that same fixed window and prints
+`confirmedDateOfBirthBindingIds`. `--apply` does not turn that scan into a
+write set. It requires the database host, an operator name, a limit, the
+confirmation `APPLY CONFIRMED CAMPAIGN DOB CORRECTION`, and an explicit
+reviewed scope: repeated `--id` values plus `--expected-count`, or a
+manifest `{ "ids": [...], "expectedCount": N }`. The count must equal the
+id list, the list cannot contain duplicates, and `--limit` cannot be smaller
+than that count. Every named id must exist and plan as `apply`. Anything
+else returns `reviewed_scope_required`, `reviewed_count_mismatch`,
+`reviewed_scope_mismatch`, or `manifest_unreadable` and writes nothing.
+A window scan cannot add ids.
 
-```sql
-CREATE TABLE "IncomingDobCorrectionAudit" (
-  id TEXT PRIMARY KEY,
-  "version" TEXT NOT NULL,
-  "action" TEXT NOT NULL,
-  "operator" TEXT NOT NULL,
-  "eventId" TEXT NOT NULL,
-  "previousUpdatedAt" TIMESTAMP(3) NOT NULL,
-  "newUpdatedAt" TIMESTAMP(3) NOT NULL,
-  "alreadyDelivered" BOOLEAN NOT NULL,
-  "beforeJson" JSONB NOT NULL,
-  "afterJson" JSONB NOT NULL,
-  "externalDestinations" TEXT NOT NULL,
-  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX "IncomingDobCorrectionAudit_eventId_createdAt_idx"
-  ON "IncomingDobCorrectionAudit" ("eventId", "createdAt");
-```
+It also requires `IncomingDobCorrectionAudit` to match the documented
+schema, not merely to exist. That table is an Auth/Account migration and is
+not created by this command. See
+`docs/validation/incoming-dob-correction-audit-migration.md`. While the
+relation is absent, apply and rollback return `audit_relation_required`. A
+table with the right name and the wrong columns, key, index, or action
+check returns `audit_relation_incompatible`. Either refusal writes nothing.
+This branch is not production-executable because that migration does not
+exist yet.
 
-When the table exists, the payload update and the audit insert commit
+When the compatible table exists, the payload update and the audit insert commit
 together. The audit stores before and after for every canonical field this
 command changes, including `sourceAttributes.date_of_birth` when that
 attribute is added. A local `.dob-correction-audit.jsonl` file is optional
@@ -263,7 +268,7 @@ receipts, inventory, and external GHL or Sheets values are not changed.
 in batches of 25. A lock skip is `pending` and the outcome is `PENDING`
 with exit code 3, so the row cannot disappear from
 `written + skipped + pending`. A second apply writes nothing. `--rollback`
-with `ROLLBACK CONFIRMED JULIA DOB CORRECTION` reads open audit rows from
+with `ROLLBACK CONFIRMED CAMPAIGN DOB CORRECTION` reads open audit rows from
 `IncomingDobCorrectionAudit`, including after a process restart. It restores
 every audited canonical field when the current values still equal the
 audited after-image, and it inserts its own audit row in that same

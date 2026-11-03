@@ -19,6 +19,7 @@ import {
   CONFIRMED_ERIKS_VEIDEMANIS_PROVIDER_FUNNEL_ID,
   CONFIRMED_JULIA_DODGE_PARENT_URL_KEY,
   CONFIRMED_JULIA_DODGE_SOURCE_FUNNEL_ID,
+  confirmedCampaignSourceLeadIds,
   confirmedDateOfBirthBindings,
   matchScopedIncomingFieldBinding,
   normalizeSourceFieldKey,
@@ -68,7 +69,7 @@ export const INCOMING_DOB_LATER_UPDATE_POLICY = {
   untouched:
     "Do not change rawPayloadJson, status, routingResultJson, deliveryResultJson, inventory, allocations, delivery receipts, or any queue. Do not enqueue Sheets or GHL delivery.",
   evidence:
-    "Each committed correction inserts one IncomingDobCorrectionAudit row in the same transaction as the normalizedPayloadJson update. That row stores the event id, operator, previous updatedAt, new updatedAt, and the before and after canonical date_of_birth, consumer_age, provenance, reference, conflict, and sourceAttributes.date_of_birth. Contact values and the raw payload are not copied. A local JSONL file may supplement the row after commit and is not the source of rollback. Apply and rollback refuse until Auth/Account adds this table. This assessment report does not print those values.",
+    "Each committed correction inserts one IncomingDobCorrectionAudit row in the same transaction as the normalizedPayloadJson update. That row stores the event id, operator, previous updatedAt, new updatedAt, and the before and after canonical date_of_birth, consumer_age, provenance, reference, conflict, and sourceAttributes.date_of_birth. Contact values and the raw payload are not copied. A local JSONL file may supplement the row after commit and is not the source of rollback. Apply and rollback refuse until Auth/Account adds this table with the documented columns, primary key, event index, and action check. A table name alone is not enough. This assessment report does not print those values.",
   idempotent:
     "A second run classifies the row unchanged once the stored canonical values equal the proposal, so the compare-and-set writes nothing.",
 } as const;
@@ -465,7 +466,7 @@ export function buildIncomingDobRecoveryReport(input: {
         `${b.sourceSystem}|${b.formKey}|${b.clientAccountId}`
       )
     ),
-    confirmedDateOfBirthBindingIds: confirmedDateOfBirthBindings().map((binding) => binding.id),
+    confirmedDateOfBirthBindingIds: listConfirmedDateOfBirthBindingIds(),
     laterUpdate: INCOMING_DOB_LATER_UPDATE_POLICY,
     upstreamPayloadChange: INCOMING_DOB_UPSTREAM_PAYLOAD_CHANGE,
     gaps: INCOMING_DOB_RECOVERY_GAPS,
@@ -501,17 +502,21 @@ export async function readIncomingDobRecoverySnapshots(
     receivedTo: Date | null;
     knownEventId: string;
     limit: number;
+    onlyIds?: readonly string[];
   }
 ): Promise<{ rows: IncomingDobRecoverySnapshot[]; truncated: boolean }> {
+  const onlyIds = [...new Set((query.onlyIds ?? []).map((id) => id.trim()).filter(Boolean))];
   const receivedAt: { gte: Date; lte?: Date } = { gte: query.receivedFrom };
   if (query.receivedTo) receivedAt.lte = query.receivedTo;
   const events = (await db.sourceLeadEvent.findMany({
-    where: {
-      sourceProvider: "leadcapture_io",
-      OR: [{ receivedAt }, { id: query.knownEventId }],
-    },
+    where: onlyIds.length > 0
+      ? { id: { in: onlyIds } }
+      : {
+          sourceProvider: "leadcapture_io",
+          OR: [{ receivedAt }, { id: query.knownEventId }],
+        },
     orderBy: [{ receivedAt: "asc" }, { id: "asc" }],
-    take: query.limit + 1,
+    take: onlyIds.length > 0 ? onlyIds.length : query.limit + 1,
     select: {
       id: true,
       sourceProvider: true,
@@ -528,7 +533,7 @@ export async function readIncomingDobRecoverySnapshots(
       routingResultJson: true,
     },
   })) as EventRow[];
-  const truncated = events.length > query.limit;
+  const truncated = onlyIds.length > 0 ? false : events.length > query.limit;
   const page = truncated ? events.slice(0, query.limit) : events;
   const ids = page.map((event) => event.id);
   const sheetsDelivered = new Set<string>();
@@ -583,6 +588,78 @@ export async function readIncomingDobRecoverySnapshots(
       commerciallyAllocated: allocated.has(event.id),
     })),
   };
+}
+
+export function listConfirmedDateOfBirthBindingIds(): readonly string[] {
+  return confirmedDateOfBirthBindings().map((binding) => binding.id);
+}
+
+export type ConfirmedSourceLeadLookup = {
+  sourceLeadId: string;
+  bindingIds: readonly string[];
+  status: "resolved" | "pending";
+  eventId: string | null;
+  matchCount: number;
+  reason: "matched" | "not_in_fetched_details" | "multiple_matches" | "pagination_incomplete";
+};
+
+function rawProviderLeadId(raw: unknown): string | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const value = (raw as Record<string, unknown>).lead_id;
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+/**
+ * Match a confirmed provider lead id to a fetched SourceLeadEvent.
+ * The provider UUID is never compared to the event id. An incomplete page
+ * stays pending even when one fetched row matches.
+ */
+export function matchConfirmedSourceLeadEvents(
+  rows: ReadonlyArray<{ id: string; rawPayload: unknown }>,
+  options?: { paginationComplete?: boolean }
+): ConfirmedSourceLeadLookup[] {
+  const paginationComplete = options?.paginationComplete !== false;
+  const grouped = new Map<string, string[]>();
+  for (const entry of confirmedCampaignSourceLeadIds()) {
+    const bindingIds = grouped.get(entry.sourceLeadId) ?? [];
+    bindingIds.push(entry.bindingId);
+    grouped.set(entry.sourceLeadId, bindingIds);
+  }
+  return [...grouped.entries()].map(([sourceLeadId, bindingIds]) => {
+    const eventIds = [
+      ...new Set(rows.filter((row) => rawProviderLeadId(row.rawPayload) === sourceLeadId).map((row) => row.id)),
+    ];
+    if (!paginationComplete) {
+      return {
+        sourceLeadId,
+        bindingIds,
+        status: "pending" as const,
+        eventId: null,
+        matchCount: eventIds.length,
+        reason: "pagination_incomplete" as const,
+      };
+    }
+    if (eventIds.length === 1) {
+      return {
+        sourceLeadId,
+        bindingIds,
+        status: "resolved" as const,
+        eventId: eventIds[0] ?? null,
+        matchCount: 1,
+        reason: "matched" as const,
+      };
+    }
+    return {
+      sourceLeadId,
+      bindingIds,
+      status: "pending" as const,
+      eventId: null,
+      matchCount: eventIds.length,
+      reason: (eventIds.length === 0 ? "not_in_fetched_details" : "multiple_matches") as
+        | "not_in_fetched_details"
+        | "multiple_matches",
+    };
+  });
 }
 
 export type IncomingDobRecoveryExpectation = {

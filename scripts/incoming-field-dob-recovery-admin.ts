@@ -7,6 +7,8 @@
  * --write, --backfill, and --replay are refused before any request. The
  * default window ends at 2026-11-03T15:36:00.000Z. storedCanonical is the
  * saved lead. proposedRecovery is recomputed and is not production verification.
+ * Confirmed provider lead ids are matched only from raw lead_id on details
+ * this command already fetched. They are not requested as event ids.
  * The localhost Prisma command is unchanged and still refuses remote databases.
  *
  * Requires SA360_PROD_API_URL (or --base-url) and ADMIN_API_KEY or
@@ -241,6 +243,9 @@ async function main(): Promise<void> {
       knownEventHttpStatus: knownStatus,
       inspectionIds,
       missingInspectionIds: inspectionIds.filter((id) => !foundIds.has(id)),
+      sourceLeadLookups: recovery.matchConfirmedSourceLeadEvents(rows, {
+        paginationComplete: scan.complete,
+      }),
       inspections,
       report,
     })

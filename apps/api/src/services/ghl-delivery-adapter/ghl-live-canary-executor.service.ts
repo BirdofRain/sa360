@@ -554,6 +554,8 @@ export async function executeLiveCanaryGhlSteps(
       fieldMap: ctx.sourceEnrichment.sourceAttributeFieldMap,
       discoveredFields: discovered,
       ignoredCanonicalKeys: ctx.sourceEnrichment.sourceEnrichmentPolicy.ignoredCanonicalKeys,
+      normalizedPayload: ctx.sourceEnrichment.normalizedPayload,
+      receivedAt: ctx.sourceEnrichment.receivedAt,
     });
     const payload = buildSourceAttributeStampPayload(stampPlan);
     if (payload.apiPayload.length > 0) {

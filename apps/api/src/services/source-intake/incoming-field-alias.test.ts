@@ -13,7 +13,10 @@ import {
 } from "../../lib/company-google-sheets-env.js";
 import { projectCampaignDobAge } from "../consumer-age/campaign-dob-age.js";
 import { companySheetsCampaignRowValues } from "../company-sheets-delivery/company-sheets-campaign-row.js";
-import { buildSourceAttributeStampPlan } from "./source-attribute-stamp.service.js";
+import {
+  buildSourceAttributeStampPayload,
+  buildSourceAttributeStampPlan,
+} from "./source-attribute-stamp.service.js";
 import { readBuyerCsvV3ZipAndAge } from "../ppl-fulfillment/buyer-lead-fields.js";
 import { normalizeLeadCaptureIoWebhookToLifecyclePayload } from "./leadcapture-io-normalizer.js";
 import {
@@ -135,6 +138,65 @@ test("scoped veteran date becomes 1955-03-13 and age 71 on 2026-11-02", () => {
   assert.equal(stamp.valuesByLogicalKey.date_of_birth, "03/13/1955");
   assert.equal(stamp.missingSourceKeys.includes("age"), true);
   assert.equal(Object.keys(stamp.valuesByLogicalKey).includes("date"), false);
+});
+
+test("selected GHL Age and DOB use the canonical projection", () => {
+  const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+    juliaPayload({ date: "03/13/1955" }),
+    { receivedAt: SUBMITTED_AT }
+  );
+  const discovered = [
+    { id: "dobfield1", name: "DOB", key: "contact.dob", fieldKey: "contact.dob", dataType: "DATE" },
+    { id: "agefield1", name: "Age", key: "contact.age", fieldKey: "contact.age", dataType: "TEXT" },
+  ];
+  const fieldMap = {
+    date_of_birth: { ghlFieldKey: "dobfield1", requirement: "optional" as const },
+    age: { ghlFieldKey: "agefield1", requirement: "optional" as const },
+  };
+  const stamp = buildSourceAttributeStampPlan({
+    sourceAttributes: attributesOf(normalized) as Record<string, string>,
+    fieldMap,
+    discoveredFields: discovered,
+    normalizedPayload: normalized,
+    receivedAt: SUBMITTED_AT,
+  });
+  assert.equal(stamp.valuesByLogicalKey.age, "71");
+  assert.equal(stamp.valuesByLogicalKey.date_of_birth, "1955-03-13");
+  const payload = buildSourceAttributeStampPayload(stamp);
+  const byId = Object.fromEntries(payload.apiPayload.map((item) => [item.id, item.field_value]));
+  assert.equal(byId.agefield1, "71");
+  assert.equal(byId.dobfield1, "1955-03-13");
+
+  const supplied = structuredClone(normalized);
+  supplied.lead_details = {
+    ...supplied.lead_details,
+    consumer_age: "40",
+    consumer_age_provenance: "supplied",
+    consumer_age_conflict: true,
+  };
+  const suppliedStamp = buildSourceAttributeStampPlan({
+    sourceAttributes: attributesOf(supplied) as Record<string, string>,
+    fieldMap,
+    discoveredFields: discovered,
+    normalizedPayload: supplied,
+    receivedAt: SUBMITTED_AT,
+  });
+  assert.equal(suppliedStamp.valuesByLogicalKey.age, "40");
+  assert.equal(suppliedStamp.valuesByLogicalKey.date_of_birth, "1955-03-13");
+
+  const invalid = buildSourceAttributeStampPlan({
+    sourceAttributes: { date_of_birth: "not-a-date" },
+    fieldMap,
+    discoveredFields: discovered,
+    normalizedPayload: {
+      routing: { source_intake: { submitted_at: SUBMITTED_AT, sourceAttributes: { date_of_birth: "not-a-date" } } },
+      lead_details: {},
+    },
+    receivedAt: SUBMITTED_AT,
+  });
+  assert.equal(invalid.missingSourceKeys.includes("date_of_birth"), true);
+  assert.equal(invalid.missingSourceKeys.includes("age"), true);
+  assert.equal(invalid.valuesByLogicalKey.date_of_birth, undefined);
 });
 
 test("confirmed funnel id maps date without falling through from a different funnel", () => {

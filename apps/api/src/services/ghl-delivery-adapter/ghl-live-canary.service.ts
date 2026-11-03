@@ -1,4 +1,4 @@
-import type { LeadDeliveryPlan, LeadDeliveryPlanStep, Prisma } from "@prisma/client";
+import type { CampaignRoutingRule, LeadDeliveryPlan, LeadDeliveryPlanStep, Prisma } from "@prisma/client";
 import {
   getGhlDeliveryAdapterMode,
   GHL_LIVE_CANARY_SAFETY_MESSAGE,
@@ -31,9 +31,48 @@ import {
   GHL_LIVE_CANARY_SAFETY_COPY,
   presentGhlLiveDeliveryRun,
 } from "./ghl-live-canary.present.js";
-import type { GhlAdapterPlanContext } from "./ghl-delivery-adapter.types.js";
+import type { GhlAdapterPlanContext, SourceEnrichmentPlanContext } from "./ghl-delivery-adapter.types.js";
 import { buildSourceEnrichmentDeliveryContext } from "../source-intake/source-enrichment.service.js";
 import { persistedCampaignRoutingRuleId } from "../association-ghl-delivery-source.js";
+
+async function campaignAgeReceivedAt(decisionId: string | null | undefined): Promise<string | null> {
+  const id = decisionId?.trim();
+  if (!id) return null;
+  try {
+    const event = await prisma.sourceLeadEvent.findFirst({
+      where: { routingDryRunDecisionId: id },
+      orderBy: { receivedAt: "desc" },
+      select: { receivedAt: true },
+    });
+    return event?.receivedAt.toISOString() ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function sourceEnrichmentPlanContext(
+  lifecyclePayload: LifecycleEventSchema | undefined,
+  destinationClientAccountId: string,
+  rule: CampaignRoutingRule | null,
+  routingDryRunDecisionId: string | null | undefined
+): Promise<SourceEnrichmentPlanContext | null> {
+  if (!lifecyclePayload) return null;
+  const sourceEnrichment = buildSourceEnrichmentDeliveryContext(
+    lifecyclePayload,
+    (await findClientAccountById(destinationClientAccountId))?.ghlDestination ?? null,
+    rule
+  );
+  return {
+    sourceAttributes: sourceEnrichment.sourceAttributes,
+    enrichmentStatus: sourceEnrichment.enrichmentStatus,
+    automationReadiness: sourceEnrichment.automationReadiness,
+    unmappedSourceFieldKeys: sourceEnrichment.unmappedSourceFieldKeys,
+    sourceAttributeFieldMap: sourceEnrichment.sourceAttributeFieldMap,
+    sourceEnrichmentPolicy: sourceEnrichment.sourceEnrichmentPolicy,
+    normalizedPayload: lifecyclePayload,
+    receivedAt: await campaignAgeReceivedAt(routingDryRunDecisionId),
+  };
+}
 
 export async function getLiveCanaryPreflightForPlan(planId: string) {
   await warmEffectiveDeliveryAdapterMode();
@@ -106,28 +145,16 @@ export async function executeLiveCanaryForPlan(
     executedBy: input.executedBy?.trim() || "admin_operator",
   });
 
-  const sourceEnrichment = input.lifecyclePayload
-    ? buildSourceEnrichmentDeliveryContext(
-        input.lifecyclePayload,
-        (await findClientAccountById(plan.destinationClientAccountId))?.ghlDestination ?? null,
-        ctx.rule
-      )
-    : null;
-
   const adapterCtx: GhlAdapterPlanContext = {
     plan,
     rule: ctx.rule,
     destinationFieldMapping: ctx.destinationFieldMapping,
-    sourceEnrichment: sourceEnrichment
-      ? {
-          sourceAttributes: sourceEnrichment.sourceAttributes,
-          enrichmentStatus: sourceEnrichment.enrichmentStatus,
-          automationReadiness: sourceEnrichment.automationReadiness,
-          unmappedSourceFieldKeys: sourceEnrichment.unmappedSourceFieldKeys,
-          sourceAttributeFieldMap: sourceEnrichment.sourceAttributeFieldMap,
-          sourceEnrichmentPolicy: sourceEnrichment.sourceEnrichmentPolicy,
-        }
-      : null,
+    sourceEnrichment: await sourceEnrichmentPlanContext(
+      input.lifecyclePayload,
+      plan.destinationClientAccountId,
+      ctx.rule,
+      plan.routingDryRunDecisionId
+    ),
   };
   let execution;
   try {
@@ -289,27 +316,16 @@ export async function executeRecordedGhlDelivery(
     }
   }
 
-  const sourceEnrichment = input.lifecyclePayload
-    ? buildSourceEnrichmentDeliveryContext(
-        input.lifecyclePayload,
-        (await findClientAccountById(input.plan.destinationClientAccountId))?.ghlDestination ?? null,
-        ctx.rule
-      )
-    : null;
   const adapterCtx: GhlAdapterPlanContext = {
     plan: input.plan,
     rule: ctx.rule,
     destinationFieldMapping: ctx.destinationFieldMapping,
-    sourceEnrichment: sourceEnrichment
-      ? {
-          sourceAttributes: sourceEnrichment.sourceAttributes,
-          enrichmentStatus: sourceEnrichment.enrichmentStatus,
-          automationReadiness: sourceEnrichment.automationReadiness,
-          unmappedSourceFieldKeys: sourceEnrichment.unmappedSourceFieldKeys,
-          sourceAttributeFieldMap: sourceEnrichment.sourceAttributeFieldMap,
-          sourceEnrichmentPolicy: sourceEnrichment.sourceEnrichmentPolicy,
-        }
-      : null,
+    sourceEnrichment: await sourceEnrichmentPlanContext(
+      input.lifecyclePayload,
+      input.plan.destinationClientAccountId,
+      ctx.rule,
+      input.plan.routingDryRunDecisionId
+    ),
   };
 
   let execution;

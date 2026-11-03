@@ -14,8 +14,10 @@ import {
   describeIncomingDobRecoveryInspection,
   INCOMING_DOB_LATER_UPDATE_POLICY,
   INCOMING_DOB_RECOVERY_REPORT_VERSION,
+  INCOMING_DOB_RECOVERY_WINDOW_END,
   INCOMING_DOB_RECOVERY_WINDOW_START,
   KNOWN_DOB_RECOVERY_EVENT_ID,
+  RELEASE_WINDOW_INSPECTION_EVENT_IDS,
   scanAdminSourceLeadWindow,
   type IncomingDobRecoverySnapshot,
 } from "./incoming-field-dob-recovery.js";
@@ -235,6 +237,7 @@ test("known-event expectation recomputes canonical DOB and age without contact f
   assert.equal(expectation.referenceDate, "2026-11-02");
   assert.equal(expectation.provenance, "derived_from_date_of_birth");
   assert.equal(expectation.conflict, false);
+  assert.equal(expectation.proposedRecoveryIsProductionVerification, false);
   assert.equal(JSON.stringify(expectation).includes("pat.sample@example.test"), false);
   assert.equal(JSON.stringify(expectation).includes("03/13/1955"), false);
 });
@@ -243,9 +246,13 @@ test("a specific inspection keeps the raw birthday distinct from receipt time an
   const row = snapshot({
     receivedAt: "2026-11-03T15:06:17.000Z",
     normalizedPayload: {
-      lead_details: {},
+      lead_details: {
+        consumer_age: "40",
+        consumer_age_provenance: "supplied",
+        consumer_age_reference_date: "2026-11-03",
+      },
       routing: { source_intake: { submitted_at: "2026-11-03T15:06:00.000Z" } },
-      contact: { email: "pat.sample@example.test" },
+      contact: { email: "pat.sample@example.test", first_name: "Pat" },
     },
   });
   const inspection = describeIncomingDobRecoveryInspection(row);
@@ -255,7 +262,15 @@ test("a specific inspection keeps the raw birthday distinct from receipt time an
   assert.equal(inspection.receivedAt, "2026-11-03T15:06:17.000Z");
   assert.notEqual(inspection.submittedAt, inspection.receivedAt);
   assert.equal(inspection.parentUrlKey, "go.lifeinsuranceforvets.com/learn-julia-dodge");
-  assert.equal(inspection.expectation?.dateOfBirth, "1955-03-13");
+  assert.equal(inspection.sourceSystem, "leadcapture_io_nextgen");
+  assert.equal(inspection.storedCanonical.dateOfBirth, null);
+  assert.equal(inspection.storedCanonical.consumerAge, "40");
+  assert.equal(inspection.storedCanonical.consumerAgeProvenance, "supplied");
+  assert.equal(inspection.storedCanonical.referenceDate, "2026-11-03");
+  assert.equal(inspection.proposedRecovery?.dateOfBirth, "1955-03-13");
+  assert.equal(inspection.proposedRecovery?.consumerAge, "71");
+  assert.equal(inspection.proposedRecovery?.proposedRecoveryIsProductionVerification, false);
+  assert.equal("expectation" in inspection, false);
   const printed = JSON.stringify(inspection);
   assert.equal(printed.includes("pat.sample@example.test"), false);
   assert.equal(printed.includes("Pat"), false);
@@ -329,6 +344,23 @@ test("admin recovery command refuses writes and a missing key before any request
   assert.equal(script.includes("POST"), false);
   assert.equal(script.includes(".update("), false);
   assert.equal(script.includes(".delete("), false);
+  assert.equal(script.includes("knownEventExpectation"), false);
+  assert.equal(script.includes("INCOMING_DOB_RECOVERY_WINDOW_END"), true);
+  assert.equal(script.includes("RELEASE_WINDOW_INSPECTION_EVENT_IDS"), true);
+  assert.equal(script.includes("missingInspectionIds"), true);
+  assert.equal(script.includes("KNOWN_DOB_RECOVERY_EVENT_ID"), true);
+  assert.equal(INCOMING_DOB_RECOVERY_WINDOW_END, "2026-11-03T15:36:00.000Z");
+  assert.deepEqual(
+    [...RELEASE_WINDOW_INSPECTION_EVENT_IDS],
+    [
+      "cmw0tfpgl0001jv0tp3bk0kz1",
+      "cmw0tlwqv000fjv0te77z8c2x",
+      "cmw0tng0m000tjv0t1cfwreyt",
+      "cmw0tyaw30015jv0tcj17bkhe",
+      "cmw0u7gyn001xjv0tfubwz6tz",
+      "cmw0u8hbx002bjv0t0nas5wot",
+    ]
+  );
 
   const run = (args: string[]) => {
     const env: Record<string, string> = {};

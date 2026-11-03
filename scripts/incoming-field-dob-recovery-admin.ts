@@ -5,7 +5,9 @@
  *
  * GET /admin/v1/source-leads only. There is no apply mode. --apply, --confirm,
  * --write, --backfill, and --replay are refused before any request. The
- * localhost Prisma command is unchanged and still refuses remote databases.
+ * default window ends at 2026-11-03T15:36:00.000Z. storedCanonical is the
+ * saved lead. proposedRecovery is recomputed and is not production verification.
+ * The localhost Prisma command is unchanged and still refuses remote databases.
  *
  * Requires SA360_PROD_API_URL (or --base-url) and ADMIN_API_KEY or
  * SA360_ADMIN_KEY. The key is sent as x-sa360-admin-key and is never printed.
@@ -122,8 +124,8 @@ async function main(): Promise<void> {
     return next && !next.startsWith("--") ? [next.trim()] : [];
   }).filter(Boolean);
 
-  const receivedToText = args["received-to"]?.trim() || "";
-  const to = receivedToText ? new Date(receivedToText) : new Date();
+  const receivedToText = args["received-to"]?.trim() || recovery.INCOMING_DOB_RECOVERY_WINDOW_END;
+  const to = new Date(receivedToText);
   if (Number.isNaN(to.getTime())) refuse("invalid_received_to", "received-to");
   if (to.getTime() < from.getTime()) refuse("received_to_before_from", "received-to");
 
@@ -175,8 +177,15 @@ async function main(): Promise<void> {
     },
   });
 
+  const inspectionIds = [
+    ...new Set([
+      recovery.KNOWN_DOB_RECOVERY_EVENT_ID,
+      ...recovery.RELEASE_WINDOW_INSPECTION_EVENT_IDS,
+      ...expectIds,
+    ]),
+  ];
   const detailIds = [...scan.ids];
-  for (const id of [recovery.KNOWN_DOB_RECOVERY_EVENT_ID, ...expectIds]) {
+  for (const id of inspectionIds) {
     if (!detailIds.includes(id)) detailIds.push(id);
   }
 
@@ -202,8 +211,11 @@ async function main(): Promise<void> {
     receivedTo: to.toISOString(),
     truncated: !scan.complete,
   });
-  const knownRow = rows.find((row) => row.id === recovery.KNOWN_DOB_RECOVERY_EVENT_ID) ?? null;
-  const expectation = knownRow ? recovery.describeIncomingDobRecoveryExpectation(knownRow) : null;
+  const foundIds = new Set(rows.map((row) => row.id));
+  const inspections = inspectionIds
+    .map((id) => rows.find((row) => row.id === id) ?? null)
+    .filter((row): row is NonNullable<typeof row> => row != null)
+    .map((row) => recovery.describeIncomingDobRecoveryInspection(row));
 
   console.log(
     JSON.stringify({
@@ -227,11 +239,9 @@ async function main(): Promise<void> {
       deliveryEvidence:
         "deliveredAt, status, and deliveryResultJson.externalCallExecuted. Sheets jobs and lead allocations are not on this API, so those two flags are unresolved and are not production zeros.",
       knownEventHttpStatus: knownStatus,
-      knownEventExpectation: expectation,
-      inspections: [...new Set([recovery.KNOWN_DOB_RECOVERY_EVENT_ID, ...expectIds])]
-        .map((id) => rows.find((row) => row.id === id) ?? null)
-        .filter((row): row is NonNullable<typeof row> => row != null)
-        .map((row) => recovery.describeIncomingDobRecoveryInspection(row)),
+      inspectionIds,
+      missingInspectionIds: inspectionIds.filter((id) => !foundIds.has(id)),
+      inspections,
       report,
     })
   );

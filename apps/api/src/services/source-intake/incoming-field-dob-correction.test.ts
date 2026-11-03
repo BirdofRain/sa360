@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import test from "node:test";
@@ -10,22 +10,31 @@ import { Prisma, PrismaClient } from "@prisma/client";
 
 import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
 import {
+  INCOMING_DOB_RECOVERY_WINDOW_END,
   INCOMING_DOB_RECOVERY_WINDOW_START,
   type IncomingDobRecoverySnapshot,
 } from "./incoming-field-dob-recovery.js";
 import {
   INCOMING_DOB_CORRECTION_APPLY_CONFIRMATION,
+  INCOMING_DOB_CORRECTION_AUDIT_DDL,
   INCOMING_DOB_CORRECTION_ROLLBACK_CONFIRMATION,
   applyIncomingDobCorrections,
+  incomingDobCorrectionExitCode,
   planIncomingDobCorrection,
   readCanonicalDobAgeState,
   readDobCorrectionAudits,
+  readDobCorrectionAuditsFromDb,
   rollbackIncomingDobCorrections,
   selectDobCorrectionRollbackTargets,
+  type CanonicalDobAgeState,
+  type DobCorrectionWriteResult,
 } from "./incoming-field-dob-correction.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../..");
-const WINDOW = { receivedFrom: INCOMING_DOB_RECOVERY_WINDOW_START, receivedTo: null };
+const WINDOW = {
+  receivedFrom: INCOMING_DOB_RECOVERY_WINDOW_START,
+  receivedTo: INCOMING_DOB_RECOVERY_WINDOW_END,
+};
 const EMAIL = "pat.sample@example.test";
 
 function snapshot(overrides: Partial<IncomingDobRecoverySnapshot> = {}): IncomingDobRecoverySnapshot {
@@ -128,6 +137,39 @@ test("a blank confirmed canonical DOB is filled and a supplied age disagreement 
   assert.equal(preservedAttribute.after.source_attribute_date_of_birth, "keep-raw");
 });
 
+test("rows outside the fixed window are not corrections", () => {
+  const afterEnd = planIncomingDobCorrection(snapshot({ receivedAt: "2026-11-03T15:36:00.001Z" }), WINDOW);
+  assert.equal(afterEnd.action, "skip");
+  assert.equal(afterEnd.reason, "outside_window");
+  const beforeStart = planIncomingDobCorrection(snapshot({ receivedAt: "2026-10-26T03:59:59.999Z" }), WINDOW);
+  assert.equal(beforeStart.action, "skip");
+  assert.equal(beforeStart.reason, "outside_window");
+  const included = planIncomingDobCorrection(snapshot({ receivedAt: "2026-11-03T15:36:00.000Z" }), WINDOW);
+  assert.equal(included.action, "apply");
+});
+
+test("a refused correction exits 2 and a pending correction exits 3", () => {
+  const result = (overrides: Partial<DobCorrectionWriteResult>): DobCorrectionWriteResult => ({
+    version: "incoming_field_dob_correction_v1",
+    outcome: "NOOP",
+    ok: true,
+    writesAttempted: true,
+    complete: true,
+    writtenIds: [],
+    pendingIds: [],
+    lockedIds: [],
+    skipped: [],
+    counts: { requested: 0, written: 0, skipped: 0, pending: 0 },
+    auditExportFailed: false,
+    auditRelation: "IncomingDobCorrectionAudit",
+    externalDestinations: "unchanged",
+    ...overrides,
+  });
+  assert.equal(incomingDobCorrectionExitCode(result({ ok: false, complete: false, outcome: "REFUSED" })), 2);
+  assert.equal(incomingDobCorrectionExitCode(result({ ok: true, complete: false, outcome: "PENDING" })), 3);
+  assert.equal(incomingDobCorrectionExitCode(result({ ok: true, complete: true, outcome: "APPLIED" })), 0);
+});
+
 test("rollback selection closes an apply and ignores contact text", () => {
   const apply = {
     version: "incoming_field_dob_correction_v1" as const,
@@ -146,10 +188,22 @@ test("rollback selection closes an apply and ignores contact text", () => {
   assert.equal(JSON.stringify(apply).includes(EMAIL), false);
 });
 
+async function dropAuditTable(db: PrismaClient): Promise<void> {
+  await db.$executeRawUnsafe('DROP TABLE IF EXISTS "IncomingDobCorrectionAudit"');
+}
+
+async function createAuditTable(db: PrismaClient): Promise<void> {
+  await dropAuditTable(db);
+  for (const statement of INCOMING_DOB_CORRECTION_AUDIT_DDL) {
+    await db.$executeRawUnsafe(statement);
+  }
+}
+
 test("apply fills only blank canonical fields, is idempotent, and rolls back", async () => {
   const databaseUrl = assertSafeTestDatabaseUrl(process.env.SA360_TEST_DATABASE_URL);
   const db = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
   const holder = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+  const restarted = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
   const auditFile = join(mkdtempSync(join(tmpdir(), "dob-correction-")), "run.dob-correction-audit.jsonl");
   const created: string[] = [];
   const base = {
@@ -189,7 +243,15 @@ test("apply fills only blank canonical fields, is idempotent, and rolls back", a
     } satisfies { rawPayloadJson: Prisma.InputJsonValue; normalizedPayloadJson: Prisma.InputJsonValue };
   }
 
+  const blank: CanonicalDobAgeState = readCanonicalDobAgeState({
+    lead_details: { coverage_note: "keep-me" },
+    routing: { source_intake: { sourceAttributes: { branch: "Army" } } },
+  });
+  let releaseHold: () => void = () => undefined;
+  let holding: Promise<unknown> | null = null;
+
   try {
+    await dropAuditTable(db);
     const eligible = await db.sourceLeadEvent.create({
       data: {
         sourceProvider: "leadcapture_io",
@@ -231,23 +293,63 @@ test("apply fills only blank canonical fields, is idempotent, and rolls back", a
     });
     created.push(lockedRow.id);
 
-    const refused = await applyIncomingDobCorrections(db, {
+    const hostMismatch = await applyIncomingDobCorrections(db, {
       ...base,
       expectedDbHost: "db.example.com",
       ids: [eligible.id],
     });
+    assert.equal(hostMismatch.ok, false);
+    assert.equal(hostMismatch.writesAttempted, false);
+    assert.equal(hostMismatch.reasonCode, "db_host_mismatch");
+
+    const refused = await applyIncomingDobCorrections(db, { ...base, ids: [eligible.id] });
     assert.equal(refused.ok, false);
     assert.equal(refused.writesAttempted, false);
-    assert.equal(refused.reasonCode, "db_host_mismatch");
+    assert.equal(refused.reasonCode, "audit_relation_required");
+    assert.equal(readCanonicalDobAgeState(
+      (await db.sourceLeadEvent.findUniqueOrThrow({ where: { id: eligible.id } })).normalizedPayloadJson
+    ).date_of_birth, null);
 
-    const applied = await applyIncomingDobCorrections(db, { ...base, ids: [eligible.id, conflict.id] });
+    await createAuditTable(db);
+    await assert.rejects(
+      () => applyIncomingDobCorrections(db, {
+        ...base,
+        ids: [eligible.id],
+        expectedBeforeById: { [eligible.id]: blank },
+        beforeCommit: () => {
+          throw new Error("terminated_before_commit");
+        },
+      }),
+      /terminated_before_commit/
+    );
+    assert.equal(readCanonicalDobAgeState(
+      (await db.sourceLeadEvent.findUniqueOrThrow({ where: { id: eligible.id } })).normalizedPayloadJson
+    ).date_of_birth, null);
+    assert.equal((await readDobCorrectionAuditsFromDb(db)).length, 0);
+
+    const applied = await applyIncomingDobCorrections(db, {
+      ...base,
+      ids: [eligible.id, conflict.id],
+      expectedBeforeById: {
+        [eligible.id]: blank,
+        [conflict.id]: { ...blank, consumer_age: "40" },
+      },
+    });
+    assert.equal(applied.complete, true);
+    assert.equal(applied.outcome, "APPLIED");
+    assert.deepEqual(applied.pendingIds, []);
+    assert.equal(applied.counts.requested, applied.counts.written + applied.counts.skipped + applied.counts.pending);
     assert.deepEqual(applied.writtenIds, [eligible.id]);
     assert.equal(applied.externalDestinations, "unchanged");
     const stored = await db.sourceLeadEvent.findUniqueOrThrow({ where: { id: eligible.id } });
     const state = readCanonicalDobAgeState(stored.normalizedPayloadJson);
     assert.equal(state.date_of_birth, "1955-03-13");
+    assert.equal(state.date_of_birth_provenance, "supplied");
     assert.equal(state.consumer_age, "71");
     assert.equal(state.consumer_age_provenance, "derived_from_date_of_birth");
+    assert.equal(state.consumer_age_reference_date, "2026-11-02");
+    assert.equal(state.consumer_age_reference_rule, "submitted_at_utc_date_else_received_at_utc_date");
+    assert.equal(state.consumer_age_conflict, null);
     assert.equal(state.source_attribute_date_of_birth, "03/13/1955");
     const normalized = stored.normalizedPayloadJson as {
       contact: { email: string };
@@ -274,62 +376,230 @@ test("apply fills only blank canonical fields, is idempotent, and rolls back", a
     assert.equal(audits.length, 1);
     assert.equal(audits[0]?.before.date_of_birth, null);
     assert.equal(audits[0]?.after.date_of_birth, "1955-03-13");
+    assert.equal(audits[0]?.after.source_attribute_date_of_birth, "03/13/1955");
     assert.equal(JSON.stringify(audits).includes(EMAIL), false);
-    assert.equal(JSON.stringify(audits).includes("03/13/1955"), true);
+    const durable = await readDobCorrectionAuditsFromDb(db);
+    assert.equal(durable.length, 1);
+    assert.equal(durable[0]?.eventId, eligible.id);
+    assert.equal(JSON.stringify(durable).includes(EMAIL), false);
 
-    let release: () => void = () => undefined;
-    const releaseHold = new Promise<void>((resolve) => {
-      release = resolve;
-    });
     let markLocked: () => void = () => undefined;
     const locked = new Promise<void>((resolve) => {
       markLocked = resolve;
     });
-    const holding = holder.$transaction(async (tx) => {
+    const released = new Promise<void>((resolve) => {
+      releaseHold = resolve;
+    });
+    holding = holder.$transaction(async (tx) => {
       await tx.$queryRaw(Prisma.sql`SELECT id FROM "SourceLeadEvent" WHERE id = ${lockedRow.id} FOR UPDATE`);
       markLocked();
-      await releaseHold;
+      await released;
     }, { timeout: 20_000 });
     await locked;
-    const blocked = await applyIncomingDobCorrections(db, { ...base, ids: [lockedRow.id] });
+    const blocked = await applyIncomingDobCorrections(db, {
+      ...base,
+      ids: [lockedRow.id],
+      expectedBeforeById: { [lockedRow.id]: blank },
+    });
     assert.deepEqual(blocked.writtenIds, []);
-    assert.deepEqual(blocked.lockedIds, [lockedRow.id]);
-    release();
+    assert.deepEqual(blocked.pendingIds, [lockedRow.id]);
+    assert.equal(blocked.outcome, "PENDING");
+    assert.equal(blocked.complete, false);
+    assert.equal(blocked.counts.requested, 1);
+    assert.equal(blocked.counts.pending, 1);
+    assert.equal(blocked.counts.written + blocked.counts.skipped + blocked.counts.pending, blocked.counts.requested);
+    assert.equal(blocked.skipped.some((row) => row.id === lockedRow.id), false);
+    releaseHold();
     await holding;
-    const afterLock = await applyIncomingDobCorrections(db, { ...base, ids: [lockedRow.id] });
+    holding = null;
+    const afterLock = await applyIncomingDobCorrections(db, {
+      ...base,
+      ids: [lockedRow.id],
+      expectedBeforeById: { [lockedRow.id]: blank },
+    });
+    assert.equal(afterLock.complete, true);
     assert.deepEqual(afterLock.writtenIds, [lockedRow.id]);
 
-    const rolled = await rollbackIncomingDobCorrections(db, {
+    const edited = await db.sourceLeadEvent.create({
+      data: {
+        sourceProvider: "leadcapture_io",
+        sourceSystem: "leadcapture_io_nextgen",
+        sourceType: "webhook",
+        sourceLeadId: `dob-edited-${Date.now()}`,
+        status: "received",
+        receivedAt: new Date("2026-11-02T18:00:00.000Z"),
+        ...payload("https://go.lifeinsuranceforvets.com/learn-julia-dodge", { coverage_note: "keep-me" }),
+      },
+    });
+    created.push(edited.id);
+    const editedApply = await applyIncomingDobCorrections(db, {
       ...base,
+      ids: [edited.id],
+      expectedBeforeById: { [edited.id]: blank },
+    });
+    assert.deepEqual(editedApply.writtenIds, [edited.id]);
+    const editedStored = await db.sourceLeadEvent.findUniqueOrThrow({ where: { id: edited.id } });
+    const editedPayload = structuredClone(editedStored.normalizedPayloadJson) as {
+      contact: { email: string };
+      lead_details: Record<string, unknown>;
+      routing: { niche_key: string; source_intake: { sourceAttributes: Record<string, string> } };
+    };
+    editedPayload.lead_details.consumer_age = "55";
+    await db.sourceLeadEvent.update({
+      where: { id: edited.id },
+      data: { normalizedPayloadJson: editedPayload as Prisma.InputJsonValue },
+    });
+
+    const outside = await db.sourceLeadEvent.create({
+      data: {
+        sourceProvider: "leadcapture_io",
+        sourceSystem: "leadcapture_io_nextgen",
+        sourceType: "webhook",
+        sourceLeadId: `dob-outside-${Date.now()}`,
+        status: "received",
+        receivedAt: new Date("2026-11-03T16:00:00.000Z"),
+        ...payload("https://go.lifeinsuranceforvets.com/learn-julia-dodge", { coverage_note: "keep-me" }),
+      },
+    });
+    created.push(outside.id);
+    const drifted = await db.sourceLeadEvent.create({
+      data: {
+        sourceProvider: "leadcapture_io",
+        sourceSystem: "leadcapture_io_nextgen",
+        sourceType: "webhook",
+        sourceLeadId: `dob-drift-${Date.now()}`,
+        status: "received",
+        receivedAt: new Date("2026-11-02T18:00:00.000Z"),
+        ...payload("https://go.lifeinsuranceforvets.com/learn-julia-dodge", { coverage_note: "keep-me" }),
+      },
+    });
+    created.push(drifted.id);
+    const blockedExport = join(mkdtempSync(join(tmpdir(), "dob-correction-")), "blocker");
+    writeFileSync(blockedExport, "not-a-directory");
+    const exportRow = await db.sourceLeadEvent.create({
+      data: {
+        sourceProvider: "leadcapture_io",
+        sourceSystem: "leadcapture_io_nextgen",
+        sourceType: "webhook",
+        sourceLeadId: `dob-export-${Date.now()}`,
+        status: "received",
+        receivedAt: new Date("2026-11-02T18:00:00.000Z"),
+        ...payload("https://go.lifeinsuranceforvets.com/learn-julia-dodge", { coverage_note: "keep-me" }),
+      },
+    });
+    created.push(exportRow.id);
+    const scope = await applyIncomingDobCorrections(db, {
+      ...base,
+      ids: [outside.id, drifted.id],
+      expectedBeforeById: {
+        [outside.id]: blank,
+        [drifted.id]: { ...blank, date_of_birth: "1900-01-01" },
+      },
+    });
+    assert.equal(scope.complete, true);
+    assert.deepEqual(scope.writtenIds, []);
+    assert.equal(scope.skipped.find((row) => row.id === outside.id)?.reason, "outside_window");
+    assert.equal(scope.skipped.find((row) => row.id === drifted.id)?.reason, "changed_under_lock");
+    assert.equal(readCanonicalDobAgeState(
+      (await db.sourceLeadEvent.findUniqueOrThrow({ where: { id: drifted.id } })).normalizedPayloadJson
+    ).date_of_birth, null);
+
+    const exported = await applyIncomingDobCorrections(db, {
+      ...base,
+      auditFile: join(blockedExport, "lost.dob-correction-audit.jsonl"),
+      ids: [exportRow.id],
+      expectedBeforeById: { [exportRow.id]: blank },
+    });
+    assert.equal(exported.ok, true);
+    assert.equal(exported.auditExportFailed, true);
+    assert.deepEqual(exported.writtenIds, [exportRow.id]);
+    assert.equal((await readDobCorrectionAuditsFromDb(db)).some((row) => row.eventId === exportRow.id), true);
+
+    await db.$disconnect();
+    const rolled = await rollbackIncomingDobCorrections(restarted, {
+      ...base,
+      auditFile: "",
       confirm: INCOMING_DOB_CORRECTION_ROLLBACK_CONFIRMATION,
     });
+    assert.equal(rolled.complete, true);
+    assert.equal(rolled.outcome, "ROLLED_BACK");
     assert.equal(rolled.writtenIds.includes(eligible.id), true);
-    const restored = await db.sourceLeadEvent.findUniqueOrThrow({ where: { id: eligible.id } });
+    assert.equal(rolled.writtenIds.includes(lockedRow.id), true);
+    assert.equal(rolled.writtenIds.includes(exportRow.id), true);
+    assert.equal(rolled.writtenIds.includes(edited.id), false);
+    assert.equal(rolled.skipped.find((row) => row.id === edited.id)?.reason, "rollback_mismatch");
+
+    const restored = await restarted.sourceLeadEvent.findUniqueOrThrow({ where: { id: eligible.id } });
     const restoredState = readCanonicalDobAgeState(restored.normalizedPayloadJson);
-    assert.equal(restoredState.date_of_birth, null);
-    assert.equal(restoredState.consumer_age, null);
-    assert.equal(restoredState.source_attribute_date_of_birth, null);
+    assert.deepEqual(restoredState, blank);
     const restoredPayload = restored.normalizedPayloadJson as {
+      contact: { email: string };
+      lead_details: Record<string, unknown>;
+      routing: { niche_key: string; source_intake: { sourceAttributes: Record<string, string> } };
+    };
+    for (const key of [
+      "date_of_birth",
+      "date_of_birth_provenance",
+      "consumer_age",
+      "consumer_age_provenance",
+      "consumer_age_reference_date",
+      "consumer_age_reference_rule",
+      "consumer_age_conflict",
+    ]) {
+      assert.equal(Object.hasOwn(restoredPayload.lead_details, key), false);
+    }
+    assert.equal(Object.hasOwn(restoredPayload.routing.source_intake.sourceAttributes, "date_of_birth"), false);
+    assert.equal(restoredPayload.contact.email, EMAIL);
+    assert.equal(restoredPayload.lead_details.coverage_note, "keep-me");
+    assert.equal(restoredPayload.routing.niche_key, "vet");
+    assert.equal(restoredPayload.routing.source_intake.sourceAttributes.branch, "Army");
+    assert.equal(restored.receivedAt.toISOString(), "2026-11-02T18:00:00.000Z");
+    assert.equal(restored.normalizedAt?.toISOString(), "2026-11-02T18:00:05.000Z");
+
+    const editedAfter = await restarted.sourceLeadEvent.findUniqueOrThrow({ where: { id: edited.id } });
+    const editedState = readCanonicalDobAgeState(editedAfter.normalizedPayloadJson);
+    assert.equal(editedState.date_of_birth, "1955-03-13");
+    assert.equal(editedState.consumer_age, "55");
+    assert.equal(editedState.source_attribute_date_of_birth, "03/13/1955");
+    const editedKept = editedAfter.normalizedPayloadJson as {
       contact: { email: string };
       lead_details: { coverage_note: string };
       routing: { source_intake: { sourceAttributes: { branch: string } } };
     };
-    assert.equal(restoredPayload.contact.email, EMAIL);
-    assert.equal(restoredPayload.lead_details.coverage_note, "keep-me");
-    assert.equal(restoredPayload.routing.source_intake.sourceAttributes.branch, "Army");
-    assert.equal(restored.receivedAt.toISOString(), "2026-11-02T18:00:00.000Z");
+    assert.equal(editedKept.contact.email, EMAIL);
+    assert.equal(editedKept.lead_details.coverage_note, "keep-me");
+    assert.equal(editedKept.routing.source_intake.sourceAttributes.branch, "Army");
 
-    const rolledAgain = await rollbackIncomingDobCorrections(db, {
+    const rollbackAudits = await readDobCorrectionAuditsFromDb(restarted);
+    const eligibleRollback = rollbackAudits.filter((row) => row.eventId === eligible.id && row.action === "rollback");
+    assert.equal(eligibleRollback.length, 1);
+    assert.equal(eligibleRollback[0]?.before.date_of_birth, "1955-03-13");
+    assert.equal(eligibleRollback[0]?.before.source_attribute_date_of_birth, "03/13/1955");
+    assert.equal(eligibleRollback[0]?.after.date_of_birth, null);
+    assert.equal(eligibleRollback[0]?.after.source_attribute_date_of_birth, null);
+    assert.equal(rollbackAudits.some((row) => row.eventId === edited.id && row.action === "rollback"), false);
+    assert.equal(JSON.stringify(rollbackAudits).includes(EMAIL), false);
+
+    const rolledAgain = await rollbackIncomingDobCorrections(restarted, {
       ...base,
+      auditFile: "",
       confirm: INCOMING_DOB_CORRECTION_ROLLBACK_CONFIRMATION,
     });
     assert.deepEqual(rolledAgain.writtenIds, []);
+    assert.equal(rolledAgain.skipped.find((row) => row.id === edited.id)?.reason, "rollback_mismatch");
+    assert.equal(readCanonicalDobAgeState(
+      (await restarted.sourceLeadEvent.findUniqueOrThrow({ where: { id: edited.id } })).normalizedPayloadJson
+    ).consumer_age, "55");
   } finally {
+    releaseHold();
+    if (holding) await holding.catch(() => undefined);
     if (created.length > 0) {
-      await db.sourceLeadEvent.deleteMany({ where: { id: { in: created } } });
+      await restarted.sourceLeadEvent.deleteMany({ where: { id: { in: created } } });
     }
-    await db.$disconnect();
+    await dropAuditTable(restarted);
+    await db.$disconnect().catch(() => undefined);
     await holder.$disconnect();
+    await restarted.$disconnect();
   }
 });
 

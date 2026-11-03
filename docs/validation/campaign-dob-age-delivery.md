@@ -207,28 +207,74 @@ SA360 would not rewrite a spreadsheet or GHL value that was already sent.
 The command does not write. A localhost count is not a production total.
 
 `pnpm source-intake:dob-recovery-admin` is a separate GET-only reader for
-`/admin/v1/source-leads`. It pages the newest-first list until the window
-start is crossed, then reads each in-window detail plus the known event. It
-does not see Sheets jobs or lead allocations, so those two flags stay
-unresolved. It refuses write flags and a non-HTTPS host.
+`/admin/v1/source-leads`. It refuses write flags and a non-HTTPS host. It
+pages the newest-first list until the window start is crossed. It defaults to the fixed window
+`2026-10-26T04:00:00.000Z` through `2026-11-03T15:36:00.000Z` (October 26,
+2026 00:00 through November 3, 2026 10:36 America/New_York). It always
+requests the known event `cmvzggvc00091ou0t9a644muo` and the six next-gen
+ids seen in the post-release API log. Each inspection separates
+`storedCanonical` (the saved DOB, age, provenance, and reference date) from
+`proposedRecovery` (recomputed; `proposedRecoveryIsProductionVerification`
+is false). `missingInspectionIds` lists requested ids the API did not
+return. Pagination reports `complete`, `stoppedReason`, `pages`, and
+`listItemsSeen`. Sheets jobs and lead allocations stay unresolved.
 
 `pnpm source-intake:dob-correction` plans that fill from the same normalizer.
-The default is a dry run. `--apply` requires the database host, an operator
-name, a limit, an audit file ending in `.dob-correction-audit.jsonl`, and
-the confirmation `APPLY CONFIRMED JULIA DOB CORRECTION`. It fills only blank
-canonical DOB, age, provenance, reference, and conflict fields, and copies
-`sourceAttributes.date_of_birth` only when that object already exists and
-the canonical DOB was blank. A nonblank disagreement is skipped. Raw payload,
-status, routing, receipts, inventory, and external GHL or Sheets values are
-not changed. `updatedAt` moves. `receivedAt`, `normalizedAt`, `createdAt`,
-and `deliveredAt` do not. Rows are locked with `SELECT … FOR UPDATE SKIP
-LOCKED` in batches of 25. A second apply writes nothing. `--rollback` with
-`ROLLBACK CONFIRMED JULIA DOB CORRECTION` restores only the audited canonical
-fields when the current values still equal the audited after-image. The
-audit file is operator-local JSONL, not a new table, and must not be
-committed. Updating `normalizedPayloadJson` can refresh the historical
-catalog read model. It does not enqueue delivery. Do not point `--apply` at
-production until that write is separately authorized.
+The default is a dry run over that same fixed window. `--apply` requires the
+database host, an operator name, a limit, and the confirmation
+`APPLY CONFIRMED JULIA DOB CORRECTION`. It also requires the
+`IncomingDobCorrectionAudit` table. That table is an Auth/Account migration
+and is not created by this command. Until `to_regclass` finds it, apply and
+rollback return `audit_relation_required` and write nothing. The migration is:
+
+```sql
+CREATE TABLE "IncomingDobCorrectionAudit" (
+  id TEXT PRIMARY KEY,
+  "version" TEXT NOT NULL,
+  "action" TEXT NOT NULL,
+  "operator" TEXT NOT NULL,
+  "eventId" TEXT NOT NULL,
+  "previousUpdatedAt" TIMESTAMP(3) NOT NULL,
+  "newUpdatedAt" TIMESTAMP(3) NOT NULL,
+  "alreadyDelivered" BOOLEAN NOT NULL,
+  "beforeJson" JSONB NOT NULL,
+  "afterJson" JSONB NOT NULL,
+  "externalDestinations" TEXT NOT NULL,
+  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX "IncomingDobCorrectionAudit_eventId_createdAt_idx"
+  ON "IncomingDobCorrectionAudit" ("eventId", "createdAt");
+```
+
+When the table exists, the payload update and the audit insert commit
+together. The audit stores before and after for every canonical field this
+command changes, including `sourceAttributes.date_of_birth` when that
+attribute is added. A local `.dob-correction-audit.jsonl` file is optional
+and is not the source of rollback. If that export fails, the database row
+still stands. The command fills only blank canonical DOB, age, provenance,
+reference, and conflict fields, and copies `sourceAttributes.date_of_birth`
+only when that object already exists and the canonical DOB was blank. A
+nonblank disagreement is skipped. Under the row lock it rechecks the window
+and the reviewed before-image, and skips `outside_window` or
+`changed_under_lock` instead of writing. Raw payload, status, routing,
+receipts, inventory, and external GHL or Sheets values are not changed.
+`updatedAt` moves. `receivedAt`, `normalizedAt`, `createdAt`, and
+`deliveredAt` do not. Rows are locked with `SELECT … FOR UPDATE SKIP LOCKED`
+in batches of 25. A lock skip is `pending` and the outcome is `PENDING`
+with exit code 3, so the row cannot disappear from
+`written + skipped + pending`. A second apply writes nothing. `--rollback`
+with `ROLLBACK CONFIRMED JULIA DOB CORRECTION` reads open audit rows from
+`IncomingDobCorrectionAudit`, including after a process restart. It restores
+every audited canonical field when the current values still equal the
+audited after-image, and it inserts its own audit row in that same
+transaction. A later edit is `rollback_mismatch` and is left in place.
+Updating `normalizedPayloadJson` can refresh the historical catalog read
+model. It does not enqueue delivery. Do not point `--apply` at production
+until that write is separately authorized. None of the existing audit models
+(`LeadVerificationApprovalAuditEvent`, `LeadProofReviewAuditEvent`,
+`LeadCaptureTrustSyncAuditEvent`, `Lf2CheckpointAAuditEvent`,
+`ClientOnboardingSetupAuditEvent`, `DeliveryRuntimeModeAuditEvent`,
+`ClientOnboardingV2AuditEvent`) can store this before/after correction.
 
 When a GHL destination map selects Age or DOB, the source-attribute stamp
 uses `projectCampaignDobAge` on the lifecycle payload. Age sends the

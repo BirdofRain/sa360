@@ -31,10 +31,25 @@ export const INCOMING_DOB_RECOVERY_REPORT_VERSION = "incoming_field_dob_recovery
 export const KNOWN_DOB_RECOVERY_EVENT_ID = "cmvzggvc00091ou0t9a644muo";
 
 /**
- * Monday, October 26, 2026 00:00 in America/New_York (EDT, UTC-4).
- * The default window runs from this instant through the time of the read.
+ * Monday, October 26, 2026 00:00 in America/New_York (EDT, UTC-4)
+ * through Tuesday, November 3, 2026 10:36 in America/New_York (EST, UTC-5).
+ * The reader defaults to this fixed end. It does not use the clock.
  */
 export const INCOMING_DOB_RECOVERY_WINDOW_START = "2026-10-26T04:00:00.000Z";
+export const INCOMING_DOB_RECOVERY_WINDOW_END = "2026-11-03T15:36:00.000Z";
+
+/**
+ * Next-gen captures recorded in the API log after release caa52d66.
+ * The log has ids and receipt times only. It does not establish form or DOB.
+ */
+export const RELEASE_WINDOW_INSPECTION_EVENT_IDS = [
+  "cmw0tfpgl0001jv0tp3bk0kz1",
+  "cmw0tlwqv000fjv0te77z8c2x",
+  "cmw0tng0m000tjv0t1cfwreyt",
+  "cmw0tyaw30015jv0tcj17bkhe",
+  "cmw0u7gyn001xjv0tfubwz6tz",
+  "cmw0u8hbx002bjv0t0nas5wot",
+] as const;
 
 export const INCOMING_DOB_RECOVERY_DEFAULT_LIMIT = 5_000;
 export const INCOMING_DOB_RECOVERY_MAX_LIMIT = 20_000;
@@ -43,7 +58,7 @@ export const INCOMING_DOB_LATER_UPDATE_POLICY = {
   writes: false,
   implemented: true,
   concurrency:
-    "Re-read confirmed eligible rows with SELECT … FOR UPDATE SKIP LOCKED, one small batch per transaction. Recompute from the retained raw payload with the same normalizer inside the lock. If the class is no longer eligible, write nothing.",
+    "Re-read confirmed eligible rows with SELECT … FOR UPDATE SKIP LOCKED, one small batch per transaction. Recompute from the retained raw payload with the same normalizer inside the lock. Skip the write when the locked row is outside the window, the class is no longer eligible, or the locked canonical state differs from the reviewed before-image. A row the lock skips is pending. Pending rows stay in the completion count and the run is incomplete.",
   compareAndSet:
     "Write only when the stored lead_details date_of_birth and consumer_age are still blank or still equal the recomputed proposal. A nonblank stored value that disagrees is left in place and recorded as a disagreement. Do not overwrite it.",
   fields:
@@ -53,7 +68,7 @@ export const INCOMING_DOB_LATER_UPDATE_POLICY = {
   untouched:
     "Do not change rawPayloadJson, status, routingResultJson, deliveryResultJson, inventory, allocations, delivery receipts, or any queue. Do not enqueue Sheets or GHL delivery.",
   evidence:
-    "The correction command appends one JSONL audit line per committed change with the event id, operator, previous updatedAt, new updatedAt, and the before and after canonical date_of_birth, consumer_age, provenance, reference, and conflict fields. Do not copy contact values or the raw payload into that audit. There is no new audit table. This assessment report does not print those values.",
+    "Each committed correction inserts one IncomingDobCorrectionAudit row in the same transaction as the normalizedPayloadJson update. That row stores the event id, operator, previous updatedAt, new updatedAt, and the before and after canonical date_of_birth, consumer_age, provenance, reference, conflict, and sourceAttributes.date_of_birth. Contact values and the raw payload are not copied. A local JSONL file may supplement the row after commit and is not the source of rollback. Apply and rollback refuse until Auth/Account adds this table. This assessment report does not print those values.",
   idempotent:
     "A second run classifies the row unchanged once the stored canonical values equal the proposal, so the compare-and-set writes nothing.",
 } as const;
@@ -576,11 +591,35 @@ export type IncomingDobRecoveryExpectation = {
   referenceDate: string | null;
   provenance: string | null;
   conflict: boolean;
-  storedDateOfBirth: string | null;
-  storedConsumerAge: string | null;
+  /** Recomputed from the raw payload. This is not a stored production value. */
+  proposedRecoveryIsProductionVerification: false;
 };
 
-/** Canonical DOB and age recomputed from the retained raw payload. Contact fields are omitted. */
+export type StoredCanonicalDobAge = {
+  dateOfBirth: string | null;
+  dateOfBirthProvenance: string | null;
+  consumerAge: string | null;
+  consumerAgeProvenance: string | null;
+  referenceDate: string | null;
+  referenceRule: string | null;
+  conflict: boolean | null;
+};
+
+function storedCanonicalDobAge(payload: unknown): StoredCanonicalDobAge {
+  const details = asRecord(asRecord(payload)?.lead_details) ?? {};
+  const conflict = details.consumer_age_conflict;
+  return {
+    dateOfBirth: cellText(details.date_of_birth) || null,
+    dateOfBirthProvenance: cellText(details.date_of_birth_provenance) || null,
+    consumerAge: cellText(details.consumer_age) || null,
+    consumerAgeProvenance: cellText(details.consumer_age_provenance) || null,
+    referenceDate: cellText(details.consumer_age_reference_date) || null,
+    referenceRule: cellText(details.consumer_age_reference_rule) || null,
+    conflict: conflict === true || conflict === false ? conflict : null,
+  };
+}
+
+/** Proposed DOB and age recomputed from the retained raw payload. Contact fields are omitted. */
 export function describeIncomingDobRecoveryExpectation(
   snapshot: IncomingDobRecoverySnapshot
 ): IncomingDobRecoveryExpectation | null {
@@ -599,8 +638,7 @@ export function describeIncomingDobRecoveryExpectation(
     referenceDate: cellText(details.consumer_age_reference_date) || null,
     provenance: cellText(details.consumer_age_provenance) || null,
     conflict: details.consumer_age_conflict === true,
-    storedDateOfBirth: storedDob(snapshot.normalizedPayload) || null,
-    storedConsumerAge: storedAge(snapshot.normalizedPayload) || null,
+    proposedRecoveryIsProductionVerification: false,
   };
 }
 
@@ -613,7 +651,8 @@ export type IncomingDobRecoveryInspection = {
   sourceSystem: string;
   rawDate: string | null;
   rawDateCount: number;
-  expectation: IncomingDobRecoveryExpectation | null;
+  storedCanonical: StoredCanonicalDobAge;
+  proposedRecovery: IncomingDobRecoveryExpectation | null;
 };
 
 /**
@@ -639,7 +678,8 @@ export function describeIncomingDobRecoveryInspection(
     sourceSystem: snapshot.sourceSystem,
     rawDate: dates.length === 1 ? dates[0]! : null,
     rawDateCount: dates.length,
-    expectation: describeIncomingDobRecoveryExpectation(snapshot),
+    storedCanonical: storedCanonicalDobAge(snapshot.normalizedPayload),
+    proposedRecovery: describeIncomingDobRecoveryExpectation(snapshot),
   };
 }
 

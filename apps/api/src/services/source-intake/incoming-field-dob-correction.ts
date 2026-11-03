@@ -10,9 +10,13 @@
  * The historical catalog projection trigger may refresh its read model when
  * `normalizedPayloadJson` changes. That trigger does not enqueue delivery.
  *
- * There is no audit table. Each committed change appends one JSONL line.
+ * The durable audit is `IncomingDobCorrectionAudit`, inserted in the same
+ * transaction as the payload update. Auth/Account owns that migration. Until
+ * the relation exists, apply and rollback refuse and write nothing. A local
+ * JSONL file may supplement the table after commit. Rollback reads the table.
  */
 
+import { randomUUID } from "node:crypto";
 import { appendFileSync, closeSync, fsyncSync, openSync, readFileSync } from "node:fs";
 
 import { Prisma, type PrismaClient } from "@prisma/client";
@@ -30,6 +34,26 @@ export const INCOMING_DOB_CORRECTION_APPLY_CONFIRMATION = "APPLY CONFIRMED JULIA
 export const INCOMING_DOB_CORRECTION_ROLLBACK_CONFIRMATION = "ROLLBACK CONFIRMED JULIA DOB CORRECTION";
 export const INCOMING_DOB_CORRECTION_BATCH_SIZE = 25;
 export const INCOMING_DOB_CORRECTION_AUDIT_SUFFIX = ".dob-correction-audit.jsonl";
+export const INCOMING_DOB_CORRECTION_AUDIT_RELATION = "IncomingDobCorrectionAudit";
+/** Prisma migrations belong to Auth/Account. This process does not create the table. */
+export const INCOMING_DOB_CORRECTION_AUDIT_MIGRATION_OWNER = "Auth/Account";
+export const INCOMING_DOB_CORRECTION_AUDIT_DDL = [
+  `CREATE TABLE "IncomingDobCorrectionAudit" (
+  id TEXT PRIMARY KEY,
+  "version" TEXT NOT NULL,
+  "action" TEXT NOT NULL,
+  "operator" TEXT NOT NULL,
+  "eventId" TEXT NOT NULL,
+  "previousUpdatedAt" TIMESTAMP(3) NOT NULL,
+  "newUpdatedAt" TIMESTAMP(3) NOT NULL,
+  "alreadyDelivered" BOOLEAN NOT NULL,
+  "beforeJson" JSONB NOT NULL,
+  "afterJson" JSONB NOT NULL,
+  "externalDestinations" TEXT NOT NULL,
+  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+)`,
+  `CREATE INDEX "IncomingDobCorrectionAudit_eventId_createdAt_idx" ON "IncomingDobCorrectionAudit" ("eventId", "createdAt")`,
+] as const;
 
 const DETAIL_KEYS = [
   "date_of_birth",
@@ -129,8 +153,33 @@ export function readCanonicalDobAgeState(payload: unknown): CanonicalDobAgeState
   };
 }
 
+const STATE_KEYS = [
+  "date_of_birth",
+  "date_of_birth_provenance",
+  "consumer_age",
+  "consumer_age_provenance",
+  "consumer_age_reference_date",
+  "consumer_age_reference_rule",
+  "consumer_age_conflict",
+  "source_attribute_date_of_birth",
+] as const satisfies readonly (keyof CanonicalDobAgeState)[];
+
 function statesEqual(left: CanonicalDobAgeState, right: CanonicalDobAgeState): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  return STATE_KEYS.every((key) => left[key] === right[key]);
+}
+
+function normalizeStoredState(value: Partial<CanonicalDobAgeState> | null | undefined): CanonicalDobAgeState {
+  const conflict = value?.consumer_age_conflict;
+  return {
+    date_of_birth: value?.date_of_birth ?? null,
+    date_of_birth_provenance: value?.date_of_birth_provenance ?? null,
+    consumer_age: value?.consumer_age ?? null,
+    consumer_age_provenance: value?.consumer_age_provenance ?? null,
+    consumer_age_reference_date: value?.consumer_age_reference_date ?? null,
+    consumer_age_reference_rule: value?.consumer_age_reference_rule ?? null,
+    consumer_age_conflict: conflict === true || conflict === false ? conflict : null,
+    source_attribute_date_of_birth: value?.source_attribute_date_of_birth ?? null,
+  };
 }
 
 function proposedFromNormalizer(snapshot: IncomingDobRecoverySnapshot): {
@@ -199,6 +248,9 @@ export function planIncomingDobCorrection(
     before,
     after: before,
   };
+  if (!assessed.inWindow) {
+    return { ...base, action: "skip", reason: "outside_window" };
+  }
   if (assessed.recoveryClass !== "eligible") {
     return { ...base, action: "skip", reason: assessed.reason };
   }
@@ -265,7 +317,7 @@ export function guardIncomingDobCorrectionCommit(args: {
   if (!Number.isInteger(args.limit) || args.limit < 1) {
     return { ok: false, reasonCode: "limit_required", reason: "positive_integer_limit_required" };
   }
-  if (!args.auditFile.endsWith(INCOMING_DOB_CORRECTION_AUDIT_SUFFIX)) {
+  if (args.auditFile.trim() && !args.auditFile.endsWith(INCOMING_DOB_CORRECTION_AUDIT_SUFFIX)) {
     return { ok: false, reasonCode: "audit_file_required", reason: "audit_file_suffix_required" };
   }
   try {
@@ -302,6 +354,102 @@ export function readDobCorrectionAudits(file: string): DobCorrectionAudit[] {
     records.push(parsed);
   }
   return records;
+}
+
+export async function incomingDobCorrectionAuditReady(
+  db: PrismaClient | Prisma.TransactionClient
+): Promise<boolean> {
+  const rows = await db.$queryRaw<Array<{ present: string | null }>>(
+    Prisma.sql`SELECT to_regclass('public."IncomingDobCorrectionAudit"')::text AS present`
+  );
+  return rows[0]?.present != null;
+}
+
+async function insertDobCorrectionAudit(
+  tx: Prisma.TransactionClient,
+  record: DobCorrectionAudit
+): Promise<void> {
+  await tx.$executeRawUnsafe(
+    `INSERT INTO "IncomingDobCorrectionAudit" (
+      id, "version", "action", "operator", "eventId",
+      "previousUpdatedAt", "newUpdatedAt", "alreadyDelivered",
+      "beforeJson", "afterJson", "externalDestinations", "createdAt"
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12)`,
+    randomUUID(),
+    record.version,
+    record.action,
+    record.operator,
+    record.eventId,
+    new Date(record.previousUpdatedAt),
+    new Date(record.newUpdatedAt),
+    record.alreadyDelivered,
+    JSON.stringify(record.before),
+    JSON.stringify(record.after),
+    record.externalDestinations,
+    new Date()
+  );
+}
+
+type StoredAuditRow = {
+  version: string;
+  action: string;
+  operator: string;
+  eventId: string;
+  previousUpdatedAt: Date;
+  newUpdatedAt: Date;
+  alreadyDelivered: boolean;
+  beforeJson: CanonicalDobAgeState;
+  afterJson: CanonicalDobAgeState;
+  externalDestinations: string;
+};
+
+export async function readDobCorrectionAuditsFromDb(
+  db: PrismaClient | Prisma.TransactionClient
+): Promise<DobCorrectionAudit[]> {
+  const rows = await db.$queryRaw<StoredAuditRow[]>(Prisma.sql`
+    SELECT
+      "version",
+      "action",
+      "operator",
+      "eventId",
+      "previousUpdatedAt",
+      "newUpdatedAt",
+      "alreadyDelivered",
+      "beforeJson",
+      "afterJson",
+      "externalDestinations"
+    FROM "IncomingDobCorrectionAudit"
+    ORDER BY "createdAt" ASC, id ASC
+  `);
+  const records: DobCorrectionAudit[] = [];
+  for (const row of rows) {
+    if (row.version !== INCOMING_DOB_CORRECTION_VERSION) continue;
+    if (row.action !== "apply" && row.action !== "rollback") continue;
+    if (row.externalDestinations !== "unchanged") continue;
+    records.push({
+      version: INCOMING_DOB_CORRECTION_VERSION,
+      action: row.action,
+      operator: row.operator,
+      eventId: row.eventId,
+      previousUpdatedAt: row.previousUpdatedAt.toISOString(),
+      newUpdatedAt: row.newUpdatedAt.toISOString(),
+      alreadyDelivered: row.alreadyDelivered,
+      before: normalizeStoredState(row.beforeJson),
+      after: normalizeStoredState(row.afterJson),
+      externalDestinations: "unchanged",
+    });
+  }
+  return records;
+}
+
+function expectedBeforeFor(
+  expected: ReadonlyMap<string, CanonicalDobAgeState> | Record<string, CanonicalDobAgeState> | undefined,
+  id: string
+): CanonicalDobAgeState | undefined {
+  if (!expected) return undefined;
+  if (expected instanceof Map) return expected.get(id);
+  const record = expected as Record<string, CanonicalDobAgeState>;
+  return record[id];
 }
 
 /** Latest apply for each event that has not been rolled back. */
@@ -404,18 +552,123 @@ function snapshotFromRow(
 
 export type DobCorrectionWriteResult = {
   version: typeof INCOMING_DOB_CORRECTION_VERSION;
-  outcome: "APPLIED" | "ROLLED_BACK" | "REFUSED" | "NOOP";
+  outcome: "APPLIED" | "ROLLED_BACK" | "REFUSED" | "NOOP" | "PENDING";
   ok: boolean;
   writesAttempted: boolean;
+  complete: boolean;
   reasonCode?: string;
   reason?: string;
   dbHostVerified?: string;
   operator?: string;
   writtenIds: string[];
+  pendingIds: string[];
   lockedIds: string[];
   skipped: Array<{ id: string; reason: string }>;
+  counts: { requested: number; written: number; skipped: number; pending: number };
+  auditExportFailed: boolean;
+  auditRelation: typeof INCOMING_DOB_CORRECTION_AUDIT_RELATION;
   externalDestinations: "unchanged";
 };
+
+export function incomingDobCorrectionExitCode(result: DobCorrectionWriteResult): 0 | 2 | 3 {
+  if (!result.ok) return 2;
+  if (!result.complete) return 3;
+  return 0;
+}
+
+function refusedResult(guard: GuardFailure): DobCorrectionWriteResult {
+  return {
+    version: INCOMING_DOB_CORRECTION_VERSION,
+    outcome: "REFUSED",
+    ok: false,
+    writesAttempted: false,
+    complete: false,
+    reasonCode: guard.reasonCode,
+    reason: guard.reason,
+    writtenIds: [],
+    pendingIds: [],
+    lockedIds: [],
+    skipped: [],
+    counts: { requested: 0, written: 0, skipped: 0, pending: 0 },
+    auditExportFailed: false,
+    auditRelation: INCOMING_DOB_CORRECTION_AUDIT_RELATION,
+    externalDestinations: "unchanged",
+  };
+}
+
+function finishWriteResult(input: {
+  kind: "apply" | "rollback";
+  guard: GuardSuccess;
+  requested: number;
+  writtenIds: string[];
+  pendingIds: string[];
+  skipped: Array<{ id: string; reason: string }>;
+  auditExportFailed: boolean;
+}): DobCorrectionWriteResult {
+  const counts = {
+    requested: input.requested,
+    written: input.writtenIds.length,
+    skipped: input.skipped.length,
+    pending: input.pendingIds.length,
+  };
+  const accounted = counts.written + counts.skipped + counts.pending === counts.requested;
+  const complete = accounted && counts.pending === 0;
+  const outcome = !complete
+    ? "PENDING"
+    : counts.written > 0
+      ? input.kind === "apply"
+        ? "APPLIED"
+        : "ROLLED_BACK"
+      : "NOOP";
+  return {
+    version: INCOMING_DOB_CORRECTION_VERSION,
+    outcome,
+    ok: true,
+    writesAttempted: true,
+    complete,
+    dbHostVerified: input.guard.dbHostVerified,
+    operator: input.guard.operator,
+    writtenIds: input.writtenIds,
+    pendingIds: input.pendingIds,
+    lockedIds: input.pendingIds,
+    skipped: input.skipped,
+    counts,
+    auditExportFailed: input.auditExportFailed,
+    auditRelation: INCOMING_DOB_CORRECTION_AUDIT_RELATION,
+    externalDestinations: "unchanged",
+  };
+}
+
+function exportSupplementalAudit(file: string, records: DobCorrectionAudit[]): boolean {
+  if (!file.trim() || records.length === 0) return false;
+  try {
+    appendDobCorrectionAudit(file, records);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+async function requireAuditRelation(db: PrismaClient): Promise<GuardFailure | null> {
+  if (await incomingDobCorrectionAuditReady(db)) return null;
+  return {
+    ok: false,
+    reasonCode: "audit_relation_required",
+    reason: `${INCOMING_DOB_CORRECTION_AUDIT_RELATION}_missing`,
+  };
+}
+
+function timestampsUntouched(
+  updated: { receivedAt: Date; normalizedAt: Date | null; createdAt: Date; deliveredAt: Date | null },
+  row: LockedEventRow
+): boolean {
+  return (
+    updated.receivedAt.getTime() === row.receivedAt.getTime() &&
+    (updated.normalizedAt?.getTime() ?? null) === (row.normalizedAt?.getTime() ?? null) &&
+    updated.createdAt.getTime() === row.createdAt.getTime() &&
+    (updated.deliveredAt?.getTime() ?? null) === (row.deliveredAt?.getTime() ?? null)
+  );
+}
 
 export async function applyIncomingDobCorrections(
   db: PrismaClient,
@@ -429,50 +682,52 @@ export async function applyIncomingDobCorrections(
     ids: string[];
     receivedFrom: string;
     receivedTo: string | null;
+    expectedBeforeById?: ReadonlyMap<string, CanonicalDobAgeState> | Record<string, CanonicalDobAgeState>;
+    beforeCommit?: () => Promise<void> | void;
   }
 ): Promise<DobCorrectionWriteResult> {
   const guard = guardIncomingDobCorrectionCommit({
     ...args,
     confirmation: INCOMING_DOB_CORRECTION_APPLY_CONFIRMATION,
   });
-  if (!guard.ok) {
-    return {
-      version: INCOMING_DOB_CORRECTION_VERSION,
-      outcome: "REFUSED",
-      ok: false,
-      writesAttempted: false,
-      reasonCode: guard.reasonCode,
-      reason: guard.reason,
-      writtenIds: [],
-      lockedIds: [],
-      skipped: [],
-      externalDestinations: "unchanged",
-    };
-  }
+  if (!guard.ok) return refusedResult(guard);
+  const missingAudit = await requireAuditRelation(db);
+  if (missingAudit) return refusedResult(missingAudit);
 
   const window = { receivedFrom: args.receivedFrom, receivedTo: args.receivedTo };
   const ids = [...new Set(args.ids)].slice(0, guard.limit);
   const writtenIds: string[] = [];
-  const lockedIds: string[] = [];
+  const pendingIds: string[] = [];
   const skipped: Array<{ id: string; reason: string }> = [];
+  let auditExportFailed = false;
 
   for (const group of chunk(ids, INCOMING_DOB_CORRECTION_BATCH_SIZE)) {
-    const audits: DobCorrectionAudit[] = [];
-    const seen = new Set<string>();
-    await db.$transaction(async (tx) => {
+    const committed = await db.$transaction(async (tx) => {
+      if (!(await incomingDobCorrectionAuditReady(tx))) {
+        throw new Error("audit_relation_required");
+      }
+      const audits: DobCorrectionAudit[] = [];
+      const batchSkipped: Array<{ id: string; reason: string }> = [];
+      const seen = new Set<string>();
       const locked = await lockEvents(tx, group);
       for (const row of locked) seen.add(row.id);
       const flags = await deliveryFlags(tx, locked.map((row) => row.id));
       for (const row of locked) {
+        const current = readCanonicalDobAgeState(row.normalizedPayloadJson);
+        const expected = expectedBeforeFor(args.expectedBeforeById, row.id);
+        if (expected && !statesEqual(current, expected)) {
+          batchSkipped.push({ id: row.id, reason: "changed_under_lock" });
+          continue;
+        }
         const snapshot = snapshotFromRow(row, flags);
         const plan = planIncomingDobCorrection(snapshot, window);
         if (plan.action !== "apply") {
-          skipped.push({ id: row.id, reason: plan.reason });
+          batchSkipped.push({ id: row.id, reason: plan.reason });
           continue;
         }
         const proposed = proposedFromNormalizer(snapshot);
         if (!proposed) {
-          skipped.push({ id: row.id, reason: "raw_payload_unreadable" });
+          batchSkipped.push({ id: row.id, reason: "raw_payload_unreadable" });
           continue;
         }
         const next = fillBlankCanonical(row.normalizedPayloadJson, proposed);
@@ -487,16 +742,10 @@ export async function applyIncomingDobCorrections(
             deliveredAt: true,
           },
         });
-        if (
-          updated.receivedAt.getTime() !== row.receivedAt.getTime() ||
-          (updated.normalizedAt?.getTime() ?? null) !== (row.normalizedAt?.getTime() ?? null) ||
-          updated.createdAt.getTime() !== row.createdAt.getTime() ||
-          (updated.deliveredAt?.getTime() ?? null) !== (row.deliveredAt?.getTime() ?? null)
-        ) {
+        if (!timestampsUntouched(updated, row)) {
           throw new Error("correction_touched_unrelated_timestamp");
         }
-        writtenIds.push(row.id);
-        audits.push({
+        const audit: DobCorrectionAudit = {
           version: INCOMING_DOB_CORRECTION_VERSION,
           action: "apply",
           operator: guard.operator,
@@ -507,27 +756,30 @@ export async function applyIncomingDobCorrections(
           before: plan.before,
           after: plan.after,
           externalDestinations: "unchanged",
-        });
+        };
+        await insertDobCorrectionAudit(tx, audit);
+        audits.push(audit);
       }
+      if (args.beforeCommit) await args.beforeCommit();
+      return { audits, batchSkipped, seen };
     });
+    writtenIds.push(...committed.audits.map((audit) => audit.eventId));
+    skipped.push(...committed.batchSkipped);
     for (const id of group) {
-      if (!seen.has(id)) lockedIds.push(id);
+      if (!committed.seen.has(id)) pendingIds.push(id);
     }
-    appendDobCorrectionAudit(args.auditFile, audits);
+    if (exportSupplementalAudit(args.auditFile, committed.audits)) auditExportFailed = true;
   }
 
-  return {
-    version: INCOMING_DOB_CORRECTION_VERSION,
-    outcome: writtenIds.length > 0 ? "APPLIED" : "NOOP",
-    ok: true,
-    writesAttempted: true,
-    dbHostVerified: guard.dbHostVerified,
-    operator: guard.operator,
+  return finishWriteResult({
+    kind: "apply",
+    guard,
+    requested: ids.length,
     writtenIds,
-    lockedIds,
+    pendingIds,
     skipped,
-    externalDestinations: "unchanged",
-  };
+    auditExportFailed,
+  });
 }
 
 export async function rollbackIncomingDobCorrections(
@@ -539,36 +791,31 @@ export async function rollbackIncomingDobCorrections(
     confirm: string;
     limit: number;
     auditFile: string;
+    beforeCommit?: () => Promise<void> | void;
   }
 ): Promise<DobCorrectionWriteResult> {
   const guard = guardIncomingDobCorrectionCommit({
     ...args,
     confirmation: INCOMING_DOB_CORRECTION_ROLLBACK_CONFIRMATION,
   });
-  if (!guard.ok) {
-    return {
-      version: INCOMING_DOB_CORRECTION_VERSION,
-      outcome: "REFUSED",
-      ok: false,
-      writesAttempted: false,
-      reasonCode: guard.reasonCode,
-      reason: guard.reason,
-      writtenIds: [],
-      lockedIds: [],
-      skipped: [],
-      externalDestinations: "unchanged",
-    };
-  }
+  if (!guard.ok) return refusedResult(guard);
+  const missingAudit = await requireAuditRelation(db);
+  if (missingAudit) return refusedResult(missingAudit);
 
-  const targets = selectDobCorrectionRollbackTargets(readDobCorrectionAudits(args.auditFile)).slice(0, guard.limit);
+  const targets = selectDobCorrectionRollbackTargets(await readDobCorrectionAuditsFromDb(db)).slice(0, guard.limit);
   const writtenIds: string[] = [];
-  const lockedIds: string[] = [];
+  const pendingIds: string[] = [];
   const skipped: Array<{ id: string; reason: string }> = [];
+  let auditExportFailed = false;
 
   for (const group of chunk(targets, INCOMING_DOB_CORRECTION_BATCH_SIZE)) {
-    const audits: DobCorrectionAudit[] = [];
-    const seen = new Set<string>();
-    await db.$transaction(async (tx) => {
+    const committed = await db.$transaction(async (tx) => {
+      if (!(await incomingDobCorrectionAuditReady(tx))) {
+        throw new Error("audit_relation_required");
+      }
+      const audits: DobCorrectionAudit[] = [];
+      const batchSkipped: Array<{ id: string; reason: string }> = [];
+      const seen = new Set<string>();
       const locked = await lockEvents(tx, group.map((target) => target.eventId));
       const byId = new Map(locked.map((row) => [row.id, row]));
       for (const target of group) {
@@ -577,15 +824,15 @@ export async function rollbackIncomingDobCorrections(
         seen.add(row.id);
         const current = readCanonicalDobAgeState(row.normalizedPayloadJson);
         if (statesEqual(current, target.before)) {
-          skipped.push({ id: row.id, reason: "already_at_before" });
+          batchSkipped.push({ id: row.id, reason: "already_at_before" });
           continue;
         }
         if (!statesEqual(current, target.after)) {
-          skipped.push({ id: row.id, reason: "rollback_mismatch" });
+          batchSkipped.push({ id: row.id, reason: "rollback_mismatch" });
           continue;
         }
         if (!asRecord(row.normalizedPayloadJson)) {
-          skipped.push({ id: row.id, reason: "normalized_payload_missing" });
+          batchSkipped.push({ id: row.id, reason: "normalized_payload_missing" });
           continue;
         }
         const next = restoreCanonicalDobAge(row.normalizedPayloadJson, target.before);
@@ -594,16 +841,10 @@ export async function rollbackIncomingDobCorrections(
           data: { normalizedPayloadJson: next as Prisma.InputJsonValue },
           select: { updatedAt: true, receivedAt: true, normalizedAt: true, createdAt: true, deliveredAt: true },
         });
-        if (
-          updated.receivedAt.getTime() !== row.receivedAt.getTime() ||
-          (updated.normalizedAt?.getTime() ?? null) !== (row.normalizedAt?.getTime() ?? null) ||
-          updated.createdAt.getTime() !== row.createdAt.getTime() ||
-          (updated.deliveredAt?.getTime() ?? null) !== (row.deliveredAt?.getTime() ?? null)
-        ) {
+        if (!timestampsUntouched(updated, row)) {
           throw new Error("rollback_touched_unrelated_timestamp");
         }
-        writtenIds.push(row.id);
-        audits.push({
+        const audit: DobCorrectionAudit = {
           version: INCOMING_DOB_CORRECTION_VERSION,
           action: "rollback",
           operator: guard.operator,
@@ -614,25 +855,28 @@ export async function rollbackIncomingDobCorrections(
           before: target.after,
           after: target.before,
           externalDestinations: "unchanged",
-        });
+        };
+        await insertDobCorrectionAudit(tx, audit);
+        audits.push(audit);
       }
+      if (args.beforeCommit) await args.beforeCommit();
+      return { audits, batchSkipped, seen };
     });
+    writtenIds.push(...committed.audits.map((audit) => audit.eventId));
+    skipped.push(...committed.batchSkipped);
     for (const target of group) {
-      if (!seen.has(target.eventId)) lockedIds.push(target.eventId);
+      if (!committed.seen.has(target.eventId)) pendingIds.push(target.eventId);
     }
-    appendDobCorrectionAudit(args.auditFile, audits);
+    if (exportSupplementalAudit(args.auditFile, committed.audits)) auditExportFailed = true;
   }
 
-  return {
-    version: INCOMING_DOB_CORRECTION_VERSION,
-    outcome: writtenIds.length > 0 ? "ROLLED_BACK" : "NOOP",
-    ok: true,
-    writesAttempted: true,
-    dbHostVerified: guard.dbHostVerified,
-    operator: guard.operator,
+  return finishWriteResult({
+    kind: "rollback",
+    guard,
+    requested: targets.length,
     writtenIds,
-    lockedIds,
+    pendingIds,
     skipped,
-    externalDestinations: "unchanged",
-  };
+    auditExportFailed,
+  });
 }

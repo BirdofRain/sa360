@@ -6,6 +6,9 @@
  *   pnpm source-intake:dob-correction -- --limit 100
  *
  * Apply on the database named by DATABASE_URL. This does not call GHL or Sheets.
+ * Apply and rollback refuse until IncomingDobCorrectionAudit exists. The
+ * audit row commits with the payload change. --audit-file is an optional
+ * local JSONL supplement and is not the source of rollback.
  *
  *   pnpm source-intake:dob-correction -- \
  *     --apply \
@@ -15,17 +18,17 @@
  *     --audit-file ./julia-dob.dob-correction-audit.jsonl \
  *     --confirm "APPLY CONFIRMED JULIA DOB CORRECTION"
  *
- * Roll back only the canonical fields recorded in that audit:
+ * Roll back open audit rows from IncomingDobCorrectionAudit. A lock skip
+ * exits 3 and stays in pendingIds.
  *
  *   pnpm source-intake:dob-correction -- \
  *     --rollback \
  *     --expected-db-host 127.0.0.1:5432 \
  *     --operator <name> \
  *     --limit 25 \
- *     --audit-file ./julia-dob.dob-correction-audit.jsonl \
  *     --confirm "ROLLBACK CONFIRMED JULIA DOB CORRECTION"
  *
- * Do not commit the audit file. Do not pass a production host until a
+ * Do not commit a JSONL supplement. Do not pass a production host until a
  * separate review authorizes that write.
  */
 import { config } from "dotenv";
@@ -102,10 +105,10 @@ async function main(): Promise<void> {
   const receivedFrom = args["received-from"]?.trim() || recovery.INCOMING_DOB_RECOVERY_WINDOW_START;
   const from = new Date(receivedFrom);
   if (Number.isNaN(from.getTime())) refuse("invalid_received_from", "received-from");
-  const receivedToText = args["received-to"]?.trim() || "";
-  const to = receivedToText ? new Date(receivedToText) : null;
-  if (to && Number.isNaN(to.getTime())) refuse("invalid_received_to", "received-to");
-  if (to && to.getTime() < from.getTime()) refuse("received_to_before_from", "received-to");
+  const receivedToText = args["received-to"]?.trim() || recovery.INCOMING_DOB_RECOVERY_WINDOW_END;
+  const to = new Date(receivedToText);
+  if (Number.isNaN(to.getTime())) refuse("invalid_received_to", "received-to");
+  if (to.getTime() < from.getTime()) refuse("received_to_before_from", "received-to");
 
   const { PrismaClient } = await import("@prisma/client");
   const db = new PrismaClient();
@@ -121,8 +124,9 @@ async function main(): Promise<void> {
         limit: Number(limitText),
         auditFile: args["audit-file"]?.trim() || "",
       });
-      console.log(JSON.stringify({ ...result, writes: result.writesAttempted && result.outcome === "ROLLED_BACK" }));
-      if (!result.ok) process.exit(2);
+      console.log(JSON.stringify({ ...result, writes: result.writtenIds.length > 0 }));
+      const code = correction.incomingDobCorrectionExitCode(result);
+      if (code !== 0) process.exit(code);
       return;
     }
 
@@ -137,7 +141,7 @@ async function main(): Promise<void> {
       knownEventId: recovery.KNOWN_DOB_RECOVERY_EVENT_ID,
       limit,
     });
-    const window = { receivedFrom: from.toISOString(), receivedTo: to ? to.toISOString() : null };
+    const window = { receivedFrom: from.toISOString(), receivedTo: to.toISOString() };
     const requestedIds = new Set(repeated("--id"));
     const plans = loaded.rows
       .filter((row) => requestedIds.size === 0 || requestedIds.has(row.id))
@@ -173,9 +177,11 @@ async function main(): Promise<void> {
       ids: applyPlans.map((plan) => plan.eventId),
       receivedFrom: window.receivedFrom,
       receivedTo: window.receivedTo,
+      expectedBeforeById: Object.fromEntries(applyPlans.map((plan) => [plan.eventId, plan.before])),
     });
-    console.log(JSON.stringify({ ...result, writes: result.outcome === "APPLIED" }));
-    if (!result.ok) process.exit(2);
+    console.log(JSON.stringify({ ...result, writes: result.writtenIds.length > 0 }));
+    const code = correction.incomingDobCorrectionExitCode(result);
+    if (code !== 0) process.exit(code);
   } finally {
     await db.$disconnect();
   }

@@ -101,6 +101,11 @@ export type NormalizeLeadCaptureOptions = {
   routeKeyFromPath?: string;
   routeAliasOverrides?: Record<string, readonly string[]>;
   /**
+   * SA360 SourceFunnel id when the caller already resolved one. Page identity
+   * is used when this is absent. It is never inferred from a client account.
+   */
+  sourceFunnelId?: string | null;
+  /**
    * Persisted `SourceLeadEvent.receivedAt`. Intake passes the timestamp it
    * stored on the row. Replay and reconcile pass that same value. This is
    * not a fresh clock, and the normalizer does not call `new Date()`.
@@ -116,6 +121,8 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
   const effective = materializeLeadCapturePayload(raw, {
     routeKeyFromPath: opts?.routeKeyFromPath,
     routeAliasOverrides: opts?.routeAliasOverrides,
+    sourceFunnelId: opts?.sourceFunnelId,
+    sourceSystem: trimOrUndefined(raw.sa360_source_system),
   });
   const sourceSystem = resolveSourceSystem(effective);
   const routeKey = resolveLeadCaptureRouteKey(effective, opts?.routeKeyFromPath);
@@ -174,6 +181,8 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
     receivedAt: attributeReceivedAt,
     routeAliasOverrides: opts?.routeAliasOverrides,
     leadCaptureMaterialized: effective,
+    sourceFunnelId: opts?.sourceFunnelId,
+    routeKey: routeKey,
   });
 
   const nestedLeadProof = readNestedLeadProof(effective);
@@ -187,7 +196,9 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
       extracted.sourceAttributes as Record<string, string>,
       niche.nicheKey
     ),
-    [extracted.sourceAttributes, effective, { unmappedSourceFieldsJson: extracted.unmappedSourceFields }],
+    // Age and DOB are calculated from the resolved canonical values only.
+    // The raw payload is not scanned again, so alias order cannot pick a birthday.
+    [extracted.sourceAttributes],
     {
       // First valid documented timestamp: submitted_at, then the persisted receipt.
       referenceAt: ageReference?.instant ?? null,
@@ -232,6 +243,7 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
       phone: phoneRaw || undefined,
       phone_e164: phoneE164,
       state: trimOrUndefined(effective.state),
+      zip: trimOrUndefined(effective.zip),
     },
     attribution: {
       source_platform: "leadcapture_io",
@@ -296,6 +308,10 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
         ...(nestedLeadProof ? { lead_proof: nestedLeadProof } : {}),
         sourceAttributes: extracted.sourceAttributes,
         unmappedSourceFieldsJson: extracted.unmappedSourceFields,
+        ...(extracted.fieldAliasConflicts.length > 0
+          ? { fieldAliasConflicts: extracted.fieldAliasConflicts }
+          : {}),
+        ...(extracted.scopedBindingId ? { scopedFieldBindingId: extracted.scopedBindingId } : {}),
         compliance: complianceMetadata,
       },
     },

@@ -145,12 +145,15 @@ export function readPortalCustomerLeadFacts(attribution: unknown): {
 } {
   const root = asRecord(attribution);
   const attrs = asRecord(root?.sourceAttributes) ?? root;
-  if (!attrs) {
+  const leadDetails = asRecord(root?.lead_details);
+  if (!attrs && !leadDetails) {
     return { state: null, age: null, leadType: null };
   }
   return {
-    state: firstAttribute(attrs, ["state", "location", "region"]),
-    age: firstAttribute(attrs, ["age", "consumer_age"]),
-    leadType: firstAttribute(attrs, ["niche", "lead_type", "leadType"]),
+    state: firstAttribute(attrs ?? {}, ["state", "location", "region"]),
+    age:
+      firstAttribute(attrs ?? {}, ["age", "consumer_age"]) ??
+      firstAttribute(leadDetails ?? {}, ["consumer_age"]),
+    leadType: firstAttribute(attrs ?? {}, ["niche", "lead_type", "leadType"]),
   };
 }

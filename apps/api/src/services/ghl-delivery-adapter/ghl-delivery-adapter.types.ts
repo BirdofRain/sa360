@@ -27,6 +27,13 @@ export type SourceEnrichmentPlanContext = {
     import("../source-intake/source-enrichment.types.js").SourceAttributeFieldMappingEntry
   >;
   sourceEnrichmentPolicy: import("../source-intake/source-enrichment.types.js").SourceEnrichmentPolicy;
+  /**
+   * Stored lifecycle payload. When present, Age and DOB stamps use
+   * `projectCampaignDobAge` instead of the raw source-attribute text.
+   */
+  normalizedPayload?: unknown;
+  /** Persisted SourceLeadEvent.receivedAt. Age falls back to this after submitted_at. */
+  receivedAt?: string | null;
 };
 
 export type GhlAdapterPlanContext = {

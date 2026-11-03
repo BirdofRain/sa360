@@ -36,6 +36,29 @@ function asRecord(v: unknown): Record<string, unknown> | null {
   return null;
 }
 
+function cellText(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return "";
+}
+
+/**
+ * Portal age reads attribution.sourceAttributes. Canonical consumer age lives
+ * on lead_details. Copy it into the presented attributes only when the stored
+ * source attributes have no age. This does not rewrite the stored payload.
+ */
+function sourceAttributesForPresentation(
+  enrichment: SourceEnrichmentMetadata | null,
+  normalizedPayloadJson: unknown
+): Record<string, string | number | boolean | null> {
+  const attributes = safeSourceAttributes(enrichment);
+  if (cellText(attributes.age) || cellText(attributes.consumer_age)) return attributes;
+  const details = asRecord(asRecord(normalizedPayloadJson)?.lead_details);
+  const age = cellText(details?.consumer_age);
+  if (!age) return attributes;
+  return { ...attributes, consumer_age: age };
+}
+
 function routingResultMatched(routingResultJson: unknown): boolean | null {
   const root = asRecord(routingResultJson);
   if (typeof root?.matched === "boolean") return root.matched;
@@ -202,7 +225,10 @@ export function presentLeadDeliveryDetail(
       sourceFunnelName: ctx.sourceLead.sourceFunnelName,
       adId: base.adId,
       adName: base.adName,
-      sourceAttributes: safeSourceAttributes(enrichment),
+      sourceAttributes: sourceAttributesForPresentation(
+        enrichment,
+        ctx.sourceLead.normalizedPayloadJson
+      ),
     },
     routing: {
       matched: ctx.decision?.matched ?? routingResultMatched(ctx.sourceLead.routingResultJson) ?? false,

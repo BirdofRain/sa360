@@ -1,10 +1,14 @@
 import { createHash } from "node:crypto";
 import {
+  incomingFieldWasConsumed,
+  resolveIncomingPayloadFields,
+  type IncomingFieldConflict,
+} from "./incoming-field-resolution.js";
+import {
   CANONICAL_SOURCE_ATTRIBUTE_KEYS,
   isReservedSourceRawKey,
   listIncomingAnswerKeys,
   normalizeSourceFieldKey,
-  resolveCanonicalAttributeKey,
   type CanonicalSourceAttributeKey,
 } from "./source-field-alias.registry.js";
 import { listLeadCaptureIncomingAnswerKeys, getLeadCaptureAnswersRecord, getLeadCaptureFormRecord, isLeadCaptureProviderPayload, isUnresolvedTemplatePlaceholder, materializeLeadCapturePayload } from "./leadcapture-payload-resolver.js";
@@ -15,6 +19,8 @@ export type SourceAttributeExtractionResult = {
   unmappedSourceFields: UnmappedSourceField[];
   unmappedSourceFieldKeys: string[];
   incomingAnswerKeys: string[];
+  fieldAliasConflicts: IncomingFieldConflict[];
+  scopedBindingId: string | null;
 };
 
 function coerceAttributeValue(
@@ -51,6 +57,8 @@ export function extractSourceAttributesFromPayload(
     receivedAt: string;
     routeAliasOverrides?: Record<string, readonly string[]>;
     leadCaptureMaterialized?: Record<string, unknown>;
+    sourceFunnelId?: string | null;
+    routeKey?: string | null;
   }
 ): SourceAttributeExtractionResult {
   const materialized =
@@ -63,13 +71,25 @@ export function extractSourceAttributesFromPayload(
   const sourceAttributes: SourceAttributes = {};
   const unmappedSourceFields: UnmappedSourceField[] = [];
   const unmappedSourceFieldKeys: string[] = [];
-  const consumedNormalized = new Set<string>();
 
   const isLeadCapture = Boolean(
     opts.leadCaptureMaterialized ||
       opts.sourceSystem.startsWith("leadcapture_io") ||
       isLeadCaptureProviderPayload(raw)
   );
+  const resolution = resolveIncomingPayloadFields(raw, {
+    sourceSystem: opts.sourceSystem,
+    sourceFunnelId: opts.sourceFunnelId,
+    routeKey: opts.routeKey,
+    routeAliasOverrides: opts.routeAliasOverrides,
+  });
+  for (const [canonical, value] of Object.entries(resolution.attributes) as Array<
+    [CanonicalSourceAttributeKey, unknown]
+  >) {
+    const coerced = coerceAttributeValue(canonical, value);
+    if (coerced !== null) sourceAttributes[canonical] = coerced;
+  }
+
   const incomingKeys = isLeadCapture
     ? listLeadCaptureIncomingAnswerKeys(raw)
     : listIncomingAnswerKeys(raw);
@@ -81,19 +101,7 @@ export function extractSourceAttributesFromPayload(
     // Unresolved LeadCapture merge fields are not real data: keep them out of
     // canonical source attributes and unmapped fields (raw payload still has them).
     if (isLeadCapture && isUnresolvedTemplatePlaceholder(value)) continue;
-
-    const canonical = resolveCanonicalAttributeKey(key, opts.routeAliasOverrides);
-    if (canonical) {
-      const normalizedKey = normalizeSourceFieldKey(key);
-      if (consumedNormalized.has(normalizedKey)) continue;
-      consumedNormalized.add(normalizedKey);
-      const coerced = coerceAttributeValue(canonical, value);
-      if (coerced !== null && sourceAttributes[canonical] === undefined) {
-        sourceAttributes[canonical] = coerced;
-      }
-      continue;
-    }
-
+    if (incomingFieldWasConsumed(resolution, key)) continue;
     if (isReservedSourceRawKey(key)) continue;
     unmappedSourceFieldKeys.push(key);
     unmappedSourceFields.push({
@@ -106,6 +114,7 @@ export function extractSourceAttributesFromPayload(
 
   for (const canonical of CANONICAL_SOURCE_ATTRIBUTE_KEYS) {
     if (sourceAttributes[canonical] !== undefined) continue;
+    if (resolution.blockedAttributes.has(canonical)) continue;
     const direct = materialized[canonical];
     if (direct !== undefined && direct !== null && String(direct).trim() !== "") {
       const coerced = coerceAttributeValue(canonical, direct);
@@ -118,6 +127,8 @@ export function extractSourceAttributesFromPayload(
     unmappedSourceFields,
     unmappedSourceFieldKeys,
     incomingAnswerKeys: incomingKeys,
+    fieldAliasConflicts: resolution.conflicts,
+    scopedBindingId: resolution.scopedBindingId,
   };
 }
 

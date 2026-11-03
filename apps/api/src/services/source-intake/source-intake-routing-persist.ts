@@ -46,7 +46,10 @@ export async function persistRoutingAndDuplicate(
   sourceLeadIdGenerated: boolean,
   receivedAt: string,
   now: Date,
-  options?: { extraEnrichmentMetadata?: Record<string, unknown> }
+  options?: {
+    extraEnrichmentMetadata?: Record<string, unknown>;
+    sourceFunnelId?: string | null;
+  }
 ): Promise<{
   routing: SourceLeadRoutingResult;
   duplicateRiskJson: object | null;
@@ -126,6 +129,7 @@ export async function persistRoutingAndDuplicate(
     routeFieldMapJson,
     routeAliasOverridesJson,
     receivedAt,
+    sourceFunnelId: options?.sourceFunnelId,
   });
 
   const normalizedWithEnrichment = attachSourceAttributesToLifecyclePayload(

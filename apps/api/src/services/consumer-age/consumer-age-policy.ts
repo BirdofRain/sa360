@@ -17,7 +17,10 @@ import {
   parseHistoricalConsumerAge,
   type ParsedConsumerAge,
 } from "../aged-inventory-bulk/aged-inventory-bulk-consumer-age.js";
-import { normalizeSourceFieldKey } from "../source-intake/source-field-alias.registry.js";
+import {
+  DEFAULT_SOURCE_FIELD_ALIASES,
+  normalizeSourceFieldKey,
+} from "../source-intake/source-field-alias.registry.js";
 
 export { completedWholeYearsAsOf };
 
@@ -45,18 +48,14 @@ export const EXPLICIT_CONSUMER_AGE_KEYS = [
   "consumerAge",
   "consumer_age_raw",
   "age",
+  "applicant_age",
+  "age_in_years",
   "dob_age_raw",
   "dobAgeRaw",
 ] as const;
 
-/** Explicit date-of-birth cells. Mirrors the source-intake `date_of_birth` aliases. */
-export const EXPLICIT_DATE_OF_BIRTH_KEYS = [
-  "date_of_birth",
-  "dateOfBirth",
-  "dob",
-  "birth_date",
-  "birthDate",
-] as const;
+/** Explicit date-of-birth cells. The source-intake alias registry is the list. */
+export const EXPLICIT_DATE_OF_BIRTH_KEYS = DEFAULT_SOURCE_FIELD_ALIASES.date_of_birth;
 
 export type ConsumerAgeResolutionSource =
   | "normalized_consumer_age"

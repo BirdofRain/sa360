@@ -171,7 +171,7 @@ describe("PPL buyer-ready eligibility policy", () => {
     );
   });
 
-  it("D/E: whitespace / multi-part first or last name is ineligible", () => {
+  it("D: a multi-word first name stays ineligible", () => {
     assert.deepEqual(
       reasonsOf(
         evaluatePplBuyerReadyEligibility(payload({ first: "Mary Ann", last: "Lee", age: 50 }))
@@ -180,15 +180,61 @@ describe("PPL buyer-ready eligibility policy", () => {
     );
     assert.deepEqual(
       reasonsOf(
-        evaluatePplBuyerReadyEligibility(payload({ first: "Ada", last: "Van Dyke", age: 50 }))
+        evaluatePplBuyerReadyEligibility(payload({ first: "Ada\tMarie", last: "Lee", age: 50 }))
       ),
+      ["first_name_multipart"]
+    );
+  });
+
+  it("accepts spaced, hyphenated, and apostrophe surnames without rewriting them", () => {
+    for (const lastName of ["Van Dyke", "De La Cruz", "Van Der Bilt", "Smith-Jones", "O'Brien", "St. Clair"]) {
+      const result = evaluatePplBuyerReadyEligibility(
+        payload({ first: "Ada", last: lastName, age: 50 })
+      );
+      assert.equal(result.ok, true, lastName);
+      if (!result.ok) return;
+      assert.equal(result.lastName, lastName);
+    }
+  });
+
+  it("rejects malformed surnames and reports overlapping exclusion reasons", () => {
+    assert.deepEqual(
+      reasonsOf(evaluatePplBuyerReadyEligibility(payload({ first: "Ada", last: "Van\tDyke", age: 50 }))),
+      ["last_name_multipart"]
+    );
+    assert.deepEqual(
+      reasonsOf(evaluatePplBuyerReadyEligibility(payload({ first: "Ada", last: "Van  Dyke", age: 50 }))),
+      ["last_name_multipart"]
+    );
+    assert.deepEqual(
+      reasonsOf(evaluatePplBuyerReadyEligibility(payload({ first: "Ada", last: "Van\nDyke", age: 50 }))),
       ["last_name_multipart"]
     );
     assert.deepEqual(
       reasonsOf(
-        evaluatePplBuyerReadyEligibility(payload({ first: "Ada\tMarie", last: "Lee", age: 50 }))
+        evaluatePplBuyerReadyEligibility(payload({ first: "Ada", last: "Van\u00A0Dyke", age: 50 }))
       ),
-      ["first_name_multipart"]
+      ["last_name_multipart"]
+    );
+    assert.deepEqual(
+      reasonsOf(evaluatePplBuyerReadyEligibility(payload({ first: "Ada", last: "A Lee", age: 50 }))),
+      ["last_name_multipart"]
+    );
+    assert.deepEqual(
+      reasonsOf(evaluatePplBuyerReadyEligibility(payload({ first: "Ada", last: "O' Brien", age: 50 }))),
+      ["last_name_multipart"]
+    );
+    assert.deepEqual(
+      reasonsOf(evaluatePplBuyerReadyEligibility(payload({ first: "Ada", last: "Van Dyke9", age: 50 }))),
+      ["last_name_multipart", "last_name_has_digits"]
+    );
+    assert.deepEqual(
+      reasonsOf(evaluatePplBuyerReadyEligibility(payload({ first: "Ada", last: "Van\tDyke" }))),
+      ["last_name_multipart", "consumer_age_missing"]
+    );
+    assert.deepEqual(
+      reasonsOf(evaluatePplBuyerReadyEligibility(payload({ first: "Mary Ann", last: "Van Dyke" }))),
+      ["first_name_multipart", "consumer_age_missing"]
     );
   });
 

@@ -20,6 +20,14 @@
  * Name field precedence matches the buyer CSV extractors. Digits in a name
  * are automatic rejections. Placeholders and suspicious tokens are flagged
  * for operator review and do not reject a short-but-legitimate name.
+ *
+ * The original buyer-ready rule required both names to be one token. That
+ * kept a broken field out of a reserved quantity, but it also rejected real
+ * spaced surnames. Last names may now be several words. Each word must be a
+ * surname token separated by one ordinary space. Tabs, newlines, repeated
+ * spaces, and a word that is not itself a name stay `last_name_multipart`.
+ * The stored lead is not trimmed, split, or rewritten. First names stay
+ * single-token.
  */
 
 import { isSupportedAgedCommerceNiche } from "@sa360/shared";
@@ -214,6 +222,22 @@ export function evaluatePplNameReviewFlags(
   return flags;
 }
 
+/** A surname word: at least two letters, plus apostrophes, hyphens, or periods. */
+const COMPOUND_SURNAME_TOKEN = /^(?:[\p{L}'.-]*\p{L}){2}[\p{L}'.-]*$/u;
+
+/**
+ * True when internal whitespace is not a single ordinary space between
+ * surname words. A last name with no whitespace is not malformed here;
+ * length and digits are separate checks.
+ */
+function isMalformedCompoundSurname(value: string): boolean {
+  if (!/\s/.test(value)) return false;
+  if (/[^\S ]|\s{2,}/.test(value)) return true;
+  const tokens = value.split(" ");
+  if (tokens.length < 2) return true;
+  return tokens.some((token) => !COMPOUND_SURNAME_TOKEN.test(token));
+}
+
 function nameTokenIssues(
   value: string,
   field: "first_name" | "last_name"
@@ -222,7 +246,7 @@ function nameTokenIssues(
   if (value.length <= 1) {
     reasons.push(field === "first_name" ? "first_name_too_short" : "last_name_too_short");
   }
-  if (/\s/.test(value)) {
+  if (field === "first_name" ? /\s/.test(value) : isMalformedCompoundSurname(value)) {
     reasons.push(field === "first_name" ? "first_name_multipart" : "last_name_multipart");
   }
   if (/\d/.test(value)) {

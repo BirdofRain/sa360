@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { afterEach, describe, it } from "node:test";
 
+import { evaluatePplBuyerReadyEligibility } from "./ppl-buyer-ready-eligibility.js";
 import {
   BUYER_CSV_COLUMNS,
   SPREADSHEET_DELIVERY_CONFIRM_PHRASE,
@@ -117,6 +118,32 @@ describe("buyer-csv-export allowlist", () => {
     const csv = serializeBuyerCsv([row]);
     assert.match(csv, /"Ada, ""Countess"""/);
     assert.match(csv, /"O'Brien, PhD"/);
+  });
+
+  it("keeps a spaced compound surname as one full delivery cell", () => {
+    const normalizedPayloadJson = {
+      contact: {
+        first_name: "Ada",
+        last_name: "De La Cruz",
+        phone_e164: "+12025550100",
+        email: "ada@example.com",
+        state: "NC",
+      },
+      lead_details: { consumer_age: 50 },
+    };
+    const ready = evaluatePplBuyerReadyEligibility(normalizedPayloadJson, { nicheKey: "trucker" });
+    assert.equal(ready.ok, true);
+    if (!ready.ok) return;
+    assert.equal(ready.lastName, "De La Cruz");
+    const row = extractBuyerCsvFields({
+      normalizedPayloadJson,
+      generatedAt: new Date("2024-01-02T12:00:00.000Z"),
+      nicheKey: "trucker",
+    });
+    assert.equal(row.last_name, "De La Cruz");
+    const csv = serializeBuyerCsv([row]);
+    assert.match(csv, /^Ada,De La Cruz,/m);
+    assert.equal(normalizedPayloadJson.contact.last_name, "De La Cruz");
   });
 
   it("produces stable checksums for identical serialization", () => {

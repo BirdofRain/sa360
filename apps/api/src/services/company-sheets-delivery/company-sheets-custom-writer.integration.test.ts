@@ -6,8 +6,8 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, describe, it } from "node:test";
 
-import { COMPANY_SHEETS_V3_HEADER } from "@sa360/shared";
 import { PrismaClient } from "@prisma/client";
+import { COMPANY_SHEETS_V3_HEADER } from "@sa360/shared";
 
 import {
   COMPANY_SHEETS_ACCEPT_RECONCILED_ROW_PHRASE,
@@ -24,6 +24,7 @@ import {
 import { deleteCompanySheetsDestinationForClient } from "../company-google/company-sheets-destination.service.js";
 import { createPrismaCapturedTestStore } from "../client-onboarding-v2/onboarding-test-store.js";
 import { capturedEventTestKey } from "../client-onboarding-v2/custom-captured-sheet.js";
+import { formatGenerationTimestamp } from "./company-sheets-campaign-row.js";
 import {
   enqueueConfirmedLeadSheetsDelivery,
   executeCompanySheetsDeliveryJob,
@@ -68,6 +69,7 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
   const updates: Array<{ spreadsheetId: string; range: string; values: string[][] }> = [];
   let mode: "ok" | "drift" | "invalid" | "network" | "update_invalid" | "update_timeout" | "second_append_invalid" = "ok";
   let customAppendsThisMode = 0;
+  let v3FailAppends = 0;
 
   function gridFor(spreadsheetId: string): string[][] {
     if (spreadsheetId === v3Sheet) return v3Rows;
@@ -174,6 +176,10 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
       },
       appendValues: async (input) => {
         appends.push({ spreadsheetId: input.spreadsheetId, range: input.range, values: input.values });
+        if (input.spreadsheetId === v3Sheet && v3FailAppends > 0) {
+          v3FailAppends -= 1;
+          return { ok: false as const, reason: "invalid_request" as const };
+        }
         if (input.spreadsheetId === customSheet && mode === "invalid") return { ok: false as const, reason: "invalid_request" as const };
         if (input.spreadsheetId === customSheet && mode === "network") return { ok: false as const, reason: "network_error" as const };
         if (input.spreadsheetId === customSheet && mode === "second_append_invalid") {
@@ -855,6 +861,71 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
     const job = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: sent.jobId } });
     assert.equal(job.schemaVersion, "company_sheets_campaign_v3");
     assert.equal(job.contentSha256, null);
+  });
+
+  it("stamps each test send with that request's clock and keeps the stamp on retry", async () => {
+    const first = "2026-11-03T15:04:00.000Z";
+    const duringRetry = "2026-11-03T20:00:00.000Z";
+    const second = "2026-11-04T16:30:00.000Z";
+    let clock = first;
+    const timed = (): CompanySheetsDeliveryDeps => ({ ...deps(), now: () => new Date(clock) });
+    const leadsBefore = await db.sourceLeadEvent.findMany({
+      select: { id: true, receivedAt: true },
+      orderBy: { id: "asc" },
+    });
+    const header = v3Rows[0]?.slice() ?? [];
+    const historical = v3Rows[1]?.slice() ?? [];
+    const updatesBefore = updates.filter((item) => item.spreadsheetId === v3Sheet).length;
+
+    v3FailAppends = 1;
+    const rejected = await sendCompanySheetsCampaignTestRow(v3Client, timed());
+    assert.equal(rejected.ok, false);
+    if (rejected.ok) return;
+    assert.equal(rejected.code, "test_row_not_written");
+    assert.equal(v3FailAppends, 0);
+    const failedAppend = appends.filter((item) => item.spreadsheetId === v3Sheet).at(-1);
+    const failedDate = failedAppend?.values[0]?.[0] ?? "";
+    assert.equal(failedDate, formatGenerationTimestamp(first));
+    assert.equal(failedDate.includes("10/26/2026"), false);
+    const held = await db.companySheetsDeliveryJob.findFirstOrThrow({
+      where: { clientAccountId: v3Client, kind: "campaign_test", status: "retryable" },
+      orderBy: { createdAt: "desc" },
+      include: { rows: true },
+    });
+    assert.equal(held.appendStartedAt, null);
+    assert.equal(held.rows[0]?.valuesJson && Array.isArray(held.rows[0].valuesJson) ? held.rows[0].valuesJson[0] : null, failedDate);
+
+    clock = duringRetry;
+    const retried = await sendCompanySheetsCampaignTestRow(v3Client, timed());
+    assert.equal(retried.ok, true);
+    if (!retried.ok) return;
+    assert.equal(retried.jobId, held.id);
+    const retriedAppend = appends.filter((item) => item.spreadsheetId === v3Sheet).at(-1);
+    assert.equal(retriedAppend?.values[0]?.[0], failedDate);
+    assert.equal(retriedAppend?.values[0]?.length, COMPANY_SHEETS_V3_HEADER.length);
+    assert.deepEqual(v3Rows[0], header);
+    assert.deepEqual(v3Rows[1], historical);
+
+    clock = second;
+    const next = await sendCompanySheetsCampaignTestRow(v3Client, timed());
+    assert.equal(next.ok, true);
+    if (!next.ok) return;
+    assert.notEqual(next.jobId, held.id);
+    const nextAppend = appends.filter((item) => item.spreadsheetId === v3Sheet).at(-1);
+    const nextDate = nextAppend?.values[0]?.[0] ?? "";
+    assert.equal(nextDate, formatGenerationTimestamp(second));
+    assert.notEqual(nextDate, failedDate);
+    assert.equal(updates.filter((item) => item.spreadsheetId === v3Sheet).length, updatesBefore);
+    assert.deepEqual(v3Rows[0], header);
+    assert.deepEqual(v3Rows[1], historical);
+    const leadsAfter = await db.sourceLeadEvent.findMany({
+      select: { id: true, receivedAt: true },
+      orderBy: { id: "asc" },
+    });
+    assert.deepEqual(
+      leadsAfter.map((lead) => ({ id: lead.id, receivedAt: lead.receivedAt.toISOString() })),
+      leadsBefore.map((lead) => ({ id: lead.id, receivedAt: lead.receivedAt.toISOString() }))
+    );
   });
 
   it("appends a stored client lead through the published map without moving the cutoff", async () => {

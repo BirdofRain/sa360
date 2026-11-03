@@ -565,9 +565,6 @@ export async function enqueueCompanySheetsCanary(
   return { ok: true, job, created: !before };
 }
 
-const SYNTHETIC_TEST_SUBMITTED_AT = "2026-10-26T14:00:00.000Z";
-const SYNTHETIC_TEST_RECEIVED_AT = "2026-10-26T15:00:00.000Z";
-
 /**
  * One explicit synthetic row through the bound campaign writer.
  * Does not create a source lead, dispatch intent, inventory row, or billing row.
@@ -626,23 +623,27 @@ export async function sendCompanySheetsCampaignTestRow(
   if (unresolved && (!resumable || unresolved.appendStartedAt)) {
     return fail("campaign_test_unresolved", 409);
   }
-  const idempotencyKey = resumable && unresolved
+  const resumeExisting = Boolean(resumable && unresolved);
+  const idempotencyKey = resumeExisting && unresolved
     ? unresolved.idempotencyKey
     : `campaign-test:${id}:${randomUUID()}`;
   const stableRowId = `campaign-test:${id}:${idempotencyKey}`;
-  const syntheticLead: CampaignSheetLeadInput =
-    contract.schemaVersion === COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA
+  // Captured once for a new test send. A retry reuses the row already stored on that job.
+  const occurredAt = resumeExisting ? null : (deps.now ?? (() => new Date()))().toISOString();
+  const syntheticLead: CampaignSheetLeadInput | null = occurredAt
+    ? contract.schemaVersion === COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA
       ? syntheticCustomCampaignLead({
           stableRowId,
           clientAccountId: id,
           spreadsheetId: destination.spreadsheetId,
           worksheetTitle: contract.worksheetTitle,
+          occurredAt,
         })
       : {
           stableRowId,
           clientAccountId: id,
           sourceLeadEventId: "synthetic-campaign-test",
-          receivedAt: SYNTHETIC_TEST_RECEIVED_AT,
+          receivedAt: occurredAt,
           sourceLeadId: null,
           normalizedPayload: {
             contact: {
@@ -657,7 +658,7 @@ export async function sendCompanySheetsCampaignTestRow(
               source_intake: {
                 lead_id: "synthetic-sheets-test",
                 source_lead_id_generated: true,
-                submitted_at: SYNTHETIC_TEST_SUBMITTED_AT,
+                submitted_at: occurredAt,
                 unmappedSourceFieldsJson: [
                   {
                     key: "notes",
@@ -667,13 +668,13 @@ export async function sendCompanySheetsCampaignTestRow(
               },
             },
           },
-        };
-  const resolved =
-    resumable && unresolved
-      ? null
-      : await resolveCampaignWrite(db, env, destination, contract, { ...syntheticLead, sourceFunnelId: null }, { controlledTest: true });
+        }
+    : null;
+  const resolved = syntheticLead
+    ? await resolveCampaignWrite(db, env, destination, contract, { ...syntheticLead, sourceFunnelId: null }, { controlledTest: true })
+    : null;
   if (resolved && !resolved.ok) return resolved;
-  const job = resumable && unresolved
+  const job = resumeExisting && unresolved
     ? unresolved
     : await createJob(db, {
         kind: "campaign_test",

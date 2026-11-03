@@ -18,6 +18,17 @@ import type {
 const WORKFLOW_ID = "d4c1fa4c-a3e2-4fd8-9091-b3fad0d04edd";
 const OTHER_WORKFLOW_ID = "11111111-1111-4111-8111-111111111111";
 
+test.before(() => {
+  if (!("ResizeObserver" in globalThis)) {
+    class ResizeObserverStub {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver;
+  }
+});
+
 test.afterEach(() => cleanup());
 
 function location(overrides: Partial<GhlWalkthroughLocation> = {}): GhlWalkthroughLocation {
@@ -178,6 +189,13 @@ function actions(overrides: Partial<GhlWalkthroughActions> = {}): GhlWalkthrough
     }),
     ...overrides,
   };
+}
+
+function chooseGhlField(canonical: string, query: string) {
+  fireEvent.click(screen.getByRole("combobox", { name: `GHL field for ${canonical}` }));
+  const input = screen.getByRole("combobox", { name: `Search GHL fields for ${canonical}` });
+  fireEvent.change(input, { target: { value: query } });
+  fireEvent.click(screen.getByRole("option", { name: new RegExp(query, "i") }));
 }
 
 function markState(container: HTMLElement, label: string): string | null {
@@ -450,6 +468,7 @@ test("ongoing GHL activation is a separate confirmation and lists omitted fields
 test("field ids are saved without enabling delivery, and blank values stay separate from missing mappings", async () => {
   const FIELD_ID = "ghl_field_primary_reason";
   let saved: Record<string, { ghlFieldKey: string }> | null = null;
+  let saveCalls = 0;
   let deliveryFlagSent = false;
   render(
     <GhlWalkthroughPanel
@@ -482,6 +501,7 @@ test("field ids are saved without enabling delivery, and blank values stay separ
           },
         }),
         saveFieldMap: async (input) => {
+          saveCalls += 1;
           saved = input.sourceAttributeFieldMapJson;
           deliveryFlagSent = "deliveryEnabled" in input;
           return { ok: true, deliveryEnabled: false };
@@ -494,11 +514,14 @@ test("field ids are saved without enabling delivery, and blank values stay separ
     />
   );
   fireEvent.click(screen.getByRole("button", { name: "Discover workflows" }));
-  const select = (await screen.findByLabelText("GHL field for primary_reason")) as HTMLSelectElement;
-  fireEvent.change(select, { target: { value: FIELD_ID } });
-  fireEvent.change(screen.getByLabelText("GHL field for beneficiary"), { target: { value: "ghl_field_beneficiary" } });
+  await screen.findByRole("combobox", { name: "GHL field for primary_reason" });
+  chooseGhlField("primary_reason", "primary");
+  chooseGhlField("beneficiary", "ghl_field_beneficiary");
+  assert.equal(saveCalls, 0);
   fireEvent.click(screen.getByRole("button", { name: "Save field ids" }));
   await waitFor(() => assert.equal(saved?.primary_reason?.ghlFieldKey, FIELD_ID));
+  assert.equal(saved?.beneficiary?.ghlFieldKey, "ghl_field_beneficiary");
+  assert.equal(saveCalls, 1);
   assert.equal(deliveryFlagSent, false);
   fireEvent.click(screen.getByRole("button", { name: "Review this lead's field values" }));
   const coverage = await screen.findByTestId("ghl-field-coverage");
@@ -508,4 +531,77 @@ test("field ids are saved without enabling delivery, and blank values stay separ
   assert.match(mappings, /Missing mappings: age \(64\)/);
   assert.doesNotMatch(mappings, /beneficiary/);
   assert.match(text, /Missing source values: beneficiary → ghl_field_beneficiary/);
+});
+
+test("an existing mapping reloads the same field id, and Unmapped removes only that row", async () => {
+  const FIELD_ID = "ghl_field_primary_reason";
+  const BENEFICIARY_ID = "ghl_field_beneficiary";
+  let saved: Record<string, { ghlFieldKey: string }> | null = null;
+  const customFields = [
+    {
+      id: FIELD_ID,
+      name: "Primary Reason",
+      key: "contact.primary_reason",
+      fieldKey: "contact.primary_reason",
+      dataType: "TEXT",
+    },
+    {
+      id: BENEFICIARY_ID,
+      name: "Beneficiary",
+      key: "contact.beneficiary",
+      fieldKey: "contact.beneficiary",
+      dataType: "TEXT",
+    },
+  ];
+  function renderSaved() {
+    return render(
+      <GhlWalkthroughPanel
+        clientAccountId="client_sam"
+        leads={[lead()]}
+        location={location({
+          sourceAttributeFieldMapJson: {
+            primary_reason: { ghlFieldKey: FIELD_ID, requirement: "optional" },
+            beneficiary: { ghlFieldKey: BENEFICIARY_ID, requirement: "optional" },
+          },
+        })}
+        connections={[connection()]}
+        sheetsCampaignEnabled={false}
+        actions={actions({
+          discover: async () => ({
+            ok: true,
+            discovery: { ...discovery(), customFields },
+          }),
+          saveFieldMap: async (input) => {
+            saved = input.sourceAttributeFieldMapJson;
+            return { ok: true, deliveryEnabled: false };
+          },
+        })}
+      />
+    );
+  }
+  const first = renderSaved();
+  fireEvent.click(screen.getByRole("button", { name: "Discover workflows" }));
+  const reason = await screen.findByRole("combobox", { name: "GHL field for primary_reason" });
+  const beneficiary = screen.getByRole("combobox", { name: "GHL field for beneficiary" });
+  assert.match(reason.textContent ?? "", new RegExp(FIELD_ID));
+  assert.match(beneficiary.textContent ?? "", new RegExp(BENEFICIARY_ID));
+  fireEvent.click(screen.getByRole("combobox", { name: "GHL field for age" }));
+  fireEvent.change(screen.getByRole("combobox", { name: "Search GHL fields for age" }), {
+    target: { value: "typed-search-not-a-field" },
+  });
+  fireEvent.keyDown(screen.getByRole("combobox", { name: "Search GHL fields for age" }), { key: "Enter" });
+  fireEvent.click(screen.getByRole("button", { name: "Save field ids" }));
+  await waitFor(() => assert.equal(saved?.primary_reason?.ghlFieldKey, FIELD_ID));
+  assert.equal(saved?.beneficiary?.ghlFieldKey, BENEFICIARY_ID);
+  assert.equal(saved && "age" in saved, false);
+  assert.equal(JSON.stringify(saved).includes("typed-search-not-a-field"), false);
+  first.unmount();
+
+  renderSaved();
+  fireEvent.click(screen.getByRole("button", { name: "Discover workflows" }));
+  await screen.findByRole("combobox", { name: "GHL field for primary_reason" });
+  chooseGhlField("beneficiary", "Unmapped");
+  fireEvent.click(screen.getByRole("button", { name: "Save field ids" }));
+  await waitFor(() => assert.equal(saved?.beneficiary, undefined));
+  assert.equal(saved?.primary_reason?.ghlFieldKey, FIELD_ID);
 });

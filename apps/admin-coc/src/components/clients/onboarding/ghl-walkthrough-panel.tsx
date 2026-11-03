@@ -17,6 +17,7 @@ import type { SelectableLead } from "@/lib/clients/onboarding/view";
 import { LIVE_CANARY_CONFIRMATION_TEXT } from "@/lib/ghl-live-canary/types";
 import type { GhlDiscoveredCustomField, RoutingRuleGhlConfigSaveBody } from "@/lib/ghl-config/types";
 
+import { GhlFieldMappingSelect } from "./ghl-field-mapping-select";
 import { StatusMark } from "./status-mark";
 import type {
   GhlWalkthroughActions,
@@ -516,21 +517,14 @@ export function GhlWalkthroughPanel({
             {CANONICAL_SURVEY_ATTRIBUTES.map((canonical) => (
               <Label key={canonical} className="grid gap-1 text-sm sm:grid-cols-[12rem_1fr] sm:items-center">
                 <span className="font-mono text-xs">{canonical}</span>
-                <select
-                  className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-sm"
-                  aria-label={`GHL field for ${canonical}`}
-                  value={discoveredFields.some((field) => field.id === fieldMap[canonical]) ? fieldMap[canonical] : ""}
-                  onChange={(event) =>
-                    setFieldMap((current) => ({ ...current, [canonical]: event.target.value }))
+                <GhlFieldMappingSelect
+                  canonical={canonical}
+                  fields={discoveredFields}
+                  value={fieldMap[canonical] ?? ""}
+                  onChange={(fieldId) =>
+                    setFieldMap((current) => ({ ...current, [canonical]: fieldId }))
                   }
-                >
-                  <option value="">Unmapped</option>
-                  {discoveredFields.map((field) => (
-                    <option key={field.id} value={field.id}>
-                      {field.name} · {field.id}
-                    </option>
-                  ))}
-                </select>
+                />
               </Label>
             ))}
             <Button type="button" variant="outline" disabled={pending !== null || !selectedLocationId} onClick={() => void saveFieldMap()}>

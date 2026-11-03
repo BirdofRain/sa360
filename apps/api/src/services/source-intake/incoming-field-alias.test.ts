@@ -20,9 +20,12 @@ import {
 import { readBuyerCsvV3ZipAndAge } from "../ppl-fulfillment/buyer-lead-fields.js";
 import { normalizeLeadCaptureIoWebhookToLifecyclePayload } from "./leadcapture-io-normalizer.js";
 import {
+  CONFIRMED_ERIKS_VEIDEMANIS_PARENT_URL_KEY,
+  CONFIRMED_ERIKS_VEIDEMANIS_PROVIDER_FUNNEL_ID,
   CONFIRMED_JULIA_DODGE_PARENT_URL_KEY,
   CONFIRMED_JULIA_DODGE_SOURCE_FUNNEL_ID,
   CONFIRMED_LEGACY_JAMES_TORREY_ROUTE_KEY,
+  confirmedDateOfBirthBindings,
   isAmbiguousIncomingFieldKey,
   normalizeSourceFieldKey,
   resolveCanonicalAttributeKey,
@@ -197,6 +200,148 @@ test("selected GHL Age and DOB use the canonical projection", () => {
   assert.equal(invalid.missingSourceKeys.includes("date_of_birth"), true);
   assert.equal(invalid.missingSourceKeys.includes("age"), true);
   assert.equal(invalid.valuesByLogicalKey.date_of_birth, undefined);
+});
+
+test("Eriks's confirmed page maps date to 1949-01-27 and age 77", () => {
+  const submittedAt = "2026-11-03T09:53:33.092Z";
+  const raw = juliaPayload({
+    parent_url: `https://${CONFIRMED_ERIKS_VEIDEMANIS_PARENT_URL_KEY}?utm_source=ad&utm_campaign=vet`,
+    submitted_at: submittedAt,
+    date: "01/27/1949",
+    branch: "Army",
+  });
+  const before = structuredClone(raw);
+  const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(raw, {
+    receivedAt: submittedAt,
+    sourceFunnelId: "cmobservedfunnel0000000000",
+  });
+  assert.deepEqual(raw, before);
+  assert.equal(detailsOf(normalized).date_of_birth, "1949-01-27");
+  assert.equal(detailsOf(normalized).date_of_birth_provenance, "supplied");
+  assert.equal(detailsOf(normalized).consumer_age, "77");
+  assert.equal(detailsOf(normalized).consumer_age_provenance, "derived_from_date_of_birth");
+  assert.equal(detailsOf(normalized).consumer_age_reference_date, "2026-11-03");
+  assert.equal(detailsOf(normalized).consumer_age_reference_rule, "submitted_at_utc_date_else_received_at_utc_date");
+  assert.equal(attributesOf(normalized).date_of_birth, "01/27/1949");
+  assert.equal(attributesOf(normalized).branch_of_service, undefined);
+  assert.equal(intakeOf(normalized).scopedFieldBindingId, "leadcapture_io_nextgen_vet_eriks_veidemanis");
+  assert.equal(intakeOf(normalized).submitted_at, submittedAt);
+  assert.equal(normalized.state.routing_status, "RECEIVED");
+  assert.equal(normalized.event.send_to_meta, false);
+  assert.equal(JSON.stringify(normalized).includes(CONFIRMED_ERIKS_VEIDEMANIS_PROVIDER_FUNNEL_ID), false);
+
+  const missingId = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+    juliaPayload({
+      parent_url: `https://${CONFIRMED_ERIKS_VEIDEMANIS_PARENT_URL_KEY}/`,
+      submitted_at: submittedAt,
+      date: "01/27/1949",
+    }),
+    { receivedAt: submittedAt }
+  );
+  assert.equal(detailsOf(missingId).date_of_birth, "1949-01-27");
+
+  const providerUuidAsInternalId = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+    juliaPayload({
+      parent_url: "https://example.test/not-eriks",
+      submitted_at: submittedAt,
+      date: "01/27/1949",
+    }),
+    { receivedAt: submittedAt, sourceFunnelId: CONFIRMED_ERIKS_VEIDEMANIS_PROVIDER_FUNNEL_ID }
+  );
+  assert.equal(detailsOf(providerUuidAsInternalId).date_of_birth, undefined);
+
+  const projected = projectCampaignDobAge({ normalizedPayload: normalized, receivedAt: submittedAt });
+  assert.equal(projected.age, "77");
+  assert.equal(projected.dateOfBirth, "1949-01-27");
+  const v3 = companySheetsCampaignRowValues({
+    schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3,
+    stableRowId: "lead:synthetic:eriks",
+    clientAccountId: "client_synthetic",
+    sourceLeadEventId: "evt_synthetic",
+    receivedAt: submittedAt,
+    sourceLeadId: "11111111-2222-4333-8444-555555555555",
+    normalizedPayload: normalized,
+  });
+  const v3Row = Object.fromEntries(COMPANY_SHEETS_V3_HEADER.map((key, index) => [key, v3?.[index] ?? ""]));
+  assert.equal(v3Row.DOB, "1949-01-27");
+  assert.equal(v3Row.Age, "77");
+  const discovered = [
+    { id: "dobfield1", name: "DOB", key: "contact.dob", fieldKey: "contact.dob", dataType: "DATE" },
+    { id: "agefield1", name: "Age", key: "contact.age", fieldKey: "contact.age", dataType: "TEXT" },
+  ];
+  const stamp = buildSourceAttributeStampPlan({
+    sourceAttributes: attributesOf(normalized) as Record<string, string>,
+    fieldMap: {
+      date_of_birth: { ghlFieldKey: "dobfield1", requirement: "optional" },
+      age: { ghlFieldKey: "agefield1", requirement: "optional" },
+    },
+    discoveredFields: discovered,
+    normalizedPayload: normalized,
+    receivedAt: submittedAt,
+  });
+  assert.equal(stamp.valuesByLogicalKey.date_of_birth, "1949-01-27");
+  assert.equal(stamp.valuesByLogicalKey.age, "77");
+
+  const unnormalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+    juliaPayload({
+      parent_url: "https://go.lifeinsuranceforvets.com/learn-eriks-veidemanis-extra",
+      submitted_at: submittedAt,
+      date: "01/27/1949",
+    }),
+    { receivedAt: submittedAt }
+  );
+  const blankSheet = companySheetsCampaignRowValues({
+    schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3,
+    stableRowId: "lead:synthetic:blank",
+    clientAccountId: "client_synthetic",
+    sourceLeadEventId: "evt_blank",
+    receivedAt: submittedAt,
+    sourceLeadId: "11111111-2222-4333-8444-555555555555",
+    normalizedPayload: unnormalized,
+  });
+  const blankRow = Object.fromEntries(COMPANY_SHEETS_V3_HEADER.map((key, index) => [key, blankSheet?.[index] ?? ""]));
+  assert.equal(blankRow.DOB, "");
+  assert.equal(blankRow.Age, "");
+  assert.equal(detailsOf(unnormalized).consumer_age, undefined);
+
+  for (const page of [
+    `https://${CONFIRMED_ERIKS_VEIDEMANIS_PARENT_URL_KEY}-extra`,
+    `https://${CONFIRMED_ERIKS_VEIDEMANIS_PARENT_URL_KEY}/extra`,
+    "https://go.lifeinsuranceforvets.com/learn-julia-healthcare-worker",
+  ]) {
+    const rejected = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+      juliaPayload({ parent_url: page, submitted_at: submittedAt, date: "01/27/1949" }),
+      { receivedAt: submittedAt }
+    );
+    assert.equal(detailsOf(rejected).date_of_birth, undefined, page);
+  }
+
+  const supplied = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+    juliaPayload({
+      parent_url: `https://${CONFIRMED_ERIKS_VEIDEMANIS_PARENT_URL_KEY}`,
+      submitted_at: submittedAt,
+      date: "01/27/1949",
+      age: "40",
+    }),
+    { receivedAt: submittedAt }
+  );
+  assert.equal(detailsOf(supplied).date_of_birth, "1949-01-27");
+  assert.equal(detailsOf(supplied).consumer_age, "40");
+  assert.equal(detailsOf(supplied).consumer_age_provenance, "supplied");
+  assert.equal(detailsOf(supplied).consumer_age_conflict, true);
+
+  const invalid = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+    juliaPayload({
+      parent_url: `https://${CONFIRMED_ERIKS_VEIDEMANIS_PARENT_URL_KEY}`,
+      submitted_at: submittedAt,
+      date: "02/31/1949",
+    }),
+    { receivedAt: submittedAt }
+  );
+  assert.equal(detailsOf(invalid).date_of_birth, undefined);
+  assert.equal(confirmedDateOfBirthBindings().map((binding) => binding.id).includes("leadcapture_io_nextgen_vet_julia_dodge"), true);
+  assert.equal(confirmedDateOfBirthBindings().map((binding) => binding.id).includes("leadcapture_io_nextgen_vet_eriks_veidemanis"), true);
+  assert.equal(resolveCanonicalAttributeKey("date"), null);
 });
 
 test("confirmed funnel id maps date without falling through from a different funnel", () => {

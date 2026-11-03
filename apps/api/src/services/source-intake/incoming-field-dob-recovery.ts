@@ -14,7 +14,12 @@ import { parseCampaignDateOfBirth } from "../consumer-age/campaign-dob-age.js";
 import { normalizeLeadCaptureIoWebhookToLifecyclePayload } from "./leadcapture-io-normalizer.js";
 import { normalizeLeadCaptureParentUrl } from "./leadcapture-parent-url.js";
 import {
+  bindingTreatsDateAsBirthday,
+  CONFIRMED_ERIKS_VEIDEMANIS_PARENT_URL_KEY,
+  CONFIRMED_ERIKS_VEIDEMANIS_PROVIDER_FUNNEL_ID,
+  CONFIRMED_JULIA_DODGE_PARENT_URL_KEY,
   CONFIRMED_JULIA_DODGE_SOURCE_FUNNEL_ID,
+  confirmedDateOfBirthBindings,
   matchScopedIncomingFieldBinding,
   normalizeSourceFieldKey,
 } from "./source-field-alias.registry.js";
@@ -32,8 +37,6 @@ export const INCOMING_DOB_RECOVERY_WINDOW_START = "2026-10-26T04:00:00.000Z";
 
 export const INCOMING_DOB_RECOVERY_DEFAULT_LIMIT = 5_000;
 export const INCOMING_DOB_RECOVERY_MAX_LIMIT = 20_000;
-
-const CONFIRMED_BINDING_ID = "leadcapture_io_nextgen_vet_julia_dodge";
 
 export const INCOMING_DOB_LATER_UPDATE_POLICY = {
   writes: false,
@@ -56,12 +59,23 @@ export const INCOMING_DOB_LATER_UPDATE_POLICY = {
 
 export const INCOMING_DOB_UPSTREAM_PAYLOAD_CHANGE = {
   liveFormsChanged: false,
-  form: "go.lifeinsuranceforvets.com/learn-julia-dodge",
-  sourceFunnelId: CONFIRMED_JULIA_DODGE_SOURCE_FUNNEL_ID,
   birthdayField: "date_of_birth",
   submissionTimeField: "submitted_at",
+  jsonKeysNotQuestionLabels: true,
+  forms: [
+    {
+      page: CONFIRMED_JULIA_DODGE_PARENT_URL_KEY,
+      sourceFunnelId: CONFIRMED_JULIA_DODGE_SOURCE_FUNNEL_ID,
+      providerFunnelId: null,
+    },
+    {
+      page: CONFIRMED_ERIKS_VEIDEMANIS_PARENT_URL_KEY,
+      sourceFunnelId: null,
+      providerFunnelId: CONFIRMED_ERIKS_VEIDEMANIS_PROVIDER_FUNNEL_ID,
+    },
+  ],
   instruction:
-    "Send the birthday as date_of_birth and the submission time as submitted_at. Do not put the birthday in date. Legacy forms keep date + time as the submission calendar.",
+    "Send the birthday answer as the JSON key date_of_birth. A question label that still says Date is not that key. Send the submission timestamp as the JSON key submitted_at. Confirmed pages that still send date remain readable. Legacy forms keep date + time as the submission calendar. Do not edit live forms from this repository.",
 } as const;
 
 export const INCOMING_DOB_RECOVERY_GAPS = [
@@ -158,7 +172,7 @@ export type IncomingDobRecoveryReport = {
   };
   reasons: Record<string, number>;
   census: IncomingDobRecoveryCensusRow[];
-  confirmedBindingId: typeof CONFIRMED_BINDING_ID;
+  confirmedDateOfBirthBindingIds: readonly string[];
   laterUpdate: typeof INCOMING_DOB_LATER_UPDATE_POLICY;
   upstreamPayloadChange: typeof INCOMING_DOB_UPSTREAM_PAYLOAD_CHANGE;
   gaps: readonly string[];
@@ -331,7 +345,7 @@ export function assessIncomingDobRecoveryRow(
     parentUrlKey: parentUrlKey(raw),
     sourceRouteKey: snapshot.sourceRouteKey,
   });
-  const confirmed = binding?.id === CONFIRMED_BINDING_ID;
+  const confirmed = bindingTreatsDateAsBirthday(binding);
   if (!confirmed) return finish("skipped", "not_confirmed_form", false);
 
   const dates = [...new Set(dateValues(visibleDateLayers(raw, snapshot.sourceSystem)))];
@@ -434,7 +448,7 @@ export function buildIncomingDobRecoveryReport(input: {
         `${b.sourceSystem}|${b.formKey}|${b.clientAccountId}`
       )
     ),
-    confirmedBindingId: CONFIRMED_BINDING_ID,
+    confirmedDateOfBirthBindingIds: confirmedDateOfBirthBindings().map((binding) => binding.id),
     laterUpdate: INCOMING_DOB_LATER_UPDATE_POLICY,
     upstreamPayloadChange: INCOMING_DOB_UPSTREAM_PAYLOAD_CHANGE,
     gaps: INCOMING_DOB_RECOVERY_GAPS,

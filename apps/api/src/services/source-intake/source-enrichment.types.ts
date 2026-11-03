@@ -1,3 +1,4 @@
+import type { IncomingFieldConflict } from "./incoming-field-resolution.js";
 import type { CanonicalSourceAttributeKey } from "./source-field-alias.registry.js";
 
 export type IntakeStatus =
@@ -58,6 +59,7 @@ export type SourceEnrichmentMetadata = {
   missingOptionalFields: string[];
   missingAiContextFields: string[];
   unmappedSourceFieldKeys: string[];
+  fieldAliasConflicts?: IncomingFieldConflict[];
   schemaDrift?: SourceSchemaDrift;
   deliveryEligible: boolean;
   deliveryBlockers: string[];

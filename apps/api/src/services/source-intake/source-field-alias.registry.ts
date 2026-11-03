@@ -40,26 +40,27 @@ export const DEFAULT_SOURCE_FIELD_ALIASES: Record<
   CanonicalSourceAttributeKey,
   readonly string[]
 > = {
-  military_status: ["military_status", "military_status_"],
+  military_status: ["military_status", "military_status_", "veteran_status", "service_status"],
   branch_of_service: [
     "branch_of_service",
-    "branch",
     "military_branch",
     "Branch of Service",
     "Military Branch",
     "service_branch",
+    "armed_forces_branch",
   ],
-  sex: ["sex", "gender"],
-  marital_status: ["marital_status", "marital_status_"],
+  // `gender` is not an alias of `sex`. Consent text is not a granted-consent flag.
+  sex: ["sex"],
+  marital_status: ["marital_status", "marital_status_", "maritalStatus", "marriage_status"],
   desired_coverage: [
     "desired_coverage",
     "desired_coverage_amount",
     "coverage_amount",
     "Coverage Amount",
-    "Coverage",
     "Desired Coverage",
     "coverageAmount",
     "requested_coverage",
+    "coverage_requested",
     "please_select_your_desired_coverage_amount",
   ],
   primary_reason: [
@@ -67,6 +68,7 @@ export const DEFAULT_SOURCE_FIELD_ALIASES: Record<
     "reason_for_insurance",
     "reason_for_wanting_insurance",
     "coverage_reason",
+    "reason_for_coverage",
   ],
   beneficiary: [
     "beneficiary",
@@ -81,19 +83,20 @@ export const DEFAULT_SOURCE_FIELD_ALIASES: Record<
     "date_of_birth",
     "dob",
     "birth_date",
-    // CamelCase normalizes without inserting underscores (`dateOfBirth` → `dateofbirth`).
     "dateOfBirth",
     "birthDate",
     "birthday",
     "birth_day",
   ],
-  age: ["age", "consumer_age", "consumerAge"],
+  age: ["age", "consumer_age", "consumerAge", "applicant_age", "age_in_years"],
   best_time_to_call: [
     "best_time_to_call",
     "best_time_to_review",
     "best_time",
     "contact_time",
     "time_to_call",
+    "preferred_call_time",
+    "best_contact_time",
   ],
   applied_for_other_insurance: ["applied_for_other_insurance"],
   disability_rating: [
@@ -114,8 +117,6 @@ export const DEFAULT_SOURCE_FIELD_ALIASES: Record<
   healthcare_profession: [
     "healthcare_profession",
     "Healthcare Profession",
-    "Profession",
-    "Occupation",
     "Medical Profession",
   ],
   primary_concern: [
@@ -183,6 +184,9 @@ const RESERVED_RAW_KEYS = new Set([
   "fbclid",
   "fbp",
   "fbc",
+  "timestamp",
+  "created_at",
+  "updated_at",
   "schema_version",
   "client_account_id",
   "sa360_source_system",
@@ -201,12 +205,66 @@ const RESERVED_RAW_KEYS = new Set([
   "lead_proof",
 ]);
 
+/**
+ * One key shape for alias lookup.
+ *
+ * CamelCase boundaries become underscores before letters are lowercased, then
+ * spaces, plus signs, and hyphens collapse the same way. `dateOfBirth` and
+ * `date_of_birth` meet. `zipcode` does not become `zip_code`; that pair is an
+ * explicit alias, not a normalization merge.
+ */
 export function normalizeSourceFieldKey(key: string): string {
   return key
     .trim()
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
     .toLowerCase()
     .replace(/[\s+\-]+/g, "_")
-    .replace(/[^a-z0-9_]/g, "");
+    .replace(/[^a-z0-9_]/g, "")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+/**
+ * Contact fields. These are not survey attributes and are not renamed.
+ * `name` maps to `full_name` only. Postal codes stay strings so leading zeros
+ * survive. `zipcode` and `zip_code` are both listed because camelCase splitting
+ * does not invent an underscore inside an already-lowercase word.
+ */
+export const INCOMING_IDENTITY_FIELD_ALIASES = {
+  first_name: ["first_name", "firstName", "firstname", "given_name"],
+  last_name: ["last_name", "lastName", "lastname", "surname", "family_name"],
+  full_name: ["full_name", "fullName", "name"],
+  email: ["email", "email_address", "emailAddress"],
+  phone: ["phone", "phone_number", "phoneNumber", "mobile", "mobile_phone", "cell_phone"],
+  state: ["state", "state_code", "state_of_residence"],
+  zip: ["zip", "zip_code", "zipCode", "zipcode", "postal_code", "postalCode"],
+} as const;
+
+export type IncomingIdentityFieldKey = keyof typeof INCOMING_IDENTITY_FIELD_ALIASES;
+
+/**
+ * Names that are not safe as global aliases. They map only through
+ * `SCOPED_INCOMING_FIELD_BINDINGS`.
+ */
+export const AMBIGUOUS_INCOMING_FIELD_KEYS = [
+  "date",
+  "time",
+  "branch",
+  "married",
+  "is_married",
+  "coverage",
+  "reason",
+  "status",
+  "timestamp",
+  "created_at",
+] as const;
+
+const AMBIGUOUS_INCOMING_FIELD_KEY_SET = new Set<string>(AMBIGUOUS_INCOMING_FIELD_KEYS);
+
+export function isAmbiguousIncomingFieldKey(key: string): boolean {
+  const normalized = normalizeSourceFieldKey(key);
+  return Boolean(normalized) && AMBIGUOUS_INCOMING_FIELD_KEY_SET.has(normalized);
 }
 
 function buildAliasLookup(
@@ -221,7 +279,9 @@ function buildAliasLookup(
       ...(routeAliasOverrides?.[canonical] ?? []),
     ];
     for (const alias of aliases) {
-      lookup.set(normalizeSourceFieldKey(alias), canonical);
+      const normalized = normalizeSourceFieldKey(alias);
+      if (!normalized || isAmbiguousIncomingFieldKey(normalized)) continue;
+      lookup.set(normalized, canonical);
     }
   }
 
@@ -229,7 +289,9 @@ function buildAliasLookup(
     for (const [canonical, aliases] of Object.entries(routeAliasOverrides)) {
       if (!(CANONICAL_SOURCE_ATTRIBUTE_KEYS as readonly string[]).includes(canonical)) continue;
       for (const alias of aliases) {
-        lookup.set(normalizeSourceFieldKey(alias), canonical as CanonicalSourceAttributeKey);
+        const normalized = normalizeSourceFieldKey(alias);
+        if (!normalized || isAmbiguousIncomingFieldKey(normalized)) continue;
+        lookup.set(normalized, canonical as CanonicalSourceAttributeKey);
       }
     }
   }
@@ -254,3 +316,152 @@ export function isReservedSourceRawKey(key: string): boolean {
 export function listIncomingAnswerKeys(raw: Record<string, unknown>): string[] {
   return Object.keys(raw).filter((k) => !isReservedSourceRawKey(k));
 }
+
+export type ScopedIncomingFieldBinding = {
+  id: string;
+  provider: string;
+  sourceSystem: string;
+  /** SA360 SourceFunnel id. Preferred when normalization already knows it. */
+  sourceFunnelId?: string;
+  /** Exact `hostname + pathname` from `normalizeLeadCaptureParentUrl`. */
+  parentUrlKey?: string;
+  /**
+   * Exact legacy endpoint route key for a form that has no page URL in the
+   * retained payload. Never `UNKNOWN_ROUTE`, and never used to treat `date`
+   * as a birthday.
+   */
+  sourceRouteKey?: string;
+  aliases: Readonly<Record<string, CanonicalSourceAttributeKey>>;
+};
+
+/** Confirmed next-gen veteran page. `date` on this form is the birthday. */
+export const CONFIRMED_JULIA_DODGE_PARENT_URL_KEY =
+  "go.lifeinsuranceforvets.com/learn-julia-dodge";
+
+export const CONFIRMED_JULIA_DODGE_SOURCE_FUNNEL_ID = "cmv8k6uui00q0lc0uyto17ld1";
+
+/**
+ * Legacy James Torrey veteran form. Retained fixtures send `branch` and use
+ * `date` + `time` as the submission calendar, not a birthday.
+ */
+export const CONFIRMED_LEGACY_JAMES_TORREY_ROUTE_KEY =
+  "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX";
+
+export const SCOPED_INCOMING_FIELD_BINDINGS: readonly ScopedIncomingFieldBinding[] = [
+  {
+    id: "leadcapture_io_nextgen_vet_julia_dodge",
+    provider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    sourceFunnelId: CONFIRMED_JULIA_DODGE_SOURCE_FUNNEL_ID,
+    parentUrlKey: CONFIRMED_JULIA_DODGE_PARENT_URL_KEY,
+    aliases: {
+      date: "date_of_birth",
+      branch: "branch_of_service",
+      married: "marital_status",
+      is_married: "marital_status",
+    },
+  },
+  {
+    id: "leadcapture_io_legacy_vet_james_torrey",
+    provider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_legacy",
+    sourceRouteKey: CONFIRMED_LEGACY_JAMES_TORREY_ROUTE_KEY,
+    aliases: {
+      branch: "branch_of_service",
+    },
+  },
+];
+
+export type ScopedIncomingFieldMatchInput = {
+  provider?: string | null;
+  sourceSystem?: string | null;
+  sourceFunnelId?: string | null;
+  parentUrlKey?: string | null;
+  sourceRouteKey?: string | null;
+};
+
+/**
+ * Prefer a verified SourceFunnel id. Otherwise require an exact normalized
+ * page, or an exact confirmed legacy route key. A different funnel id does
+ * not fall through to the page. Client id, UNKNOWN_ROUTE, and fuzzy URLs
+ * never match.
+ */
+export function matchScopedIncomingFieldBinding(
+  input: ScopedIncomingFieldMatchInput
+): ScopedIncomingFieldBinding | null {
+  const provider = input.provider?.trim() ?? "";
+  const sourceSystem = input.sourceSystem?.trim() ?? "";
+  const funnelId = input.sourceFunnelId?.trim() ?? "";
+  const parentUrlKey = input.parentUrlKey?.trim() ?? "";
+  const routeKey = input.sourceRouteKey?.trim() ?? "";
+  const matched: ScopedIncomingFieldBinding[] = [];
+
+  for (const binding of SCOPED_INCOMING_FIELD_BINDINGS) {
+    if (binding.provider !== provider || binding.sourceSystem !== sourceSystem) continue;
+    if (funnelId) {
+      if (binding.sourceFunnelId && funnelId === binding.sourceFunnelId) matched.push(binding);
+      continue;
+    }
+    if (binding.parentUrlKey && parentUrlKey === binding.parentUrlKey) {
+      matched.push(binding);
+      continue;
+    }
+    if (
+      binding.sourceRouteKey &&
+      routeKey === binding.sourceRouteKey &&
+      routeKey !== "UNKNOWN_ROUTE"
+    ) {
+      matched.push(binding);
+    }
+  }
+
+  return matched.length === 1 ? matched[0]! : null;
+}
+
+export function scopedAliasForKey(
+  binding: ScopedIncomingFieldBinding | null,
+  key: string
+): CanonicalSourceAttributeKey | null {
+  if (!binding) return null;
+  const normalized = normalizeSourceFieldKey(key);
+  if (!normalized) return null;
+  for (const [alias, canonical] of Object.entries(binding.aliases)) {
+    if (normalizeSourceFieldKey(alias) === normalized) return canonical;
+  }
+  return null;
+}
+
+function assertUnambiguousGlobalAliases(): void {
+  const owners = new Map<string, string>();
+  const claim = (normalized: string, owner: string) => {
+    if (!normalized) return;
+    const prior = owners.get(normalized);
+    if (prior && prior !== owner) {
+      throw new Error(`incoming_field_alias_collision:${normalized}:${prior}:${owner}`);
+    }
+    owners.set(normalized, owner);
+  };
+
+  for (const canonical of CANONICAL_SOURCE_ATTRIBUTE_KEYS) {
+    claim(normalizeSourceFieldKey(canonical), canonical);
+    for (const alias of DEFAULT_SOURCE_FIELD_ALIASES[canonical] ?? []) {
+      const normalized = normalizeSourceFieldKey(alias);
+      if (isAmbiguousIncomingFieldKey(normalized)) {
+        throw new Error(`ambiguous_incoming_field_is_global:${normalized}`);
+      }
+      claim(normalized, canonical);
+    }
+  }
+  for (const [canonical, aliases] of Object.entries(INCOMING_IDENTITY_FIELD_ALIASES)) {
+    claim(normalizeSourceFieldKey(canonical), `identity:${canonical}`);
+    for (const alias of aliases) {
+      const normalized = normalizeSourceFieldKey(alias);
+      if (isAmbiguousIncomingFieldKey(normalized)) {
+        throw new Error(`ambiguous_incoming_field_is_global:${normalized}`);
+      }
+      claim(normalized, `identity:${canonical}`);
+    }
+  }
+}
+
+assertUnambiguousGlobalAliases();

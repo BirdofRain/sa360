@@ -137,6 +137,50 @@ test("client detail strips adminDetail", () => {
   assert.equal(detail.adminDetail, undefined);
 });
 
+test("detail copies canonical consumer age only when source attributes have none", () => {
+  const ctx = baseContext({
+    sourceLead: baseSourceLead({
+      enrichmentMetadataJson: {
+        intakeStatus: "routing_matched",
+        enrichmentStatus: "complete",
+        automationReadiness: "ready",
+        sourceAttributes: { state: "OH", date_of_birth: "03/13/1955" },
+        deliveryEligible: true,
+        deliveryBlockers: [],
+        deliveryWarnings: [],
+        mappedFieldCount: 1,
+        missingOptionalFields: [],
+        missingAiContextFields: [],
+        unmappedSourceFieldKeys: [],
+        unmappedSourceFields: [],
+      },
+      normalizedPayloadJson: {
+        contact: { first_name: "Pat", last_name: "Sample" },
+        lead_details: { consumer_age: "71", date_of_birth: "1955-03-13" },
+      },
+    }),
+  });
+  const before = JSON.stringify(ctx.sourceLead.enrichmentMetadataJson);
+  const detail = presentLeadDeliveryDetail(ctx, "admin");
+  assert.equal(detail.attribution.sourceAttributes.consumer_age, "71");
+  assert.equal(detail.attribution.sourceAttributes.date_of_birth, "03/13/1955");
+  assert.equal(JSON.stringify(ctx.sourceLead.enrichmentMetadataJson), before);
+
+  const explicit = presentLeadDeliveryDetail(
+    baseContext({
+      sourceLead: baseSourceLead({
+        enrichmentMetadataJson: {
+          ...(ctx.sourceLead.enrichmentMetadataJson as object),
+          sourceAttributes: { age: "80" },
+        },
+      }),
+    }),
+    "admin"
+  );
+  assert.equal(explicit.attribution.sourceAttributes.age, "80");
+  assert.equal(explicit.attribution.sourceAttributes.consumer_age, undefined);
+});
+
 test("missing routing/delivery data does not crash presenter", () => {
   const ctx = baseContext({
     sourceLead: baseSourceLead({

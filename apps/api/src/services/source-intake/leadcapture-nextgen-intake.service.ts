@@ -461,6 +461,7 @@ export async function processLeadCaptureNextGenLeadCreated(
 
   const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(normalizeInput, {
     receivedAt: persistedReceiptIso(event.receivedAt, now),
+    sourceFunnelId: effectiveFunnelObservation?.sourceFunnel?.id ?? null,
   });
   // Stage B+ routing match still uses campaign_id / route key.
   // Inventory identity uses the immutable funnel/form ID.
@@ -585,7 +586,8 @@ export async function processLeadCaptureNextGenLeadCreated(
     leadId,
     false,
     now.toISOString(),
-    now
+    now,
+    { sourceFunnelId: effectiveFunnelObservation?.sourceFunnel?.id ?? null }
   );
 
   let effectiveStatus = status;

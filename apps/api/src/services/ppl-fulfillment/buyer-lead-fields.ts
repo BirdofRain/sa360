@@ -138,21 +138,21 @@ export const BUYER_FIELD_ALIASES: Record<
   coverage_amount: [
     "coverage_amount",
     "Coverage Amount",
-    "Coverage",
     "Desired Coverage",
     "coverageAmount",
     "desired_coverage",
     "desired_coverage_amount",
     "requested_coverage",
+    "coverage_requested",
     "please_select_your_desired_coverage_amount",
   ],
   branch_of_service: [
     "branch_of_service",
     "Branch of Service",
     "Military Branch",
-    "branch",
     "service_branch",
     "military_branch",
+    "armed_forces_branch",
   ],
   disability_rating: [
     "disability_rating",
@@ -172,8 +172,6 @@ export const BUYER_FIELD_ALIASES: Record<
   healthcare_profession: [
     "healthcare_profession",
     "Healthcare Profession",
-    "Profession",
-    "Occupation",
     "Medical Profession",
   ],
   primary_concern: ["primary_concern", "Primary Concern", "main_concern", "Primary Need"],

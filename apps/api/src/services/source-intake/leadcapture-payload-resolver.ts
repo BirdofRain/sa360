@@ -1,12 +1,15 @@
 import { createHash } from "node:crypto";
 import { isLeadCaptureUuidLeadId } from "../../lib/leadcapture-lead-id.js";
+import { resolveIncomingPayloadFields } from "./incoming-field-resolution.js";
 import {
   CANONICAL_SOURCE_ATTRIBUTE_KEYS,
   DEFAULT_SOURCE_FIELD_ALIASES,
+  INCOMING_IDENTITY_FIELD_ALIASES,
   isReservedSourceRawKey,
   normalizeSourceFieldKey,
   resolveCanonicalAttributeKey,
   type CanonicalSourceAttributeKey,
+  type IncomingIdentityFieldKey,
 } from "./source-field-alias.registry.js";
 
 /** Identity / contact fields resolved before canonical source attributes. */
@@ -17,12 +20,7 @@ export const LEADCAPTURE_IDENTITY_FIELD_ALIASES: Record<string, readonly string[
    * Never include questionnaire `number` or Data-API-only `lead_number`.
    */
   lead_id: ["lead_id", "ref_id"],
-  phone: ["phone", "phone_number"],
-  full_name: ["full_name", "name"],
-  first_name: ["first_name"],
-  last_name: ["last_name"],
-  email: ["email"],
-  state: ["state"],
+  ...INCOMING_IDENTITY_FIELD_ALIASES,
   submitted_at: ["submitted_at"],
   date: ["date"],
   time: ["time"],
@@ -72,6 +70,7 @@ const CONTACT_FIELD_KEYS = [
   "email",
   "phone",
   "state",
+  "zip",
 ] as const;
 
 const COMPLIANCE_FIELD_KEYS = [
@@ -497,11 +496,15 @@ function applyResolvedIdentityNames(
 }
 
 /** Materialize resolved LeadCapture fields onto a shallow copy (top-level wins). */
+const INCOMING_IDENTITY_KEYS = Object.keys(INCOMING_IDENTITY_FIELD_ALIASES) as IncomingIdentityFieldKey[];
+
 export function materializeLeadCapturePayload(
   raw: Record<string, unknown>,
   opts?: {
     routeKeyFromPath?: string;
     routeAliasOverrides?: Record<string, readonly string[]>;
+    sourceFunnelId?: string | null;
+    sourceSystem?: string | null;
   }
 ): Record<string, unknown> {
   const effective: Record<string, unknown> = { ...raw };
@@ -531,7 +534,28 @@ export function materializeLeadCapturePayload(
     }
   }
 
-  applyResolvedIdentityNames(effective, raw, opts?.routeAliasOverrides);
+  const identityResolution = resolveIncomingPayloadFields(raw, {
+    sourceSystem:
+      opts?.sourceSystem ??
+      (typeof raw.sa360_source_system === "string" ? raw.sa360_source_system : "leadcapture_io_legacy"),
+    sourceFunnelId: opts?.sourceFunnelId,
+    routeKey: opts?.routeKeyFromPath,
+    routeAliasOverrides: opts?.routeAliasOverrides,
+  });
+  for (const key of INCOMING_IDENTITY_KEYS) {
+    if (identityResolution.blockedIdentity.has(key)) {
+      delete effective[key];
+      continue;
+    }
+    const value = identityResolution.identity[key];
+    if (value) effective[key] = value;
+  }
+  if (
+    !identityResolution.blockedIdentity.has("first_name") &&
+    !identityResolution.blockedIdentity.has("last_name")
+  ) {
+    applyResolvedIdentityNames(effective, raw, opts?.routeAliasOverrides);
+  }
   applyParentUrlAttribution(effective);
 
   const submittedAt = resolveLegacySubmittedAt(raw, opts?.routeAliasOverrides);

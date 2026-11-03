@@ -30,6 +30,8 @@ export type RunSourceEnrichmentPipelineInput = {
   routeFieldMapJson?: unknown;
   routeAliasOverridesJson?: unknown;
   receivedAt: string;
+  /** SA360 SourceFunnel id when intake already resolved one. Never inferred here. */
+  sourceFunnelId?: string | null;
 };
 
 export async function runSourceEnrichmentPipeline(
@@ -49,7 +51,12 @@ export async function runSourceEnrichmentPipeline(
 
   const leadCaptureMaterialized =
     input.sourceProvider === "leadcapture_io"
-      ? materializeLeadCapturePayload(input.rawPayload, { routeAliasOverrides })
+      ? materializeLeadCapturePayload(input.rawPayload, {
+          routeAliasOverrides,
+          routeKeyFromPath: input.sourceRouteKey,
+          sourceSystem: input.sourceSystem,
+          sourceFunnelId: input.sourceFunnelId,
+        })
       : undefined;
 
   const extraction = extractSourceAttributesFromPayload(input.rawPayload, {
@@ -57,6 +64,8 @@ export async function runSourceEnrichmentPipeline(
     receivedAt: input.receivedAt,
     routeAliasOverrides,
     leadCaptureMaterialized,
+    routeKey: input.sourceRouteKey,
+    sourceFunnelId: input.sourceFunnelId,
   });
 
   const schema = await detectSourceSchemaDrift({
@@ -103,6 +112,9 @@ export async function runSourceEnrichmentPipeline(
     missingOptionalFields: enrichmentEval.missingOptionalFields,
     missingAiContextFields: enrichmentEval.missingAiContextFields,
     unmappedSourceFieldKeys: extraction.unmappedSourceFieldKeys,
+    ...(extraction.fieldAliasConflicts.length > 0
+      ? { fieldAliasConflicts: extraction.fieldAliasConflicts }
+      : {}),
     schemaDrift: schema.schemaDrift,
     deliveryEligible: enrichmentEval.deliveryEligible,
     deliveryBlockers: [...identity.blockers, ...enrichmentEval.deliveryBlockers],

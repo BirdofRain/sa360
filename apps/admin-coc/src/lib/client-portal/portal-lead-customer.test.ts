@@ -87,6 +87,20 @@ test("reads customer-safe facts from attribution without ad or email plumbing", 
   assert.equal(portalCustomerState("tx"), "TX");
 });
 
+test("portal age falls back to canonical lead_details.consumer_age", () => {
+  const facts = readPortalCustomerLeadFacts({
+    sourceAttributes: { state: "oh" },
+    lead_details: { consumer_age: "71" },
+  });
+  assert.equal(facts.age, "71");
+  assert.equal(facts.state, "oh");
+  const explicit = readPortalCustomerLeadFacts({
+    sourceAttributes: { age: "80" },
+    lead_details: { consumer_age: "71" },
+  });
+  assert.equal(explicit.age, "80");
+});
+
 test("missing attribution facts stay empty instead of inventing values", () => {
   assert.deepEqual(readPortalCustomerLeadFacts(null), {
     state: null,

@@ -50,6 +50,24 @@ async function campaignAgeReceivedAt(decisionId: string | null | undefined): Pro
   }
 }
 
+/** Production and canary GHL runs both attach the lifecycle payload here before the stamp. */
+export function recordedGhlSourceEnrichment(
+  sourceEnrichment: ReturnType<typeof buildSourceEnrichmentDeliveryContext>,
+  lifecyclePayload: LifecycleEventSchema,
+  receivedAt: string | null
+): SourceEnrichmentPlanContext {
+  return {
+    sourceAttributes: sourceEnrichment.sourceAttributes,
+    enrichmentStatus: sourceEnrichment.enrichmentStatus,
+    automationReadiness: sourceEnrichment.automationReadiness,
+    unmappedSourceFieldKeys: sourceEnrichment.unmappedSourceFieldKeys,
+    sourceAttributeFieldMap: sourceEnrichment.sourceAttributeFieldMap,
+    sourceEnrichmentPolicy: sourceEnrichment.sourceEnrichmentPolicy,
+    normalizedPayload: lifecyclePayload,
+    receivedAt,
+  };
+}
+
 async function sourceEnrichmentPlanContext(
   lifecyclePayload: LifecycleEventSchema | undefined,
   destinationClientAccountId: string,
@@ -62,16 +80,11 @@ async function sourceEnrichmentPlanContext(
     (await findClientAccountById(destinationClientAccountId))?.ghlDestination ?? null,
     rule
   );
-  return {
-    sourceAttributes: sourceEnrichment.sourceAttributes,
-    enrichmentStatus: sourceEnrichment.enrichmentStatus,
-    automationReadiness: sourceEnrichment.automationReadiness,
-    unmappedSourceFieldKeys: sourceEnrichment.unmappedSourceFieldKeys,
-    sourceAttributeFieldMap: sourceEnrichment.sourceAttributeFieldMap,
-    sourceEnrichmentPolicy: sourceEnrichment.sourceEnrichmentPolicy,
-    normalizedPayload: lifecyclePayload,
-    receivedAt: await campaignAgeReceivedAt(routingDryRunDecisionId),
-  };
+  return recordedGhlSourceEnrichment(
+    sourceEnrichment,
+    lifecyclePayload,
+    await campaignAgeReceivedAt(routingDryRunDecisionId)
+  );
 }
 
 export async function getLiveCanaryPreflightForPlan(planId: string) {

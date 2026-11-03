@@ -15,6 +15,7 @@ import {
   isReservedSourceRawKey,
   matchScopedIncomingFieldBinding,
   normalizeSourceFieldKey,
+  readSuppliedProviderFunnelId,
   resolveCanonicalAttributeKey,
   scopedAliasForKey,
   type CanonicalSourceAttributeKey,
@@ -278,6 +279,7 @@ export function resolveIncomingPayloadFields(
     provider: providerFromPayload(raw, sourceSystem),
     sourceSystem,
     sourceFunnelId: options.sourceFunnelId,
+    providerFunnelId: readSuppliedProviderFunnelId(raw),
     parentUrlKey: parentUrlKeyFromPayload(raw),
     sourceRouteKey: options.routeKey ?? trimmedString(raw.sa360_route_key),
   });

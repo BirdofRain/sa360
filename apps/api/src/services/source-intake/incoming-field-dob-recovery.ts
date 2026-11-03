@@ -22,6 +22,7 @@ import {
   confirmedDateOfBirthBindings,
   matchScopedIncomingFieldBinding,
   normalizeSourceFieldKey,
+  readSuppliedProviderFunnelId,
 } from "./source-field-alias.registry.js";
 
 export const INCOMING_DOB_RECOVERY_REPORT_VERSION = "incoming_field_dob_recovery_v1" as const;
@@ -342,6 +343,7 @@ export function assessIncomingDobRecoveryRow(
     provider: cellText(raw.provider) || cellText(raw.sa360_source_platform) || snapshot.sourceProvider,
     sourceSystem: cellText(raw.sa360_source_system) || snapshot.sourceSystem,
     sourceFunnelId,
+    providerFunnelId: readSuppliedProviderFunnelId(raw),
     parentUrlKey: parentUrlKey(raw),
     sourceRouteKey: snapshot.sourceRouteKey,
   });

@@ -200,6 +200,29 @@ test("Eriks's confirmed page is eligible without using the provider lead id as t
   );
   assert.equal(wrongPage.recoveryClass, "skipped");
   assert.equal(wrongPage.reason, "not_confirmed_form");
+
+  const mismatchedFunnel = assessIncomingDobRecoveryRow(
+    snapshot({
+      rawPayload: {
+        ...(row.rawPayload as Record<string, unknown>),
+        funnel_id: "11111111-2222-4333-8444-666666666666",
+      },
+      enrichment: { sourceFunnelId: "cmobservedfunnel0000000000" },
+    }),
+    WINDOW
+  );
+  assert.equal(mismatchedFunnel.recoveryClass, "skipped");
+  assert.equal(mismatchedFunnel.reason, "not_confirmed_form");
+
+  const crossForm = assessIncomingDobRecoveryRow(
+    snapshot({
+      rawPayload: row.rawPayload,
+      enrichment: { sourceFunnelId: CONFIRMED_JULIA_DODGE_SOURCE_FUNNEL_ID },
+    }),
+    WINDOW
+  );
+  assert.equal(crossForm.recoveryClass, "skipped");
+  assert.equal(crossForm.reason, "not_confirmed_form");
 });
 
 test("known-event expectation recomputes canonical DOB and age without contact fields", () => {

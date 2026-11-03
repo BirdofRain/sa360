@@ -149,11 +149,14 @@ count from the fixture classifications.
 A binding maps `date` to `date_of_birth` only when that form is explicitly
 confirmed. `SourceFunnel.id` and the LeadCapture funnel UUID
 (`providerFunnelId`) are different identifiers. A binding that names an
-internal id rejects every other id and does not fall through to its page. A
-confirmed page whose internal id is not verified still matches that exact
-normalized hostname and path. Tracking queries are ignored. A path prefix
-does not match. Healthcare pages are not included unless they are separately
-confirmed.
+internal id rejects every other internal id and does not fall through to its
+page. A non-UUID internal id that is not one of the recorded SourceFunnel ids
+is unverified, so the exact page may still match. A UUID is a LeadCapture
+funnel id, not a SourceFunnel id. When that UUID is supplied and it is not
+the recorded provider funnel id, the page does not match. Two confirmed
+forms that disagree, such as Julia's internal id on Eriks's page, match
+neither form. Tracking queries are ignored. A path prefix does not match.
+Healthcare pages are not included unless they are separately confirmed.
 
 Confirmed `date` means birthday (`leadcapture_io` / `leadcapture_io_nextgen`):
 

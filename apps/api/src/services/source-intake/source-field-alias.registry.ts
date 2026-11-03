@@ -1,3 +1,5 @@
+import { isLeadCaptureUuidLeadId } from "../../lib/leadcapture-lead-id.js";
+
 /** Canonical source attribute keys recognized by SA360 intake. */
 export const CANONICAL_SOURCE_ATTRIBUTE_KEYS = [
   "military_status",
@@ -328,8 +330,9 @@ export type ScopedIncomingFieldBinding = {
    */
   sourceFunnelId?: string;
   /**
-   * LeadCapture `SourceFunnel.providerFunnelId`. Recorded so it is not pasted
-   * into `sourceFunnelId`. Matching does not treat this UUID as an internal id.
+   * LeadCapture `SourceFunnel.providerFunnelId`. This is not `SourceFunnel.id`.
+   * A supplied UUID may agree with this value. It never selects the binding by
+   * itself, and a different UUID does not fall through to the page.
    */
   providerFunnelId?: string;
   /** Exact `hostname + pathname` from `normalizeLeadCaptureParentUrl`. */
@@ -415,43 +418,106 @@ export const SCOPED_INCOMING_FIELD_BINDINGS: readonly ScopedIncomingFieldBinding
 export type ScopedIncomingFieldMatchInput = {
   provider?: string | null;
   sourceSystem?: string | null;
+  /** SA360 `SourceFunnel.id`. A LeadCapture funnel UUID placed here is not this id. */
   sourceFunnelId?: string | null;
+  /** LeadCapture funnel UUID from the payload. Not an internal SourceFunnel id. */
+  providerFunnelId?: string | null;
   parentUrlKey?: string | null;
   sourceRouteKey?: string | null;
 };
 
+const PROVIDER_FUNNEL_ID_KEYS = ["funnel_id", "form_id", "sa360_form_id"] as const;
+
+function payloadLayers(raw: Record<string, unknown>): Record<string, unknown>[] {
+  const layers = [raw];
+  const answers = raw.answers;
+  if (answers && typeof answers === "object" && !Array.isArray(answers)) {
+    layers.push(answers as Record<string, unknown>);
+  }
+  return layers;
+}
+
+/** UUID-shaped funnel/form id from the provider payload. Numeric lead_form is not included. */
+export function readSuppliedProviderFunnelId(raw: Record<string, unknown> | null | undefined): string | null {
+  if (!raw) return null;
+  for (const key of PROVIDER_FUNNEL_ID_KEYS) {
+    for (const layer of payloadLayers(raw)) {
+      const value = layer[key];
+      if (typeof value === "string" && isLeadCaptureUuidLeadId(value)) return value.trim().toLowerCase();
+    }
+  }
+  return null;
+}
+
 /**
- * Prefer a verified SourceFunnel id. A binding that names an internal id
- * rejects every other id and does not fall through to its page. A binding
- * with no internal id still matches its exact page, including when intake
- * has observed some other SourceFunnel id. The LeadCapture funnel UUID is
- * not an internal id. Client id, UNKNOWN_ROUTE, and fuzzy URLs never match.
+ * A verified internal id is a recorded `SourceFunnel.id`. Any other non-UUID
+ * id is unverified, so a confirmed page may still match. A UUID is an external
+ * funnel id: it may agree with `providerFunnelId`, and a mismatch does not
+ * fall through to the page. A verified id for one confirmed form on another
+ * confirmed form's page matches neither. UNKNOWN_ROUTE and fuzzy URLs never match.
  */
 export function matchScopedIncomingFieldBinding(
   input: ScopedIncomingFieldMatchInput
 ): ScopedIncomingFieldBinding | null {
   const provider = input.provider?.trim() ?? "";
   const sourceSystem = input.sourceSystem?.trim() ?? "";
-  const funnelId = input.sourceFunnelId?.trim() ?? "";
+  let internalId = input.sourceFunnelId?.trim() ?? "";
+  let providerId = input.providerFunnelId?.trim().toLowerCase() ?? "";
   const parentUrlKey = input.parentUrlKey?.trim() ?? "";
   const routeKey = input.sourceRouteKey?.trim() ?? "";
+  const sameSystem = SCOPED_INCOMING_FIELD_BINDINGS.filter(
+    (binding) => binding.provider === provider && binding.sourceSystem === sourceSystem
+  );
+  const knownInternal = new Set(
+    sameSystem.flatMap((binding) => (binding.sourceFunnelId ? [binding.sourceFunnelId] : []))
+  );
+  const knownProvider = new Set(
+    sameSystem.flatMap((binding) => (binding.providerFunnelId ? [binding.providerFunnelId.toLowerCase()] : []))
+  );
+  const confirmedPages = new Set(
+    sameSystem.flatMap((binding) => (binding.parentUrlKey ? [binding.parentUrlKey] : []))
+  );
+
+  if (internalId && isLeadCaptureUuidLeadId(internalId)) {
+    const misplaced = internalId.toLowerCase();
+    if (providerId && providerId !== misplaced) return null;
+    providerId = providerId || misplaced;
+    internalId = "";
+  }
+
+  const internalIsVerified = internalId !== "" && knownInternal.has(internalId);
+  const providerIsKnown = providerId !== "" && knownProvider.has(providerId);
+  const providerIsUnknown = providerId !== "" && !knownProvider.has(providerId);
   const idMatches: ScopedIncomingFieldBinding[] = [];
   const pageMatches: ScopedIncomingFieldBinding[] = [];
   const routeMatches: ScopedIncomingFieldBinding[] = [];
 
-  for (const binding of SCOPED_INCOMING_FIELD_BINDINGS) {
-    if (binding.provider !== provider || binding.sourceSystem !== sourceSystem) continue;
-    if (funnelId && binding.sourceFunnelId && funnelId === binding.sourceFunnelId) {
+  for (const binding of sameSystem) {
+    const bindingProvider = binding.providerFunnelId?.toLowerCase() ?? "";
+    const providerConflicts =
+      providerId !== "" &&
+      (providerIsUnknown ||
+        (bindingProvider !== "" && providerId !== bindingProvider) ||
+        (bindingProvider === "" && providerIsKnown));
+    if (internalId && binding.sourceFunnelId && internalId === binding.sourceFunnelId) {
+      const pageConflicts =
+        parentUrlKey !== "" &&
+        binding.parentUrlKey !== undefined &&
+        parentUrlKey !== binding.parentUrlKey &&
+        confirmedPages.has(parentUrlKey);
+      if (pageConflicts || providerConflicts) continue;
       idMatches.push(binding);
       continue;
     }
-    if (funnelId && binding.sourceFunnelId) continue;
+    if (internalId && binding.sourceFunnelId) continue;
+    if (internalIsVerified || providerConflicts) continue;
     if (binding.parentUrlKey && parentUrlKey === binding.parentUrlKey) {
       pageMatches.push(binding);
       continue;
     }
     if (
-      !funnelId &&
+      !internalId &&
+      !providerId &&
       binding.sourceRouteKey &&
       routeKey === binding.sourceRouteKey &&
       routeKey !== "UNKNOWN_ROUTE"

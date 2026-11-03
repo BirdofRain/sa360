@@ -344,6 +344,91 @@ test("Eriks's confirmed page maps date to 1949-01-27 and age 77", () => {
   assert.equal(resolveCanonicalAttributeKey("date"), null);
 });
 
+test("confirmed form identities reject conflicts and do not treat a funnel UUID as an internal id", () => {
+  const submittedAt = "2026-11-03T09:53:33.092Z";
+  const eriksPage = `https://${CONFIRMED_ERIKS_VEIDEMANIS_PARENT_URL_KEY}`;
+  const otherProviderFunnelId = "11111111-2222-4333-8444-666666666666";
+
+  const unverifiedInternal = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+    juliaPayload({ parent_url: eriksPage, submitted_at: submittedAt, date: "01/27/1949" }),
+    { receivedAt: submittedAt, sourceFunnelId: "cmobservedfunnel0000000000" }
+  );
+  assert.equal(detailsOf(unverifiedInternal).date_of_birth, "1949-01-27");
+  assert.equal(detailsOf(unverifiedInternal).consumer_age, "77");
+
+  const agreeingProvider = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+    juliaPayload({
+      parent_url: eriksPage,
+      submitted_at: submittedAt,
+      date: "01/27/1949",
+      funnel_id: CONFIRMED_ERIKS_VEIDEMANIS_PROVIDER_FUNNEL_ID.toUpperCase(),
+    }),
+    { receivedAt: submittedAt }
+  );
+  assert.equal(detailsOf(agreeingProvider).date_of_birth, "1949-01-27");
+  assert.equal(intakeOf(agreeingProvider).scopedFieldBindingId, "leadcapture_io_nextgen_vet_eriks_veidemanis");
+
+  const mismatchedProvider = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+    juliaPayload({
+      parent_url: eriksPage,
+      submitted_at: submittedAt,
+      date: "01/27/1949",
+      funnel_id: otherProviderFunnelId,
+    }),
+    { receivedAt: submittedAt, sourceFunnelId: "cmobservedfunnel0000000000" }
+  );
+  assert.equal(detailsOf(mismatchedProvider).date_of_birth, undefined);
+  assert.equal(intakeOf(mismatchedProvider).scopedFieldBindingId, undefined);
+
+  const uuidInInternalSlot = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+    juliaPayload({ parent_url: eriksPage, submitted_at: submittedAt, date: "01/27/1949" }),
+    { receivedAt: submittedAt, sourceFunnelId: otherProviderFunnelId }
+  );
+  assert.equal(detailsOf(uuidInInternalSlot).date_of_birth, undefined);
+
+  const agreeingUuidInInternalSlot = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+    juliaPayload({ parent_url: eriksPage, submitted_at: submittedAt, date: "01/27/1949" }),
+    { receivedAt: submittedAt, sourceFunnelId: CONFIRMED_ERIKS_VEIDEMANIS_PROVIDER_FUNNEL_ID }
+  );
+  assert.equal(detailsOf(agreeingUuidInInternalSlot).date_of_birth, "1949-01-27");
+
+  const crossForms = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+    juliaPayload({ parent_url: eriksPage, submitted_at: submittedAt, date: "01/27/1949" }),
+    { receivedAt: submittedAt, sourceFunnelId: CONFIRMED_JULIA_DODGE_SOURCE_FUNNEL_ID }
+  );
+  assert.equal(detailsOf(crossForms).date_of_birth, undefined);
+  assert.equal(attributesOf(crossForms).branch_of_service, undefined);
+
+  const juliaWithForeignFunnel = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+    juliaPayload({
+      date: "03/13/1955",
+      funnel_id: CONFIRMED_ERIKS_VEIDEMANIS_PROVIDER_FUNNEL_ID,
+    }),
+    { receivedAt: SUBMITTED_AT, sourceFunnelId: CONFIRMED_JULIA_DODGE_SOURCE_FUNNEL_ID }
+  );
+  assert.equal(detailsOf(juliaWithForeignFunnel).date_of_birth, undefined);
+
+  const juliaMismatch = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+    juliaPayload({ date: "03/13/1955" }),
+    { receivedAt: SUBMITTED_AT, sourceFunnelId: "cmotherfunnel000000000000" }
+  );
+  assert.equal(detailsOf(juliaMismatch).date_of_birth, undefined);
+
+  const otherSystem = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+    juliaPayload({
+      sa360_source_system: "leadcapture_io_legacy",
+      sa360_route_key: "UNKNOWN_ROUTE",
+      parent_url: eriksPage,
+      submitted_at: submittedAt,
+      date: "01/27/1949",
+      time: "09:53:33",
+    }),
+    { receivedAt: submittedAt }
+  );
+  assert.equal(detailsOf(otherSystem).date_of_birth, undefined);
+  assert.equal(intakeOf(otherSystem).scopedFieldBindingId, undefined);
+});
+
 test("confirmed funnel id maps date without falling through from a different funnel", () => {
   const byFunnel = normalizeLeadCaptureIoWebhookToLifecyclePayload(
     juliaPayload({

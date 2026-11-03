@@ -100,7 +100,7 @@ describe("LO-1055 selection inventory funnel", { skip: !runIntegration }, () => 
     { id: "lo1055-protected", lot: "protected", consumerAge: "62" },
     { id: "lo1055-noid", omitIdentity: true, consumerAge: "62" },
     { id: "lo1055-short-first", first: "A", consumerAge: "62" },
-    { id: "lo1055-multipart", last: "Ann Lee", consumerAge: "62" },
+    { id: "lo1055-multipart", last: "Ann\tLee", consumerAge: "62" },
     { id: "lo1055-dup", phone: eligiblePhone, consumerAge: "62" },
     { id: "lo1055-reserved", status: "reserved", consumerAge: "62" },
     { id: "lo1055-committed", status: "committed", consumerAge: "62" },

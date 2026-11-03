@@ -114,7 +114,7 @@ export function buildCandidateSpecs(now: Date): CandidateSpec[] {
           reason === "last_name_too_short"
             ? "Z"
             : reason === "last_name_multipart"
-              ? "Van Dyke"
+              ? "Van\tDyke"
               : "BadLast",
         phone: `+1202555${String(1000 + invalidN).slice(-4)}`,
         email: `fifty.invalid.${invalidN}@example.test`,

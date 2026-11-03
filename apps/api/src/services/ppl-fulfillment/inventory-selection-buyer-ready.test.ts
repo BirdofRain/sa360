@@ -416,13 +416,13 @@ test("D: whitespace/multi-part first name does not consume reserved quantity", a
   assert.equal(preview.exclusionCounts?.notBuyerReady, 1);
 });
 
-test("E: whitespace/multi-part last name does not consume reserved quantity", async () => {
+test("E: a malformed spaced last name does not consume reserved quantity", async () => {
   const bad = makeItem({
     id: "multi-last",
     evaluatedAt: nowEvaluatedAt(),
     phone: "+12025551009",
     email: "multi-last@example.test",
-    last: "Van Dyke",
+    last: "Van\tDyke",
     ageDays: 60,
   });
   const ok = valid("ok-after-multi-last", 10);
@@ -435,6 +435,39 @@ test("E: whitespace/multi-part last name does not consume reserved quantity", as
   if (!preview.ok) return;
   assert.deepEqual(preview.selectedItemIds, ["ok-after-multi-last"]);
   assert.equal(preview.exclusionCounts?.notBuyerReady, 1);
+});
+
+test("a spaced compound surname fills a selection slot and the stored name stays intact", async () => {
+  const evaluatedAt = nowEvaluatedAt();
+  const compound = makeItem({
+    id: "compound-last",
+    evaluatedAt,
+    phone: "+12025551011",
+    email: "compound-last@example.test",
+    last: "De La Cruz",
+    ageDays: 61,
+  });
+  const malformed = makeItem({
+    id: "malformed-last",
+    evaluatedAt,
+    phone: "+12025551013",
+    email: "malformed-last@example.test",
+    last: "A Lee",
+    ageDays: 60,
+  });
+  const { db } = buildInventoryFakeDb([malformed, compound], { requestedQuantity: 1 });
+  const preview = await previewPplInventorySelection(
+    { orderId: "order-compound", commerceAgeBucketKeys: ["COMMERCE_1_3_MO"], requestedQuantity: 1 },
+    db
+  );
+  assert.equal(preview.ok, true);
+  if (!preview.ok) return;
+  assert.deepEqual(preview.selectedItemIds, ["compound-last"]);
+  assert.equal(preview.exclusionCounts?.notBuyerReady, 1);
+  const stored = compound.sourceLeadEvent.normalizedPayloadJson as {
+    contact: { last_name: string };
+  };
+  assert.equal(stored.contact.last_name, "De La Cruz");
 });
 
 test("F: selector searches beyond rejected candidates to satisfy requested quantity", async () => {
@@ -490,7 +523,7 @@ test("F: selector searches beyond rejected candidates to satisfy requested quant
       evaluatedAt: nowEvaluatedAt(),
       phone: "+12025552007",
       email: "bad-ml@example.test",
-      last: "De La Cruz",
+      last: "De  La Cruz",
       ageDays: 51,
     }),
     makeItem({

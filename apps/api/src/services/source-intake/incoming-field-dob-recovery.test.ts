@@ -7,12 +7,15 @@ import { fileURLToPath } from "node:url";
 
 import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
 import {
+  adminSourceLeadDetailToRecoverySnapshot,
   assessIncomingDobRecoveryRow,
   buildIncomingDobRecoveryReport,
+  describeIncomingDobRecoveryExpectation,
   INCOMING_DOB_LATER_UPDATE_POLICY,
   INCOMING_DOB_RECOVERY_REPORT_VERSION,
   INCOMING_DOB_RECOVERY_WINDOW_START,
   KNOWN_DOB_RECOVERY_EVENT_ID,
+  scanAdminSourceLeadWindow,
   type IncomingDobRecoverySnapshot,
 } from "./incoming-field-dob-recovery.js";
 import { CONFIRMED_JULIA_DODGE_SOURCE_FUNNEL_ID } from "./source-field-alias.registry.js";
@@ -116,6 +119,10 @@ test("census keeps non-birthday dates separate and does not print the date", () 
   assert.equal(printed.includes("pat.sample@example.test"), false);
   assert.equal(INCOMING_DOB_LATER_UPDATE_POLICY.writes, false);
   assert.equal(INCOMING_DOB_LATER_UPDATE_POLICY.implemented, false);
+  assert.equal(INCOMING_DOB_LATER_UPDATE_POLICY.timestamps.includes('"updatedAt" = "updatedAt"'), false);
+  assert.equal(INCOMING_DOB_LATER_UPDATE_POLICY.timestamps.includes("Let updatedAt move"), true);
+  assert.equal(INCOMING_DOB_LATER_UPDATE_POLICY.evidence.includes("before and after"), true);
+  assert.equal(INCOMING_DOB_LATER_UPDATE_POLICY.compareAndSet.includes("disagrees"), true);
 });
 
 test("stored disagreement and an invalid date are not eligible", () => {
@@ -153,6 +160,116 @@ test("stored disagreement and an invalid date are not eligible", () => {
     WINDOW
   );
   assert.equal(invalid.recoveryClass, "invalid");
+});
+
+test("known-event expectation recomputes canonical DOB and age without contact fields", () => {
+  const row = snapshot({ id: KNOWN_DOB_RECOVERY_EVENT_ID, rawPayload: { ...(snapshot().rawPayload as object), date: "03/13/1955" } });
+  const expectation = describeIncomingDobRecoveryExpectation(row);
+  assert.ok(expectation);
+  assert.equal(expectation.dateOfBirth, "1955-03-13");
+  assert.equal(expectation.consumerAge, "71");
+  assert.equal(expectation.referenceDate, "2026-11-02");
+  assert.equal(expectation.provenance, "derived_from_date_of_birth");
+  assert.equal(expectation.conflict, false);
+  assert.equal(JSON.stringify(expectation).includes("pat.sample@example.test"), false);
+  assert.equal(JSON.stringify(expectation).includes("03/13/1955"), false);
+});
+
+test("admin list scan stops at the window and does not invent sheet delivery", async () => {
+  const pages = [
+    {
+      items: [
+        { id: "new", receivedAt: "2026-11-02T12:00:00.000Z", sourceProvider: "leadcapture_io" },
+        { id: "edge", receivedAt: "2026-10-26T04:00:00.000Z", sourceProvider: "leadcapture_io" },
+      ],
+      nextCursor: "edge",
+    },
+    {
+      items: [{ id: "old", receivedAt: "2026-10-25T12:00:00.000Z", sourceProvider: "leadcapture_io" }],
+      nextCursor: "old",
+    },
+  ];
+  let calls = 0;
+  const scan = await scanAdminSourceLeadWindow({
+    receivedFrom: INCOMING_DOB_RECOVERY_WINDOW_START,
+    receivedTo: "2026-11-03T15:00:00.000Z",
+    maxPages: 5,
+    listPage: async () => pages[calls++] ?? { items: [], nextCursor: null },
+  });
+  assert.equal(calls, 2);
+  assert.deepEqual(scan.ids, ["new", "edge"]);
+  assert.equal(scan.complete, true);
+  assert.equal(scan.stoppedReason, "window_crossed");
+
+  const capped = await scanAdminSourceLeadWindow({
+    receivedFrom: INCOMING_DOB_RECOVERY_WINDOW_START,
+    receivedTo: null,
+    maxPages: 1,
+    listPage: async () => ({
+      items: [{ id: "only", receivedAt: "2026-11-02T12:00:00.000Z", sourceProvider: "leadcapture_io" }],
+      nextCursor: "only",
+    }),
+  });
+  assert.equal(capped.complete, false);
+  assert.equal(capped.stoppedReason, "page_cap");
+
+  const mapped = adminSourceLeadDetailToRecoverySnapshot({
+    id: "evt_detail",
+    sourceProvider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    status: "delivery_failed",
+    receivedAt: "2026-11-02T12:00:00.000Z",
+    destinationClientAccountId: "client_dest",
+    rawPayloadJson: { email: "hidden@example.test" },
+    deliveryResultJson: { externalCallExecuted: true },
+  });
+  assert.equal(mapped.ghlDelivered, true);
+  assert.equal(mapped.sheetsDelivered, false);
+  assert.equal(mapped.commerciallyAllocated, false);
+  assert.equal(mapped.clientAccountId, "client_dest");
+  const printed = JSON.stringify(
+    buildIncomingDobRecoveryReport({
+      rows: [mapped],
+      receivedFrom: INCOMING_DOB_RECOVERY_WINDOW_START,
+      receivedTo: null,
+    })
+  );
+  assert.equal(printed.includes("hidden@example.test"), false);
+});
+
+test("admin recovery command refuses writes and a missing key before any request", () => {
+  const script = readFileSync(resolve(repoRoot, "scripts/incoming-field-dob-recovery-admin.ts"), "utf8");
+  assert.equal(script.includes('method: "GET"'), true);
+  assert.equal(script.includes("POST"), false);
+  assert.equal(script.includes(".update("), false);
+  assert.equal(script.includes(".delete("), false);
+
+  const run = (args: string[]) => {
+    const env: Record<string, string> = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      if (value != null) env[key] = value;
+    }
+    delete env.NODE_ENV;
+    delete env.ADMIN_API_KEY;
+    delete env.SA360_ADMIN_KEY;
+    delete env.SA360_PROD_API_URL;
+    return spawnSync("pnpm", ["exec", "tsx", "scripts/incoming-field-dob-recovery-admin.ts", ...args], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env,
+      shell: true,
+      timeout: 20_000,
+    });
+  };
+
+  const apply = run(["--apply", "--base-url", "https://example.test"]);
+  assert.equal(apply.status, 2);
+  assert.match(`${apply.stdout}\n${apply.stderr}`, /writes_refused/);
+
+  const missing = run(["--base-url", "https://example.test"]);
+  assert.equal(missing.status, 2);
+  assert.match(`${missing.stdout}\n${missing.stderr}`, /admin_key_required/);
+  assert.equal(`${missing.stdout}`.includes(INCOMING_DOB_RECOVERY_REPORT_VERSION), false);
 });
 
 test("recovery command refuses writes and remote hosts before printing a report", () => {

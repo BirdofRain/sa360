@@ -154,10 +154,26 @@ does not fall through to that page. Julia's healthcare-worker page is a
 different path and is not mapped. CamelCase aliases such as `dateOfBirth` now
 normalize to `date_of_birth` before lookup.
 
-`pnpm source-intake:dob-recovery` is a dry run. It refuses `--apply` and any
-remote database host. It reports eligible, unchanged, conflicting, invalid,
-and skipped counts for the confirmed form, and a separate census of every
-LeadCapture form that retained a raw `date` with a missing canonical DOB or
-age. Only the confirmed form has `dateMeansBirthday`. Already-delivered rows
-are flagged because updating SA360 would not rewrite a spreadsheet or GHL
-value that was already sent. The command does not write.
+`pnpm source-intake:dob-recovery` is a dry run against localhost only. It
+refuses `--apply` and any remote database host. It reports eligible,
+unchanged, conflicting, invalid, and skipped counts for the confirmed form,
+and a separate census of every LeadCapture form that retained a raw `date`
+with a missing canonical DOB or age. Only the confirmed form has
+`dateMeansBirthday`. Already-delivered rows are flagged because updating
+SA360 would not rewrite a spreadsheet or GHL value that was already sent.
+The command does not write. A localhost count is not a production total.
+
+`pnpm source-intake:dob-recovery-admin` is a separate GET-only reader for
+`/admin/v1/source-leads`. It pages the newest-first list until the window
+start is crossed, then reads each in-window detail plus the known event. It
+does not see Sheets jobs or lead allocations, so those two flags stay
+unresolved. It refuses write flags and a non-HTTPS host.
+
+When a GHL destination map selects Age or DOB, the source-attribute stamp
+uses `projectCampaignDobAge` on the lifecycle payload. Age sends the
+canonical consumer age, including `lead_details.consumer_age`. DOB sends
+`YYYY-MM-DD`. A supplied age that disagrees with the DOB is still the value
+that is sent. The stamp does not enable delivery or change the destination.
+The onboarding note still does not calculate age. Occupation, coverage type,
+and beneficiary relationship stay unmapped; the original answers remain on
+the raw payload.

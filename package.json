@@ -24,6 +24,7 @@
     "consumer-age:maintenance": "tsx scripts/consumer-age-maintenance.ts",
     "historical-catalog:backfill": "node scripts/historical-catalog-projection-backfill.mjs",
     "source-intake:dob-recovery": "tsx scripts/incoming-field-dob-recovery.ts",
+    "source-intake:dob-recovery-admin": "tsx scripts/incoming-field-dob-recovery-admin.ts",
     "source-intake:nextgen-one-event-promote": "tsx scripts/leadcapture-nextgen-one-event-promote.ts",
     "source-intake:one-event-reconcile": "tsx scripts/leadcapture-one-event-reconcile.ts",
     "seed:guidance": "tsx prisma/seed-guidance.ts",

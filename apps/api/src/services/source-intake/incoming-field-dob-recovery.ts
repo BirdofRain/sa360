@@ -39,17 +39,17 @@ export const INCOMING_DOB_LATER_UPDATE_POLICY = {
   writes: false,
   implemented: false,
   concurrency:
-    "Re-read confirmed eligible rows with SELECT … FOR UPDATE SKIP LOCKED, one small batch per transaction.",
+    "Re-read confirmed eligible rows with SELECT … FOR UPDATE SKIP LOCKED, one small batch per transaction. Recompute from the retained raw payload with the same normalizer inside the lock. If the class is no longer eligible, write nothing.",
   compareAndSet:
-    "Recompute with this classifier. Write only when the class is still eligible and the stored lead_details date_of_birth and consumer_age still match the snapshot.",
+    "Write only when the stored lead_details date_of_birth and consumer_age are still blank or still equal the recomputed proposal. A nonblank stored value that disagrees is left in place and recorded as a disagreement. Do not overwrite it.",
   fields:
     "Merge only blank canonical date_of_birth, consumer_age, provenance, reference fields, and a visible consumer_age_conflict. Copy sourceAttributes.date_of_birth only when that canonical was blank. Leave every other normalized key untouched.",
   timestamps:
-    'Set "updatedAt" = "updatedAt" in the same statement so Prisma @updatedAt does not move it. Do not change receivedAt, normalizedAt, createdAt, or deliveredAt.',
+    "SourceLeadEvent.updatedAt is Prisma @updatedAt. It is not indexed, list and recovery scans use receivedAt, and no delivery worker polls it. The applied historical catalog projection trigger refreshes when normalizedPayloadJson, rawPayloadJson, sourceCampaignName, bulkImportId, sourceSystem, or sourceProvider changes. It does not watch updatedAt, and it does not enqueue delivery. Setting updatedAt equal to itself would hide the correction time without stopping that read-model refresh. Let updatedAt move to the correction time. Do not change receivedAt, normalizedAt, createdAt, or deliveredAt.",
   untouched:
-    "Do not change rawPayloadJson, status, routingResultJson, deliveryResultJson, inventory, allocations, delivery receipts, or any queue.",
+    "Do not change rawPayloadJson, status, routingResultJson, deliveryResultJson, inventory, allocations, delivery receipts, or any queue. Do not enqueue Sheets or GHL delivery.",
   evidence:
-    "Record before/after canonical fields in a separate operator audit. This dry-run report does not print those values.",
+    "Insert a separate operator audit row with the event id, the previous updatedAt, the new updatedAt, and the before and after canonical date_of_birth, consumer_age, provenance, and conflict fields. Do not copy contact values or the raw payload into that audit. This dry-run report does not print those values.",
   idempotent:
     "A second run classifies the row unchanged once the stored canonical values equal the proposal, so the compare-and-set writes nothing.",
 } as const;
@@ -65,11 +65,11 @@ export const INCOMING_DOB_UPSTREAM_PAYLOAD_CHANGE = {
 } as const;
 
 export const INCOMING_DOB_RECOVERY_GAPS = [
-  "No canonical field exists for occupation, coverage type, or beneficiary relationship. job_title, profession, coverage_type, type_of_coverage, insurance_type, beneficiary_relationship, and relationship_to_beneficiary stay unmapped.",
+  "No canonical schema field exists for occupation, coverage type, or beneficiary relationship. job_title, profession, coverage_type, type_of_coverage, insurance_type, beneficiary_relationship, and relationship_to_beneficiary stay unmapped. The original answers remain on rawPayloadJson and, when unmapped, on unmapped source fields.",
   "gender is not an alias of sex, and consent text is not a granted-consent flag.",
-  "GHL discovery in sam-test-survey-text-fields.ts still treats a field named gender as the sex stamp target. This change does not edit that mapping.",
-  "GHL custom-field stamp and the GHL note age line read sourceAttributes.age. Derived age stays on lead_details.consumer_age. Portal facts and the C.O.C. delivery detail fall back to that canonical age. A date-only form does not stamp GHL Age until delivery reads lead_details or the form sends age.",
-  "A production count was not run. This command refuses remote database hosts.",
+  "GHL discovery in sam-test-survey-text-fields.ts still treats a field named gender as the sex stamp target. This change does not edit that mapping or the GHL mapping dropdowns.",
+  "When the GHL source-attribute stamp has the lifecycle payload, Age and consumer_age send projectCampaignDobAge().age and date_of_birth sends canonical YYYY-MM-DD. A stamp without that payload still reads sourceAttributes only. The onboarding note still says age is not calculated from DOB.",
+  "The localhost recovery command refuses remote database hosts. Its local counts are not a production census. The separate admin-API reader is GET-only and still cannot see Sheets jobs or lead allocations.",
   "CamelCase answer keys now fingerprint as their underscored form. A route that previously snapshotted dateOfBirth as dateofbirth can show one schema-drift warning.",
 ] as const;
 
@@ -551,5 +551,154 @@ export async function readIncomingDobRecoverySnapshots(
       ghlDelivered: ghlDelivered.has(event.id),
       commerciallyAllocated: allocated.has(event.id),
     })),
+  };
+}
+
+export type IncomingDobRecoveryExpectation = {
+  dateOfBirth: string | null;
+  consumerAge: string | null;
+  referenceDate: string | null;
+  provenance: string | null;
+  conflict: boolean;
+  storedDateOfBirth: string | null;
+  storedConsumerAge: string | null;
+};
+
+/** Canonical DOB and age recomputed from the retained raw payload. Contact fields are omitted. */
+export function describeIncomingDobRecoveryExpectation(
+  snapshot: IncomingDobRecoverySnapshot
+): IncomingDobRecoveryExpectation | null {
+  const raw = asRecord(snapshot.rawPayload);
+  if (!raw) return null;
+  const sourceFunnelId = readStoredSourceFunnelId(snapshot);
+  const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(structuredClone(raw), {
+    sourceFunnelId: sourceFunnelId ?? undefined,
+    receivedAt: snapshot.receivedAt,
+    routeKeyFromPath: snapshot.sourceRouteKey ?? undefined,
+  });
+  const details = asRecord(normalized.lead_details) ?? {};
+  return {
+    dateOfBirth: cellText(details.date_of_birth) || null,
+    consumerAge: cellText(details.consumer_age) || null,
+    referenceDate: cellText(details.consumer_age_reference_date) || null,
+    provenance: cellText(details.consumer_age_provenance) || null,
+    conflict: details.consumer_age_conflict === true,
+    storedDateOfBirth: storedDob(snapshot.normalizedPayload) || null,
+    storedConsumerAge: storedAge(snapshot.normalizedPayload) || null,
+  };
+}
+
+export type AdminSourceLeadListItem = {
+  id: string;
+  receivedAt: string;
+  sourceProvider?: string | null;
+};
+
+export type AdminSourceLeadWindowScan = {
+  ids: string[];
+  pages: number;
+  listItemsSeen: number;
+  complete: boolean;
+  stoppedReason: "window_crossed" | "cursor_exhausted" | "page_cap" | "order_not_descending";
+};
+
+/**
+ * Page a newest-first source-lead list until the window start is crossed.
+ * The admin list has no receivedAt filter. An out-of-order page stops the scan
+ * as incomplete so a partial walk is not reported as the whole window.
+ */
+export async function scanAdminSourceLeadWindow(input: {
+  listPage: (cursor: string | null) => Promise<{ items: AdminSourceLeadListItem[]; nextCursor: string | null }>;
+  receivedFrom: string;
+  receivedTo: string | null;
+  maxPages: number;
+}): Promise<AdminSourceLeadWindowScan> {
+  const ids: string[] = [];
+  const seenIds = new Set<string>();
+  const seenCursors = new Set<string>();
+  let cursor: string | null = null;
+  let pages = 0;
+  let listItemsSeen = 0;
+  let previousReceivedAt: string | null = null;
+
+  while (pages < input.maxPages) {
+    if (cursor) {
+      if (seenCursors.has(cursor)) {
+        return { ids, pages, listItemsSeen, complete: false, stoppedReason: "order_not_descending" };
+      }
+      seenCursors.add(cursor);
+    }
+    pages += 1;
+    const page = await input.listPage(cursor);
+    if (page.items.length === 0) {
+      return { ids, pages, listItemsSeen, complete: true, stoppedReason: "cursor_exhausted" };
+    }
+    let crossed = false;
+    for (const item of page.items) {
+      listItemsSeen += 1;
+      if (previousReceivedAt && item.receivedAt > previousReceivedAt) {
+        return { ids, pages, listItemsSeen, complete: false, stoppedReason: "order_not_descending" };
+      }
+      previousReceivedAt = item.receivedAt;
+      if (input.receivedTo && item.receivedAt > input.receivedTo) continue;
+      if (item.receivedAt < input.receivedFrom) {
+        crossed = true;
+        continue;
+      }
+      if (item.sourceProvider && item.sourceProvider !== "leadcapture_io") continue;
+      if (seenIds.has(item.id)) continue;
+      seenIds.add(item.id);
+      ids.push(item.id);
+    }
+    if (crossed) return { ids, pages, listItemsSeen, complete: true, stoppedReason: "window_crossed" };
+    if (!page.nextCursor) return { ids, pages, listItemsSeen, complete: true, stoppedReason: "cursor_exhausted" };
+    cursor = page.nextCursor;
+  }
+
+  return { ids, pages, listItemsSeen, complete: false, stoppedReason: "page_cap" };
+}
+
+export type AdminSourceLeadDetail = {
+  id: string;
+  sourceProvider: string;
+  sourceSystem: string;
+  sourceRouteKey?: string | null;
+  sourceFunnelName?: string | null;
+  destinationClientAccountId?: string | null;
+  sourceClientAccountId?: string | null;
+  status: string;
+  receivedAt: string;
+  deliveredAt?: string | null;
+  rawPayloadJson?: unknown;
+  normalizedPayloadJson?: unknown;
+  enrichmentMetadataJson?: unknown;
+  routingResultJson?: unknown;
+  deliveryResultJson?: unknown;
+};
+
+/**
+ * Admin detail does not include Sheets jobs or lead allocations.
+ * sheetsDelivered and commerciallyAllocated stay false for that reason.
+ * externalCallExecuted marks a GHL write that may not have set deliveredAt.
+ */
+export function adminSourceLeadDetailToRecoverySnapshot(item: AdminSourceLeadDetail): IncomingDobRecoverySnapshot {
+  const delivery = asRecord(item.deliveryResultJson);
+  return {
+    id: item.id,
+    sourceProvider: item.sourceProvider,
+    sourceSystem: item.sourceSystem,
+    sourceRouteKey: item.sourceRouteKey ?? null,
+    sourceFunnelName: item.sourceFunnelName ?? null,
+    clientAccountId: item.destinationClientAccountId?.trim() || item.sourceClientAccountId?.trim() || null,
+    status: item.status,
+    receivedAt: item.receivedAt,
+    deliveredAt: item.deliveredAt ?? null,
+    rawPayload: item.rawPayloadJson ?? null,
+    normalizedPayload: item.normalizedPayloadJson ?? null,
+    enrichment: item.enrichmentMetadataJson ?? null,
+    routingResult: item.routingResultJson ?? null,
+    sheetsDelivered: false,
+    ghlDelivered: delivery?.externalCallExecuted === true,
+    commerciallyAllocated: false,
   };
 }

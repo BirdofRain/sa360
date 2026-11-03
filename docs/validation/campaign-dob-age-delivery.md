@@ -141,3 +141,23 @@ or redacted export.
 
 A production count requires the missing event export above. Do not infer that
 count from the fixture classifications.
+
+## Scoped incoming `date`
+
+`date` is not a global date-of-birth alias. Existing LeadCapture fixtures use
+it as the legacy submission calendar together with `time`. The confirmed
+next-gen veteran form (`leadcapture_io` / `leadcapture_io_nextgen`, SourceFunnel
+`cmv8k6uui00q0lc0uyto17ld1`, or the exact page
+`go.lifeinsuranceforvets.com/learn-julia-dodge`) maps `date` to
+`date_of_birth` before the existing DOB parser runs. A different funnel id
+does not fall through to that page. Julia's healthcare-worker page is a
+different path and is not mapped. CamelCase aliases such as `dateOfBirth` now
+normalize to `date_of_birth` before lookup.
+
+`pnpm source-intake:dob-recovery` is a dry run. It refuses `--apply` and any
+remote database host. It reports eligible, unchanged, conflicting, invalid,
+and skipped counts for the confirmed form, and a separate census of every
+LeadCapture form that retained a raw `date` with a missing canonical DOB or
+age. Only the confirmed form has `dateMeansBirthday`. Already-delivered rows
+are flagged because updating SA360 would not rewrite a spreadsheet or GHL
+value that was already sent. The command does not write.

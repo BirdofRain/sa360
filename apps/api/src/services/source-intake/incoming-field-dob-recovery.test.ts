@@ -16,9 +16,12 @@ import {
   INCOMING_DOB_RECOVERY_REPORT_VERSION,
   INCOMING_DOB_RECOVERY_WINDOW_END,
   INCOMING_DOB_RECOVERY_WINDOW_START,
+  INCOMING_DOB_RELEASED_INTAKE_INSPECTION_START,
   KNOWN_DOB_RECOVERY_EVENT_ID,
   RELEASE_WINDOW_INSPECTION_EVENT_IDS,
+  incomingDobRecoveryAdminInspectionIds,
   matchConfirmedSourceLeadEvents,
+  resolveIncomingDobRecoveryAdminWindow,
   scanAdminSourceLeadWindow,
   type IncomingDobRecoverySnapshot,
 } from "./incoming-field-dob-recovery.js";
@@ -263,6 +266,9 @@ test("a specific inspection keeps the raw birthday distinct from receipt time an
   assert.equal(inspection.receivedAt, "2026-11-03T15:06:17.000Z");
   assert.notEqual(inspection.submittedAt, inspection.receivedAt);
   assert.equal(inspection.parentUrlKey, "go.lifeinsuranceforvets.com/learn-julia-dodge");
+  assert.equal(inspection.formIdentity.confirmedBindingId, "leadcapture_io_nextgen_vet_julia_dodge");
+  assert.equal(inspection.formIdentity.sourceFunnelId, null);
+  assert.equal(inspection.formIdentity.providerFunnelId, null);
   assert.equal(inspection.sourceSystem, "leadcapture_io_nextgen");
   assert.equal(inspection.storedCanonical.dateOfBirth, null);
   assert.equal(inspection.storedCanonical.consumerAge, "40");
@@ -275,6 +281,59 @@ test("a specific inspection keeps the raw birthday distinct from receipt time an
   const printed = JSON.stringify(inspection);
   assert.equal(printed.includes("pat.sample@example.test"), false);
   assert.equal(printed.includes("Pat"), false);
+});
+
+test("Eriks page identity keeps the external funnel UUID out of SourceFunnel.id", () => {
+  const row = snapshot({
+    rawPayload: {
+      provider: "leadcapture_io",
+      sa360_source_system: "leadcapture_io_nextgen",
+      lead_id: "11111111-2222-4333-8444-555555555555",
+      parent_url: `https://${CONFIRMED_ERIKS_VEIDEMANIS_PARENT_URL_KEY}`,
+      funnel_id: CONFIRMED_ERIKS_VEIDEMANIS_PROVIDER_FUNNEL_ID,
+      date: "01/27/1949",
+      submitted_at: "2026-11-03T09:53:33.092Z",
+    },
+  });
+  const inspection = describeIncomingDobRecoveryInspection(row);
+  assert.equal(inspection.formIdentity.confirmedBindingId, "leadcapture_io_nextgen_vet_eriks_veidemanis");
+  assert.equal(inspection.formIdentity.sourceFunnelId, null);
+  assert.equal(inspection.formIdentity.providerFunnelId, CONFIRMED_ERIKS_VEIDEMANIS_PROVIDER_FUNNEL_ID);
+  assert.notEqual(inspection.formIdentity.providerFunnelId, inspection.formIdentity.sourceFunnelId);
+  assert.equal(inspection.storedCanonical.dateOfBirth, null);
+  assert.equal(inspection.proposedRecovery?.dateOfBirth, "1949-01-27");
+  assert.equal(inspection.proposedRecovery?.consumerAge, "77");
+  assert.equal(inspection.proposedRecovery?.proposedRecoveryIsProductionVerification, false);
+});
+
+test("released-intake start is separate from the fixed historical window", () => {
+  assert.equal(INCOMING_DOB_RECOVERY_WINDOW_START, "2026-10-26T04:00:00.000Z");
+  assert.equal(INCOMING_DOB_RECOVERY_WINDOW_END, "2026-11-03T15:36:00.000Z");
+  assert.equal(INCOMING_DOB_RELEASED_INTAKE_INSPECTION_START, "2026-11-03T17:42:00.000Z");
+  const clock = new Date("2026-11-03T18:15:00.000Z");
+  const historical = resolveIncomingDobRecoveryAdminWindow({ releasedIntake: false, now: clock });
+  assert.equal(historical.assessment, "historical");
+  assert.equal(historical.receivedFrom, INCOMING_DOB_RECOVERY_WINDOW_START);
+  assert.equal(historical.receivedTo, INCOMING_DOB_RECOVERY_WINDOW_END);
+  assert.equal(historical.receivedToSource, "historical_window_end");
+  const released = resolveIncomingDobRecoveryAdminWindow({ releasedIntake: true, now: clock });
+  assert.equal(released.assessment, "released_intake");
+  assert.equal(released.receivedFrom, INCOMING_DOB_RELEASED_INTAKE_INSPECTION_START);
+  assert.equal(released.receivedTo, "2026-11-03T18:15:00.000Z");
+  assert.equal(released.receivedToSource, "process_clock");
+  const bounded = resolveIncomingDobRecoveryAdminWindow({
+    releasedIntake: true,
+    receivedTo: "2026-11-03T18:00:00.000Z",
+    now: clock,
+  });
+  assert.equal(bounded.receivedTo, "2026-11-03T18:00:00.000Z");
+  assert.equal(bounded.receivedToSource, "argument");
+  assert.deepEqual(incomingDobRecoveryAdminInspectionIds({ releasedIntake: false, extraIds: ["extra"] }), [
+    KNOWN_DOB_RECOVERY_EVENT_ID,
+    ...RELEASE_WINDOW_INSPECTION_EVENT_IDS,
+    "extra",
+  ]);
+  assert.deepEqual(incomingDobRecoveryAdminInspectionIds({ releasedIntake: true, extraIds: ["extra"] }), ["extra"]);
 });
 
 test("admin list scan stops at the window and does not invent sheet delivery", async () => {
@@ -401,8 +460,19 @@ test("admin recovery command refuses writes and a missing key before any request
   assert.equal(script.includes(".update("), false);
   assert.equal(script.includes(".delete("), false);
   assert.equal(script.includes("knownEventExpectation"), false);
-  assert.equal(script.includes("INCOMING_DOB_RECOVERY_WINDOW_END"), true);
-  assert.equal(script.includes("RELEASE_WINDOW_INSPECTION_EVENT_IDS"), true);
+  assert.equal(script.includes("2026-11-03T15:36:00.000Z"), true);
+  assert.equal(script.includes("2026-11-03T17:42:00.000Z"), true);
+  assert.equal(script.includes("resolveIncomingDobRecoveryAdminWindow"), true);
+  assert.equal(script.includes("incomingDobRecoveryAdminInspectionIds"), true);
+  assert.equal(script.includes("released-intake"), true);
+  assert.equal(script.includes("RELEASE_WINDOW_INSPECTION_EVENT_IDS"), false);
+  const recoverySource = readFileSync(
+    resolve(repoRoot, "apps/api/src/services/source-intake/incoming-field-dob-recovery.ts"),
+    "utf8"
+  );
+  assert.equal(recoverySource.includes("INCOMING_DOB_RECOVERY_WINDOW_END"), true);
+  assert.equal(recoverySource.includes("RELEASE_WINDOW_INSPECTION_EVENT_IDS"), true);
+  assert.equal(recoverySource.includes("INCOMING_DOB_RELEASED_INTAKE_INSPECTION_START"), true);
   assert.equal(script.includes("missingInspectionIds"), true);
   assert.equal(script.includes("KNOWN_DOB_RECOVERY_EVENT_ID"), true);
   assert.equal(script.includes("sourceLeadLookups"), true);

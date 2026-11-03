@@ -40,6 +40,56 @@ export const INCOMING_DOB_RECOVERY_WINDOW_START = "2026-10-26T04:00:00.000Z";
 export const INCOMING_DOB_RECOVERY_WINDOW_END = "2026-11-03T15:36:00.000Z";
 
 /**
+ * Tuesday, November 3, 2026 12:42 PM America/New_York (EST, UTC-5).
+ * Deployment f9cbbcf4 of fcb1324 became active at 17:42:28Z. This start is
+ * only for the separate released-intake inspection. It does not replace
+ * the historical window above.
+ */
+export const INCOMING_DOB_RELEASED_INTAKE_INSPECTION_START = "2026-11-03T17:42:00.000Z";
+
+export type IncomingDobRecoveryAdminAssessment = "historical" | "released_intake";
+
+/**
+ * Historical reads keep the fixed window and ignore the clock. Released-intake
+ * reads start at the active-deploy instant. An omitted end on that read is the
+ * supplied clock and is printed with the report.
+ */
+export function resolveIncomingDobRecoveryAdminWindow(input: {
+  releasedIntake: boolean;
+  receivedFrom?: string | null;
+  receivedTo?: string | null;
+  now?: Date;
+}): {
+  assessment: IncomingDobRecoveryAdminAssessment;
+  receivedFrom: string;
+  receivedTo: string;
+  receivedToSource: "argument" | "process_clock" | "historical_window_end";
+} {
+  const assessment: IncomingDobRecoveryAdminAssessment = input.releasedIntake ? "released_intake" : "historical";
+  const receivedFrom =
+    input.receivedFrom?.trim() ||
+    (input.releasedIntake ? INCOMING_DOB_RELEASED_INTAKE_INSPECTION_START : INCOMING_DOB_RECOVERY_WINDOW_START);
+  const explicitTo = input.receivedTo?.trim();
+  if (explicitTo) {
+    return { assessment, receivedFrom, receivedTo: explicitTo, receivedToSource: "argument" };
+  }
+  if (input.releasedIntake) {
+    return {
+      assessment,
+      receivedFrom,
+      receivedTo: (input.now ?? new Date()).toISOString(),
+      receivedToSource: "process_clock",
+    };
+  }
+  return {
+    assessment,
+    receivedFrom,
+    receivedTo: INCOMING_DOB_RECOVERY_WINDOW_END,
+    receivedToSource: "historical_window_end",
+  };
+}
+
+/**
  * Next-gen captures recorded in the API log after release caa52d66.
  * The log has ids and receipt times only. It does not establish form or DOB.
  */
@@ -51,6 +101,16 @@ export const RELEASE_WINDOW_INSPECTION_EVENT_IDS = [
   "cmw0u7gyn001xjv0tfubwz6tz",
   "cmw0u8hbx002bjv0t0nas5wot",
 ] as const;
+
+/** Historical reads always include the known event and the six morning ids. Released-intake reads do not. */
+export function incomingDobRecoveryAdminInspectionIds(input: {
+  releasedIntake: boolean;
+  extraIds?: readonly string[];
+}): string[] {
+  const extra = (input.extraIds ?? []).map((id) => id.trim()).filter(Boolean);
+  if (input.releasedIntake) return [...new Set(extra)];
+  return [...new Set([KNOWN_DOB_RECOVERY_EVENT_ID, ...RELEASE_WINDOW_INSPECTION_EVENT_IDS, ...extra])];
+}
 
 export const INCOMING_DOB_RECOVERY_DEFAULT_LIMIT = 5_000;
 export const INCOMING_DOB_RECOVERY_MAX_LIMIT = 20_000;
@@ -719,6 +779,15 @@ export function describeIncomingDobRecoveryExpectation(
   };
 }
 
+export type IncomingDobFormIdentity = {
+  confirmedBindingId: string | null;
+  parentUrlKey: string | null;
+  /** Internal SourceFunnel.id when the stored enrichment or routing recorded one. */
+  sourceFunnelId: string | null;
+  /** External LeadCapture funnel UUID. This is not SourceFunnel.id. */
+  providerFunnelId: string | null;
+};
+
 export type IncomingDobRecoveryInspection = {
   id: string;
   receivedAt: string;
@@ -726,11 +795,34 @@ export type IncomingDobRecoveryInspection = {
   parentUrlKey: string | null;
   sourceFunnelId: string | null;
   sourceSystem: string;
+  formIdentity: IncomingDobFormIdentity;
   rawDate: string | null;
   rawDateCount: number;
   storedCanonical: StoredCanonicalDobAge;
   proposedRecovery: IncomingDobRecoveryExpectation | null;
 };
+
+function formIdentityFor(snapshot: IncomingDobRecoverySnapshot): IncomingDobFormIdentity {
+  const raw = asRecord(snapshot.rawPayload);
+  const sourceFunnelId = readStoredSourceFunnelId(snapshot);
+  if (!raw) {
+    return { confirmedBindingId: null, parentUrlKey: null, sourceFunnelId, providerFunnelId: null };
+  }
+  const binding = matchScopedIncomingFieldBinding({
+    provider: cellText(raw.provider) || cellText(raw.sa360_source_platform) || snapshot.sourceProvider,
+    sourceSystem: cellText(raw.sa360_source_system) || snapshot.sourceSystem,
+    sourceFunnelId,
+    providerFunnelId: readSuppliedProviderFunnelId(raw),
+    parentUrlKey: parentUrlKey(raw),
+    sourceRouteKey: snapshot.sourceRouteKey,
+  });
+  return {
+    confirmedBindingId: binding?.id ?? null,
+    parentUrlKey: parentUrlKey(raw),
+    sourceFunnelId,
+    providerFunnelId: readSuppliedProviderFunnelId(raw),
+  };
+}
 
 /**
  * One stored event, for an operator checking a specific id.
@@ -746,13 +838,15 @@ export function describeIncomingDobRecoveryInspection(
     cellText(asRecord(routing?.source_intake)?.submitted_at) ||
     (raw ? cellText(raw.submitted_at) : "") ||
     null;
+  const formIdentity = formIdentityFor(snapshot);
   return {
     id: snapshot.id,
     receivedAt: snapshot.receivedAt,
     submittedAt,
-    parentUrlKey: raw ? parentUrlKey(raw) : null,
-    sourceFunnelId: readStoredSourceFunnelId(snapshot),
+    parentUrlKey: formIdentity.parentUrlKey,
+    sourceFunnelId: formIdentity.sourceFunnelId,
     sourceSystem: snapshot.sourceSystem,
+    formIdentity,
     rawDate: dates.length === 1 ? dates[0]! : null,
     rawDateCount: dates.length,
     storedCanonical: storedCanonicalDobAge(snapshot.normalizedPayload),

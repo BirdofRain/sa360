@@ -5,8 +5,12 @@
  *
  * GET /admin/v1/source-leads only. There is no apply mode. --apply, --confirm,
  * --write, --backfill, and --replay are refused before any request. The
- * default window ends at 2026-11-03T15:36:00.000Z. storedCanonical is the
- * saved lead. proposedRecovery is recomputed and is not production verification.
+ * default assessment is the fixed historical window ending at
+ * 2026-11-03T15:36:00.000Z. --released-intake is a separate read beginning
+ * 2026-11-03T17:42:00.000Z (November 3, 2026 12:42 PM America/New_York). It does
+ * not change that historical window. storedCanonical is the saved lead.
+ * proposedRecovery is recomputed and is not production verification.
+ * formIdentity.providerFunnelId is the external funnel UUID, not SourceFunnel.id.
  * Confirmed provider lead ids are matched only from raw lead_id on details
  * this command already fetched. They are not requested as event ids.
  * The localhost Prisma command is unchanged and still refuses remote databases.
@@ -117,8 +121,14 @@ async function main(): Promise<void> {
   if (!key) refuse("admin_key_required");
 
   const recovery = await import("../apps/api/src/services/source-intake/incoming-field-dob-recovery.ts");
-  const receivedFrom = args["received-from"]?.trim() || recovery.INCOMING_DOB_RECOVERY_WINDOW_START;
-  const from = new Date(receivedFrom);
+  const releasedIntake = args["released-intake"] === "true";
+  const resolved = recovery.resolveIncomingDobRecoveryAdminWindow({
+    releasedIntake,
+    receivedFrom: args["received-from"],
+    receivedTo: args["received-to"],
+    now: releasedIntake && !args["received-to"]?.trim() ? new Date() : undefined,
+  });
+  const from = new Date(resolved.receivedFrom);
   if (Number.isNaN(from.getTime())) refuse("invalid_received_from", "received-from");
   const expectIds = process.argv.slice(2).flatMap((token, index, argv) => {
     if (token !== "--expect-id") return [];
@@ -126,8 +136,7 @@ async function main(): Promise<void> {
     return next && !next.startsWith("--") ? [next.trim()] : [];
   }).filter(Boolean);
 
-  const receivedToText = args["received-to"]?.trim() || recovery.INCOMING_DOB_RECOVERY_WINDOW_END;
-  const to = new Date(receivedToText);
+  const to = new Date(resolved.receivedTo);
   if (Number.isNaN(to.getTime())) refuse("invalid_received_to", "received-to");
   if (to.getTime() < from.getTime()) refuse("received_to_before_from", "received-to");
 
@@ -179,13 +188,10 @@ async function main(): Promise<void> {
     },
   });
 
-  const inspectionIds = [
-    ...new Set([
-      recovery.KNOWN_DOB_RECOVERY_EVENT_ID,
-      ...recovery.RELEASE_WINDOW_INSPECTION_EVENT_IDS,
-      ...expectIds,
-    ]),
-  ];
+  const inspectionIds = recovery.incomingDobRecoveryAdminInspectionIds({
+    releasedIntake,
+    extraIds: expectIds,
+  });
   const detailIds = [...scan.ids];
   for (const id of inspectionIds) {
     if (!detailIds.includes(id)) detailIds.push(id);
@@ -225,9 +231,11 @@ async function main(): Promise<void> {
       host: base.hostname,
       writes: false,
       method: "GET",
+      assessment: resolved.assessment,
       window: {
         receivedFrom: from.toISOString(),
         receivedTo: to.toISOString(),
+        receivedToSource: resolved.receivedToSource,
         timezone: "America/New_York",
       },
       pagination: {

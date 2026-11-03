@@ -214,14 +214,24 @@ The command does not write. A localhost count is not a production total.
 
 `pnpm source-intake:dob-recovery-admin` is a separate GET-only reader for
 `/admin/v1/source-leads`. It refuses write flags and a non-HTTPS host. It
-pages the newest-first list until the window start is crossed. It defaults to the fixed window
+pages the newest-first list until the window start is crossed. The default
+assessment is `historical`. That window stays
 `2026-10-26T04:00:00.000Z` through `2026-11-03T15:36:00.000Z` (October 26,
-2026 00:00 through November 3, 2026 10:36 America/New_York). It always
-requests the known event `cmvzggvc00091ou0t9a644muo` and the six next-gen
-ids seen in the post-release API log. Each inspection separates
-`storedCanonical` (the saved DOB, age, provenance, and reference date) from
-`proposedRecovery` (recomputed; `proposedRecoveryIsProductionVerification`
-is false). `missingInspectionIds` lists requested ids the API did not
+2026 00:00 through November 3, 2026 10:36 America/New_York). The historical
+assessment always requests the known event `cmvzggvc00091ou0t9a644muo` and
+the six next-gen ids recorded before the `fcb1324` deploy. `--released-intake`
+is a second assessment. It begins at `2026-11-03T17:42:00.000Z` (November 3,
+2026 12:42 PM America/New_York), when deployment `f9cbbcf4` of `fcb1324`
+became active. An omitted end on that assessment is the process clock and is
+printed as `window.receivedTo` with `receivedToSource` `process_clock`. That
+flag does not change the historical window and does not fetch the known event
+or the six morning ids unless they fall inside the released-intake scan.
+Each inspection separates `storedCanonical` (the saved DOB, age, provenance,
+and reference date) from `proposedRecovery` (recomputed;
+`proposedRecoveryIsProductionVerification` is false). `formIdentity` names
+`confirmedBindingId`, the internal `sourceFunnelId`, and `providerFunnelId`.
+`providerFunnelId` is the external LeadCapture funnel UUID, not
+`SourceFunnel.id`. `missingInspectionIds` lists requested ids the API did not
 return. Pagination reports `complete`, `stoppedReason`, `pages`, and
 `listItemsSeen`. `sourceLeadLookups` matches confirmed provider lead ids
 from raw `lead_id` on those fetched details. An incomplete page, a missing
@@ -249,7 +259,13 @@ relation is absent, apply and rollback return `audit_relation_required`. A
 table with the right name and the wrong columns, key, index, or action
 check returns `audit_relation_incompatible`. Either refusal writes nothing.
 This branch is not production-executable because that migration does not
-exist yet.
+exist yet. The commits that add the correction are only on
+`cursor/dob-historical-correction-156d`. They are not on `master`.
+`master` remains the #269 merge `fcb1324df0e8bfea03f6af068cc50152f254f32f`.
+The implementer of the audit table is named in
+`docs/validation/incoming-dob-correction-audit-migration.md`. Confirmed
+birthday coverage remains Julia Dodge and Eriks Veidemanis. Other campaign
+forms stay unresolved.
 
 When the compatible table exists, the payload update and the audit insert commit
 together. The audit stores before and after for every canonical field this

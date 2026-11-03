@@ -3955,3 +3955,23 @@ model ClientSheetColumnMap {
   @@index([clientAccountId, status], map: "ClientSheetColumnMap_client_status_idx")
   @@index([clientAccountId, spreadsheetId, worksheetId], map: "ClientSheetColumnMap_client_sheet_idx")
 }
+
+/// Historical DOB correction audit. The writer inserts one row in the same
+/// transaction as the payload change. eventId is not a foreign key.
+/// The action check (apply | rollback) lives in SQL; Prisma does not emit it.
+model IncomingDobCorrectionAudit {
+  id                   String   @id
+  version              String
+  action               String
+  operator             String
+  eventId              String
+  previousUpdatedAt    DateTime
+  newUpdatedAt         DateTime
+  alreadyDelivered     Boolean
+  beforeJson           Json
+  afterJson            Json
+  externalDestinations String
+  createdAt            DateTime @default(now())
+
+  @@index([eventId, createdAt], map: "IncomingDobCorrectionAudit_eventId_createdAt_idx")
+}

@@ -482,12 +482,15 @@ export function syntheticCustomCampaignLead(input: {
   clientAccountId: string;
   spreadsheetId: string;
   worksheetTitle: string;
+  /** One instant for this test send. Omitted calls keep the fixed mapping-preview sample. */
+  occurredAt?: string;
 }): CampaignSheetLeadInput {
+  const occurredAt = input.occurredAt?.trim() || null;
   return {
     stableRowId: input.stableRowId,
     clientAccountId: input.clientAccountId,
     sourceLeadEventId: "synthetic-campaign-test",
-    receivedAt: "2026-10-26T15:00:00.000Z",
+    receivedAt: occurredAt ?? "2026-10-26T15:00:00.000Z",
     sourceLeadId: null,
     normalizedPayload: {
       contact: {
@@ -503,7 +506,7 @@ export function syntheticCustomCampaignLead(input: {
         source_intake: {
           lead_id: "synthetic-sheets-test",
           source_lead_id_generated: true,
-          submitted_at: "2026-10-26T14:00:00.000Z",
+          submitted_at: occurredAt ?? "2026-10-26T14:00:00.000Z",
           unmappedSourceFieldsJson: [
             {
               key: "notes",

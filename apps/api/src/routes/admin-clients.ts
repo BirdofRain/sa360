@@ -8,6 +8,7 @@ import {
   clientGhlDestinationPatchBodySchema,
 } from "../schemas/client-account.schema.js";
 import {
+  activeRoutingRulesQuerySchema,
   routingRuleCreateBodySchema,
   routingRulePatchBodySchema,
   routingRulesAdminListQuerySchema,
@@ -21,8 +22,12 @@ import {
   patchClientAdmin,
   patchClientGhlDestinationAdmin,
 } from "../services/client-account.service.js";
-import { listCampaignRoutingRules } from "../repositories/campaign-routing-rule.repository.js";
+import {
+  listActiveCampaignRoutingRulesPage,
+  listCampaignRoutingRules,
+} from "../repositories/campaign-routing-rule.repository.js";
 import { presentRoutingRulesWithReadinessEnriched } from "../services/delivery-readiness-admin.present.js";
+import { presentActiveRoutingRuleIdentity } from "../services/routing-rule-inventory.present.js";
 import {
   createRoutingRuleAdmin,
   deleteRoutingRuleAdmin,
@@ -459,6 +464,31 @@ export async function adminClientsRoutes(
       count: items.length,
       items,
       masterClientAccountId: q.masterClientAccountId ?? null,
+    });
+  });
+
+  app.get("/routing/active-rules", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const parsed = activeRoutingRulesQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid query",
+        details: parsed.error.flatten(),
+      });
+    }
+    const page = await listActiveCampaignRoutingRulesPage({
+      limit: parsed.data.limit,
+      cursor: parsed.data.cursor,
+    });
+    if ("error" in page) {
+      return reply.status(400).send({ ok: false, error: "Invalid cursor", code: "invalid_cursor" });
+    }
+    return reply.send({
+      ok: true,
+      count: page.items.length,
+      items: page.items.map(presentActiveRoutingRuleIdentity),
+      nextCursor: page.nextCursor,
     });
   });
 

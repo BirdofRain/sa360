@@ -36,3 +36,11 @@ export const observedSourceFunnelsQuerySchema = z
     limit: z.coerce.number().int().min(1).max(50).optional(),
   })
   .strict();
+
+/** Full source catalog. Limit above 50 fails closed instead of being clamped. */
+export const sourceFunnelCatalogQuerySchema = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(50).optional().default(25),
+    cursor: z.string().trim().min(1).max(80).optional(),
+  })
+  .strict();

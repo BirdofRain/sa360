@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { COMPANY_SHEETS_V3_COLUMNS } from "@sa360/shared";
+
+import { COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3 } from "../../lib/company-google-sheets-env.js";
+import { companySheetsCampaignRowValues, formatGenerationTimestamp } from "./company-sheets-campaign-row.js";
 import {
   applyOperatorAssignments,
   columnLabel,
@@ -83,6 +87,70 @@ test("date-only values stay on that calendar day and offset timestamps use New Y
   assert.equal(formatDateAmericaNewYork("2026-10-26T03:30:00.000Z"), "10/25/2026");
   assert.equal(formatDateAmericaNewYork("not a date"), "");
   assert.equal(formatDateAmericaNewYork(""), "");
+});
+
+test("a captured test-send time fills the mapped Date cell and leaves the sample birthday", () => {
+  const first = "2026-11-03T15:04:00.000Z";
+  const second = "2026-11-04T16:30:00.000Z";
+  const sample = syntheticCustomCampaignLead({
+    stableRowId: "preview",
+    clientAccountId: "preview",
+    spreadsheetId: "sheet",
+    worksheetTitle: "Campaign Leads",
+  });
+  const sampleIntake = (sample.normalizedPayload as { routing: { source_intake: { submitted_at: string } } }).routing
+    .source_intake;
+  assert.equal(sample.receivedAt, "2026-10-26T15:00:00.000Z");
+  assert.equal(sampleIntake.submitted_at, "2026-10-26T14:00:00.000Z");
+
+  const header = ["Date", "Client Name", "DOB"];
+  const mapped = suggestColumnAssignments(header, ["10/26/2026", "Pat Example", "04/02/1990"]).map((column) => ({
+    ...column,
+    explicit: true,
+  }));
+  assert.equal(mapped[0]?.target?.sourceField, "submitted_at");
+  assert.equal(mapped[2]?.target?.sourceField, "date_of_birth");
+
+  function projected(occurredAt: string): string[] {
+    const lead = syntheticCustomCampaignLead({
+      stableRowId: "row",
+      clientAccountId: "client",
+      spreadsheetId: "sheet",
+      worksheetTitle: "Campaign Leads",
+      occurredAt,
+    });
+    const intake = (lead.normalizedPayload as { routing: { source_intake: { submitted_at: string } } }).routing
+      .source_intake;
+    assert.equal(lead.receivedAt, occurredAt);
+    assert.equal(intake.submitted_at, occurredAt);
+    const values = customRowValues(mapped, lead);
+    assert.ok(values);
+    return values;
+  }
+
+  const firstRow = projected(first);
+  const secondRow = projected(second);
+  assert.equal(firstRow[0], formatGenerationTimestamp(first));
+  assert.equal(secondRow[0], formatGenerationTimestamp(second));
+  assert.notEqual(firstRow[0], secondRow[0]);
+  assert.equal(firstRow[0]?.includes("10/26/2026"), false);
+  assert.equal(firstRow[2], "04/02/1990");
+  assert.equal(secondRow[2], "04/02/1990");
+
+  const v3 = companySheetsCampaignRowValues({
+    ...syntheticCustomCampaignLead({
+      stableRowId: "row",
+      clientAccountId: "client",
+      spreadsheetId: "sheet",
+      worksheetTitle: "Campaign Leads",
+      occurredAt: first,
+    }),
+    schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3,
+  });
+  const dateIndex = COMPANY_SHEETS_V3_COLUMNS.findIndex((column) => column.header === "Date");
+  const dobIndex = COMPANY_SHEETS_V3_COLUMNS.findIndex((column) => column.header === "DOB");
+  assert.equal(v3?.[dateIndex], formatGenerationTimestamp(first));
+  assert.equal(v3?.[dobIndex], "1990-04-02");
 });
 
 test("Age/DOB, primary reason, and blank headers reject the unsafe choice", () => {

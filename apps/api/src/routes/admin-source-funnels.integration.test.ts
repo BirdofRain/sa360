@@ -36,6 +36,8 @@ const PARENT_KEYS = [
   `my.leadcapture.io/p/${SLUG_UNASSOC}`,
   `my.leadcapture.io/p/${SLUG_COUNT}`,
   "my.leadcapture.io/p/admsf_unas2",
+  "my.leadcapture.io/p/admsf_catalog_never",
+  "my.leadcapture.io/p/admsf_catalog_unas",
 ];
 
 function nextgenPayload(input: {
@@ -417,6 +419,93 @@ describe("Admin SourceFunnel association API", { skip: !runIntegration }, () => 
     assert.equal(body.code, "invalid_page_url_or_slug");
     assert.equal(body.error, "That value could not be recognized as a valid LeadCapture source.");
     assert.doesNotMatch(JSON.stringify(body), /prisma|SQL|stack/i);
+  });
+
+  it("catalog includes confirmed never-seen and unassociated sources without lead payloads", async () => {
+    const never = await db.sourceFunnel.create({
+      data: {
+        provider: "leadcapture_io",
+        parentUrlKey: "my.leadcapture.io/p/admsf_catalog_never",
+        pageSlug: "admsf_catalog_never",
+        associationStatus: "confirmed",
+        originClientAccountId: CLIENT_A,
+        firstSeenAt: null,
+        lastSeenAt: null,
+      },
+    });
+    const unassociated = await db.sourceFunnel.create({
+      data: {
+        provider: "leadcapture_io",
+        parentUrlKey: "my.leadcapture.io/p/admsf_catalog_unas",
+        pageSlug: "admsf_catalog_unas",
+        associationStatus: "unassociated",
+        firstSeenAt: null,
+        lastSeenAt: null,
+      },
+    });
+
+    const unbounded = await admin("GET", "/admin/v1/source-funnels?limit=51");
+    assert.equal(unbounded.statusCode, 400);
+
+    const found = new Set<string>();
+    let cursor: string | null = null;
+    for (let page = 0; page < 40 && found.size < 2; page += 1) {
+      const url = cursor
+        ? `/admin/v1/source-funnels?limit=50&cursor=${encodeURIComponent(cursor)}`
+        : "/admin/v1/source-funnels?limit=50";
+      const res = await admin("GET", url);
+      assert.equal(res.statusCode, 200);
+      const body = res.json() as {
+        count: number;
+        nextCursor: string | null;
+        items: Array<Record<string, unknown>>;
+      };
+      assert.equal(body.count, body.items.length);
+      assert.ok(body.items.length <= 50);
+      assert.doesNotMatch(JSON.stringify(body), /rawPayload|normalizedPayload/);
+      for (const item of body.items) {
+        assert.equal("rawPayloadJson" in item, false);
+        assert.equal("email" in item, false);
+        assert.equal("phone" in item, false);
+        assert.equal(typeof item.id, "string");
+        assert.equal(typeof item.associationStatus, "string");
+        if (item.id === never.id) {
+          found.add(never.id);
+          assert.equal(item.associationStatus, "confirmed");
+          assert.equal(item.firstSeenAt, null);
+          assert.equal(item.lastSeenAt, null);
+          assert.equal(item.originClientAccountId, CLIENT_A);
+        }
+        if (item.id === unassociated.id) {
+          found.add(unassociated.id);
+          assert.equal(item.associationStatus, "unassociated");
+          assert.equal(item.firstSeenAt, null);
+          assert.equal(item.lastSeenAt, null);
+        }
+      }
+      cursor = body.nextCursor;
+      if (!cursor) break;
+    }
+    assert.ok(found.has(never.id));
+    assert.ok(found.has(unassociated.id));
+
+    const first = await admin("GET", "/admin/v1/source-funnels?limit=1");
+    assert.equal(first.statusCode, 200);
+    const firstBody = first.json() as { count: number; items: Array<{ id: string }>; nextCursor: string | null };
+    assert.equal(firstBody.count, 1);
+    assert.equal(firstBody.items.length, 1);
+    assert.ok(firstBody.nextCursor);
+    const second = await admin(
+      "GET",
+      `/admin/v1/source-funnels?limit=1&cursor=${encodeURIComponent(firstBody.nextCursor)}`
+    );
+    assert.equal(second.statusCode, 200);
+    const secondBody = second.json() as { items: Array<{ id: string }> };
+    assert.notEqual(secondBody.items[0]?.id, firstBody.items[0]?.id);
+
+    const badCursor = await admin("GET", "/admin/v1/source-funnels?cursor=not-a-real-cursor");
+    assert.equal(badCursor.statusCode, 400);
+    assert.equal((badCursor.json() as { code?: string }).code, "invalid_cursor");
   });
 
   it("discovery endpoint lists recently observed unassociated/suggested sources", async () => {

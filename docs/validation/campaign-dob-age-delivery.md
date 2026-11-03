@@ -168,6 +168,16 @@ Confirmed `date` means birthday (`leadcapture_io` / `leadcapture_io_nextgen`):
 | `go.lifeinsuranceforvets.com/learn-jean-perez` | not verified; do not invent one | `181b0e69-fd55-44e3-be68-a284c96435b0` | `date` on the DOB step | added from public form config |
 | `healthcareworker.familylegacyprotection.com/learn-andru-duranso` | not verified; do not invent one | `18c28feb-5c3d-4bd0-94d8-1ed33a6fa718` | `date` on the DOB step | added from public form config |
 | `healthcareworker.familylegacyprotection.com/learn-alex-feuerstein` | not verified; do not invent one | `22ac7ad2-97a3-4fce-bd4d-02124b6e4520` | `date` on the DOB step | added from public form config |
+| `go.lifeinsuranceforvets.com/learn-5428` | `cmw090p2c012skm0u1ku2cokp` | `96b80928-a16d-491b-a8f7-f3528becf567` | `date` on the DOB step. LeadCapture names the funnel Tori Haskell. No receiving client is stored on the binding | added after the public form and stored event `cmw15zx850001kq0uvcbyxht0` |
+| `go.lifeinsuranceforvets.com/learn-nick-agents` | `cmw0knqfk01ntkm0uorv5xrl7` | `006e7d56-604f-4d19-a273-3044dcf143f2` | `date` on the DOB step. This is not `learn-nicholas-dambruoso` | added after the public form and stored event `cmw0knqfy01nukm0uz9mrjzqo` |
+| `go.lifeinsuranceforvets.com/learn-rob-arden` | `cmubqp3qv07htm00v2eva4jdl` | `c5e832d0-ef1b-4837-960c-d312f7ebbd2b` | `date` on the DOB step | added after the public form and stored event `cmw189sti008mkq0ujinyz8w1` |
+| `go.lifeinsuranceforvets.com/learn-vernon-baker` | `cmuebit920awam00v7kheh6au` | `5d0892ee-b3a1-45a3-a111-bcd3065e394b` | `date` on the DOB step | added after the public form and stored event `cmw181rww0088kq0uxiwu79np` |
+| `go.lifeinsuranceforvets.com/learn-daniel-gvili-new` | `cmubzdlct07vcm00v0ca90xhq` | `dd056ca1-dbf1-40af-8eb9-563281a80b8d` | `date` on the DOB step. `learn-daniel-gvili` is a different page and is not bound | added after the public form and stored event `cmw17tj2a007skq0uo8jh1w67` |
+| `go.lifeinsuranceforvets.com/learn-jacob-zapata` | `cmubr493407ivm00v401jrwc8` | `e8d5cef4-5713-4000-8313-bb141ef1fbbd` | `date` on the DOB step | added after the public form and stored event `cmw178rkh0066kq0uif87sbkt` |
+| `go.lifeinsuranceforvets.com/learn-dom-scalice` | `cmtwbyi5v00d1j50uf933qfsc` | `d4d275e1-ce6a-4856-8ae4-ae9c7ce9ab38` | `date` on the DOB step | added after the public form and stored event `cmw1777by005skq0u4ij8cchb` |
+| `go.lifeinsuranceforvets.com/learn-james-laird` | `cmvcejoyo01nzjh0u0jh07us0` | `aa7e4196-c8f8-4f84-abc0-5526f903460e` | `date` on the DOB step | added after the public form and stored event `cmw18v7oy000pg70uo27ez6r7` |
+
+These added bindings do not set a receiving client, change a source association, or enable delivery. A stored slash-shaped `date` is not enough by itself. Each added page has a public step named `DOB` whose `webhookFieldName` is `date`, and a stored event on that exact parent whose raw `date` did not become a canonical DOB.
 
 The Eriks example source lead `e452eaed-92c8-4916-9dd1-fbd001dafaac` is a
 provider lead id, not a `SourceLeadEvent` id. Its raw `date` is `01/27/1949`
@@ -196,6 +206,13 @@ the JSON value type on the wire is not claimed from production.
 | Page or fixture | Birthday key in the accessible evidence | Status |
 | --- | --- | --- |
 | `learn-madison-pimentel` | public step `Sex/ DOB` webhooks `date_of_birth` (`f2cca061-4b70-4a0f-b201-2cf8b4b03c6f`) | explicit key already supported; `date` is not bound |
+| `learn-madison-pimentel-634632` | same embed and funnel as Madison; webhook `date_of_birth` | `date` is not bound |
+| `learn-179930` | public Age step webhooks `age` | global age alias; `number` is not bound |
+| `go.lifeinsuranceforvets.com/learn` | James Torrey legacy parent; stored event sends `age` and calendar `date` | calendar `date` is not bound |
+| `learn-ryan-wooldridge` | public DOB step webhooks `date`; no stored event was opened | not bound |
+| `learn-robby-wells` | public DOB step webhooks `date`; no stored event was opened. The typo host `go.lifeinsuranceforvet.com` does not resolve | not bound |
+| `my.leadcapture.io/p/6rci-usi` | public page returned 404 | unresolved |
+| provider funnel `d0e009dc-d23a-4670-a7f5-fb4a95138ba7` | public funnel API returned 404 | unresolved |
 | `learn-julia-healthcare-worker` | public page returned 404 | not an active page |
 | `learn-nicholas-dambruoso` | public page has no LeadCapture embed; repository fixture has no birthday field | unverified; `date` is not bound |
 | James Torrey route `LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX` | retained fixture `date` + `time`; public funnel `d6f2157f-d612-441a-80af-88742ef084dc` has an Age step whose webhook is `number`, not a birthday `date` | submission calendar stays; `number` is not bound |

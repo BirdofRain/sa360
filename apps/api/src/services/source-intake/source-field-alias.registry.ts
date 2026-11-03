@@ -405,6 +405,72 @@ export const CONFIRMED_ALEX_FEUERSTEIN_PARENT_URL_KEY =
 export const CONFIRMED_ALEX_FEUERSTEIN_PROVIDER_FUNNEL_ID = "22ac7ad2-97a3-4fce-bd4d-02124b6e4520";
 
 /**
+ * Live page `learn-5428`. LeadCapture names the embedded funnel Tori Haskell.
+ * The page is unassociated: this binding does not name a receiving client.
+ */
+export const CONFIRMED_TORI_HASKELL_PARENT_URL_KEY = "go.lifeinsuranceforvets.com/learn-5428";
+
+export const CONFIRMED_TORI_HASKELL_SOURCE_FUNNEL_ID = "cmw090p2c012skm0u1ku2cokp";
+
+export const CONFIRMED_TORI_HASKELL_PROVIDER_FUNNEL_ID = "96b80928-a16d-491b-a8f7-f3528becf567";
+
+/**
+ * Agents page `learn-nick-agents`. This is not
+ * `learn-nicholas-dambruoso`, whose birthday key is already `date_of_birth`.
+ */
+export const CONFIRMED_NICK_AGENTS_PARENT_URL_KEY = "go.lifeinsuranceforvets.com/learn-nick-agents";
+
+export const CONFIRMED_NICK_AGENTS_SOURCE_FUNNEL_ID = "cmw0knqfk01ntkm0uorv5xrl7";
+
+export const CONFIRMED_NICK_AGENTS_PROVIDER_FUNNEL_ID = "006e7d56-604f-4d19-a273-3044dcf143f2";
+
+/** Confirmed next-gen veteran page. The public form's DOB step webhooks `date`. */
+export const CONFIRMED_ROB_ARDEN_PARENT_URL_KEY = "go.lifeinsuranceforvets.com/learn-rob-arden";
+
+export const CONFIRMED_ROB_ARDEN_SOURCE_FUNNEL_ID = "cmubqp3qv07htm00v2eva4jdl";
+
+export const CONFIRMED_ROB_ARDEN_PROVIDER_FUNNEL_ID = "c5e832d0-ef1b-4837-960c-d312f7ebbd2b";
+
+/** Confirmed next-gen veteran page. The public form's DOB step webhooks `date`. */
+export const CONFIRMED_VERNON_BAKER_PARENT_URL_KEY = "go.lifeinsuranceforvets.com/learn-vernon-baker";
+
+export const CONFIRMED_VERNON_BAKER_SOURCE_FUNNEL_ID = "cmuebit920awam00v7kheh6au";
+
+export const CONFIRMED_VERNON_BAKER_PROVIDER_FUNNEL_ID = "5d0892ee-b3a1-45a3-a111-bcd3065e394b";
+
+/**
+ * Confirmed next-gen page `learn-daniel-gvili-new`. The older
+ * `learn-daniel-gvili` page is a different source and is not this binding.
+ */
+export const CONFIRMED_DANIEL_GVILI_PARENT_URL_KEY =
+  "go.lifeinsuranceforvets.com/learn-daniel-gvili-new";
+
+export const CONFIRMED_DANIEL_GVILI_SOURCE_FUNNEL_ID = "cmubzdlct07vcm00v0ca90xhq";
+
+export const CONFIRMED_DANIEL_GVILI_PROVIDER_FUNNEL_ID = "dd056ca1-dbf1-40af-8eb9-563281a80b8d";
+
+/** Confirmed next-gen veteran page. The public form's DOB step webhooks `date`. */
+export const CONFIRMED_JACOB_ZAPATA_PARENT_URL_KEY = "go.lifeinsuranceforvets.com/learn-jacob-zapata";
+
+export const CONFIRMED_JACOB_ZAPATA_SOURCE_FUNNEL_ID = "cmubr493407ivm00v401jrwc8";
+
+export const CONFIRMED_JACOB_ZAPATA_PROVIDER_FUNNEL_ID = "e8d5cef4-5713-4000-8313-bb141ef1fbbd";
+
+/** Confirmed next-gen veteran page. The public form's DOB step webhooks `date`. */
+export const CONFIRMED_DOM_SCALICE_PARENT_URL_KEY = "go.lifeinsuranceforvets.com/learn-dom-scalice";
+
+export const CONFIRMED_DOM_SCALICE_SOURCE_FUNNEL_ID = "cmtwbyi5v00d1j50uf933qfsc";
+
+export const CONFIRMED_DOM_SCALICE_PROVIDER_FUNNEL_ID = "d4d275e1-ce6a-4856-8ae4-ae9c7ce9ab38";
+
+/** Confirmed next-gen veteran page. The public form's DOB step webhooks `date`. */
+export const CONFIRMED_JAMES_LAIRD_PARENT_URL_KEY = "go.lifeinsuranceforvets.com/learn-james-laird";
+
+export const CONFIRMED_JAMES_LAIRD_SOURCE_FUNNEL_ID = "cmvcejoyo01nzjh0u0jh07us0";
+
+export const CONFIRMED_JAMES_LAIRD_PROVIDER_FUNNEL_ID = "aa7e4196-c8f8-4f84-abc0-5526f903460e";
+
+/**
  * Legacy James Torrey veteran form. Retained fixtures send `branch` and use
  * `date` + `time` as the submission calendar, not a birthday.
  */
@@ -473,6 +539,94 @@ export const SCOPED_INCOMING_FIELD_BINDINGS: readonly ScopedIncomingFieldBinding
     sourceSystem: "leadcapture_io_nextgen",
     providerFunnelId: CONFIRMED_ALEX_FEUERSTEIN_PROVIDER_FUNNEL_ID,
     parentUrlKey: CONFIRMED_ALEX_FEUERSTEIN_PARENT_URL_KEY,
+    aliases: {
+      date: "date_of_birth",
+    },
+  },
+  {
+    id: "leadcapture_io_nextgen_vet_tori_haskell",
+    provider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    sourceFunnelId: CONFIRMED_TORI_HASKELL_SOURCE_FUNNEL_ID,
+    providerFunnelId: CONFIRMED_TORI_HASKELL_PROVIDER_FUNNEL_ID,
+    parentUrlKey: CONFIRMED_TORI_HASKELL_PARENT_URL_KEY,
+    aliases: {
+      date: "date_of_birth",
+    },
+  },
+  {
+    id: "leadcapture_io_nextgen_vet_nick_dambruoso_agents",
+    provider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    sourceFunnelId: CONFIRMED_NICK_AGENTS_SOURCE_FUNNEL_ID,
+    providerFunnelId: CONFIRMED_NICK_AGENTS_PROVIDER_FUNNEL_ID,
+    parentUrlKey: CONFIRMED_NICK_AGENTS_PARENT_URL_KEY,
+    aliases: {
+      date: "date_of_birth",
+    },
+  },
+  {
+    id: "leadcapture_io_nextgen_vet_rob_arden",
+    provider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    sourceFunnelId: CONFIRMED_ROB_ARDEN_SOURCE_FUNNEL_ID,
+    providerFunnelId: CONFIRMED_ROB_ARDEN_PROVIDER_FUNNEL_ID,
+    parentUrlKey: CONFIRMED_ROB_ARDEN_PARENT_URL_KEY,
+    aliases: {
+      date: "date_of_birth",
+    },
+  },
+  {
+    id: "leadcapture_io_nextgen_vet_vernon_baker",
+    provider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    sourceFunnelId: CONFIRMED_VERNON_BAKER_SOURCE_FUNNEL_ID,
+    providerFunnelId: CONFIRMED_VERNON_BAKER_PROVIDER_FUNNEL_ID,
+    parentUrlKey: CONFIRMED_VERNON_BAKER_PARENT_URL_KEY,
+    aliases: {
+      date: "date_of_birth",
+    },
+  },
+  {
+    id: "leadcapture_io_nextgen_vet_daniel_gvili",
+    provider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    sourceFunnelId: CONFIRMED_DANIEL_GVILI_SOURCE_FUNNEL_ID,
+    providerFunnelId: CONFIRMED_DANIEL_GVILI_PROVIDER_FUNNEL_ID,
+    parentUrlKey: CONFIRMED_DANIEL_GVILI_PARENT_URL_KEY,
+    aliases: {
+      date: "date_of_birth",
+    },
+  },
+  {
+    id: "leadcapture_io_nextgen_vet_jacob_zapata",
+    provider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    sourceFunnelId: CONFIRMED_JACOB_ZAPATA_SOURCE_FUNNEL_ID,
+    providerFunnelId: CONFIRMED_JACOB_ZAPATA_PROVIDER_FUNNEL_ID,
+    parentUrlKey: CONFIRMED_JACOB_ZAPATA_PARENT_URL_KEY,
+    aliases: {
+      date: "date_of_birth",
+    },
+  },
+  {
+    id: "leadcapture_io_nextgen_vet_dom_scalice",
+    provider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    sourceFunnelId: CONFIRMED_DOM_SCALICE_SOURCE_FUNNEL_ID,
+    providerFunnelId: CONFIRMED_DOM_SCALICE_PROVIDER_FUNNEL_ID,
+    parentUrlKey: CONFIRMED_DOM_SCALICE_PARENT_URL_KEY,
+    aliases: {
+      date: "date_of_birth",
+    },
+  },
+  {
+    id: "leadcapture_io_nextgen_vet_james_laird",
+    provider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    sourceFunnelId: CONFIRMED_JAMES_LAIRD_SOURCE_FUNNEL_ID,
+    providerFunnelId: CONFIRMED_JAMES_LAIRD_PROVIDER_FUNNEL_ID,
+    parentUrlKey: CONFIRMED_JAMES_LAIRD_PARENT_URL_KEY,
     aliases: {
       date: "date_of_birth",
     },

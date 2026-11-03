@@ -1,4 +1,4 @@
-import type { Prisma, PrismaClient } from "@prisma/client";
+import type { CampaignRoutingRule, Prisma, PrismaClient } from "@prisma/client";
 import { prisma } from "../lib/db.js";
 
 export async function listActiveCampaignRoutingRules(
@@ -12,6 +12,45 @@ export async function listActiveCampaignRoutingRules(
     },
     orderBy: [{ priority: "desc" }, { updatedAt: "desc" }],
   });
+}
+
+export type ActiveRoutingRulePage = {
+  items: CampaignRoutingRule[];
+  nextCursor: string | null;
+};
+
+function isMissingCursor(err: unknown): boolean {
+  return typeof err === "object" && err !== null && "code" in err && (err as { code?: unknown }).code === "P2025";
+}
+
+/**
+ * Active routing rules for every client. Inactive rules are excluded.
+ * This is a read of rule identity, not a delivery or mutation path.
+ */
+export async function listActiveCampaignRoutingRulesPage(
+  input: { limit: number; cursor?: string },
+  db: PrismaClient = prisma
+): Promise<ActiveRoutingRulePage | { error: "invalid_cursor" }> {
+  const take = input.limit;
+  const cursor = input.cursor?.trim() || undefined;
+  if (cursor) {
+    const anchor = await db.campaignRoutingRule.findUnique({ where: { id: cursor }, select: { id: true } });
+    if (!anchor) return { error: "invalid_cursor" };
+  }
+  try {
+    const rows = await db.campaignRoutingRule.findMany({
+      where: { active: true },
+      orderBy: { id: "asc" },
+      take: take + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    });
+    const hasMore = rows.length > take;
+    const items = hasMore ? rows.slice(0, take) : rows;
+    return { items, nextCursor: hasMore ? items[items.length - 1]?.id ?? null : null };
+  } catch (err) {
+    if (isMissingCursor(err)) return { error: "invalid_cursor" };
+    throw err;
+  }
 }
 
 export async function listCampaignRoutingRules(

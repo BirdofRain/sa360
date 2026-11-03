@@ -12,6 +12,14 @@ export const routingRulesAdminListQuerySchema = z.object({
     .transform((v) => (v === undefined ? undefined : v === "true")),
 });
 
+/** Cross-client active rules. Limit above 50 fails closed instead of being clamped. */
+export const activeRoutingRulesQuerySchema = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(50).optional().default(25),
+    cursor: z.string().trim().min(1).max(80).optional(),
+  })
+  .strict();
+
 const routingRuleMatchFieldsSchema = z.object({
   masterClientAccountId: z.string().trim().min(1),
   clientAccountId: z.string().trim().min(1),

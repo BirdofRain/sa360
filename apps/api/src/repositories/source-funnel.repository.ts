@@ -122,6 +122,45 @@ export async function listObservedDiscoverableSourceFunnels(
   });
 }
 
+export type SourceFunnelCatalogPage = {
+  items: SourceFunnelRecord[];
+  nextCursor: string | null;
+};
+
+function isMissingCursor(err: unknown): boolean {
+  return typeof err === "object" && err !== null && "code" in err && (err as { code?: unknown }).code === "P2025";
+}
+
+/**
+ * Every SourceFunnel row, including confirmed, unassociated, and never-observed
+ * sources. Identity metadata only; callers must not attach lead payloads.
+ * A row here does not mean a campaign routing rule is active.
+ */
+export async function listSourceFunnelsPage(
+  input: { limit: number; cursor?: string },
+  db: PrismaClient | Prisma.TransactionClient = prisma
+): Promise<SourceFunnelCatalogPage | { error: "invalid_cursor" }> {
+  const take = input.limit;
+  const cursor = input.cursor?.trim() || undefined;
+  if (cursor) {
+    const anchor = await db.sourceFunnel.findUnique({ where: { id: cursor }, select: { id: true } });
+    if (!anchor) return { error: "invalid_cursor" };
+  }
+  try {
+    const rows = await db.sourceFunnel.findMany({
+      orderBy: { id: "asc" },
+      take: take + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    });
+    const hasMore = rows.length > take;
+    const items = hasMore ? rows.slice(0, take) : rows;
+    return { items, nextCursor: hasMore ? items[items.length - 1]?.id ?? null : null };
+  } catch (err) {
+    if (isMissingCursor(err)) return { error: "invalid_cursor" };
+    throw err;
+  }
+}
+
 export async function createSourceFunnel(
   input: {
     provider: SourceLeadProvider;

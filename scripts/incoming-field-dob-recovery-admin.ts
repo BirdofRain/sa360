@@ -116,6 +116,12 @@ async function main(): Promise<void> {
   const receivedFrom = args["received-from"]?.trim() || recovery.INCOMING_DOB_RECOVERY_WINDOW_START;
   const from = new Date(receivedFrom);
   if (Number.isNaN(from.getTime())) refuse("invalid_received_from", "received-from");
+  const expectIds = process.argv.slice(2).flatMap((token, index, argv) => {
+    if (token !== "--expect-id") return [];
+    const next = argv[index + 1];
+    return next && !next.startsWith("--") ? [next.trim()] : [];
+  }).filter(Boolean);
+
   const receivedToText = args["received-to"]?.trim() || "";
   const to = receivedToText ? new Date(receivedToText) : new Date();
   if (Number.isNaN(to.getTime())) refuse("invalid_received_to", "received-to");
@@ -170,8 +176,8 @@ async function main(): Promise<void> {
   });
 
   const detailIds = [...scan.ids];
-  if (!detailIds.includes(recovery.KNOWN_DOB_RECOVERY_EVENT_ID)) {
-    detailIds.push(recovery.KNOWN_DOB_RECOVERY_EVENT_ID);
+  for (const id of [recovery.KNOWN_DOB_RECOVERY_EVENT_ID, ...expectIds]) {
+    if (!detailIds.includes(id)) detailIds.push(id);
   }
 
   const rows: Array<ReturnType<typeof recovery.adminSourceLeadDetailToRecoverySnapshot>> = [];
@@ -222,6 +228,10 @@ async function main(): Promise<void> {
         "deliveredAt, status, and deliveryResultJson.externalCallExecuted. Sheets jobs and lead allocations are not on this API, so those two flags are unresolved and are not production zeros.",
       knownEventHttpStatus: knownStatus,
       knownEventExpectation: expectation,
+      inspections: [...new Set([recovery.KNOWN_DOB_RECOVERY_EVENT_ID, ...expectIds])]
+        .map((id) => rows.find((row) => row.id === id) ?? null)
+        .filter((row): row is NonNullable<typeof row> => row != null)
+        .map((row) => recovery.describeIncomingDobRecoveryInspection(row)),
       report,
     })
   );

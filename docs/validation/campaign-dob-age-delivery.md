@@ -212,6 +212,24 @@ start is crossed, then reads each in-window detail plus the known event. It
 does not see Sheets jobs or lead allocations, so those two flags stay
 unresolved. It refuses write flags and a non-HTTPS host.
 
+`pnpm source-intake:dob-correction` plans that fill from the same normalizer.
+The default is a dry run. `--apply` requires the database host, an operator
+name, a limit, an audit file ending in `.dob-correction-audit.jsonl`, and
+the confirmation `APPLY CONFIRMED JULIA DOB CORRECTION`. It fills only blank
+canonical DOB, age, provenance, reference, and conflict fields, and copies
+`sourceAttributes.date_of_birth` only when that object already exists and
+the canonical DOB was blank. A nonblank disagreement is skipped. Raw payload,
+status, routing, receipts, inventory, and external GHL or Sheets values are
+not changed. `updatedAt` moves. `receivedAt`, `normalizedAt`, `createdAt`,
+and `deliveredAt` do not. Rows are locked with `SELECT … FOR UPDATE SKIP
+LOCKED` in batches of 25. A second apply writes nothing. `--rollback` with
+`ROLLBACK CONFIRMED JULIA DOB CORRECTION` restores only the audited canonical
+fields when the current values still equal the audited after-image. The
+audit file is operator-local JSONL, not a new table, and must not be
+committed. Updating `normalizedPayloadJson` can refresh the historical
+catalog read model. It does not enqueue delivery. Do not point `--apply` at
+production until that write is separately authorized.
+
 When a GHL destination map selects Age or DOB, the source-attribute stamp
 uses `projectCampaignDobAge` on the lifecycle payload. Age sends the
 canonical consumer age, including `lead_details.consumer_age`. DOB sends

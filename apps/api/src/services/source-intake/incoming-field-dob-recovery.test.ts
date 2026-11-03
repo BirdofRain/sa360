@@ -11,6 +11,7 @@ import {
   assessIncomingDobRecoveryRow,
   buildIncomingDobRecoveryReport,
   describeIncomingDobRecoveryExpectation,
+  describeIncomingDobRecoveryInspection,
   INCOMING_DOB_LATER_UPDATE_POLICY,
   INCOMING_DOB_RECOVERY_REPORT_VERSION,
   INCOMING_DOB_RECOVERY_WINDOW_START,
@@ -123,7 +124,7 @@ test("census keeps non-birthday dates separate and does not print the date", () 
   assert.equal(printed.includes("1955-03-13"), false);
   assert.equal(printed.includes("pat.sample@example.test"), false);
   assert.equal(INCOMING_DOB_LATER_UPDATE_POLICY.writes, false);
-  assert.equal(INCOMING_DOB_LATER_UPDATE_POLICY.implemented, false);
+  assert.equal(INCOMING_DOB_LATER_UPDATE_POLICY.implemented, true);
   assert.equal(INCOMING_DOB_LATER_UPDATE_POLICY.timestamps.includes('"updatedAt" = "updatedAt"'), false);
   assert.equal(INCOMING_DOB_LATER_UPDATE_POLICY.timestamps.includes("Let updatedAt move"), true);
   assert.equal(INCOMING_DOB_LATER_UPDATE_POLICY.evidence.includes("before and after"), true);
@@ -236,6 +237,28 @@ test("known-event expectation recomputes canonical DOB and age without contact f
   assert.equal(expectation.conflict, false);
   assert.equal(JSON.stringify(expectation).includes("pat.sample@example.test"), false);
   assert.equal(JSON.stringify(expectation).includes("03/13/1955"), false);
+});
+
+test("a specific inspection keeps the raw birthday distinct from receipt time and omits contact fields", () => {
+  const row = snapshot({
+    receivedAt: "2026-11-03T15:06:17.000Z",
+    normalizedPayload: {
+      lead_details: {},
+      routing: { source_intake: { submitted_at: "2026-11-03T15:06:00.000Z" } },
+      contact: { email: "pat.sample@example.test" },
+    },
+  });
+  const inspection = describeIncomingDobRecoveryInspection(row);
+  assert.equal(inspection.rawDate, "03/13/1955");
+  assert.equal(inspection.rawDateCount, 1);
+  assert.equal(inspection.submittedAt, "2026-11-03T15:06:00.000Z");
+  assert.equal(inspection.receivedAt, "2026-11-03T15:06:17.000Z");
+  assert.notEqual(inspection.submittedAt, inspection.receivedAt);
+  assert.equal(inspection.parentUrlKey, "go.lifeinsuranceforvets.com/learn-julia-dodge");
+  assert.equal(inspection.expectation?.dateOfBirth, "1955-03-13");
+  const printed = JSON.stringify(inspection);
+  assert.equal(printed.includes("pat.sample@example.test"), false);
+  assert.equal(printed.includes("Pat"), false);
 });
 
 test("admin list scan stops at the window and does not invent sheet delivery", async () => {

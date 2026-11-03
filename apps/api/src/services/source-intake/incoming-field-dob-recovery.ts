@@ -4,8 +4,8 @@
  * This module only reads. It does not update rows, replay intake, change
  * inventory, routing, allocations, receipts, or timestamps, and it does not
  * enqueue delivery. The report omits raw dates, ages, names, and contact
- * values. A later update is described by `INCOMING_DOB_LATER_UPDATE_POLICY`
- * and is not implemented here.
+ * values. A later update is described by `INCOMING_DOB_LATER_UPDATE_POLICY`.
+ * The writer lives in `incoming-field-dob-correction.ts`. This module does not write.
  */
 
 import type { PrismaClient } from "@prisma/client";
@@ -41,7 +41,7 @@ export const INCOMING_DOB_RECOVERY_MAX_LIMIT = 20_000;
 
 export const INCOMING_DOB_LATER_UPDATE_POLICY = {
   writes: false,
-  implemented: false,
+  implemented: true,
   concurrency:
     "Re-read confirmed eligible rows with SELECT … FOR UPDATE SKIP LOCKED, one small batch per transaction. Recompute from the retained raw payload with the same normalizer inside the lock. If the class is no longer eligible, write nothing.",
   compareAndSet:
@@ -53,7 +53,7 @@ export const INCOMING_DOB_LATER_UPDATE_POLICY = {
   untouched:
     "Do not change rawPayloadJson, status, routingResultJson, deliveryResultJson, inventory, allocations, delivery receipts, or any queue. Do not enqueue Sheets or GHL delivery.",
   evidence:
-    "Insert a separate operator audit row with the event id, the previous updatedAt, the new updatedAt, and the before and after canonical date_of_birth, consumer_age, provenance, and conflict fields. Do not copy contact values or the raw payload into that audit. This dry-run report does not print those values.",
+    "The correction command appends one JSONL audit line per committed change with the event id, operator, previous updatedAt, new updatedAt, and the before and after canonical date_of_birth, consumer_age, provenance, reference, and conflict fields. Do not copy contact values or the raw payload into that audit. There is no new audit table. This assessment report does not print those values.",
   idempotent:
     "A second run classifies the row unchanged once the stored canonical values equal the proposal, so the compare-and-set writes nothing.",
 } as const;
@@ -601,6 +601,45 @@ export function describeIncomingDobRecoveryExpectation(
     conflict: details.consumer_age_conflict === true,
     storedDateOfBirth: storedDob(snapshot.normalizedPayload) || null,
     storedConsumerAge: storedAge(snapshot.normalizedPayload) || null,
+  };
+}
+
+export type IncomingDobRecoveryInspection = {
+  id: string;
+  receivedAt: string;
+  submittedAt: string | null;
+  parentUrlKey: string | null;
+  sourceFunnelId: string | null;
+  sourceSystem: string;
+  rawDate: string | null;
+  rawDateCount: number;
+  expectation: IncomingDobRecoveryExpectation | null;
+};
+
+/**
+ * One stored event, for an operator checking a specific id.
+ * Returns the raw `date` text and canonical DOB/age only. Contact fields are omitted.
+ */
+export function describeIncomingDobRecoveryInspection(
+  snapshot: IncomingDobRecoverySnapshot
+): IncomingDobRecoveryInspection {
+  const raw = asRecord(snapshot.rawPayload);
+  const dates = raw ? [...new Set(dateValues(visibleDateLayers(raw, snapshot.sourceSystem)))] : [];
+  const routing = asRecord(asRecord(snapshot.normalizedPayload)?.routing);
+  const submittedAt =
+    cellText(asRecord(routing?.source_intake)?.submitted_at) ||
+    (raw ? cellText(raw.submitted_at) : "") ||
+    null;
+  return {
+    id: snapshot.id,
+    receivedAt: snapshot.receivedAt,
+    submittedAt,
+    parentUrlKey: raw ? parentUrlKey(raw) : null,
+    sourceFunnelId: readStoredSourceFunnelId(snapshot),
+    sourceSystem: snapshot.sourceSystem,
+    rawDate: dates.length === 1 ? dates[0]! : null,
+    rawDateCount: dates.length,
+    expectation: describeIncomingDobRecoveryExpectation(snapshot),
   };
 }
 

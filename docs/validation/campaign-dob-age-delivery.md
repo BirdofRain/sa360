@@ -183,6 +183,8 @@ These added bindings do not set a receiving client, change a source association,
 
 Ryan Wooldridge and Robby Wells were opened after that first pass. Their raw `parent_url` normalizes to the exact page and their raw birthday key is `date`. The stored normalized `parent_url_key` on those older events is empty; this binding applies to a new intake of that raw shape and does not rewrite the stored events. The typo host `go.lifeinsuranceforvet.com/learn-robby-wells` stays unbound.
 
+The catalog pass adds every other live page whose public DOB step webhooks `date` or, for the two self-employed forms, `date_copy`, and whose catalog `SourceFunnel` id matches that page. A missing production DOB is not required. Louie Mezzone (`cmw19ikp1002ng70u84bqx9on`) and Michael Coulter (`cmw195f4x001vg70uch6dcxty`) did send `date` with no canonical DOB. Jordan Montero's public step webhooks `date`, while stored event `cmw18wo540013g70u61affdvx` used `date_of_birth` and already stored a canonical DOB. The `date` alias is configuration evidence; that event did not exercise it. `learn-andrew-hearn` and `my.leadcapture.io/p/6khoj2_q` embed the same funnel as the nurse Julia page (`5164ed76-dadf-40ac-b148-1863f52c0e1a`). Each page keeps its own source id. No receiving client is assigned. `learn-sam-test` has the same DOB step and is left unbound because the funnel is a named test, not a client campaign.
+
 The Eriks example source lead `e452eaed-92c8-4916-9dd1-fbd001dafaac` is a
 provider lead id, not a `SourceLeadEvent` id. Its raw `date` is `01/27/1949`
 and its `submitted_at` is `2026-11-03T09:53:33.092Z` (4:53 AM America/New_York).
@@ -217,7 +219,12 @@ the JSON value type on the wire is not claimed from production.
 | `my.leadcapture.io/p/6rci-usi` | public page returned 404 | unresolved |
 | provider funnel `d0e009dc-d23a-4670-a7f5-fb4a95138ba7` | public funnel API returned 404 | unresolved |
 | `learn-julia-healthcare-worker` | public page returned 404 | not an active page |
-| `learn-nicholas-dambruoso` | public page has no LeadCapture embed; repository fixture has no birthday field | unverified; `date` is not bound |
+| `learn-nicholas-dambruoso` | public page has no LeadCapture embed. Stored event `cmw0wckts0086jv0tcsbrkrvr` sent `date_of_birth` plus a calendar `date` | explicit `date_of_birth`; calendar `date` is not bound |
+| `learn-731462` | public funnel `97c24cee-0530-41db-b4d6-20981ca32397` is James Torrey Age + OTP. The Age field's webhook name is empty | incoming age key is not confirmed |
+| `learn-daniel-gvili` | page has no LeadCapture embed. `learn-daniel-gvili-new` is the bound page | DOB key on this older page is not confirmed |
+| `learn-ben-stephens` | page has no LeadCapture embed and the catalog row has not been seen | field meaning is not confirmed |
+| `learn-sam-test` | public DOB step webhooks `date` on funnel `5b6959bf-5e41-4508-a802-500f0cc9279b` | named test funnel; not a campaign binding |
+| `go.selfemployedhi.com/chandler-bigagency` and `zach-busch` | DOB step webhooks `date_copy`, not `date` | `date_copy` is bound; plain `date` is not |
 | James Torrey route `LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX` | retained fixture `date` + `time`; public funnel `d6f2157f-d612-441a-80af-88742ef084dc` has an Age step whose webhook is `number`, not a birthday `date` | submission calendar stays; `number` is not bound |
 | `example.test/nurse-nextgen-canary` | fixture `date_of_birth` | synthetic fixture, not a live form |
 | `example.test/vet-fex-nextgen` | fixture `date` of `2026-06-12` | synthetic fixture; not mapped |

@@ -20,6 +20,7 @@ import {
 import { readBuyerCsvV3ZipAndAge } from "../ppl-fulfillment/buyer-lead-fields.js";
 import { normalizeLeadCaptureIoWebhookToLifecyclePayload } from "./leadcapture-io-normalizer.js";
 import {
+  CONFIRMED_CATALOG_DOB_FORMS,
   CONFIRMED_ALEX_FEUERSTEIN_PARENT_URL_KEY,
   CONFIRMED_ALEX_FEUERSTEIN_PROVIDER_FUNNEL_ID,
   CONFIRMED_ALEX_GROSS_PARENT_URL_KEY,
@@ -1300,4 +1301,171 @@ test("observed DOB-step dates map only on the confirmed page and source", () => 
   assert.equal(intakeOf(jamesCalendar).scopedFieldBindingId, "leadcapture_io_legacy_vet_james_torrey");
   assert.equal(resolveCanonicalAttributeKey("date"), null);
   assert.equal(resolveCanonicalAttributeKey("number"), null);
+});
+
+test("catalog DOB steps map only on the confirmed page and webhook key", () => {
+  const submittedAt = "2026-11-02T18:00:00.000Z";
+  const ids = CONFIRMED_CATALOG_DOB_FORMS.map((form) => form.id);
+  const pages = CONFIRMED_CATALOG_DOB_FORMS.map((form) => form.parentUrlKey);
+  assert.equal(new Set(ids).size, ids.length);
+  assert.equal(new Set(pages).size, pages.length);
+  const foreignFunnelId = CONFIRMED_JULIA_DODGE_PROVIDER_FUNNEL_ID;
+
+  for (const form of CONFIRMED_CATALOG_DOB_FORMS) {
+    const raw = juliaPayload({
+      parent_url: `https://${form.parentUrlKey}?utm_source=redacted`,
+      submitted_at: submittedAt,
+      [form.alias]: "03/13/1955",
+      funnel_id: form.providerFunnelId,
+    });
+    const before = structuredClone(raw);
+    const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(raw, { receivedAt: submittedAt });
+    assert.deepEqual(raw, before, form.id);
+    assert.equal(detailsOf(normalized).date_of_birth, "1955-03-13", form.id);
+    assert.equal(detailsOf(normalized).consumer_age, "71", form.id);
+    assert.equal(intakeOf(normalized).scopedFieldBindingId, form.id);
+    const projected = projectDob(normalized, submittedAt);
+    assert.equal(projected.v3Row.DOB, "1955-03-13", form.id);
+    assert.equal(projected.v3Row.Age, "71", form.id);
+    assert.equal(projected.stamp.valuesByLogicalKey.date_of_birth, "1955-03-13", form.id);
+    assert.equal(projected.stamp.valuesByLogicalKey.age, "71", form.id);
+
+    const pageOnly = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+      juliaPayload({
+        parent_url: `https://${form.parentUrlKey}/`,
+        submitted_at: submittedAt,
+        [form.alias]: "03/13/1955",
+      }),
+      { receivedAt: submittedAt }
+    );
+    assert.equal(detailsOf(pageOnly).date_of_birth, "1955-03-13", form.id);
+    assert.equal(intakeOf(pageOnly).scopedFieldBindingId, form.id);
+
+    const recordedId = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+      juliaPayload({
+        parent_url: `https://${form.parentUrlKey}`,
+        submitted_at: submittedAt,
+        [form.alias]: "03/13/1955",
+      }),
+      { receivedAt: submittedAt, sourceFunnelId: form.sourceFunnelId }
+    );
+    assert.equal(detailsOf(recordedId).date_of_birth, "1955-03-13", form.id);
+
+    const otherInternalId = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+      juliaPayload({
+        parent_url: `https://${form.parentUrlKey}`,
+        submitted_at: submittedAt,
+        [form.alias]: "03/13/1955",
+        funnel_id: form.providerFunnelId,
+      }),
+      { receivedAt: submittedAt, sourceFunnelId: "cmobservedfunnel0000000000" }
+    );
+    assert.equal(detailsOf(otherInternalId).date_of_birth, undefined, form.id);
+
+    const explicit = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+      juliaPayload({
+        parent_url: `https://${form.parentUrlKey}`,
+        submitted_at: submittedAt,
+        [form.alias]: "03/13/1955",
+        date_of_birth: "04/12/1979",
+        funnel_id: form.providerFunnelId,
+      }),
+      { receivedAt: submittedAt }
+    );
+    assert.equal(detailsOf(explicit).date_of_birth, "1979-04-12", form.id);
+
+    const swapped = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+      juliaPayload({
+        parent_url: `https://${form.parentUrlKey}`,
+        submitted_at: submittedAt,
+        [form.alias]: "03/13/1955",
+        funnel_id: foreignFunnelId,
+      }),
+      { receivedAt: submittedAt }
+    );
+    assert.equal(detailsOf(swapped).date_of_birth, undefined, form.id);
+
+    const uuidAlone = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+      juliaPayload({
+        parent_url: "https://example.test/unknown-catalog-form",
+        submitted_at: submittedAt,
+        [form.alias]: "03/13/1955",
+        funnel_id: form.providerFunnelId,
+      }),
+      { receivedAt: submittedAt }
+    );
+    assert.equal(detailsOf(uuidAlone).date_of_birth, undefined, form.id);
+  }
+
+  const sharedJuliaFunnel = "5164ed76-dadf-40ac-b148-1863f52c0e1a";
+  const nurseJulia = CONFIRMED_CATALOG_DOB_FORMS.find(
+    (form) => form.id === "leadcapture_io_nextgen_nurse_julia_dodge"
+  );
+  const andrew = CONFIRMED_CATALOG_DOB_FORMS.find(
+    (form) => form.id === "leadcapture_io_nextgen_nurse_andrew_hearn"
+  );
+  const hostedJulia = CONFIRMED_CATALOG_DOB_FORMS.find(
+    (form) => form.id === "leadcapture_io_nextgen_hosted_julia_dodge"
+  );
+  assert.ok(nurseJulia && andrew && hostedJulia);
+  assert.equal(nurseJulia.providerFunnelId, sharedJuliaFunnel);
+  assert.equal(andrew.providerFunnelId, sharedJuliaFunnel);
+  const crossed = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+    juliaPayload({
+      parent_url: `https://${andrew.parentUrlKey}`,
+      submitted_at: submittedAt,
+      date: "03/13/1955",
+      funnel_id: sharedJuliaFunnel,
+    }),
+    { receivedAt: submittedAt, sourceFunnelId: nurseJulia.sourceFunnelId }
+  );
+  assert.equal(detailsOf(crossed).date_of_birth, undefined);
+  assert.equal(intakeOf(crossed).scopedFieldBindingId, undefined);
+
+  for (const form of CONFIRMED_CATALOG_DOB_FORMS.filter((item) => item.alias === "date_copy")) {
+    const calendar = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+      juliaPayload({
+        parent_url: `https://${form.parentUrlKey}`,
+        submitted_at: submittedAt,
+        date: "03/13/1955",
+        funnel_id: form.providerFunnelId,
+      }),
+      { receivedAt: submittedAt }
+    );
+    assert.equal(detailsOf(calendar).date_of_birth, undefined, form.id);
+  }
+
+  const madisonGo = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+    juliaPayload({
+      parent_url: "https://go.lifeinsuranceforvets.com/learn-madison-pimentel",
+      submitted_at: submittedAt,
+      date: "03/13/1955",
+      date_of_birth: "04/12/1979",
+    }),
+    { receivedAt: submittedAt }
+  );
+  assert.equal(detailsOf(madisonGo).date_of_birth, "1979-04-12");
+  assert.equal(intakeOf(madisonGo).scopedFieldBindingId, undefined);
+
+  const samTest = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+    juliaPayload({
+      parent_url: "https://go.lifeinsuranceforvets.com/learn-sam-test",
+      submitted_at: submittedAt,
+      date: "03/13/1955",
+    }),
+    { receivedAt: submittedAt }
+  );
+  assert.equal(detailsOf(samTest).date_of_birth, undefined);
+
+  const jamesAgePage = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+    juliaPayload({
+      parent_url: "https://go.lifeinsuranceforvets.com/learn-731462",
+      submitted_at: submittedAt,
+      date: "2026-11-02",
+      number: "64",
+    }),
+    { receivedAt: submittedAt }
+  );
+  assert.equal(detailsOf(jamesAgePage).date_of_birth, undefined);
+  assert.equal(detailsOf(jamesAgePage).consumer_age, undefined);
 });

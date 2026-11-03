@@ -18,7 +18,12 @@ import {
   scanAdminSourceLeadWindow,
   type IncomingDobRecoverySnapshot,
 } from "./incoming-field-dob-recovery.js";
-import { CONFIRMED_JULIA_DODGE_SOURCE_FUNNEL_ID } from "./source-field-alias.registry.js";
+import {
+  CONFIRMED_ERIKS_VEIDEMANIS_PARENT_URL_KEY,
+  CONFIRMED_ERIKS_VEIDEMANIS_PROVIDER_FUNNEL_ID,
+  CONFIRMED_ERIKS_VEIDEMANIS_SOURCE_LEAD_ID,
+  CONFIRMED_JULIA_DODGE_SOURCE_FUNNEL_ID,
+} from "./source-field-alias.registry.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../..");
 const WINDOW = { receivedFrom: INCOMING_DOB_RECOVERY_WINDOW_START, receivedTo: null };
@@ -160,6 +165,64 @@ test("stored disagreement and an invalid date are not eligible", () => {
     WINDOW
   );
   assert.equal(invalid.recoveryClass, "invalid");
+});
+
+test("Eriks's confirmed page is eligible without using the provider lead id as the event id", () => {
+  const row = snapshot({
+    id: "evt_internal",
+    receivedAt: "2026-11-03T09:53:40.000Z",
+    rawPayload: {
+      provider: "leadcapture_io",
+      sa360_source_system: "leadcapture_io_nextgen",
+      lead_id: CONFIRMED_ERIKS_VEIDEMANIS_SOURCE_LEAD_ID,
+      submitted_at: "2026-11-03T09:53:33.092Z",
+      parent_url: `https://${CONFIRMED_ERIKS_VEIDEMANIS_PARENT_URL_KEY}?utm_source=ad`,
+      date: "01/27/1949",
+      email: "pat.sample@example.test",
+    },
+    enrichment: { sourceFunnelId: "cmobservedfunnel0000000000" },
+  });
+  const assessed = assessIncomingDobRecoveryRow(row, WINDOW);
+  assert.equal(assessed.recoveryClass, "eligible");
+  assert.equal(assessed.dateMeansBirthday, true);
+  assert.notEqual(assessed.id, CONFIRMED_ERIKS_VEIDEMANIS_SOURCE_LEAD_ID);
+  const wrongPage = assessIncomingDobRecoveryRow(
+    snapshot({
+      rawPayload: {
+        provider: "leadcapture_io",
+        sa360_source_system: "leadcapture_io_nextgen",
+        parent_url: `https://${CONFIRMED_ERIKS_VEIDEMANIS_PARENT_URL_KEY}/extra`,
+        date: "01/27/1949",
+      },
+      enrichment: { sourceFunnelId: CONFIRMED_ERIKS_VEIDEMANIS_PROVIDER_FUNNEL_ID },
+    }),
+    WINDOW
+  );
+  assert.equal(wrongPage.recoveryClass, "skipped");
+  assert.equal(wrongPage.reason, "not_confirmed_form");
+
+  const mismatchedFunnel = assessIncomingDobRecoveryRow(
+    snapshot({
+      rawPayload: {
+        ...(row.rawPayload as Record<string, unknown>),
+        funnel_id: "11111111-2222-4333-8444-666666666666",
+      },
+      enrichment: { sourceFunnelId: "cmobservedfunnel0000000000" },
+    }),
+    WINDOW
+  );
+  assert.equal(mismatchedFunnel.recoveryClass, "skipped");
+  assert.equal(mismatchedFunnel.reason, "not_confirmed_form");
+
+  const crossForm = assessIncomingDobRecoveryRow(
+    snapshot({
+      rawPayload: row.rawPayload,
+      enrichment: { sourceFunnelId: CONFIRMED_JULIA_DODGE_SOURCE_FUNNEL_ID },
+    }),
+    WINDOW
+  );
+  assert.equal(crossForm.recoveryClass, "skipped");
+  assert.equal(crossForm.reason, "not_confirmed_form");
 });
 
 test("known-event expectation recomputes canonical DOB and age without contact fields", () => {

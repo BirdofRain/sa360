@@ -1,3 +1,5 @@
+import { isLeadCaptureUuidLeadId } from "../../lib/leadcapture-lead-id.js";
+
 /** Canonical source attribute keys recognized by SA360 intake. */
 export const CANONICAL_SOURCE_ATTRIBUTE_KEYS = [
   "military_status",
@@ -321,8 +323,18 @@ export type ScopedIncomingFieldBinding = {
   id: string;
   provider: string;
   sourceSystem: string;
-  /** SA360 SourceFunnel id. Preferred when normalization already knows it. */
+  /**
+   * SA360 `SourceFunnel.id`. This is not the LeadCapture funnel UUID.
+   * When it is set, any other incoming id rejects this binding, including
+   * its page.
+   */
   sourceFunnelId?: string;
+  /**
+   * LeadCapture `SourceFunnel.providerFunnelId`. This is not `SourceFunnel.id`.
+   * A supplied UUID may agree with this value. It never selects the binding by
+   * itself, and a different UUID does not fall through to the page.
+   */
+  providerFunnelId?: string;
   /** Exact `hostname + pathname` from `normalizeLeadCaptureParentUrl`. */
   parentUrlKey?: string;
   /**
@@ -331,6 +343,11 @@ export type ScopedIncomingFieldBinding = {
    * as a birthday.
    */
   sourceRouteKey?: string;
+  /**
+   * Provider lead ids that identify an example submission. They are not
+   * `SourceLeadEvent` ids and they do not select a binding.
+   */
+  knownSourceLeadIds?: readonly string[];
   aliases: Readonly<Record<string, CanonicalSourceAttributeKey>>;
 };
 
@@ -339,6 +356,21 @@ export const CONFIRMED_JULIA_DODGE_PARENT_URL_KEY =
   "go.lifeinsuranceforvets.com/learn-julia-dodge";
 
 export const CONFIRMED_JULIA_DODGE_SOURCE_FUNNEL_ID = "cmv8k6uui00q0lc0uyto17ld1";
+
+/** Confirmed next-gen veteran page. `date` on this form is the birthday. */
+export const CONFIRMED_ERIKS_VEIDEMANIS_PARENT_URL_KEY =
+  "go.lifeinsuranceforvets.com/learn-eriks-veidemanis";
+
+/**
+ * External LeadCapture funnel UUID for Eriks's page. The SA360 SourceFunnel
+ * id was not verified, so it is intentionally absent.
+ */
+export const CONFIRMED_ERIKS_VEIDEMANIS_PROVIDER_FUNNEL_ID =
+  "c12cf351-0bc4-4127-8786-50a67643eadb";
+
+/** Provider lead id from the confirmed example. Not a SourceLeadEvent id. */
+export const CONFIRMED_ERIKS_VEIDEMANIS_SOURCE_LEAD_ID =
+  "e452eaed-92c8-4916-9dd1-fbd001dafaac";
 
 /**
  * Legacy James Torrey veteran form. Retained fixtures send `branch` and use
@@ -362,6 +394,17 @@ export const SCOPED_INCOMING_FIELD_BINDINGS: readonly ScopedIncomingFieldBinding
     },
   },
   {
+    id: "leadcapture_io_nextgen_vet_eriks_veidemanis",
+    provider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    providerFunnelId: CONFIRMED_ERIKS_VEIDEMANIS_PROVIDER_FUNNEL_ID,
+    parentUrlKey: CONFIRMED_ERIKS_VEIDEMANIS_PARENT_URL_KEY,
+    knownSourceLeadIds: [CONFIRMED_ERIKS_VEIDEMANIS_SOURCE_LEAD_ID],
+    aliases: {
+      date: "date_of_birth",
+    },
+  },
+  {
     id: "leadcapture_io_legacy_vet_james_torrey",
     provider: "leadcapture_io",
     sourceSystem: "leadcapture_io_legacy",
@@ -375,47 +418,131 @@ export const SCOPED_INCOMING_FIELD_BINDINGS: readonly ScopedIncomingFieldBinding
 export type ScopedIncomingFieldMatchInput = {
   provider?: string | null;
   sourceSystem?: string | null;
+  /** SA360 `SourceFunnel.id`. A LeadCapture funnel UUID placed here is not this id. */
   sourceFunnelId?: string | null;
+  /** LeadCapture funnel UUID from the payload. Not an internal SourceFunnel id. */
+  providerFunnelId?: string | null;
   parentUrlKey?: string | null;
   sourceRouteKey?: string | null;
 };
 
+const PROVIDER_FUNNEL_ID_KEYS = ["funnel_id", "form_id", "sa360_form_id"] as const;
+
+function payloadLayers(raw: Record<string, unknown>): Record<string, unknown>[] {
+  const layers = [raw];
+  const answers = raw.answers;
+  if (answers && typeof answers === "object" && !Array.isArray(answers)) {
+    layers.push(answers as Record<string, unknown>);
+  }
+  return layers;
+}
+
+/** UUID-shaped funnel/form id from the provider payload. Numeric lead_form is not included. */
+export function readSuppliedProviderFunnelId(raw: Record<string, unknown> | null | undefined): string | null {
+  if (!raw) return null;
+  for (const key of PROVIDER_FUNNEL_ID_KEYS) {
+    for (const layer of payloadLayers(raw)) {
+      const value = layer[key];
+      if (typeof value === "string" && isLeadCaptureUuidLeadId(value)) return value.trim().toLowerCase();
+    }
+  }
+  return null;
+}
+
 /**
- * Prefer a verified SourceFunnel id. Otherwise require an exact normalized
- * page, or an exact confirmed legacy route key. A different funnel id does
- * not fall through to the page. Client id, UNKNOWN_ROUTE, and fuzzy URLs
- * never match.
+ * A verified internal id is a recorded `SourceFunnel.id`. Any other non-UUID
+ * id is unverified, so a confirmed page may still match. A UUID is an external
+ * funnel id: it may agree with `providerFunnelId`, and a mismatch does not
+ * fall through to the page. A verified id for one confirmed form on another
+ * confirmed form's page matches neither. UNKNOWN_ROUTE and fuzzy URLs never match.
  */
 export function matchScopedIncomingFieldBinding(
   input: ScopedIncomingFieldMatchInput
 ): ScopedIncomingFieldBinding | null {
   const provider = input.provider?.trim() ?? "";
   const sourceSystem = input.sourceSystem?.trim() ?? "";
-  const funnelId = input.sourceFunnelId?.trim() ?? "";
+  let internalId = input.sourceFunnelId?.trim() ?? "";
+  let providerId = input.providerFunnelId?.trim().toLowerCase() ?? "";
   const parentUrlKey = input.parentUrlKey?.trim() ?? "";
   const routeKey = input.sourceRouteKey?.trim() ?? "";
-  const matched: ScopedIncomingFieldBinding[] = [];
+  const sameSystem = SCOPED_INCOMING_FIELD_BINDINGS.filter(
+    (binding) => binding.provider === provider && binding.sourceSystem === sourceSystem
+  );
+  const knownInternal = new Set(
+    sameSystem.flatMap((binding) => (binding.sourceFunnelId ? [binding.sourceFunnelId] : []))
+  );
+  const knownProvider = new Set(
+    sameSystem.flatMap((binding) => (binding.providerFunnelId ? [binding.providerFunnelId.toLowerCase()] : []))
+  );
+  const confirmedPages = new Set(
+    sameSystem.flatMap((binding) => (binding.parentUrlKey ? [binding.parentUrlKey] : []))
+  );
 
-  for (const binding of SCOPED_INCOMING_FIELD_BINDINGS) {
-    if (binding.provider !== provider || binding.sourceSystem !== sourceSystem) continue;
-    if (funnelId) {
-      if (binding.sourceFunnelId && funnelId === binding.sourceFunnelId) matched.push(binding);
+  if (internalId && isLeadCaptureUuidLeadId(internalId)) {
+    const misplaced = internalId.toLowerCase();
+    if (providerId && providerId !== misplaced) return null;
+    providerId = providerId || misplaced;
+    internalId = "";
+  }
+
+  const internalIsVerified = internalId !== "" && knownInternal.has(internalId);
+  const providerIsKnown = providerId !== "" && knownProvider.has(providerId);
+  const providerIsUnknown = providerId !== "" && !knownProvider.has(providerId);
+  const idMatches: ScopedIncomingFieldBinding[] = [];
+  const pageMatches: ScopedIncomingFieldBinding[] = [];
+  const routeMatches: ScopedIncomingFieldBinding[] = [];
+
+  for (const binding of sameSystem) {
+    const bindingProvider = binding.providerFunnelId?.toLowerCase() ?? "";
+    const providerConflicts =
+      providerId !== "" &&
+      (providerIsUnknown ||
+        (bindingProvider !== "" && providerId !== bindingProvider) ||
+        (bindingProvider === "" && providerIsKnown));
+    if (internalId && binding.sourceFunnelId && internalId === binding.sourceFunnelId) {
+      const pageConflicts =
+        parentUrlKey !== "" &&
+        binding.parentUrlKey !== undefined &&
+        parentUrlKey !== binding.parentUrlKey &&
+        confirmedPages.has(parentUrlKey);
+      if (pageConflicts || providerConflicts) continue;
+      idMatches.push(binding);
       continue;
     }
+    if (internalId && binding.sourceFunnelId) continue;
+    if (internalIsVerified || providerConflicts) continue;
     if (binding.parentUrlKey && parentUrlKey === binding.parentUrlKey) {
-      matched.push(binding);
+      pageMatches.push(binding);
       continue;
     }
     if (
+      !internalId &&
+      !providerId &&
       binding.sourceRouteKey &&
       routeKey === binding.sourceRouteKey &&
       routeKey !== "UNKNOWN_ROUTE"
     ) {
-      matched.push(binding);
+      routeMatches.push(binding);
     }
   }
 
-  return matched.length === 1 ? matched[0]! : null;
+  if (idMatches.length > 0) return idMatches.length === 1 ? idMatches[0]! : null;
+  const fallback = [...pageMatches, ...routeMatches];
+  return fallback.length === 1 ? fallback[0]! : null;
+}
+
+export function bindingTreatsDateAsBirthday(binding: ScopedIncomingFieldBinding | null): boolean {
+  return scopedAliasForKey(binding, "date") === "date_of_birth";
+}
+
+export function confirmedDateOfBirthBindings(): readonly ScopedIncomingFieldBinding[] {
+  return SCOPED_INCOMING_FIELD_BINDINGS.filter((binding) => bindingTreatsDateAsBirthday(binding));
+}
+
+export function confirmedCampaignSourceLeadIds(): ReadonlyArray<{ bindingId: string; sourceLeadId: string }> {
+  return SCOPED_INCOMING_FIELD_BINDINGS.flatMap((binding) =>
+    (binding.knownSourceLeadIds ?? []).map((sourceLeadId) => ({ bindingId: binding.id, sourceLeadId }))
+  );
 }
 
 export function scopedAliasForKey(
@@ -464,4 +591,22 @@ function assertUnambiguousGlobalAliases(): void {
   }
 }
 
+function assertScopedBindings(): void {
+  const pages = new Set<string>();
+  for (const binding of SCOPED_INCOMING_FIELD_BINDINGS) {
+    if (
+      binding.providerFunnelId &&
+      binding.sourceFunnelId &&
+      binding.providerFunnelId === binding.sourceFunnelId
+    ) {
+      throw new Error(`provider_funnel_id_collides_with_source_funnel_id:${binding.id}`);
+    }
+    if (!binding.parentUrlKey) continue;
+    const key = `${binding.provider}|${binding.sourceSystem}|${binding.parentUrlKey}`;
+    if (pages.has(key)) throw new Error(`duplicate_scoped_page:${key}`);
+    pages.add(key);
+  }
+}
+
 assertUnambiguousGlobalAliases();
+assertScopedBindings();

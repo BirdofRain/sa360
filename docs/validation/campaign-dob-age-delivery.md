@@ -144,15 +144,58 @@ count from the fixture classifications.
 
 ## Scoped incoming `date`
 
-`date` is not a global date-of-birth alias. Existing LeadCapture fixtures use
-it as the legacy submission calendar together with `time`. The confirmed
-next-gen veteran form (`leadcapture_io` / `leadcapture_io_nextgen`, SourceFunnel
-`cmv8k6uui00q0lc0uyto17ld1`, or the exact page
-`go.lifeinsuranceforvets.com/learn-julia-dodge`) maps `date` to
-`date_of_birth` before the existing DOB parser runs. A different funnel id
-does not fall through to that page. Julia's healthcare-worker page is a
-different path and is not mapped. CamelCase aliases such as `dateOfBirth` now
-normalize to `date_of_birth` before lookup.
+`date` is not a global date-of-birth alias, and it is not mapped on
+`UNKNOWN_ROUTE`. The reusable registry is `SCOPED_INCOMING_FIELD_BINDINGS`.
+A binding maps `date` to `date_of_birth` only when that form is explicitly
+confirmed. `SourceFunnel.id` and the LeadCapture funnel UUID
+(`providerFunnelId`) are different identifiers. A binding that names an
+internal id rejects every other internal id and does not fall through to its
+page. A non-UUID internal id that is not one of the recorded SourceFunnel ids
+is unverified, so the exact page may still match. A UUID is a LeadCapture
+funnel id, not a SourceFunnel id. When that UUID is supplied and it is not
+the recorded provider funnel id, the page does not match. Two confirmed
+forms that disagree, such as Julia's internal id on Eriks's page, match
+neither form. Tracking queries are ignored. A path prefix does not match.
+Healthcare pages are not included unless they are separately confirmed.
+
+Confirmed `date` means birthday (`leadcapture_io` / `leadcapture_io_nextgen`):
+
+| Client page | Internal SourceFunnel id | External LeadCapture funnel | Birthday JSON key | Status |
+| --- | --- | --- | --- | --- |
+| `go.lifeinsuranceforvets.com/learn-julia-dodge` | `cmv8k6uui00q0lc0uyto17ld1` | not recorded | `date` on current payloads; upstream target `date_of_birth` | confirmed |
+| `go.lifeinsuranceforvets.com/learn-eriks-veidemanis` | not verified; do not invent one | `c12cf351-0bc4-4127-8786-50a67643eadb` | `date` on the confirmed example; upstream target `date_of_birth` | confirmed |
+
+The Eriks example source lead `e452eaed-92c8-4916-9dd1-fbd001dafaac` is a
+provider lead id, not a `SourceLeadEvent` id. Its raw `date` is `01/27/1949`
+and its `submitted_at` is `2026-11-03T09:53:33.092Z` (4:53 AM America/New_York).
+The canonical DOB is `1949-01-27` and the age at that submission is 77. That
+lead arrived before the Julia-only release and stays historically blank until
+a separate correction runs.
+
+Other LeadCapture forms found in this repository are not guessed from the
+veteran domain, an old-looking date, or `submitted_at` alone. Production
+`SourceFunnel` rows were not readable from this environment, so this is not a
+live campaign inventory.
+
+| Page or fixture | Birthday key in the retained evidence | Status |
+| --- | --- | --- |
+| `learn-julia-healthcare-worker` | none confirmed | unconfirmed; excluded as a different path |
+| `learn-alex-gross` | redacted fixture sends `dateOfBirth` | unambiguous alias in that fixture; live form not re-verified |
+| `learn-jean-perez` | ownership fixture has no birthday field | unconfirmed |
+| `learn-nicholas-dambruoso` | legacy `date` + `time` | submission calendar, not a confirmed birthday |
+| James Torrey route `LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX` | legacy `date` + `time`; `branch` is mapped | submission calendar, not a birthday |
+| `example.test/nurse-nextgen-canary` | fixture `date_of_birth` | unambiguous alias in a synthetic fixture |
+| `example.test/vet-fex-nextgen` | fixture `date` of `2026-06-12` | unconfirmed; not mapped |
+
+Upstream LeadCapture change, for every confirmed page: the outgoing JSON key
+for the birthday answer is `date_of_birth`, and the outgoing JSON key for the
+submission timestamp is `submitted_at`. A visible question label is not that
+key. Old payloads remain readable. This repository does not edit live forms.
+
+CamelCase aliases such as `dateOfBirth` now normalize to `date_of_birth`
+before lookup. Spreadsheet preview, Sheets rows, portal age, and ordinary
+GHL Age/DOB stamps read the canonical projection. They do not fall back to a
+raw `date`.
 
 `pnpm source-intake:dob-recovery` is a dry run against localhost only. It
 refuses `--apply` and any remote database host. It reports eligible,

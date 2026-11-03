@@ -176,8 +176,12 @@ Confirmed `date` means birthday (`leadcapture_io` / `leadcapture_io_nextgen`):
 | `go.lifeinsuranceforvets.com/learn-jacob-zapata` | `cmubr493407ivm00v401jrwc8` | `e8d5cef4-5713-4000-8313-bb141ef1fbbd` | `date` on the DOB step | added after the public form and stored event `cmw178rkh0066kq0uif87sbkt` |
 | `go.lifeinsuranceforvets.com/learn-dom-scalice` | `cmtwbyi5v00d1j50uf933qfsc` | `d4d275e1-ce6a-4856-8ae4-ae9c7ce9ab38` | `date` on the DOB step | added after the public form and stored event `cmw1777by005skq0u4ij8cchb` |
 | `go.lifeinsuranceforvets.com/learn-james-laird` | `cmvcejoyo01nzjh0u0jh07us0` | `aa7e4196-c8f8-4f84-abc0-5526f903460e` | `date` on the DOB step | added after the public form and stored event `cmw18v7oy000pg70uo27ez6r7` |
+| `go.lifeinsuranceforvets.com/learn-ryan-wooldridge` | `cmtwxk42200vcj50usrthhi2e` | `39d7cc47-07f9-47ca-b3a3-2c421bd0cdb9` | `date` on the DOB step. No receiving client is stored on the binding | added after the public form and stored events `cmtwxk42g00vdj50unl30y9l7` and `cmu2f7pxa00miiu0uts1gsv8p` |
+| `go.lifeinsuranceforvets.com/learn-robby-wells` | `cmuo20w7c02tvdz0vf6luhl8d` | `f422264d-acc5-40fd-b82d-f9462db19f27` | `date` on the DOB step. The typo host `go.lifeinsuranceforvet.com` is not this page | added after the public form and stored events `cmuo20w7t02twdz0vc97j50wo` and `cmuux2dro05zcjn0vqhc9lrjt` |
 
 These added bindings do not set a receiving client, change a source association, or enable delivery. A stored slash-shaped `date` is not enough by itself. Each added page has a public step named `DOB` whose `webhookFieldName` is `date`, and a stored event on that exact parent whose raw `date` did not become a canonical DOB.
+
+Ryan Wooldridge and Robby Wells were opened after that first pass. Their raw `parent_url` normalizes to the exact page and their raw birthday key is `date`. The stored normalized `parent_url_key` on those older events is empty; this binding applies to a new intake of that raw shape and does not rewrite the stored events. The typo host `go.lifeinsuranceforvet.com/learn-robby-wells` stays unbound.
 
 The Eriks example source lead `e452eaed-92c8-4916-9dd1-fbd001dafaac` is a
 provider lead id, not a `SourceLeadEvent` id. Its raw `date` is `01/27/1949`
@@ -209,8 +213,7 @@ the JSON value type on the wire is not claimed from production.
 | `learn-madison-pimentel-634632` | same embed and funnel as Madison; webhook `date_of_birth` | `date` is not bound |
 | `learn-179930` | public Age step webhooks `age` | global age alias; `number` is not bound |
 | `go.lifeinsuranceforvets.com/learn` | James Torrey legacy parent; stored event sends `age` and calendar `date` | calendar `date` is not bound |
-| `learn-ryan-wooldridge` | public DOB step webhooks `date`; no stored event was opened | not bound |
-| `learn-robby-wells` | public DOB step webhooks `date`; no stored event was opened. The typo host `go.lifeinsuranceforvet.com` does not resolve | not bound |
+| `go.lifeinsuranceforvet.com/learn-robby-wells` | typo host does not resolve; never-seen confirmed row is a different source | not bound |
 | `my.leadcapture.io/p/6rci-usi` | public page returned 404 | unresolved |
 | provider funnel `d0e009dc-d23a-4670-a7f5-fb4a95138ba7` | public funnel API returned 404 | unresolved |
 | `learn-julia-healthcare-worker` | public page returned 404 | not an active page |

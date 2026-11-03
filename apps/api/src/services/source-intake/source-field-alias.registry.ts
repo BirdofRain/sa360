@@ -471,6 +471,28 @@ export const CONFIRMED_JAMES_LAIRD_SOURCE_FUNNEL_ID = "cmvcejoyo01nzjh0u0jh07us0
 export const CONFIRMED_JAMES_LAIRD_PROVIDER_FUNNEL_ID = "aa7e4196-c8f8-4f84-abc0-5526f903460e";
 
 /**
+ * Confirmed next-gen page. The public DOB step webhooks `date`.
+ * The unassociated source is `go.lifeinsuranceforvets.com/learn-ryan-wooldridge`.
+ * No receiving client is stored on this binding.
+ */
+export const CONFIRMED_RYAN_WOOLDRIDGE_PARENT_URL_KEY =
+  "go.lifeinsuranceforvets.com/learn-ryan-wooldridge";
+
+export const CONFIRMED_RYAN_WOOLDRIDGE_SOURCE_FUNNEL_ID = "cmtwxk42200vcj50usrthhi2e";
+
+export const CONFIRMED_RYAN_WOOLDRIDGE_PROVIDER_FUNNEL_ID = "39d7cc47-07f9-47ca-b3a3-2c421bd0cdb9";
+
+/**
+ * Confirmed next-gen page `learn-robby-wells`. The public DOB step webhooks `date`.
+ * The typo host `go.lifeinsuranceforvet.com` is a different source and is not this binding.
+ */
+export const CONFIRMED_ROBBY_WELLS_PARENT_URL_KEY = "go.lifeinsuranceforvets.com/learn-robby-wells";
+
+export const CONFIRMED_ROBBY_WELLS_SOURCE_FUNNEL_ID = "cmuo20w7c02tvdz0vf6luhl8d";
+
+export const CONFIRMED_ROBBY_WELLS_PROVIDER_FUNNEL_ID = "f422264d-acc5-40fd-b82d-f9462db19f27";
+
+/**
  * Legacy James Torrey veteran form. Retained fixtures send `branch` and use
  * `date` + `time` as the submission calendar, not a birthday.
  */
@@ -627,6 +649,28 @@ export const SCOPED_INCOMING_FIELD_BINDINGS: readonly ScopedIncomingFieldBinding
     sourceFunnelId: CONFIRMED_JAMES_LAIRD_SOURCE_FUNNEL_ID,
     providerFunnelId: CONFIRMED_JAMES_LAIRD_PROVIDER_FUNNEL_ID,
     parentUrlKey: CONFIRMED_JAMES_LAIRD_PARENT_URL_KEY,
+    aliases: {
+      date: "date_of_birth",
+    },
+  },
+  {
+    id: "leadcapture_io_nextgen_vet_ryan_wooldridge",
+    provider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    sourceFunnelId: CONFIRMED_RYAN_WOOLDRIDGE_SOURCE_FUNNEL_ID,
+    providerFunnelId: CONFIRMED_RYAN_WOOLDRIDGE_PROVIDER_FUNNEL_ID,
+    parentUrlKey: CONFIRMED_RYAN_WOOLDRIDGE_PARENT_URL_KEY,
+    aliases: {
+      date: "date_of_birth",
+    },
+  },
+  {
+    id: "leadcapture_io_nextgen_vet_robby_wells",
+    provider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    sourceFunnelId: CONFIRMED_ROBBY_WELLS_SOURCE_FUNNEL_ID,
+    providerFunnelId: CONFIRMED_ROBBY_WELLS_PROVIDER_FUNNEL_ID,
+    parentUrlKey: CONFIRMED_ROBBY_WELLS_PARENT_URL_KEY,
     aliases: {
       date: "date_of_birth",
     },

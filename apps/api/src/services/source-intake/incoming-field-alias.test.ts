@@ -49,6 +49,12 @@ import {
   CONFIRMED_NICK_AGENTS_PARENT_URL_KEY,
   CONFIRMED_NICK_AGENTS_PROVIDER_FUNNEL_ID,
   CONFIRMED_NICK_AGENTS_SOURCE_FUNNEL_ID,
+  CONFIRMED_ROBBY_WELLS_PARENT_URL_KEY,
+  CONFIRMED_ROBBY_WELLS_PROVIDER_FUNNEL_ID,
+  CONFIRMED_ROBBY_WELLS_SOURCE_FUNNEL_ID,
+  CONFIRMED_RYAN_WOOLDRIDGE_PARENT_URL_KEY,
+  CONFIRMED_RYAN_WOOLDRIDGE_PROVIDER_FUNNEL_ID,
+  CONFIRMED_RYAN_WOOLDRIDGE_SOURCE_FUNNEL_ID,
   CONFIRMED_ROB_ARDEN_PARENT_URL_KEY,
   CONFIRMED_ROB_ARDEN_PROVIDER_FUNNEL_ID,
   CONFIRMED_ROB_ARDEN_SOURCE_FUNNEL_ID,
@@ -1122,6 +1128,20 @@ test("observed DOB-step dates map only on the confirmed page and source", () => 
       sourceFunnelId: CONFIRMED_JAMES_LAIRD_SOURCE_FUNNEL_ID,
       otherFunnelId: CONFIRMED_DOM_SCALICE_PROVIDER_FUNNEL_ID,
     },
+    {
+      id: "leadcapture_io_nextgen_vet_ryan_wooldridge",
+      page: CONFIRMED_RYAN_WOOLDRIDGE_PARENT_URL_KEY,
+      funnelId: CONFIRMED_RYAN_WOOLDRIDGE_PROVIDER_FUNNEL_ID,
+      sourceFunnelId: CONFIRMED_RYAN_WOOLDRIDGE_SOURCE_FUNNEL_ID,
+      otherFunnelId: CONFIRMED_ROBBY_WELLS_PROVIDER_FUNNEL_ID,
+    },
+    {
+      id: "leadcapture_io_nextgen_vet_robby_wells",
+      page: CONFIRMED_ROBBY_WELLS_PARENT_URL_KEY,
+      funnelId: CONFIRMED_ROBBY_WELLS_PROVIDER_FUNNEL_ID,
+      sourceFunnelId: CONFIRMED_ROBBY_WELLS_SOURCE_FUNNEL_ID,
+      otherFunnelId: CONFIRMED_RYAN_WOOLDRIDGE_PROVIDER_FUNNEL_ID,
+    },
   ];
   const bindingIds = confirmedDateOfBirthBindings().map((binding) => binding.id);
   for (const item of cases) {
@@ -1222,6 +1242,18 @@ test("observed DOB-step dates map only on the confirmed page and source", () => 
     { receivedAt: submittedAt }
   );
   assert.equal(detailsOf(olderDanielPage).date_of_birth, undefined);
+
+  const robbyTypoHost = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+    juliaPayload({
+      parent_url: "https://go.lifeinsuranceforvet.com/learn-robby-wells",
+      submitted_at: submittedAt,
+      date: "03/13/1955",
+      funnel_id: CONFIRMED_ROBBY_WELLS_PROVIDER_FUNNEL_ID,
+    }),
+    { receivedAt: submittedAt }
+  );
+  assert.equal(detailsOf(robbyTypoHost).date_of_birth, undefined);
+  assert.equal(intakeOf(robbyTypoHost).scopedFieldBindingId, undefined);
 
   const legacyNicholas = normalizeLeadCaptureIoWebhookToLifecyclePayload(
     juliaPayload({

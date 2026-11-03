@@ -8,12 +8,14 @@ import {
   findSourceFunnelByParentUrlKey,
   listObservedDiscoverableSourceFunnels,
   listSourceFunnelsForClient,
+  listSourceFunnelsPage,
 } from "../repositories/source-funnel.repository.js";
 import {
   associateSourceFunnelBodySchema,
   confirmSourceFunnelBodySchema,
   observedSourceFunnelsQuerySchema,
   reassignSourceFunnelBodySchema,
+  sourceFunnelCatalogQuerySchema,
   sourceFunnelIdParamSchema,
 } from "../schemas/source-funnel-admin.schema.js";
 import { normalizeLeadCapturePageUrlOrSlug } from "../services/source-intake/leadcapture-parent-url.js";
@@ -186,6 +188,31 @@ export async function adminSourceFunnelRoutes(app: FastifyInstance) {
       });
       return reply.status(500).send({ ok: false, error: "Unable to complete source association." });
     }
+  });
+
+  app.get("/source-funnels", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const parsed = sourceFunnelCatalogQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid query",
+        details: parsed.error.flatten(),
+      });
+    }
+    const page = await listSourceFunnelsPage({
+      limit: parsed.data.limit,
+      cursor: parsed.data.cursor,
+    });
+    if ("error" in page) {
+      return reply.status(400).send({ ok: false, error: "Invalid cursor", code: "invalid_cursor" });
+    }
+    return reply.send({
+      ok: true,
+      count: page.items.length,
+      items: page.items.map(presentSourceFunnelAdmin),
+      nextCursor: page.nextCursor,
+    });
   });
 
   app.get("/source-funnels/observed", async (request, reply) => {

@@ -87,6 +87,35 @@ test("DELETE /admin/v1/source-funnels/:id/association → 401 without admin key"
   else delete process.env.ADMIN_API_KEY;
 });
 
+test("GET /admin/v1/source-funnels → 401 without admin key", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-source-funnel-secret";
+  const app = await buildAdminApp();
+  const res = await app.inject({
+    method: "GET",
+    url: "/admin/v1/source-funnels",
+  });
+  assert.equal(res.statusCode, 401);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
+test("GET /admin/v1/source-funnels rejects an unbounded limit", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-source-funnel-secret";
+  const app = await buildAdminApp();
+  const res = await app.inject({
+    method: "GET",
+    url: "/admin/v1/source-funnels?limit=51",
+    headers: { [HEADER]: "admin-source-funnel-secret" },
+  });
+  assert.equal(res.statusCode, 400);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
 test("GET /admin/v1/source-funnels/observed → 401 without admin key", async () => {
   const prev = process.env.ADMIN_API_KEY;
   process.env.ADMIN_API_KEY = "admin-source-funnel-secret";

@@ -1,0 +1,5 @@
+{
+  "sourceLabel": "sanitized_campaign_registry",
+  "note": "Candidate evidence only. Import does not create a client or confirm a SourceFunnel association. This example has no production form IDs. The sanitized 22-form registry was not in the agent workspace; import the operator file through POST /admin/v1/meta-capture/candidates.",
+  "pages": []
+}

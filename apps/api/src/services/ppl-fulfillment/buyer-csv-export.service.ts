@@ -1484,7 +1484,11 @@ export async function markSpreadsheetDelivered(
     externalWriteOccurred: false,
   };
 
-  await db.$transaction(async (tx) => {
+  // One interactive transaction, Prisma's default 5s budget. The package stamp,
+  // aged intent, identity insert, and allocation/inventory commits commit together
+  // or roll back together. Statements are set-based: a per-allocation round trip
+  // expired this budget on a 1,200-row package (P2028) and undid the whole release.
+  const recorded = await db.$transaction(async (tx) => {
     const updated = await tx.leadDeliveryExportPackage.updateMany({
       where: { id: packageRow.id, spreadsheetDeliveredAt: null },
       data: {
@@ -1496,8 +1500,8 @@ export async function markSpreadsheetDelivered(
       },
     });
     if (updated.count !== 1) {
-      // Concurrent first-writer won; treat as idempotent success below.
-      return;
+      // Concurrent first-writer already committed. Do not write again.
+      return false;
     }
 
     // Same transaction as the operator release. createdAt is the release time,
@@ -1529,24 +1533,8 @@ export async function markSpreadsheetDelivered(
       };
     });
     await recordBuyerDeliveredIdentities(identityRows, tx as unknown as PrismaClient);
-
-    for (const allocation of allocations) {
-      if (allocation.status === "reserved" || allocation.status === "delivering") {
-        await tx.leadAllocation.updateMany({
-          where: { id: allocation.id, status: { in: ["reserved", "delivering"] } },
-          data: { status: "committed", committedAt: now },
-        });
-      }
-      if (allocation.leadInventoryItemId) {
-        await tx.leadInventoryItem.updateMany({
-          where: {
-            id: allocation.leadInventoryItemId,
-            status: { in: ["reserved", "committed"] },
-          },
-          data: { status: "committed", committedAt: now },
-        });
-      }
-    }
+    await commitReleasedAllocationRows(tx, allocations, now);
+    return true;
   });
 
   const finalized = await db.leadDeliveryExportPackage.findUniqueOrThrow({
@@ -1565,12 +1553,42 @@ export async function markSpreadsheetDelivered(
       evidenceNote: SPREADSHEET_DELIVERY_EVIDENCE_NOTE,
       deliveredAt: (finalized.spreadsheetDeliveredAt ?? now).toISOString(),
       deliveredBy: finalized.spreadsheetDeliveredBy,
-      idempotentReplay: false,
+      idempotentReplay: !recorded,
       externalWriteOccurred: false,
     },
     db,
     deps
   );
+}
+
+/** Primary-key updates for one release. One statement per table, not one per row. */
+async function commitReleasedAllocationRows(
+  tx: Prisma.TransactionClient,
+  allocations: Array<{ id: string; status: string; leadInventoryItemId: string | null }>,
+  now: Date
+): Promise<void> {
+  const allocationIds = allocations
+    .filter((allocation) => allocation.status === "reserved" || allocation.status === "delivering")
+    .map((allocation) => allocation.id);
+  if (allocationIds.length > 0) {
+    await tx.leadAllocation.updateMany({
+      where: { id: { in: allocationIds }, status: { in: ["reserved", "delivering"] } },
+      data: { status: "committed", committedAt: now },
+    });
+  }
+  const itemIds = [
+    ...new Set(
+      allocations
+        .map((allocation) => allocation.leadInventoryItemId)
+        .filter((id): id is string => Boolean(id))
+    ),
+  ];
+  if (itemIds.length > 0) {
+    await tx.leadInventoryItem.updateMany({
+      where: { id: { in: itemIds }, status: { in: ["reserved", "committed"] } },
+      data: { status: "committed", committedAt: now },
+    });
+  }
 }
 
 async function attachCustomerReleaseNotification(

@@ -48,6 +48,11 @@ describe("buyer-csv-export allowlist", () => {
       src.slice(markAt),
       /customerReleaseNotifyStatus:\s*CUSTOMER_RELEASE_NOTIFY_STATUS\.pending/
     );
+    const releaseSlice = src.slice(markAt, src.indexOf("async function attachCustomerReleaseNotification"));
+    assert.equal(releaseSlice.includes("for (const allocation of allocations)"), false);
+    assert.match(releaseSlice, /id:\s*\{\s*in:\s*allocationIds\s*\}/);
+    assert.match(releaseSlice, /id:\s*\{\s*in:\s*itemIds\s*\}/);
+    assert.equal(releaseSlice.includes("timeout:"), false);
   });
 
   it("requires exact spreadsheet delivery confirmation phrase", () => {

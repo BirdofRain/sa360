@@ -1,5 +1,17 @@
 # IncomingDobCorrectionAudit migration handoff
 
+## Status
+
+Auth/Account shipped this table on master as
+`prisma/migrations/20261103184500_incoming_dob_correction_audit`. This branch
+includes that migration through the refresh onto
+`f04906e6aa4793f594071d44460998bf5b861c16`. The sections below are the
+original assignment. Do not open a second migration for the same table. Do
+not run the correction from this refresh. The #275 deploy reported 99
+migrations and none pending, so production likely already has the table.
+This read-only pass did not re-check that production schema. A later apply
+would not refuse for a missing relation.
+
 ## Who implements this
 
 This file is the assignment. It is not a completed migration.

@@ -68,3 +68,58 @@ test("Facebook intake panel submits page and form association without delivery c
   assert.equal(calls[0]?.clientAccountId, "synthetic_client");
   assert.ok(await screen.findByText(/Existing leads were not rewritten/));
 });
+
+test("Facebook intake shows multi-page capture health without a token", async () => {
+  render(
+    React.createElement(FacebookIntakePanel, {
+      associations: [],
+      loadError: null,
+      captureHealth: {
+        flags: {
+          intakeEnabled: false,
+          graphFetchEnabled: false,
+          routingEnabled: false,
+          captureAssociationEnabled: true,
+          unboundPageTokenEnabled: false,
+          inventoryDiscoveryEnabled: false,
+          encryptionConfigured: true,
+          envTokenConfigured: false,
+          envTokenPageId: null,
+        },
+        pages: [
+          {
+            pageId: "102720336121632",
+            pageName: "Pilot",
+            captureEnabled: false,
+            credentialId: "cred_ok",
+            credentialKind: "page_access_token",
+            credentialStatus: "active",
+            tokenFingerprint: "abc123def456",
+            expiresAt: null,
+            scopes: [],
+            lastDiagnostic: null,
+          },
+        ],
+        review: {
+          adminReviewUnmatched: 3,
+          associationDisabled: 0,
+          captureNotAllowlisted: 1,
+          candidateForms: 22,
+        },
+      },
+      captureHealthError: null,
+      associateAction: async () => {
+        throw new Error("not used");
+      },
+      reevaluateAction: async () => {
+        throw new Error("not used");
+      },
+    })
+  );
+  assert.ok(screen.getByText("Meta multi-page capture health"));
+  assert.ok(screen.getByText(/Admin review unmatched: 3/));
+  assert.ok(screen.getByText(/abc123def456/));
+  assert.ok(screen.getByText(/Capture not allowlisted: 1/));
+  assert.ok(screen.getByText(/several campaigns share that form/));
+  assert.equal(document.body.textContent?.includes("EAAB"), false);
+});

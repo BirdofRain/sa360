@@ -3,16 +3,18 @@ import {
   associateFacebookFormAction,
   reevaluateFacebookCaptureAction,
 } from "@/app/actions/facebook-intake";
-import { listFacebookFormAssociations } from "@/lib/admin-api/facebook-intake-server";
+import { listFacebookFormAssociations, loadMetaCaptureHealth } from "@/lib/admin-api/facebook-intake-server";
 
 export default async function FacebookIntakePage() {
-  const listed = await listFacebookFormAssociations();
+  const [listed, health] = await Promise.all([listFacebookFormAssociations(), loadMetaCaptureHealth()]);
   return (
     <FacebookIntakePanel
       associations={listed.items}
       loadError={listed.error}
       associateAction={associateFacebookFormAction}
       reevaluateAction={reevaluateFacebookCaptureAction}
+      captureHealth={health.health}
+      captureHealthError={health.error}
     />
   );
 }

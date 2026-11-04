@@ -26,19 +26,27 @@
  *     --audit-file ./campaign-dob.dob-correction-audit.jsonl \
  *     --confirm "APPLY CONFIRMED CAMPAIGN DOB CORRECTION"
  *
- * Roll back open audit rows from IncomingDobCorrectionAudit. A lock skip
- * exits 3 and stays in pendingIds. Rollback does not discover new ids.
+ * Roll back open audit rows from IncomingDobCorrectionAudit. Without a
+ * manifest, the selector is every latest unrolled apply, then the first
+ * `limit` of those rows. That is not a correction-run selector. Pass the
+ * same manifest, or the same repeated --id values and --expected-count, to
+ * restrict the selection to those event ids. A limit shorter than that
+ * count refuses and writes nothing. A named id with no open apply is
+ * skipped as no_open_audit. A lock skip exits 3 and stays in pendingIds.
+ * Rollback does not discover new ids.
  *
  *   pnpm source-intake:dob-correction -- \
  *     --rollback \
  *     --expected-db-host 127.0.0.1:5432 \
  *     --operator <name> \
- *     --limit 25 \
+ *     --manifest docs/validation/incoming-dob-correction-manifest.json \
+ *     --limit 1015 \
  *     --confirm "ROLLBACK CONFIRMED CAMPAIGN DOB CORRECTION"
  *
  * Do not commit a JSONL supplement. Do not pass a production host until a
- * separate review authorizes that write. This command is not
- * production-executable until Auth/Account ships the audit migration.
+ * separate review authorizes that write. Auth/Account already shipped
+ * IncomingDobCorrectionAudit. Apply still refuses unless that relation
+ * matches the documented schema.
  */
 import { readFileSync } from "node:fs";
 import { config } from "dotenv";
@@ -175,13 +183,18 @@ async function main(): Promise<void> {
     if (args.rollback) {
       const limitText = args.limit?.trim() || "";
       if (!/^[1-9]\d*$/.test(limitText)) refuse("invalid_limit", "limit");
+      const limit = Number(limitText);
+      const scoped = Boolean((args.manifest?.trim() || "") || repeated("--id").length > 0);
+      const reviewed = scoped ? reviewedScope(args) : null;
+      if (reviewed && limit < reviewed.expectedCount) refuse("reviewed_count_mismatch", "limit");
       const result = await correction.rollbackIncomingDobCorrections(db, {
         databaseUrl,
         expectedDbHost: expectedHost,
         operator: args.operator?.trim() || "",
         confirm: args.confirm?.trim() || "",
-        limit: Number(limitText),
+        limit,
         auditFile: args["audit-file"]?.trim() || "",
+        ...(reviewed ? { eventIds: reviewed.ids, expectedCount: reviewed.expectedCount } : {}),
       });
       console.log(JSON.stringify({ ...result, writes: result.writtenIds.length > 0 }));
       const code = correction.incomingDobCorrectionExitCode(result);
@@ -213,8 +226,34 @@ async function main(): Promise<void> {
         const row = byId.get(id);
         return row ? correction.planIncomingDobCorrection(row, window) : null;
       });
-      if (plans.some((plan) => plan == null || plan.action !== "apply")) refuse("reviewed_scope_mismatch");
-      const applyPlans = plans.filter((plan): plan is NonNullable<typeof plan> => plan != null);
+      const partitioned = correction.partitionReviewedDobCorrectionPlans(plans);
+      if (!partitioned.ok) refuse("reviewed_scope_mismatch");
+      const satisfied = partitioned.alreadyCanonical.map((plan) => ({
+        id: plan.eventId,
+        reason: "already_canonical" as const,
+      }));
+      if (partitioned.applyPlans.length === 0) {
+        console.log(JSON.stringify({
+          version: correction.INCOMING_DOB_CORRECTION_VERSION,
+          outcome: "NOOP",
+          ok: true,
+          writes: false,
+          writesAttempted: false,
+          complete: true,
+          writtenIds: [],
+          pendingIds: [],
+          skipped: satisfied,
+          counts: {
+            requested: reviewed.expectedCount,
+            written: 0,
+            skipped: satisfied.length,
+            pending: 0,
+          },
+          externalDestinations: "unchanged",
+        }));
+        return;
+      }
+      const applyPlans = partitioned.applyPlans;
       const result = await correction.applyIncomingDobCorrections(db, {
         databaseUrl,
         expectedDbHost: expectedHost,
@@ -222,13 +261,23 @@ async function main(): Promise<void> {
         confirm: args.confirm?.trim() || "",
         limit,
         auditFile: args["audit-file"]?.trim() || "",
-        ids: reviewed.ids,
-        expectedCount: reviewed.expectedCount,
+        ids: applyPlans.map((plan) => plan.eventId),
+        expectedCount: applyPlans.length,
         receivedFrom: window.receivedFrom,
         receivedTo: window.receivedTo,
         expectedBeforeById: Object.fromEntries(applyPlans.map((plan) => [plan.eventId, plan.before])),
       });
-      console.log(JSON.stringify({ ...result, writes: result.writtenIds.length > 0 }));
+      console.log(JSON.stringify({
+        ...result,
+        writes: result.writtenIds.length > 0,
+        reviewedCount: reviewed.expectedCount,
+        skipped: [...satisfied, ...result.skipped],
+        counts: {
+          ...result.counts,
+          requested: reviewed.expectedCount,
+          skipped: satisfied.length + result.counts.skipped,
+        },
+      }));
       const code = correction.incomingDobCorrectionExitCode(result);
       if (code !== 0) process.exit(code);
       return;

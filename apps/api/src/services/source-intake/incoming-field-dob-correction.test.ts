@@ -21,6 +21,7 @@ import {
   INCOMING_DOB_CORRECTION_ROLLBACK_CONFIRMATION,
   applyIncomingDobCorrections,
   incomingDobCorrectionExitCode,
+  partitionReviewedDobCorrectionPlans,
   planIncomingDobCorrection,
   readCanonicalDobAgeState,
   readDobCorrectionAudits,
@@ -223,7 +224,167 @@ test("rollback selection closes an apply and ignores contact text", () => {
   };
   assert.equal(selectDobCorrectionRollbackTargets([apply]).length, 1);
   assert.equal(selectDobCorrectionRollbackTargets([{ ...apply, action: "rollback" }]).length, 0);
+  const other = { ...apply, eventId: "evt_b" };
+  assert.deepEqual(
+    selectDobCorrectionRollbackTargets([apply, other], ["evt_a"]).map((row) => row.eventId),
+    ["evt_a"]
+  );
+  assert.equal(selectDobCorrectionRollbackTargets([other], ["evt_a"]).length, 0);
   assert.equal(JSON.stringify(apply).includes(EMAIL), false);
+});
+
+test("reviewed resume accepts already-canonical rows and refuses every other skip", () => {
+  const apply = planIncomingDobCorrection(snapshot(), WINDOW);
+  const satisfied = { ...apply, action: "skip" as const, reason: "already_canonical" };
+  const resumed = partitionReviewedDobCorrectionPlans([apply, satisfied]);
+  assert.equal(resumed.ok, true);
+  if (resumed.ok) {
+    assert.deepEqual(resumed.applyPlans.map((plan) => plan.eventId), [apply.eventId]);
+    assert.deepEqual(resumed.alreadyCanonical.map((plan) => plan.reason), ["already_canonical"]);
+  }
+  const conflict = planIncomingDobCorrection(
+    snapshot({
+      normalizedPayload: {
+        ...(snapshot().normalizedPayload as object),
+        lead_details: { consumer_age: "40", coverage_note: "keep-me" },
+      },
+    }),
+    WINDOW
+  );
+  assert.equal(partitionReviewedDobCorrectionPlans([apply, conflict]).ok, false);
+  assert.equal(partitionReviewedDobCorrectionPlans([null]).ok, false);
+  assert.equal(
+    partitionReviewedDobCorrectionPlans([
+      planIncomingDobCorrection(snapshot({ receivedAt: "2026-11-03T16:00:00.000Z" }), WINDOW),
+    ]).ok,
+    false
+  );
+});
+
+test("manifest rollback leaves other runs in place and keeps the after-image guard", async () => {
+  const databaseUrl = assertSafeTestDatabaseUrl(process.env.SA360_TEST_DATABASE_URL);
+  const db = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+  const created: string[] = [];
+  const base = {
+    databaseUrl,
+    expectedDbHost: "127.0.0.1:5432",
+    operator: "correction-test",
+    confirm: INCOMING_DOB_CORRECTION_APPLY_CONFIRMATION,
+    limit: 25,
+    auditFile: "",
+    receivedFrom: WINDOW.receivedFrom,
+    receivedTo: WINDOW.receivedTo,
+  };
+  const lead = (suffix: string) => ({
+    sourceProvider: "leadcapture_io" as const,
+    sourceSystem: "leadcapture_io_nextgen" as const,
+    sourceType: "webhook" as const,
+    sourceLeadId: `dob-scope-${suffix}-${Date.now()}`,
+    status: "received" as const,
+    receivedAt: new Date("2026-11-02T18:00:00.000Z"),
+    rawPayloadJson: {
+      provider: "leadcapture_io",
+      sa360_source_system: "leadcapture_io_nextgen",
+      lead_id: "11111111-2222-4333-8444-555555555555",
+      submitted_at: "2026-11-02T18:00:00.000Z",
+      parent_url: "https://go.lifeinsuranceforvets.com/learn-julia-dodge",
+      first_name: "Pat",
+      email: EMAIL,
+      date: "03/13/1955",
+    },
+    normalizedPayloadJson: {
+      contact: { email: EMAIL, first_name: "Pat" },
+      lead_details: { coverage_note: "keep-me" },
+      routing: {
+        niche_key: "vet",
+        source_intake: {
+          submitted_at: "2026-11-02T18:00:00.000Z",
+          sourceAttributes: { branch: "Army" },
+        },
+      },
+    },
+  });
+  try {
+    await createAuditTable(db);
+    const kept = await db.sourceLeadEvent.create({ data: lead("kept") });
+    const restored = await db.sourceLeadEvent.create({ data: lead("restored") });
+    const edited = await db.sourceLeadEvent.create({ data: lead("edited") });
+    created.push(kept.id, restored.id, edited.id);
+    const blank = readCanonicalDobAgeState(lead("blank").normalizedPayloadJson);
+    const applied = await applyIncomingDobCorrections(db, {
+      ...base,
+      ids: [kept.id, restored.id, edited.id],
+      expectedCount: 3,
+      expectedBeforeById: {
+        [kept.id]: blank,
+        [restored.id]: blank,
+        [edited.id]: blank,
+      },
+    });
+    assert.deepEqual(applied.writtenIds.slice().sort(), [kept.id, restored.id, edited.id].sort());
+    const stored = await db.sourceLeadEvent.findUniqueOrThrow({ where: { id: edited.id } });
+    const payload = structuredClone(stored.normalizedPayloadJson) as {
+      lead_details: Record<string, unknown>;
+    };
+    payload.lead_details.consumer_age = "55";
+    await db.sourceLeadEvent.update({
+      where: { id: edited.id },
+      data: { normalizedPayloadJson: payload as Prisma.InputJsonValue },
+    });
+
+    const short = await rollbackIncomingDobCorrections(db, {
+      ...base,
+      confirm: INCOMING_DOB_CORRECTION_ROLLBACK_CONFIRMATION,
+      limit: 1,
+      eventIds: [restored.id, edited.id],
+      expectedCount: 2,
+    });
+    assert.equal(short.ok, false);
+    assert.equal(short.reasonCode, "reviewed_count_mismatch");
+    assert.equal(short.writesAttempted, false);
+    assert.equal(
+      readCanonicalDobAgeState(
+        (await db.sourceLeadEvent.findUniqueOrThrow({ where: { id: restored.id } })).normalizedPayloadJson
+      ).date_of_birth,
+      "1955-03-13"
+    );
+
+    const rolled = await rollbackIncomingDobCorrections(db, {
+      ...base,
+      confirm: INCOMING_DOB_CORRECTION_ROLLBACK_CONFIRMATION,
+      eventIds: [restored.id, edited.id, "evt_missing"],
+      expectedCount: 3,
+    });
+    assert.equal(rolled.complete, true);
+    assert.deepEqual(rolled.writtenIds, [restored.id]);
+    assert.equal(rolled.skipped.find((row) => row.id === edited.id)?.reason, "rollback_mismatch");
+    assert.equal(rolled.skipped.find((row) => row.id === "evt_missing")?.reason, "no_open_audit");
+    assert.equal(rolled.writtenIds.includes(kept.id), false);
+    assert.equal(
+      readCanonicalDobAgeState(
+        (await db.sourceLeadEvent.findUniqueOrThrow({ where: { id: kept.id } })).normalizedPayloadJson
+      ).date_of_birth,
+      "1955-03-13"
+    );
+    assert.equal(
+      readCanonicalDobAgeState(
+        (await db.sourceLeadEvent.findUniqueOrThrow({ where: { id: restored.id } })).normalizedPayloadJson
+      ).date_of_birth,
+      null
+    );
+    assert.equal(
+      readCanonicalDobAgeState(
+        (await db.sourceLeadEvent.findUniqueOrThrow({ where: { id: edited.id } })).normalizedPayloadJson
+      ).consumer_age,
+      "55"
+    );
+  } finally {
+    if (created.length > 0) {
+      await db.sourceLeadEvent.deleteMany({ where: { id: { in: created } } });
+    }
+    await dropAuditTable(db);
+    await db.$disconnect();
+  }
 });
 
 async function dropAuditTable(db: PrismaClient): Promise<void> {

@@ -298,9 +298,13 @@ confirmation `APPLY CONFIRMED CAMPAIGN DOB CORRECTION`, and an explicit
 reviewed scope: repeated `--id` values plus `--expected-count`, or a
 manifest `{ "ids": [...], "expectedCount": N }`. The count must equal the
 id list, the list cannot contain duplicates, and `--limit` cannot be smaller
-than that count. Every named id must exist and plan as `apply`. Anything
-else returns `reviewed_scope_required`, `reviewed_count_mismatch`,
-`reviewed_scope_mismatch`, or `manifest_unreadable` and writes nothing.
+than that count. Every named id must exist. A row that plans as `apply`
+is written. A row that plans as `already_canonical` is already satisfied
+and is not rewritten, so the same manifest can be resumed after a partial
+commit. Any other plan returns `reviewed_scope_mismatch` and writes
+nothing. A missing scope returns `reviewed_scope_required`, a bad count
+returns `reviewed_count_mismatch`, and an unreadable file returns
+`manifest_unreadable`.
 A window scan cannot add ids.
 
 It also requires `IncomingDobCorrectionAudit` to match the documented
@@ -336,12 +340,17 @@ receipts, inventory, and external GHL or Sheets values are not changed.
 `deliveredAt` do not. Rows are locked with `SELECT … FOR UPDATE SKIP LOCKED`
 in batches of 25. A lock skip is `pending` and the outcome is `PENDING`
 with exit code 3, so the row cannot disappear from
-`written + skipped + pending`. A second apply writes nothing. `--rollback`
-with `ROLLBACK CONFIRMED CAMPAIGN DOB CORRECTION` reads open audit rows from
-`IncomingDobCorrectionAudit`, including after a process restart. It restores
-every audited canonical field when the current values still equal the
-audited after-image, and it inserts its own audit row in that same
-transaction. A later edit is `rollback_mismatch` and is left in place.
+`written + skipped + pending`. A second apply of the same manifest writes
+only rows that still plan as `apply`. `--rollback` with `ROLLBACK CONFIRMED
+CAMPAIGN DOB CORRECTION` reads open audit rows from
+`IncomingDobCorrectionAudit`, including after a process restart. Without a
+manifest it keeps the latest unrolled apply for every event and then keeps
+only the first `limit` of those rows. Pass the same manifest to restrict
+that selection to those event ids. A shorter limit refuses and writes
+nothing. It restores every audited canonical field when the current values
+still equal the audited after-image, and it inserts its own audit row in
+that same transaction. A later edit is `rollback_mismatch` and is left in
+place.
 Updating `normalizedPayloadJson` can refresh the historical catalog read
 model. It does not enqueue delivery. Do not point `--apply` at production
 until that write is separately authorized. None of the existing audit models

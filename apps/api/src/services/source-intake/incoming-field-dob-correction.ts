@@ -525,14 +525,54 @@ function expectedBeforeFor(
   return record[id];
 }
 
-/** Latest apply for each event that has not been rolled back. */
-export function selectDobCorrectionRollbackTargets(records: DobCorrectionAudit[]): DobCorrectionAudit[] {
+/**
+ * Latest apply for each event that has not been rolled back.
+ * Audit rows are walked in the order given, which the database reader
+ * sorts by createdAt then id. There is no correction-run column. When
+ * eventIds is set, only those events are returned. Other open applies stay
+ * out of the selection.
+ */
+export function selectDobCorrectionRollbackTargets(
+  records: DobCorrectionAudit[],
+  eventIds?: readonly string[]
+): DobCorrectionAudit[] {
   const open = new Map<string, DobCorrectionAudit>();
   for (const record of records) {
     if (record.action === "apply") open.set(record.eventId, record);
     if (record.action === "rollback") open.delete(record.eventId);
   }
-  return [...open.values()];
+  const targets = [...open.values()];
+  if (!eventIds) return targets;
+  const allowed = new Set(eventIds);
+  return targets.filter((target) => allowed.has(target.eventId));
+}
+
+/**
+ * A reviewed manifest may be resumed after a partial commit. Rows that now
+ * plan as already_canonical were written by an earlier batch and are not
+ * rewritten. Any missing row, or any other skip, refuses the invocation
+ * before a new transaction.
+ */
+export function partitionReviewedDobCorrectionPlans(
+  plans: Array<DobCorrectionPlan | null>
+):
+  | { ok: false; reasonCode: "reviewed_scope_mismatch" }
+  | { ok: true; applyPlans: DobCorrectionPlan[]; alreadyCanonical: DobCorrectionPlan[] } {
+  const applyPlans: DobCorrectionPlan[] = [];
+  const alreadyCanonical: DobCorrectionPlan[] = [];
+  for (const plan of plans) {
+    if (!plan) return { ok: false, reasonCode: "reviewed_scope_mismatch" };
+    if (plan.action === "apply") {
+      applyPlans.push(plan);
+      continue;
+    }
+    if (plan.reason === "already_canonical") {
+      alreadyCanonical.push(plan);
+      continue;
+    }
+    return { ok: false, reasonCode: "reviewed_scope_mismatch" };
+  }
+  return { ok: true, applyPlans, alreadyCanonical };
 }
 
 async function lockEvents(
@@ -892,6 +932,8 @@ export async function rollbackIncomingDobCorrections(
     confirm: string;
     limit: number;
     auditFile: string;
+    eventIds?: string[];
+    expectedCount?: number;
     beforeCommit?: () => Promise<void> | void;
   }
 ): Promise<DobCorrectionWriteResult> {
@@ -903,10 +945,29 @@ export async function rollbackIncomingDobCorrections(
   const missingAudit = await requireAuditRelation(db);
   if (missingAudit) return refusedResult(missingAudit);
 
-  const targets = selectDobCorrectionRollbackTargets(await readDobCorrectionAuditsFromDb(db)).slice(0, guard.limit);
+  const openTargets = selectDobCorrectionRollbackTargets(
+    await readDobCorrectionAuditsFromDb(db),
+    args.eventIds
+  );
+  const skipped: Array<{ id: string; reason: string }> = [];
+  let targets: DobCorrectionAudit[];
+  let requested: number;
+  if (args.eventIds) {
+    const reviewed = reviewedCorrectionIds(args.eventIds, args.expectedCount ?? Number.NaN, guard.limit);
+    if (!reviewed.ok) return refusedResult(reviewed);
+    const allowed = new Set(reviewed.ids);
+    targets = openTargets.filter((target) => allowed.has(target.eventId));
+    const openIds = new Set(targets.map((target) => target.eventId));
+    for (const id of reviewed.ids) {
+      if (!openIds.has(id)) skipped.push({ id, reason: "no_open_audit" });
+    }
+    requested = reviewed.ids.length;
+  } else {
+    targets = openTargets.slice(0, guard.limit);
+    requested = targets.length;
+  }
   const writtenIds: string[] = [];
   const pendingIds: string[] = [];
-  const skipped: Array<{ id: string; reason: string }> = [];
   let auditExportFailed = false;
 
   for (const group of chunk(targets, INCOMING_DOB_CORRECTION_BATCH_SIZE)) {
@@ -972,7 +1033,7 @@ export async function rollbackIncomingDobCorrections(
   return finishWriteResult({
     kind: "rollback",
     guard,
-    requested: targets.length,
+    requested,
     writtenIds,
     pendingIds,
     skipped,

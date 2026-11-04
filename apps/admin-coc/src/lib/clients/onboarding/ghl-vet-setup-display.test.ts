@@ -106,6 +106,12 @@ test("the backend write plan is displayed without normalizing a date", () => {
         { key: "primary_reason", disposition: "blocked", fieldId: "field_reason", fieldName: "Primary Reason", value: null },
       ],
       enrollment: { allowed: false, reason: "Duplicate custom field targets block workflow enrollment." },
+      automationEntry: {
+        tag: "SA360::EVENT::LEAD_CREATED",
+        disposition: "withheld",
+        includedInThisPreviewPost: false,
+        detail: "SA360::EVENT::LEAD_CREATED is withheld because the write plan blocks enrollment. This preview does not send it.",
+      },
       note: { enabled: false, contractVersion: "sa360_lead_note_v2", preview: null, posted: false },
       sendsLead: false,
     },
@@ -118,6 +124,8 @@ test("the backend write plan is displayed without normalizing a date", () => {
   assert.equal(plan?.customFields.find((row) => row.key === "age")?.disposition, "omitted_missing");
   assert.equal(plan?.customFields.find((row) => row.key === "primary_reason")?.disposition, "blocked");
   assert.equal(plan?.enrollmentAllowed, false);
+  assert.equal(plan?.automationEntryDisposition, "withheld");
+  assert.match(plan?.automationEntryDetail ?? "", /does not send it/);
   assert.equal(plan?.sendsLead, false);
 });
 

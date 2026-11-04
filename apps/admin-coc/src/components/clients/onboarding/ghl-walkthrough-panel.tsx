@@ -869,6 +869,10 @@ export function GhlWalkthroughPanel({
                     {writePlan.enrollmentReason ? ` ${writePlan.enrollmentReason}` : ""}
                   </p>
                   <p>
+                    {writePlan.automationEntryDetail ??
+                      "SA360::EVENT::LEAD_CREATED is not reported on this write plan. This preview does not send it."}
+                  </p>
+                  <p>
                     Note on this plan: {writePlan.noteEnabled ? "enabled" : "disabled"} · {writePlan.noteContract ?? "sa360_lead_note_v2"}.
                     {writePlan.noteError ? ` ${writePlan.noteError}` : ""}
                   </p>

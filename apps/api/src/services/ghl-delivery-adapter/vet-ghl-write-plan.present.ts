@@ -11,10 +11,13 @@ import {
 import type { SourceAttributes, SourceFieldRequirement } from "../source-intake/source-enrichment.types.js";
 import { ONBOARDING_LEAD_NOTE_CONTRACT } from "./onboarding-lead-note.js";
 import {
+  AUTOMATION_ENTRY_EVENT_TAG,
   planIntakeSummaryNote,
+  planRoutingTagPreview,
   presentNativeContactPlan,
   vetNativeContactFields,
   workflowEnrollmentAllowed,
+  type RoutingTagPreview,
   type VetNativeFieldPlan,
 } from "./vet-ghl-delivery-contract.js";
 
@@ -39,6 +42,12 @@ export type VetWritePlan = {
   customFields: VetCustomFieldPlanRow[];
   collisions: SourceAttributeStampPlan["collisions"];
   enrollment: { allowed: boolean; reason: string | null };
+  automationEntry: {
+    tag: RoutingTagPreview["automationEntry"]["tag"];
+    disposition: RoutingTagPreview["automationEntry"]["disposition"];
+    includedInThisPreviewPost: false;
+    detail: string;
+  };
   note: {
     enabled: boolean;
     contractVersion: typeof ONBOARDING_LEAD_NOTE_CONTRACT;
@@ -182,6 +191,11 @@ export function presentVetWritePlan(input: {
     collisions: stamp.collisions,
     unresolvedDeliveryRequired: stamp.unresolvedDeliveryRequired,
   });
+  const routingTags = planRoutingTagPreview({
+    locationId: "",
+    tags: [AUTOMATION_ENTRY_EVENT_TAG],
+    blockAutomationEntry: !enrollment.allowed,
+  });
 
   const notesEnabled = input.notesEnabled === true;
   let note: VetWritePlan["note"] = {
@@ -226,6 +240,12 @@ export function presentVetWritePlan(input: {
     customFields,
     collisions: stamp.collisions,
     enrollment,
+    automationEntry: {
+      tag: routingTags.automationEntry.tag,
+      disposition: routingTags.automationEntry.disposition,
+      includedInThisPreviewPost: false,
+      detail: routingTags.detail,
+    },
     note,
     sendsLead: false,
   };

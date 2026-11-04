@@ -124,6 +124,9 @@ export type VetWritePlanView = {
   customFields: CustomPreviewRow[];
   enrollmentAllowed: boolean | null;
   enrollmentReason: string | null;
+  automationEntryTag: string | null;
+  automationEntryDisposition: "withheld" | "planned_if_required_writes_succeed" | null;
+  automationEntryDetail: string | null;
   timezoneWritten: false;
   noteEnabled: boolean | null;
   noteContract: string | null;
@@ -338,12 +341,18 @@ export function readVetWritePlan(requestPreviewJson: unknown): VetWritePlanView 
     }
   }
   const enrollment = record(plan.enrollment);
+  const automation = record(plan.automationEntry);
+  const disposition = automation?.disposition;
   const note = record(plan.note);
   return {
     native,
     customFields,
     enrollmentAllowed: typeof enrollment?.allowed === "boolean" ? enrollment.allowed : null,
     enrollmentReason: typeof enrollment?.reason === "string" ? enrollment.reason : null,
+    automationEntryTag: typeof automation?.tag === "string" ? automation.tag : null,
+    automationEntryDisposition:
+      disposition === "withheld" || disposition === "planned_if_required_writes_succeed" ? disposition : null,
+    automationEntryDetail: typeof automation?.detail === "string" ? automation.detail : null,
     timezoneWritten: false,
     noteEnabled: typeof note?.enabled === "boolean" ? note.enabled : null,
     noteContract: typeof note?.contractVersion === "string" ? note.contractVersion : null,

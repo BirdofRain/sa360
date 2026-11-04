@@ -165,7 +165,7 @@ async function deliverLoadedPlan(
   const execution = await deps.execute({
     planId: plan.id,
     mode: input.mode,
-    reuseRunId: disposition === "retry" ? existing?.id ?? null : null,
+    reuseRunId: disposition === "retry" || disposition === "resume" ? existing?.id ?? null : null,
     confirmation: input.confirmation,
     lifecyclePayload: input.lifecyclePayload,
   });

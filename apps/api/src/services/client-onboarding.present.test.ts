@@ -122,7 +122,48 @@ test("destination DTO keeps the saved trigger mode beside deliveryEnabled", () =
     updatedAt: new Date("2026-10-29T14:00:00.000Z"),
   } as ClientGhlDestination);
   assert.equal(dto.workflowTriggerMode, "direct_api");
+  assert.equal(dto.vetWorkflowTriggerProposal.proposedMode, "direct_api");
+  assert.equal(dto.vetWorkflowTriggerProposal.storedMode, "direct_api");
+  assert.equal(dto.vetWorkflowTriggerProposal.changesExistingClients, false);
   assert.equal(dto.destinationWorkflowIdGhl, "d4c1fa4c-a3e2-4fd8-9091-b3fad0d04edd");
   assert.equal(dto.locationName, "Sam's Test");
   assert.equal(dto.deliveryEnabled, false);
+});
+
+test("direct API proposal does not rewrite a stored tag trigger", () => {
+  const dto = presentClientGhlDestination({
+    id: "dest_tag",
+    clientAccountId: "acct_a",
+    destinationSubaccountIdGhl: "loc_sam",
+    locationName: null,
+    ghlConnectionStatus: null,
+    snapshotInstalled: false,
+    requiredFieldsInstalled: false,
+    defaultAssignedUserIdGhl: null,
+    destinationWorkflowIdGhl: null,
+    destinationPipelineIdGhl: null,
+    destinationPipelineStageIdGhl: null,
+    pipelineStageContactingIdGhl: null,
+    pipelineStageAppointmentSetIdGhl: null,
+    pipelineStageShowedIdGhl: null,
+    pipelineStageSoldIdGhl: null,
+    pipelineStageDeadIdGhl: null,
+    opportunityCreationEnabled: false,
+    backupSheetEnabled: false,
+    backupSheetId: null,
+    deliveryMode: "shadow",
+    deliveryEnabled: false,
+    clientCutoverApproved: false,
+    internalApprovalStatus: "not_reviewed",
+    workflowTriggerMode: "tag_trigger",
+    sourceAttributeFieldMapJson: {},
+    sourceEnrichmentPolicyJson: {},
+    sourceFieldAliasOverridesJson: {},
+    updatedAt: new Date("2026-10-29T14:00:00.000Z"),
+  } as ClientGhlDestination);
+  assert.equal(dto.workflowTriggerMode, "tag_trigger");
+  assert.equal(dto.deliveryEnabled, false);
+  assert.equal(dto.vetWorkflowTriggerProposal.proposedMode, "direct_api");
+  assert.equal(dto.vetWorkflowTriggerProposal.storedMode, "tag_trigger");
+  assert.equal(dto.vetWorkflowTriggerProposal.changesExistingClients, false);
 });

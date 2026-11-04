@@ -13,6 +13,8 @@ export type GhlDestinationFieldMappingConfig = {
   ownerAssignmentRequired: boolean;
   workflowStartRequired: boolean;
   workflowTriggerMode?: WorkflowTriggerMode | string | null;
+  /** Runtime opt-in. Absent or false does not post an intake-summary note. */
+  intakeSummaryNotesEnabled?: boolean;
   sourceAttributeFieldMapJson?: unknown;
   sourceEnrichmentPolicyJson?: unknown;
 };
@@ -60,6 +62,12 @@ export type GhlContactUpsertPreview = {
     email: string | null;
     phone: string | null;
     state: string | null;
+    city?: string | null;
+    postalCode?: string | null;
+    address1?: string | null;
+    country?: string | null;
+    /** ISO YYYY-MM-DD from projectCampaignDobAge. Omitted from the HTTP body when absent. */
+    dateOfBirth?: string | null;
     source: string;
     customFields: Record<string, string | null>;
   };

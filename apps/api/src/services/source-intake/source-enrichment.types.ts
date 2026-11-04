@@ -28,6 +28,12 @@ export type SourceEnrichmentPolicy = {
   ignoredCanonicalKeys?: CanonicalSourceAttributeKey[];
   /** When automation is limited: basic_voice_ai | queue_for_review | wait_for_enrichment */
   limitedAutomationBehavior?: "basic_voice_ai" | "queue_for_review" | "wait_for_enrichment";
+  /**
+   * Optional intake-summary note. Only an explicit true posts a note.
+   * Persistence of this flag stays in the existing policy JSON. It does not
+   * enable delivery.
+   */
+  intakeSummaryNotesEnabled?: boolean;
 };
 
 export type UnmappedSourceField = {

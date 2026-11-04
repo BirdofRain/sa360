@@ -34,6 +34,8 @@ import {
 import type { GhlAdapterPlanContext, SourceEnrichmentPlanContext } from "./ghl-delivery-adapter.types.js";
 import { buildSourceEnrichmentDeliveryContext } from "../source-intake/source-enrichment.service.js";
 import { persistedCampaignRoutingRuleId } from "../association-ghl-delivery-source.js";
+import { ongoingRunDisposition } from "../ghl-destination-authorization.js";
+import { receiptFromPersistedStep, type VetOperationReceipt } from "./vet-ghl-delivery-contract.js";
 
 async function campaignAgeReceivedAt(decisionId: string | null | undefined): Promise<string | null> {
   const id = decisionId?.trim();
@@ -282,7 +284,29 @@ export async function executeRecordedGhlDelivery(
   const idempotencyKey = ctx.idempotencyKey;
   let runId = input.reuseRunId ?? null;
 
+  let priorReceipts: VetOperationReceipt[] = [];
   if (runId) {
+    const existing = await findGhlLiveDeliveryRunById(runId);
+    const disposition = ongoingRunDisposition(existing);
+    if (!existing || disposition === "hold") {
+      return {
+        held: true,
+        ok: existing?.status === "succeeded",
+        runId,
+        status: existing?.status ?? "held",
+        contactIdGhl: null,
+        opportunityIdGhl: null,
+        workflowStarted: false,
+        externalCallExecuted: existing ? existing.stepRuns.some((step) => {
+          const response = step.responseRedactedJson;
+          return Boolean(response && typeof response === "object" && !Array.isArray(response) && (response as { externalCallExecuted?: boolean }).externalCallExecuted === true);
+        }) : false,
+        errors: [existing ? "remote_outcome_not_retried" : "run_not_found"],
+      };
+    }
+    priorReceipts = existing.stepRuns
+      .map((step) => receiptFromPersistedStep(step))
+      .filter((receipt): receipt is VetOperationReceipt => receipt !== null);
     await prisma.ghlLiveDeliveryStepRun.deleteMany({ where: { liveRunId: runId } });
     await updateGhlLiveDeliveryRun(runId, {
       status: "executing",
@@ -344,7 +368,7 @@ export async function executeRecordedGhlDelivery(
   let execution;
   try {
     execution = await runWithOngoingGhlWrite(() =>
-      executeLiveCanaryGhlSteps(adapterCtx, idempotencyKey, deps)
+      executeLiveCanaryGhlSteps(adapterCtx, idempotencyKey, deps, { priorReceipts })
     );
   } catch {
     const completedAt = new Date();

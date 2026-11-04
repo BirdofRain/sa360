@@ -18,6 +18,8 @@ import {
   buildWorkflowStartRequest,
   validateDeliveryPlanForGhlSimulation,
 } from "./ghl-delivery-request-builders.js";
+import { knownWritePlanBlocksAutomationEntry } from "./routing-tag-plan.js";
+import { planRoutingTagPreview } from "./vet-ghl-delivery-contract.js";
 import type {
   GhlAdapterPlanContext,
   GhlAdapterSimulationResult,
@@ -53,7 +55,12 @@ function buildStepDrafts(
   const drafts: GhlAdapterStepDraft[] = [];
   const contact = buildContactUpsertRequest(ctx);
   const fields = buildCustomFieldStampRequest(ctx);
-  const tags = buildTagRequest(ctx);
+  const tagRequest = buildTagRequest(ctx);
+  const tags = planRoutingTagPreview({
+    locationId: tagRequest.locationId,
+    tags: tagRequest.tags,
+    blockAutomationEntry: knownWritePlanBlocksAutomationEntry(ctx),
+  });
   const opportunity = buildOpportunityRequest(ctx);
   const owner = buildAssignOwnerRequest(ctx);
   const workflow = buildWorkflowStartRequest(ctx);
@@ -159,6 +166,7 @@ function buildStepDrafts(
         break;
       case "add_tags":
         request = tags as unknown as Record<string, unknown>;
+        stepWarnings = [...stepWarnings, tags.detail];
         break;
       case "create_or_update_opportunity":
         request = opportunity ? (opportunity as unknown as Record<string, unknown>) : request;

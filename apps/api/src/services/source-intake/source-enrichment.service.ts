@@ -70,6 +70,7 @@ export function parseSourceEnrichmentPolicyJson(raw: unknown): SourceEnrichmentP
       limitedAutomationBehavior === "wait_for_enrichment"
         ? limitedAutomationBehavior
         : "basic_voice_ai",
+    intakeSummaryNotesEnabled: record.intakeSummaryNotesEnabled === true,
   };
 }
 

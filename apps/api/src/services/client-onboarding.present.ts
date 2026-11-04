@@ -5,6 +5,7 @@ import {
   presentRoutingRuleWithReadiness,
   type RoutingRuleWithReadinessItem,
 } from "./delivery-readiness-admin.present.js";
+import { vetWorkflowTriggerProposal } from "./ghl-delivery-adapter/vet-ghl-delivery-contract.js";
 
 export type ClientGhlDestinationDto = {
   id: string;
@@ -18,6 +19,16 @@ export type ClientGhlDestinationDto = {
   destinationWorkflowIdGhl: string | null;
   /** How a saved workflow is started. Saving a workflow does not change deliveryEnabled. */
   workflowTriggerMode: string | null;
+  /**
+   * Direct API is the proposed mode for a new supported configuration.
+   * `storedMode` is the row that already exists. COC must not copy
+   * `proposedMode` onto that row unless an operator saves it.
+   */
+  vetWorkflowTriggerProposal: {
+    proposedMode: "direct_api";
+    storedMode: string | null;
+    changesExistingClients: false;
+  };
   destinationPipelineIdGhl: string | null;
   destinationPipelineStageIdGhl: string | null;
   pipelineStageContactingIdGhl: string | null;
@@ -102,6 +113,7 @@ export function presentClientGhlDestination(
     defaultAssignedUserIdGhl: dest.defaultAssignedUserIdGhl,
     destinationWorkflowIdGhl: dest.destinationWorkflowIdGhl,
     workflowTriggerMode: dest.workflowTriggerMode,
+    vetWorkflowTriggerProposal: vetWorkflowTriggerProposal(dest.workflowTriggerMode),
     destinationPipelineIdGhl: dest.destinationPipelineIdGhl,
     destinationPipelineStageIdGhl: dest.destinationPipelineStageIdGhl,
     pipelineStageContactingIdGhl: dest.pipelineStageContactingIdGhl,

@@ -8,6 +8,7 @@
  */
 
 import type { ClientGhlDestination } from "@prisma/client";
+import { deliveryRetryDisposition } from "./ghl-delivery-adapter/vet-ghl-delivery-contract.js";
 
 export const ENABLE_ONGOING_GHL_DELIVERY = "ENABLE ONGOING GHL DELIVERY";
 export const DELIVER_ONE_GHL_TEST = "DELIVER ONE LEAD";
@@ -39,27 +40,26 @@ export function isPersistedLiveDestination(
 
 export type DeliveryRunDispositionInput = {
   status: string;
-  stepRuns: Array<{ errorCode: string | null; responseRedactedJson: unknown }>;
+  stepRuns: Array<{
+    errorCode: string | null;
+    responseRedactedJson: unknown;
+    stepType?: string | null;
+    status?: string | null;
+    externalId?: string | null;
+  }>;
 };
 
 /**
  * succeeded, partial_success, and executing are kept.
- * A failed run that already called GHL, or that has no step evidence, is kept.
- * A failed run whose steps show the call never left SA360 can be retried on the same row.
+ * Ambiguous and rejected remote outcomes are kept.
+ * A failed run whose steps never left SA360 can be retried.
+ * A failed run with a completed operation resumes only the operations that
+ * have no completed receipt. Completed operations are not repeated.
  */
-export function ongoingRunDisposition(run: DeliveryRunDispositionInput | null): "create" | "retry" | "hold" {
-  if (!run) return "create";
-  if (
-    run.status === "succeeded" ||
-    run.status === "partial_success" ||
-    run.status === "executing" ||
-    run.status === "skipped_duplicate"
-  ) {
-    return "hold";
-  }
-  if (run.status !== "failed") return "hold";
-  if (run.stepRuns.length === 0 || runHadExternalCall(run)) return "hold";
-  return "retry";
+export function ongoingRunDisposition(
+  run: DeliveryRunDispositionInput | null
+): "create" | "retry" | "resume" | "hold" {
+  return deliveryRetryDisposition(run);
 }
 
 export function runHadExternalCall(run: DeliveryRunDispositionInput): boolean {

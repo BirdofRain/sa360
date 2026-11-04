@@ -34,7 +34,12 @@ const CONTACT_UPSERT_BODY_KEYS = new Set([
   "source",
   "firstName",
   "lastName",
+  "address1",
+  "city",
   "state",
+  "postalCode",
+  "country",
+  "dateOfBirth",
 ]);
 
 export const LOCATION_API_ONBOARDING_CAPABILITIES = {
@@ -278,7 +283,12 @@ export type LocationApiDeliveryInput = {
     lastName?: string | null;
     email?: string | null;
     phone?: string | null;
+    address1?: string | null;
+    city?: string | null;
     state?: string | null;
+    postalCode?: string | null;
+    country?: string | null;
+    dateOfBirth?: string | null;
     source?: string | null;
   };
   notePlan: OnboardingLeadNotePlan;
@@ -430,7 +440,12 @@ export function onboardingContactUpsertBody(
       lastName: blankToNull(contact.lastName),
       email: blankToNull(contact.email),
       phone: blankToNull(contact.phone),
+      address1: blankToNull(contact.address1),
+      city: blankToNull(contact.city),
       state: blankToNull(contact.state),
+      postalCode: blankToNull(contact.postalCode),
+      country: blankToNull(contact.country),
+      dateOfBirth: blankToNull(contact.dateOfBirth),
       source: blankToNull(contact.source) ?? "sa360",
       customFields: {},
     },

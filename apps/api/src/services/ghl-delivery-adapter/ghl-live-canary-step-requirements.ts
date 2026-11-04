@@ -13,6 +13,7 @@ const OPTIONAL_POST_CONTACT_STEP_TYPES = new Set([
   "assign_owner",
   "start_workflow",
   "stamp_custom_fields",
+  "write_intake_summary_note",
 ]);
 
 export function getLiveCanaryStepRequirementFlags(
@@ -91,6 +92,9 @@ export function deriveLiveCanaryRunStatus(input: {
     (s) => s.status === "failed" && isRequiredLiveCanaryStepFailure(s.stepType, flags)
   );
   if (requiredHardFailures.length > 0) return "failed";
+
+  const sourceStamp = stepOutcomes.find((step) => step.stepType === "stamp_source_attributes");
+  if (sourceStamp?.status === "failed") return "failed";
 
   const pathComplete = isRequiredDeliveryPathComplete(stepOutcomes, opportunityConfigured);
   if (!pathComplete) return "failed";

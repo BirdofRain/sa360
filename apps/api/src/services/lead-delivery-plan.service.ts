@@ -26,6 +26,7 @@ import {
 } from "../repositories/lead-delivery-plan.repository.js";
 import { findLatestGhlLiveDeliveryRunForPlan } from "../repositories/ghl-live-delivery-run.repository.js";
 import { getDuplicateRiskForRoutingDecision } from "./lead-identity/lead-identity-correlation.service.js";
+import { planRoutingTagPreview } from "./ghl-delivery-adapter/vet-ghl-delivery-contract.js";
 import type { DuplicateRiskResult } from "./lead-identity/lead-identity.types.js";
 import {
   isCompanySheetsInternalPilotDecision,
@@ -323,10 +324,11 @@ export function buildShadowDeliveryPlanSteps(
     stepType: "add_tags",
     status: "planned",
     title: "Add SA360 tags",
-    description: "Would apply niche/source/event tags on the contact.",
+    description:
+      "Would add niche, source, and client tags. SA360::EVENT::LEAD_CREATED is planned only if required writes succeed and is not sent by this plan.",
     targetSystem: "ghl",
     targetId: subaccount || undefined,
-    requestPreviewJson: { tags },
+    requestPreviewJson: planRoutingTagPreview({ locationId: subaccount, tags, blockAutomationEntry: false }),
   });
 
   const hasPipeline =
@@ -696,9 +698,11 @@ export function buildDirectCanaryDeliveryPlanSteps(
     stepType: "add_tags",
     status: "planned",
     title: "Add SA360 tags",
+    description:
+      "Would add niche, source, and client tags. SA360::EVENT::LEAD_CREATED is planned only if required writes succeed and is not sent by this plan.",
     targetSystem: "ghl",
     targetId: subaccount || undefined,
-    requestPreviewJson: { tags },
+    requestPreviewJson: planRoutingTagPreview({ locationId: subaccount, tags, blockAutomationEntry: false }),
   });
 
   const hasPipeline =

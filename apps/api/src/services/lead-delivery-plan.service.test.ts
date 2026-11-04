@@ -132,6 +132,16 @@ test("matched decision generates plan with create_or_update_contact and stamp st
   const stamp = steps.find((s) => s.stepType === "stamp_custom_fields");
   const preview = stamp?.requestPreviewJson as { customFields?: Record<string, string> };
   assert.equal(preview?.customFields?.sa360_routing_status, "ROUTED_SHADOW");
+  const tags = steps.find((s) => s.stepType === "add_tags");
+  const tagPreview = tags?.requestPreviewJson as {
+    tags?: string[];
+    sendsLead?: boolean;
+    automationEntry?: { disposition?: string; includedInThisPreviewPost?: boolean };
+  };
+  assert.equal(tagPreview.sendsLead, false);
+  assert.equal(tagPreview.tags?.includes("SA360::EVENT::LEAD_CREATED"), false);
+  assert.equal(tagPreview.automationEntry?.disposition, "planned_if_required_writes_succeed");
+  assert.equal(tagPreview.automationEntry?.includedInThisPreviewPost, false);
 });
 
 test("unmatched decision creates blocked plan with review step", () => {

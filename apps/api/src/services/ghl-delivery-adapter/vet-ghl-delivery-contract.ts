@@ -178,6 +178,58 @@ export function withheldAutomationEntryTags(receipt: VetOperationReceipt | null 
   return tags.filter((tag) => AUTOMATION_ENTRY_TAGS.has(tag));
 }
 
+export type RoutingTagPreview = {
+  method: "POST";
+  path: "/contacts/:contactId/tags";
+  locationId: string;
+  tagWrite: "add_only";
+  replacesExistingTags: false;
+  sendsLead: false;
+  /** Niche, source, and client tags. Automation-entry tags are never in this list. */
+  tags: string[];
+  automationEntry: {
+    tag: typeof AUTOMATION_ENTRY_EVENT_TAG;
+    disposition: "withheld" | "planned_if_required_writes_succeed";
+    includedInThisPreviewPost: false;
+  };
+  withheldAutomationEntryTags: string[];
+  detail: string;
+};
+
+/**
+ * Simulation and shadow plans use this preview. The event tag is withheld when
+ * the known write plan already blocks enrollment, and otherwise stays conditional
+ * because a live required-write failure can still withhold it. The preview does
+ * not send the tag.
+ */
+export function planRoutingTagPreview(input: {
+  locationId: string;
+  tags: readonly string[];
+  blockAutomationEntry: boolean;
+}): RoutingTagPreview {
+  const split = partitionRoutingTags(input.tags, true);
+  const withheld = input.blockAutomationEntry ? split.withheldAutomationEntryTags : [];
+  const detail = input.blockAutomationEntry
+    ? "SA360::EVENT::LEAD_CREATED is withheld because the write plan blocks enrollment. This preview does not send it."
+    : "SA360::EVENT::LEAD_CREATED is planned only if required writes succeed. This preview does not send it. A later required-write failure withholds it. A Contact Created trigger on the contact upsert is separate and is not verified here.";
+  return {
+    method: "POST",
+    path: "/contacts/:contactId/tags",
+    locationId: input.locationId,
+    tagWrite: "add_only",
+    replacesExistingTags: false,
+    sendsLead: false,
+    tags: split.tags,
+    automationEntry: {
+      tag: AUTOMATION_ENTRY_EVENT_TAG,
+      disposition: input.blockAutomationEntry ? "withheld" : "planned_if_required_writes_succeed",
+      includedInThisPreviewPost: false,
+    },
+    withheldAutomationEntryTags: withheld,
+    detail,
+  };
+}
+
 function trimmed(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const text = value.trim();

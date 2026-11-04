@@ -12,6 +12,7 @@ import {
   nativeContactHttpFields,
   nativeDateOfBirthForContact,
   partitionRoutingTags,
+  planRoutingTagPreview,
   planIntakeSummaryNote,
   receiptFromPersistedStep,
   retryDecision,
@@ -192,6 +193,31 @@ test("direct API is a proposal and tag mode only adds tags", () => {
   assert.equal(direct.replacesExistingTags, false);
 });
 
+test("a tag preview never lists the event tag as a definite post", () => {
+  const open = planRoutingTagPreview({
+    locationId: "loc_1",
+    tags: ["SA360::NICHE::VET", AUTOMATION_ENTRY_EVENT_TAG, "SA360::CLIENT::client_1"],
+    blockAutomationEntry: false,
+  });
+  assert.equal(open.sendsLead, false);
+  assert.equal(open.automationEntry.includedInThisPreviewPost, false);
+  assert.equal(open.automationEntry.disposition, "planned_if_required_writes_succeed");
+  assert.equal(open.tags.includes(AUTOMATION_ENTRY_EVENT_TAG), false);
+  assert.deepEqual(open.withheldAutomationEntryTags, []);
+  assert.match(open.detail, /planned only if required writes succeed/);
+
+  const closed = planRoutingTagPreview({
+    locationId: "loc_1",
+    tags: open.tags.concat(AUTOMATION_ENTRY_EVENT_TAG),
+    blockAutomationEntry: true,
+  });
+  assert.equal(closed.automationEntry.disposition, "withheld");
+  assert.equal(closed.tags.includes(AUTOMATION_ENTRY_EVENT_TAG), false);
+  assert.deepEqual(closed.withheldAutomationEntryTags, [AUTOMATION_ENTRY_EVENT_TAG]);
+  assert.match(closed.detail, /withheld/);
+  assert.match(closed.detail, /does not send it/);
+});
+
 test("a closed required-write gate withholds automation-entry tags and keeps routing tags", () => {
   const open = partitionRoutingTags(
     ["SA360::NICHE::VET", AUTOMATION_ENTRY_EVENT_TAG, "SA360::CLIENT::client_1", WORKFLOW_TRIGGER_TAG],
@@ -308,6 +334,28 @@ test("remote outcomes retry only before a completed or ambiguous call", () => {
     deliveryRetryDisposition({
       status: "failed",
       stepRuns: [{ stepType: "create_or_update_contact", status: "failed", errorCode: "http_0", responseRedactedJson: { externalCallExecuted: true } }],
+    }),
+    "hold"
+  );
+  assert.equal(
+    deliveryRetryDisposition({
+      status: "partial_success",
+      stepRuns: [
+        {
+          stepType: "add_tags",
+          status: "succeeded",
+          responseRedactedJson: {
+            vetOperationReceipt: {
+              operation: "tags",
+              idempotencyKey: "k:tags",
+              outcome: "completed",
+              externalId: null,
+              httpStatus: 200,
+              withheldAutomationEntryTags: [AUTOMATION_ENTRY_EVENT_TAG],
+            },
+          },
+        },
+      ],
     }),
     "hold"
   );

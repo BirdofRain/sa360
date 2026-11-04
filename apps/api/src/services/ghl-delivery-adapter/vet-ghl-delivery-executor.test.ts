@@ -2,8 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import type { GhlAdapterPlanContext } from "./ghl-delivery-adapter.types.js";
 import { executeLiveCanaryGhlSteps } from "./ghl-live-canary-executor.service.js";
+import { buildTagRequest } from "./ghl-delivery-request-builders.js";
+import { knownWritePlanBlocksAutomationEntry } from "./routing-tag-plan.js";
 import type { GhlLiveHttpDeps } from "./ghl-live-transport.js";
-import { AUTOMATION_ENTRY_EVENT_TAG } from "./vet-ghl-delivery-contract.js";
+import { AUTOMATION_ENTRY_EVENT_TAG, deliveryRetryDisposition, planRoutingTagPreview } from "./vet-ghl-delivery-contract.js";
 import { WORKFLOW_TRIGGER_TAG } from "./ghl-workflow-trigger-mode.js";
 import {
   enableLiveCanaryRuntimeForTests,
@@ -312,6 +314,12 @@ test("unresolved delivery_required withholds the event tag for both enrollment m
     assert.equal(posted(calls, "SA360::NICHE::VET"), true, workflowTriggerMode);
     assert.equal(result.workflowResult, "blocked", workflowTriggerMode);
     assert.equal(result.contactResult, "upserted", workflowTriggerMode);
+    assert.equal(result.runStatus, "partial_success", workflowTriggerMode);
+    assert.equal(
+      deliveryRetryDisposition({ status: result.runStatus, stepRuns: result.stepOutcomes }),
+      "hold",
+      workflowTriggerMode
+    );
   }
 });
 
@@ -377,4 +385,95 @@ test("a resumed run posts a withheld event tag only after the required-write gat
   assert.equal(posted(stillBlocked.calls, AUTOMATION_ENTRY_EVENT_TAG), false);
   assert.equal(posted(stillBlocked.calls, WORKFLOW_TRIGGER_TAG), false);
   assert.equal(held.workflowResult, "blocked");
+});
+
+test("ambiguous and rejected tag receipts do not backfill a withheld event tag", async () => {
+  arm();
+  const contact: VetOperationReceipt = {
+    operation: "contact",
+    idempotencyKey: "idem_tag_hold:contact",
+    outcome: "completed",
+    externalId: "contact_kept",
+    httpStatus: 200,
+  };
+  for (const outcome of ["ambiguous", "rejected"] as const) {
+    const { deps, calls } = depsFrom(okHandler);
+    const result = await executeLiveCanaryGhlSteps(makeCtx({ workflowTriggerMode: "direct_api" }), `idem_${outcome}`, deps, {
+      emitLifecycle: async () => {},
+      priorReceipts: [
+        contact,
+        {
+          operation: "tags",
+          idempotencyKey: `idem_${outcome}:tags`,
+          outcome,
+          externalId: null,
+          httpStatus: outcome === "ambiguous" ? 500 : 422,
+          withheldAutomationEntryTags: [AUTOMATION_ENTRY_EVENT_TAG],
+        },
+      ],
+    });
+    assert.equal(posted(calls, AUTOMATION_ENTRY_EVENT_TAG), false, outcome);
+    assert.equal(calls.some((call) => call.url.includes("/tags")), false, outcome);
+    assert.equal(result.runStatus, "failed", outcome);
+  }
+});
+
+test("mode none still posts the event tag only when the required-write gate is open", async () => {
+  arm();
+  const open = depsFrom(okHandler);
+  const opened = await executeLiveCanaryGhlSteps(makeCtx({ workflowTriggerMode: "none" }), "idem_none_open", open.deps, {
+    emitLifecycle: async () => {},
+  });
+  assert.equal(posted(open.calls, AUTOMATION_ENTRY_EVENT_TAG), true);
+  assert.equal(open.calls.some((call) => call.url.includes("/workflow/")), false);
+  assert.equal(opened.workflowResult, "skipped");
+
+  const required = requiredFieldContext("tag_trigger");
+  const noneClosed = makeCtx({ workflowTriggerMode: "none" });
+  noneClosed.sourceEnrichment = required.sourceEnrichment;
+  noneClosed.destinationFieldMapping = {
+    ...required.destinationFieldMapping!,
+    workflowTriggerMode: "none",
+  };
+  const closedRun = depsFrom(okHandler);
+  const held = await executeLiveCanaryGhlSteps(noneClosed, "idem_none_closed", closedRun.deps, {
+    emitLifecycle: async () => {},
+  });
+  assert.equal(posted(closedRun.calls, AUTOMATION_ENTRY_EVENT_TAG), false);
+  assert.equal(closedRun.calls.some((call) => call.url.includes("/workflow/")), false);
+  assert.equal(held.workflowResult, "skipped");
+});
+
+test("the simulation gate matches a known unresolved delivery_required block", () => {
+  const blocked = requiredFieldContext("direct_api");
+  assert.equal(knownWritePlanBlocksAutomationEntry(blocked), true);
+  const preview = planRoutingTagPreview({
+    locationId: blocked.plan.destinationSubaccountIdGhl,
+    tags: buildTagRequest(blocked).tags,
+    blockAutomationEntry: knownWritePlanBlocksAutomationEntry(blocked),
+  });
+  assert.equal(preview.automationEntry.disposition, "withheld");
+  assert.equal(preview.tags.includes(AUTOMATION_ENTRY_EVENT_TAG), false);
+  assert.equal(preview.automationEntry.includedInThisPreviewPost, false);
+  const shared = "abc123XYZ78901";
+  const collided = makeCtx({ idMap: { sa360_lead_uid: shared, sa360_lifecycle_stage: shared } });
+  assert.equal(knownWritePlanBlocksAutomationEntry(collided), true);
+  assert.equal(knownWritePlanBlocksAutomationEntry(makeCtx()), false);
+});
+
+test("an opportunity failure can already have posted the event tag", async () => {
+  arm();
+  const { deps, calls } = depsFrom((call) => {
+    if (call.url.includes("/opportunities")) return new Response("upstream", { status: 500 });
+    return okHandler(call);
+  });
+  const result = await executeLiveCanaryGhlSteps(makeCtx({ workflowTriggerMode: "direct_api" }), "idem_opp_fail", deps, {
+    emitLifecycle: async () => {},
+  });
+  const tagAt = calls.findIndex((call) => posted([call], AUTOMATION_ENTRY_EVENT_TAG));
+  const oppAt = calls.findIndex((call) => call.url.includes("/opportunities"));
+  assert.equal(tagAt >= 0 && oppAt > tagAt, true);
+  assert.equal(calls.some((call) => call.url.includes("/workflow/")), false);
+  assert.equal(result.workflowResult, "skipped");
+  assert.equal(result.runStatus, "failed");
 });

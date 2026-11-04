@@ -1327,9 +1327,21 @@ export type SpreadsheetDeliveryResult =
         | "confirmation_required"
         | "idempotency_conflict"
         | "allocations_missing"
+        | "release_row_count"
         | typeof BUYER_EXPORT_AGE_REQUIRED;
       details?: Record<string, unknown>;
     };
+
+class ReleaseRowCountMismatch extends Error {
+  constructor(
+    readonly table: "LeadAllocation" | "LeadInventoryItem" | "BuyerDeliveredIdentity",
+    readonly expected: number,
+    readonly actual: number
+  ) {
+    super("release_row_count");
+    this.name = "ReleaseRowCountMismatch";
+  }
+}
 
 /**
  * Explicit operator action: record manual spreadsheet delivery.
@@ -1484,70 +1496,82 @@ export async function markSpreadsheetDelivered(
     externalWriteOccurred: false,
   };
 
-  await db.$transaction(async (tx) => {
-    const updated = await tx.leadDeliveryExportPackage.updateMany({
-      where: { id: packageRow.id, spreadsheetDeliveredAt: null },
-      data: {
-        spreadsheetDeliveredAt: now,
-        spreadsheetDeliveredBy: deliveredBy,
-        spreadsheetDeliveryIdempotencyKey: idempotencyKey,
-        spreadsheetDeliveryEvidenceJson: evidence,
-        customerReleaseNotifyStatus: CUSTOMER_RELEASE_NOTIFY_STATUS.pending,
-      },
+  // One interactive transaction, Prisma's default 5s budget. The package stamp,
+  // aged intent, identity insert, and allocation/inventory commits commit together
+  // or roll back together. Statements are set-based: a per-allocation round trip
+  // expired this budget on a 1,200-row package (P2028) and undid the whole release.
+  // A short row count throws inside this callback so Postgres rolls the stamp back
+  // with the partial writes. A lost response retries the same key.
+  let recorded = false;
+  try {
+    recorded = await db.$transaction(async (tx) => {
+      const updated = await tx.leadDeliveryExportPackage.updateMany({
+        where: { id: packageRow.id, spreadsheetDeliveredAt: null },
+        data: {
+          spreadsheetDeliveredAt: now,
+          spreadsheetDeliveredBy: deliveredBy,
+          spreadsheetDeliveryIdempotencyKey: idempotencyKey,
+          spreadsheetDeliveryEvidenceJson: evidence,
+          customerReleaseNotifyStatus: CUSTOMER_RELEASE_NOTIFY_STATUS.pending,
+        },
+      });
+      if (updated.count !== 1) {
+        // Concurrent first-writer already committed. Do not write again.
+        return false;
+      }
+
+      // Same transaction as the operator release. createdAt is the release time,
+      // so an earlier export is scheduled only when Approve & Release is after the
+      // client cutoff. Flag-off and pre-cutoff return without throwing. A database
+      // error rolls the release back; the operator retries the same phrase and key.
+      // This does not call Google.
+      await recordCompanySheetsAgedIntent(
+        {
+          exportPackageId: packageRow.id,
+          clientAccountId: packageRow.clientAccountId,
+          leadOrderId: packageRow.leadOrderId,
+          createdAt: now,
+        },
+        tx
+      );
+
+      const identityRows = allocations.map((allocation) => {
+        const identity = readNormalizedLeadIdentity(allocation.sourceLeadEvent.normalizedPayloadJson);
+        return {
+          clientAccountId: packageRow.clientAccountId,
+          phoneFingerprint: fingerprintPhoneIdentity(identity?.phoneE164),
+          emailFingerprint: identity?.email
+            ? fingerprintIdentityValue("email", identity.email)
+            : null,
+          sourceLeadEventId: allocation.sourceLeadEventId,
+          leadAllocationId: allocation.id,
+          leadInventoryItemId: allocation.leadInventoryItemId,
+        };
+      });
+      const identityWrite = await recordBuyerDeliveredIdentities(
+        identityRows,
+        tx as unknown as PrismaClient
+      );
+      if (identityWrite.count !== identityRows.length) {
+        throw new ReleaseRowCountMismatch(
+          "BuyerDeliveredIdentity",
+          identityRows.length,
+          identityWrite.count
+        );
+      }
+      await commitReleasedAllocationRows(tx, allocations, now);
+      return true;
     });
-    if (updated.count !== 1) {
-      // Concurrent first-writer won; treat as idempotent success below.
-      return;
-    }
-
-    // Same transaction as the operator release. createdAt is the release time,
-    // so an earlier export is scheduled only when Approve & Release is after the
-    // client cutoff. Flag-off and pre-cutoff return without throwing. A database
-    // error rolls the release back; the operator retries the same phrase and key.
-    // This does not call Google.
-    await recordCompanySheetsAgedIntent(
-      {
-        exportPackageId: packageRow.id,
-        clientAccountId: packageRow.clientAccountId,
-        leadOrderId: packageRow.leadOrderId,
-        createdAt: now,
-      },
-      tx
-    );
-
-    const identityRows = allocations.map((allocation) => {
-      const identity = readNormalizedLeadIdentity(allocation.sourceLeadEvent.normalizedPayloadJson);
+  } catch (err) {
+    if (err instanceof ReleaseRowCountMismatch) {
       return {
-        clientAccountId: packageRow.clientAccountId,
-        phoneFingerprint: fingerprintPhoneIdentity(identity?.phoneE164),
-        emailFingerprint: identity?.email
-          ? fingerprintIdentityValue("email", identity.email)
-          : null,
-        sourceLeadEventId: allocation.sourceLeadEventId,
-        leadAllocationId: allocation.id,
-        leadInventoryItemId: allocation.leadInventoryItemId,
+        ok: false,
+        code: "release_row_count",
+        details: { table: err.table, expected: err.expected, actual: err.actual },
       };
-    });
-    await recordBuyerDeliveredIdentities(identityRows, tx as unknown as PrismaClient);
-
-    for (const allocation of allocations) {
-      if (allocation.status === "reserved" || allocation.status === "delivering") {
-        await tx.leadAllocation.updateMany({
-          where: { id: allocation.id, status: { in: ["reserved", "delivering"] } },
-          data: { status: "committed", committedAt: now },
-        });
-      }
-      if (allocation.leadInventoryItemId) {
-        await tx.leadInventoryItem.updateMany({
-          where: {
-            id: allocation.leadInventoryItemId,
-            status: { in: ["reserved", "committed"] },
-          },
-          data: { status: "committed", committedAt: now },
-        });
-      }
     }
-  });
+    throw err;
+  }
 
   const finalized = await db.leadDeliveryExportPackage.findUniqueOrThrow({
     where: { id: packageRow.id },
@@ -1565,12 +1589,52 @@ export async function markSpreadsheetDelivered(
       evidenceNote: SPREADSHEET_DELIVERY_EVIDENCE_NOTE,
       deliveredAt: (finalized.spreadsheetDeliveredAt ?? now).toISOString(),
       deliveredBy: finalized.spreadsheetDeliveredBy,
-      idempotentReplay: false,
+      idempotentReplay: !recorded,
       externalWriteOccurred: false,
     },
     db,
     deps
   );
+}
+
+/** Primary-key updates for one release. One statement per table, not one per row. */
+async function commitReleasedAllocationRows(
+  tx: Prisma.TransactionClient,
+  allocations: Array<{ id: string; status: string; leadInventoryItemId: string | null }>,
+  now: Date
+): Promise<void> {
+  const allocationIds = allocations
+    .filter((allocation) => allocation.status === "reserved" || allocation.status === "delivering")
+    .map((allocation) => allocation.id);
+  if (allocationIds.length > 0) {
+    const allocationUpdated = await tx.leadAllocation.updateMany({
+      where: { id: { in: allocationIds }, status: { in: ["reserved", "delivering"] } },
+      data: { status: "committed", committedAt: now },
+    });
+    if (allocationUpdated.count !== allocationIds.length) {
+      throw new ReleaseRowCountMismatch(
+        "LeadAllocation",
+        allocationIds.length,
+        allocationUpdated.count
+      );
+    }
+  }
+  const itemIds = [
+    ...new Set(
+      allocations
+        .map((allocation) => allocation.leadInventoryItemId)
+        .filter((id): id is string => Boolean(id))
+    ),
+  ];
+  if (itemIds.length > 0) {
+    const itemUpdated = await tx.leadInventoryItem.updateMany({
+      where: { id: { in: itemIds }, status: { in: ["reserved", "committed"] } },
+      data: { status: "committed", committedAt: now },
+    });
+    if (itemUpdated.count !== itemIds.length) {
+      throw new ReleaseRowCountMismatch("LeadInventoryItem", itemIds.length, itemUpdated.count);
+    }
+  }
 }
 
 async function attachCustomerReleaseNotification(

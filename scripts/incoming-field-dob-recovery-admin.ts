@@ -256,6 +256,11 @@ async function main(): Promise<void> {
       }),
       inspections,
       report,
+      manifest: recovery.buildIncomingDobCorrectionManifest({
+        rows,
+        receivedFrom: from.toISOString(),
+        receivedTo: to.toISOString(),
+      }),
     })
   );
 }

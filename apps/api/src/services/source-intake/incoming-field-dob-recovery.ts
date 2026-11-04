@@ -15,10 +15,6 @@ import { normalizeLeadCaptureIoWebhookToLifecyclePayload } from "./leadcapture-i
 import { normalizeLeadCaptureParentUrl } from "./leadcapture-parent-url.js";
 import {
   bindingTreatsDateAsBirthday,
-  CONFIRMED_ERIKS_VEIDEMANIS_PARENT_URL_KEY,
-  CONFIRMED_ERIKS_VEIDEMANIS_PROVIDER_FUNNEL_ID,
-  CONFIRMED_JULIA_DODGE_PARENT_URL_KEY,
-  CONFIRMED_JULIA_DODGE_SOURCE_FUNNEL_ID,
   confirmedCampaignSourceLeadIds,
   confirmedDateOfBirthBindings,
   matchScopedIncomingFieldBinding,
@@ -139,18 +135,12 @@ export const INCOMING_DOB_UPSTREAM_PAYLOAD_CHANGE = {
   birthdayField: "date_of_birth",
   submissionTimeField: "submitted_at",
   jsonKeysNotQuestionLabels: true,
-  forms: [
-    {
-      page: CONFIRMED_JULIA_DODGE_PARENT_URL_KEY,
-      sourceFunnelId: CONFIRMED_JULIA_DODGE_SOURCE_FUNNEL_ID,
-      providerFunnelId: null,
-    },
-    {
-      page: CONFIRMED_ERIKS_VEIDEMANIS_PARENT_URL_KEY,
-      sourceFunnelId: null,
-      providerFunnelId: CONFIRMED_ERIKS_VEIDEMANIS_PROVIDER_FUNNEL_ID,
-    },
-  ],
+  forms: confirmedDateOfBirthBindings().map((binding) => ({
+    bindingId: binding.id,
+    page: binding.parentUrlKey ?? null,
+    sourceFunnelId: binding.sourceFunnelId ?? null,
+    providerFunnelId: binding.providerFunnelId ?? null,
+  })),
   instruction:
     "Send the birthday answer as the JSON key date_of_birth. A question label that still says Date is not that key. Send the submission timestamp as the JSON key submitted_at. Confirmed pages that still send date remain readable. Legacy forms keep date + time as the submission calendar. Do not edit live forms from this repository.",
 } as const;
@@ -161,6 +151,7 @@ export const INCOMING_DOB_RECOVERY_GAPS = [
   "GHL discovery in sam-test-survey-text-fields.ts still treats a field named gender as the sex stamp target. This change does not edit that mapping or the GHL mapping dropdowns.",
   "When the GHL source-attribute stamp has the lifecycle payload, Age and consumer_age send projectCampaignDobAge().age and date_of_birth sends canonical YYYY-MM-DD. A stamp without that payload still reads sourceAttributes only. The onboarding note still says age is not calculated from DOB.",
   "The localhost recovery command refuses remote database hosts. Its local counts are not a production census. The separate admin-API reader is GET-only and still cannot see Sheets jobs or lead allocations.",
+  "This recovery reads the raw key date. Registry bindings whose DOB step webhooks date_copy are not correction candidates. Plain date on those pages stays a non-birthday field.",
   "CamelCase answer keys now fingerprint as their underscored form. A route that previously snapshotted dateOfBirth as dateofbirth can show one schema-drift warning.",
 ] as const;
 
@@ -821,6 +812,103 @@ function formIdentityFor(snapshot: IncomingDobRecoverySnapshot): IncomingDobForm
     parentUrlKey: parentUrlKey(raw),
     sourceFunnelId,
     providerFunnelId: readSuppliedProviderFunnelId(raw),
+  };
+}
+
+export type IncomingDobCorrectionManifest = {
+  writes: false;
+  externalDestinations: "unchanged";
+  window: { receivedFrom: string; receivedTo: string | null };
+  ids: string[];
+  expectedCount: number;
+  heldDeliveredIds: string[];
+  outsideWindow: number;
+  counts: IncomingDobRecoveryReport["counts"];
+  reasons: Record<string, number>;
+  byBinding: Array<{
+    bindingId: string;
+    formKey: string;
+    eligible: number;
+    unchanged: number;
+    conflicting: number;
+    invalid: number;
+    skipped: number;
+    recoverableDob: number;
+    recoverableAge: number;
+    routing: Record<string, number>;
+  }>;
+};
+
+/**
+ * Reviewed apply scope for the fixed window. Ids are eligible rows with no
+ * delivery evidence. Delivered eligible ids are listed separately and are not
+ * part of expectedCount. No payload values are copied.
+ */
+export function buildIncomingDobCorrectionManifest(input: {
+  rows: IncomingDobRecoverySnapshot[];
+  receivedFrom: string;
+  receivedTo: string | null;
+}): IncomingDobCorrectionManifest {
+  const window = { receivedFrom: input.receivedFrom, receivedTo: input.receivedTo };
+  const statusById = new Map(input.rows.map((row) => [row.id, row.status]));
+  const bindingById = new Map(input.rows.map((row) => [row.id, formIdentityFor(row).confirmedBindingId]));
+  const assessments = input.rows.map((row) => assessIncomingDobRecoveryRow(row, window));
+  const counted = assessments.filter((row) => row.inWindow);
+  const counts: IncomingDobCorrectionManifest["counts"] = {
+    eligible: 0,
+    unchanged: 0,
+    conflicting: 0,
+    invalid: 0,
+    skipped: 0,
+    alreadyDelivered: 0,
+    alreadyDeliveredEligible: 0,
+  };
+  const reasons: Record<string, number> = {};
+  const groups = new Map<string, IncomingDobCorrectionManifest["byBinding"][number]>();
+  const ids: string[] = [];
+  const heldDeliveredIds: string[] = [];
+
+  for (const row of counted) {
+    counts[row.recoveryClass] += 1;
+    reasons[`${row.recoveryClass}:${row.reason}`] = (reasons[`${row.recoveryClass}:${row.reason}`] ?? 0) + 1;
+    if (row.alreadyDelivered) counts.alreadyDelivered += 1;
+    if (row.alreadyDelivered && row.recoveryClass === "eligible") counts.alreadyDeliveredEligible += 1;
+    if (!row.dateMeansBirthday) continue;
+    const bindingId = bindingById.get(row.id) ?? "unbound";
+    const group = groups.get(bindingId) ?? {
+      bindingId,
+      formKey: row.formKey,
+      eligible: 0,
+      unchanged: 0,
+      conflicting: 0,
+      invalid: 0,
+      skipped: 0,
+      recoverableDob: 0,
+      recoverableAge: 0,
+      routing: {},
+    };
+    group[row.recoveryClass] += 1;
+    if (row.recoveryClass === "eligible" && row.missingCanonicalDob) group.recoverableDob += 1;
+    if (row.recoveryClass === "eligible" && row.missingCanonicalAge) group.recoverableAge += 1;
+    const routingStatus = statusById.get(row.id) ?? "unknown";
+    group.routing[routingStatus] = (group.routing[routingStatus] ?? 0) + 1;
+    groups.set(bindingId, group);
+    if (row.recoveryClass !== "eligible") continue;
+    if (row.alreadyDelivered) heldDeliveredIds.push(row.id);
+    else ids.push(row.id);
+  }
+
+  return {
+    writes: false,
+    externalDestinations: "unchanged",
+    window,
+    ids,
+    expectedCount: ids.length,
+    heldDeliveredIds,
+    outsideWindow: assessments.length - counted.length,
+    counts,
+    reasons,
+    byBinding: [...groups.values()].sort((a, b) => a.bindingId.localeCompare(b.bindingId)),
   };
 }
 

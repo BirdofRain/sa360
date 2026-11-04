@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { Prisma, PrismaClient } from "@prisma/client";
 
 import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
+import { confirmedDateOfBirthBindings, CONFIRMED_CATALOG_DOB_FORMS } from "./source-field-alias.registry.js";
 import {
   INCOMING_DOB_RECOVERY_WINDOW_END,
   INCOMING_DOB_RECOVERY_WINDOW_START,
@@ -701,10 +702,17 @@ test("correction command dry-run does not write and refuses a remote host", () =
   };
   assert.equal(report.mode, "dry_run");
   assert.equal(report.writes, false);
-  assert.deepEqual(report.confirmedDateOfBirthBindingIds, [
-    "leadcapture_io_nextgen_vet_julia_dodge",
-    "leadcapture_io_nextgen_vet_eriks_veidemanis",
-  ]);
+  assert.deepEqual(
+    report.confirmedDateOfBirthBindingIds,
+    confirmedDateOfBirthBindings().map((binding) => binding.id)
+  );
+  assert.equal(report.confirmedDateOfBirthBindingIds.includes("leadcapture_io_nextgen_vet_julia_dodge"), true);
+  assert.equal(report.confirmedDateOfBirthBindingIds.includes("leadcapture_io_nextgen_vet_eriks_veidemanis"), true);
+  assert.equal(
+    report.confirmedDateOfBirthBindingIds.includes("leadcapture_io_nextgen_sehi_zach_busch"),
+    false
+  );
+  assert.equal(CONFIRMED_CATALOG_DOB_FORMS.some((form) => form.alias === "date_copy"), true);
 
   const remote = run([], "postgresql://user:secret@db.example.com:25060/defaultdb");
   assert.equal(remote.status, 2);

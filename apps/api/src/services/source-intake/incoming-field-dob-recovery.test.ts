@@ -9,6 +9,7 @@ import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
 import {
   adminSourceLeadDetailToRecoverySnapshot,
   assessIncomingDobRecoveryRow,
+  buildIncomingDobCorrectionManifest,
   buildIncomingDobRecoveryReport,
   describeIncomingDobRecoveryExpectation,
   describeIncomingDobRecoveryInspection,
@@ -579,4 +580,37 @@ test("local dry run reads without writing", () => {
   assert.equal(report.report, INCOMING_DOB_RECOVERY_REPORT_VERSION);
   assert.equal(report.writes, false);
   assert.equal(typeof report.knownEvent.found, "boolean");
+});
+
+test("correction manifest keeps delivered rows and date_copy pages out of the apply ids", () => {
+  const open = snapshot({ id: "evt_open" });
+  const delivered = snapshot({
+    id: "evt_delivered",
+    deliveredAt: "2026-11-02T19:00:00.000Z",
+  });
+  const dateCopy = snapshot({
+    id: "evt_date_copy",
+    rawPayload: {
+      provider: "leadcapture_io",
+      sa360_source_system: "leadcapture_io_nextgen",
+      submitted_at: "2026-11-02T18:00:00.000Z",
+      parent_url: "https://go.selfemployedhi.com/zach-busch",
+      date_copy: "03/13/1955",
+    },
+  });
+  const manifest = buildIncomingDobCorrectionManifest({
+    rows: [open, delivered, dateCopy],
+    receivedFrom: INCOMING_DOB_RECOVERY_WINDOW_START,
+    receivedTo: INCOMING_DOB_RECOVERY_WINDOW_END,
+  });
+  assert.equal(manifest.writes, false);
+  assert.deepEqual(manifest.ids, ["evt_open"]);
+  assert.equal(manifest.expectedCount, 1);
+  assert.deepEqual(manifest.heldDeliveredIds, ["evt_delivered"]);
+  assert.equal(manifest.ids.includes("evt_date_copy"), false);
+  assert.equal(JSON.stringify(manifest).includes("1955"), false);
+  const julia = manifest.byBinding.find((row) => row.bindingId === "leadcapture_io_nextgen_vet_julia_dodge");
+  assert.equal(julia?.recoverableDob, 2);
+  assert.equal(julia?.recoverableAge, 2);
+  assert.equal(julia?.routing.normalized, 2);
 });

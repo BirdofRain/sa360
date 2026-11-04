@@ -9,6 +9,12 @@
  *
  * Admin C.O.C. should read `vetWorkflowTriggerProposal` on the client
  * destination DTO and must not apply `proposedMode` onto an existing row.
+ *
+ * A required-write failure that blocks explicit enrollment also withholds
+ * automation-entry tags (`SA360::EVENT::LEAD_CREATED`, `SA360::TRIGGER::NEW_LEAD`,
+ * and `SA360::TRIGGER::AI_READY`) from the later routing-tag post. Niche, source,
+ * and client tags still post. A GHL Contact Created trigger on the upsert is
+ * outside this gate.
  */
 import { projectCampaignDobAge } from "../consumer-age/campaign-dob-age.js";
 import type { GhlDiscoveredCustomField } from "../ghl-config-discovery/ghl-config-discovery.types.js";
@@ -17,6 +23,7 @@ import {
   type OnboardingLeadNotePlan,
 } from "./onboarding-lead-note.js";
 import {
+  WORKFLOW_AI_READY_TAG,
   WORKFLOW_TRIGGER_MODE_DEFAULT,
   WORKFLOW_TRIGGER_TAG,
   normalizeWorkflowTriggerMode,
@@ -62,6 +69,12 @@ export type VetOperationReceipt = {
   outcome: VetOperationOutcome;
   externalId: string | null;
   httpStatus: number | null;
+  /**
+   * Automation-entry tags left off a completed routing-tag post because required
+   * writes had already blocked enrollment. A later resume posts only these tags,
+   * and only after that gate opens. Niche, source, and client tags are not listed.
+   */
+  withheldAutomationEntryTags?: string[];
 };
 
 export type VetRetryDecision = "execute" | "skip_completed" | "hold_ambiguous" | "hold_rejected";
@@ -127,6 +140,42 @@ export function tagModePlan(input: {
     tagsToAdd: [],
     enrollsByDirectApi: input.mode === "direct_api",
   };
+}
+
+/** Posted by the routing-tag step. A Contact Tag Added listener can start a workflow from this tag alone. */
+export const AUTOMATION_ENTRY_EVENT_TAG = "SA360::EVENT::LEAD_CREATED";
+
+const AUTOMATION_ENTRY_TAGS = new Set<string>([
+  AUTOMATION_ENTRY_EVENT_TAG,
+  WORKFLOW_TRIGGER_TAG,
+  WORKFLOW_AI_READY_TAG,
+]);
+
+/**
+ * Required-write failures block explicit enrollment. The same gate has to cover
+ * a later tag post, or `SA360::EVENT::LEAD_CREATED` starts an automation while
+ * `SA360::TRIGGER::NEW_LEAD` and direct API enrollment are skipped.
+ * Niche, source, and client tags stay. This does not stop a GHL Contact Created
+ * trigger on the earlier contact upsert.
+ */
+export function partitionRoutingTags(
+  tags: readonly string[],
+  blockAutomationEntry: boolean
+): { tags: string[]; withheldAutomationEntryTags: string[] } {
+  if (!blockAutomationEntry) return { tags: [...tags], withheldAutomationEntryTags: [] };
+  const kept: string[] = [];
+  const withheld: string[] = [];
+  for (const tag of tags) {
+    if (AUTOMATION_ENTRY_TAGS.has(tag)) withheld.push(tag);
+    else kept.push(tag);
+  }
+  return { tags: kept, withheldAutomationEntryTags: withheld };
+}
+
+export function withheldAutomationEntryTags(receipt: VetOperationReceipt | null | undefined): string[] {
+  const tags = receipt?.withheldAutomationEntryTags;
+  if (!tags) return [];
+  return tags.filter((tag) => AUTOMATION_ENTRY_TAGS.has(tag));
 }
 
 function trimmed(value: unknown): string | null {
@@ -382,12 +431,18 @@ function storedReceipt(value: unknown): VetOperationReceipt | null {
   const outcome = receipt.outcome;
   if (typeof operation !== "string" || !OPERATION_NAMES.has(operation as VetOperation)) return null;
   if (typeof outcome !== "string" || !OUTCOME_NAMES.has(outcome as VetOperationOutcome)) return null;
+  const withheld = Array.isArray(receipt.withheldAutomationEntryTags)
+    ? receipt.withheldAutomationEntryTags.filter(
+        (tag): tag is string => typeof tag === "string" && AUTOMATION_ENTRY_TAGS.has(tag)
+      )
+    : [];
   return {
     operation: operation as VetOperation,
     idempotencyKey: typeof receipt.idempotencyKey === "string" ? receipt.idempotencyKey : "",
     outcome: outcome as VetOperationOutcome,
     externalId: typeof receipt.externalId === "string" ? receipt.externalId : null,
     httpStatus: typeof receipt.httpStatus === "number" ? receipt.httpStatus : null,
+    ...(withheld.length > 0 ? { withheldAutomationEntryTags: withheld } : {}),
   };
 }
 

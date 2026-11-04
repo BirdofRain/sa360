@@ -9,7 +9,7 @@ import type {
   GhlBackupSheetPreview,
   GhlValidationResult,
 } from "./ghl-delivery-adapter.types.js";
-import { vetNativeContactFields } from "./vet-ghl-delivery-contract.js";
+import { AUTOMATION_ENTRY_EVENT_TAG, vetNativeContactFields } from "./vet-ghl-delivery-contract.js";
 
 function trim(v: string | null | undefined): string | null {
   const t = v?.trim();
@@ -198,7 +198,7 @@ export function buildTagRequest(ctx: GhlAdapterPlanContext): GhlTagPreview {
   const tags = [
     nicheTag(ctx.plan.nicheKey ?? ctx.rule?.nicheKey),
     sourceTag(ctx.rule?.sourcePlatform),
-    "SA360::EVENT::LEAD_CREATED",
+    AUTOMATION_ENTRY_EVENT_TAG,
     clientTag(ctx.plan.destinationClientAccountId),
   ].filter((t): t is string => Boolean(t));
 

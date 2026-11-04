@@ -62,10 +62,12 @@ import {
   classifyRemoteOutcome,
   noteIdFromResponse,
   operationIdempotencyKey,
+  partitionRoutingTags,
   planIntakeSummaryNote,
   retryDecision,
   separateDeliveryResults,
   tagModePlan,
+  withheldAutomationEntryTags,
   workflowEnrollmentAllowed,
   type VetOperation,
   type VetOperationReceipt,
@@ -1045,12 +1047,79 @@ export async function executeLiveCanaryGhlSteps(
   }
 
   // add_tags — POST adds these tags and does not replace unrelated contact tags.
+  // A closed required-write gate drops automation-entry tags. Niche, source, and client tags still post.
   {
     const startedAt = new Date();
     const tagsPreview = buildTagRequest(ctx);
+    const blockAutomationEntry = workflowBlockReason !== null;
+    const partitioned = partitionRoutingTags(tagsPreview.tags, blockAutomationEntry);
     const tagPrior = priorFor("tags");
     const tagDecision = retryDecision(tagPrior);
-    if (tagDecision !== "execute") {
+    const withheldOnPrior = withheldAutomationEntryTags(tagPrior);
+    const postWithheldOnly =
+      tagDecision === "skip_completed" && !blockAutomationEntry && withheldOnPrior.length > 0;
+    const tagReceipt = (
+      outcome: VetOperationReceipt["outcome"],
+      httpStatus: number | null,
+      withheld: string[]
+    ): VetOperationReceipt => ({
+      operation: "tags",
+      idempotencyKey: operationIdempotencyKey(idempotencyKey, "tags"),
+      outcome,
+      externalId: null,
+      httpStatus,
+      ...(withheld.length > 0 ? { withheldAutomationEntryTags: withheld } : {}),
+    });
+
+    if (postWithheldOnly) {
+      const res = await ghlDeliveryWrite(
+        deps,
+        tagsPreview.method,
+        `/contacts/${encodeURIComponent(contactIdGhl!)}/tags`,
+        { body: { tags: withheldOnPrior }, locationId: ghlLocationId }
+      );
+      const ok = res.ok;
+      const tagError = ok ? null : parseGhlApiErrorSummary(res.text, res.json);
+      if (!ok) warnings.push(tagError ?? "Withheld automation-entry tag was not posted.");
+      const outcome = classifyRemoteOutcome({
+        attempted: true,
+        httpStatus: res.status,
+        ok,
+        externalId: null,
+        requiresExternalId: false,
+      });
+      pushOutcome({
+        stepType: "add_tags",
+        deliveryPlanStepId: findPlanStepId(ctx, "add_tags"),
+        status: ok ? "succeeded" : "failed",
+        targetSystem: "ghl",
+        targetId: contactIdGhl,
+        externalId: null,
+        errorCode: ok ? null : `http_${res.status || "transport"}`,
+        errorSummary: ok ? null : tagError,
+        warnings: ok
+          ? ["Posted the automation-entry tag withheld until required writes succeeded."]
+          : ["Automation-entry tag was not confirmed and was not repeated."],
+        requestRedactedJson: {
+          ...(res.redactedRequest ?? {}),
+          tagWrite: "add_only",
+          replacesExistingTags: false,
+          tags: withheldOnPrior,
+        } as Prisma.InputJsonValue,
+        responseRedactedJson: withReceipt(
+          {
+            ...(res.redactedResponse ?? {}),
+            externalCallExecuted: true,
+            tagWrite: "add_only",
+            replacesExistingTags: false,
+          },
+          tagReceipt(outcome, res.status, [])
+        ),
+        startedAt,
+        completedAt: new Date(),
+        externalCallExecuted: true,
+      });
+    } else if (tagDecision !== "execute") {
       pushOutcome({
         stepType: "add_tags",
         deliveryPlanStepId: findPlanStepId(ctx, "add_tags"),
@@ -1070,56 +1139,86 @@ export async function executeLiveCanaryGhlSteps(
         completedAt: new Date(),
         externalCallExecuted: false,
       });
-    } else {
-    const res = await ghlDeliveryWrite(
-      deps,
-      tagsPreview.method,
-      `/contacts/${encodeURIComponent(contactIdGhl!)}/tags`,
-      { body: { tags: tagsPreview.tags }, locationId: ghlLocationId }
-    );
-    const ok = res.ok;
-    const tagError = ok ? null : parseGhlApiErrorSummary(res.text, res.json);
-    if (!ok) warnings.push(tagError ?? "Tag add failed after contact was created.");
-    pushOutcome({
-      stepType: "add_tags",
-      deliveryPlanStepId: findPlanStepId(ctx, "add_tags"),
-      status: ok ? "succeeded" : "failed",
-      targetSystem: "ghl",
-      targetId: contactIdGhl,
-      externalId: null,
-      errorCode: ok ? null : `http_${res.status || "transport"}`,
-      errorSummary: ok ? null : tagError,
-      warnings: ok ? [] : ["Non-fatal tag failure."],
-      requestRedactedJson: {
-        ...(res.redactedRequest ?? {}),
-        tagWrite: "add_only",
-        replacesExistingTags: false,
-      } as Prisma.InputJsonValue,
-      responseRedactedJson: withReceipt(
-        {
-          ...(res.redactedResponse ?? {}),
-          externalCallExecuted: true,
+    } else if (partitioned.tags.length === 0) {
+      pushOutcome({
+        stepType: "add_tags",
+        deliveryPlanStepId: findPlanStepId(ctx, "add_tags"),
+        status: "succeeded",
+        targetSystem: "ghl",
+        targetId: contactIdGhl,
+        externalId: null,
+        errorCode: null,
+        errorSummary: null,
+        warnings: ["Automation-entry tags were withheld because required writes blocked enrollment."],
+        requestRedactedJson: {
           tagWrite: "add_only",
           replacesExistingTags: false,
-        },
-        {
-          operation: "tags",
-          idempotencyKey: operationIdempotencyKey(idempotencyKey, "tags"),
-          outcome: classifyRemoteOutcome({
-            attempted: true,
-            httpStatus: res.status,
-            ok,
-            externalId: null,
-            requiresExternalId: false,
-          }),
-          externalId: null,
-          httpStatus: res.status,
-        }
-      ),
-      startedAt,
-      completedAt: new Date(),
-      externalCallExecuted: true,
-    });
+          withheldAutomationEntryTags: partitioned.withheldAutomationEntryTags,
+        } as Prisma.InputJsonValue,
+        responseRedactedJson: withReceipt(
+          { externalCallExecuted: false, tagWrite: "add_only", replacesExistingTags: false },
+          tagReceipt("completed", null, partitioned.withheldAutomationEntryTags)
+        ),
+        startedAt,
+        completedAt: new Date(),
+        externalCallExecuted: false,
+      });
+    } else {
+      const res = await ghlDeliveryWrite(
+        deps,
+        tagsPreview.method,
+        `/contacts/${encodeURIComponent(contactIdGhl!)}/tags`,
+        { body: { tags: partitioned.tags }, locationId: ghlLocationId }
+      );
+      const ok = res.ok;
+      const tagError = ok ? null : parseGhlApiErrorSummary(res.text, res.json);
+      if (!ok) warnings.push(tagError ?? "Tag add failed after contact was created.");
+      pushOutcome({
+        stepType: "add_tags",
+        deliveryPlanStepId: findPlanStepId(ctx, "add_tags"),
+        status: ok ? "succeeded" : "failed",
+        targetSystem: "ghl",
+        targetId: contactIdGhl,
+        externalId: null,
+        errorCode: ok ? null : `http_${res.status || "transport"}`,
+        errorSummary: ok ? null : tagError,
+        warnings: [
+          ...(ok ? [] : ["Non-fatal tag failure."]),
+          ...(partitioned.withheldAutomationEntryTags.length > 0
+            ? ["Automation-entry tags were withheld because required writes blocked enrollment."]
+            : []),
+        ],
+        requestRedactedJson: {
+          ...(res.redactedRequest ?? {}),
+          tagWrite: "add_only",
+          replacesExistingTags: false,
+          ...(partitioned.withheldAutomationEntryTags.length > 0
+            ? { withheldAutomationEntryTags: partitioned.withheldAutomationEntryTags }
+            : {}),
+        } as Prisma.InputJsonValue,
+        responseRedactedJson: withReceipt(
+          {
+            ...(res.redactedResponse ?? {}),
+            externalCallExecuted: true,
+            tagWrite: "add_only",
+            replacesExistingTags: false,
+          },
+          tagReceipt(
+            classifyRemoteOutcome({
+              attempted: true,
+              httpStatus: res.status,
+              ok,
+              externalId: null,
+              requiresExternalId: false,
+            }),
+            res.status,
+            partitioned.withheldAutomationEntryTags
+          )
+        ),
+        startedAt,
+        completedAt: new Date(),
+        externalCallExecuted: true,
+      });
     }
   }
 

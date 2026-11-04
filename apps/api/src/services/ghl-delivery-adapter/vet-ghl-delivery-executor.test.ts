@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { GhlAdapterPlanContext } from "./ghl-delivery-adapter.types.js";
 import { executeLiveCanaryGhlSteps } from "./ghl-live-canary-executor.service.js";
 import type { GhlLiveHttpDeps } from "./ghl-live-transport.js";
+import { AUTOMATION_ENTRY_EVENT_TAG } from "./vet-ghl-delivery-contract.js";
 import { WORKFLOW_TRIGGER_TAG } from "./ghl-workflow-trigger-mode.js";
 import {
   enableLiveCanaryRuntimeForTests,
@@ -37,6 +38,16 @@ function depsFrom(handler: (call: Call) => Response): { deps: GhlLiveHttpDeps; c
     },
   };
   return { deps, calls };
+}
+
+function tagLists(calls: Call[]): string[][] {
+  return calls
+    .filter((call) => call.url.includes("/tags") && Array.isArray(call.body?.tags))
+    .map((call) => call.body?.tags as string[]);
+}
+
+function posted(calls: Call[], tag: string): boolean {
+  return tagLists(calls).some((tags) => tags.includes(tag));
 }
 
 function okHandler(call: Call): Response {
@@ -143,6 +154,7 @@ test("executor omits blank natives, writes DOB, and does not post a note by defa
   assert.equal(calls.some((call) => call.url.includes("/notes")), false);
   assert.equal(result.noteResult, "disabled");
   assert.equal(result.contactResult, "upserted");
+  assert.equal(posted(calls, AUTOMATION_ENTRY_EVENT_TAG), true);
   const workflowTags = calls.filter((call) => call.url.includes("/tags") && Array.isArray(call.body?.tags) && (call.body.tags as string[]).includes(WORKFLOW_TRIGGER_TAG));
   assert.equal(workflowTags.length, 1);
   assert.equal(workflowTags[0]?.method, "POST");
@@ -191,6 +203,8 @@ test("duplicate custom-field targets do not write either value and block workflo
   assert.equal(result.runStatus, "failed");
   assert.equal(result.workflowResult, "blocked");
   assert.equal(result.contactResult, "upserted");
+  assert.equal(posted(calls, AUTOMATION_ENTRY_EVENT_TAG), false);
+  assert.equal(posted(calls, "SA360::NICHE::VET"), true);
 });
 
 test("a completed contact is not upserted again", async () => {
@@ -250,4 +264,117 @@ test("a note failure stays separate and is not transport-retried", async () => {
   const note = calls.find((call) => call.url.includes("/notes"));
   assert.equal(note?.body?.title, "SA360 lead");
   assert.equal(typeof note?.body?.body, "string");
+});
+
+function requiredFieldContext(workflowTriggerMode: "tag_trigger" | "direct_api"): GhlAdapterPlanContext {
+  const ctx = makeCtx({
+    workflowTriggerMode,
+    enrichment: {
+      sourceAttributes: { primary_reason: " " },
+      enrichmentStatus: "partial",
+      automationReadiness: "ready",
+      unmappedSourceFieldKeys: [],
+      sourceAttributeFieldMap: {
+        primary_reason: { ghlFieldKey: "fieldReason01", requirement: "delivery_required" },
+      },
+      sourceEnrichmentPolicy: { intakeSummaryNotesEnabled: false },
+    },
+  });
+  ctx.destinationFieldMapping = {
+    ...ctx.destinationFieldMapping!,
+    discoveredCustomFields: [
+      {
+        id: "fieldReason01",
+        name: "Primary Reason",
+        key: "primary_reason",
+        fieldKey: "contact.primary_reason",
+        dataType: "TEXT",
+      },
+    ],
+  };
+  return ctx;
+}
+
+test("unresolved delivery_required withholds the event tag for both enrollment modes", async () => {
+  arm();
+  for (const workflowTriggerMode of ["tag_trigger", "direct_api"] as const) {
+    const { deps, calls } = depsFrom(okHandler);
+    const result = await executeLiveCanaryGhlSteps(
+      requiredFieldContext(workflowTriggerMode),
+      `idem_required_${workflowTriggerMode}`,
+      deps,
+      { emitLifecycle: async () => {} }
+    );
+    assert.equal(posted(calls, AUTOMATION_ENTRY_EVENT_TAG), false, workflowTriggerMode);
+    assert.equal(posted(calls, WORKFLOW_TRIGGER_TAG), false, workflowTriggerMode);
+    assert.equal(posted(calls, "SA360::TRIGGER::AI_READY"), false, workflowTriggerMode);
+    assert.equal(calls.some((call) => call.url.includes("/workflow/")), false, workflowTriggerMode);
+    assert.equal(posted(calls, "SA360::NICHE::VET"), true, workflowTriggerMode);
+    assert.equal(result.workflowResult, "blocked", workflowTriggerMode);
+    assert.equal(result.contactResult, "upserted", workflowTriggerMode);
+  }
+});
+
+test("duplicate targets withhold the event tag on direct API enrollment", async () => {
+  arm();
+  const shared = "abc123XYZ78901";
+  const { deps, calls } = depsFrom(okHandler);
+  const result = await executeLiveCanaryGhlSteps(
+    makeCtx({
+      workflowTriggerMode: "direct_api",
+      idMap: { sa360_lead_uid: shared, sa360_lifecycle_stage: shared },
+    }),
+    "idem_collision_direct",
+    deps,
+    { emitLifecycle: async () => {} }
+  );
+  assert.equal(posted(calls, AUTOMATION_ENTRY_EVENT_TAG), false);
+  assert.equal(posted(calls, WORKFLOW_TRIGGER_TAG), false);
+  assert.equal(calls.some((call) => call.url.includes("/workflow/")), false);
+  assert.equal(posted(calls, "SA360::CLIENT::client_dest"), true);
+  assert.equal(result.workflowResult, "blocked");
+});
+
+test("a resumed run posts a withheld event tag only after the required-write gate opens", async () => {
+  arm();
+  const priorTags: VetOperationReceipt = {
+    operation: "tags",
+    idempotencyKey: "idem_resume:tags",
+    outcome: "completed",
+    externalId: null,
+    httpStatus: 200,
+    withheldAutomationEntryTags: [AUTOMATION_ENTRY_EVENT_TAG],
+  };
+  const priorContact: VetOperationReceipt = {
+    operation: "contact",
+    idempotencyKey: "idem_resume:contact",
+    outcome: "completed",
+    externalId: "contact_kept",
+    httpStatus: 200,
+  };
+  const { deps, calls } = depsFrom(okHandler);
+  const opened = await executeLiveCanaryGhlSteps(makeCtx({ workflowTriggerMode: "direct_api" }), "idem_resume", deps, {
+    emitLifecycle: async () => {},
+    priorReceipts: [priorContact, priorTags],
+  });
+  assert.equal(calls.some((call) => call.url.includes("/contacts/upsert")), false);
+  assert.deepEqual(
+    tagLists(calls).filter((tags) => tags.includes(AUTOMATION_ENTRY_EVENT_TAG)),
+    [[AUTOMATION_ENTRY_EVENT_TAG]]
+  );
+  assert.equal(posted(calls, "SA360::NICHE::VET"), false);
+  assert.equal(calls.some((call) => call.url.includes("/workflow/")), true);
+  assert.equal(opened.workflowResult, "enrolled");
+
+  const stillBlocked = depsFrom(okHandler);
+  const shared = "abc123XYZ78901";
+  const held = await executeLiveCanaryGhlSteps(
+    makeCtx({ idMap: { sa360_lead_uid: shared, sa360_lifecycle_stage: shared } }),
+    "idem_resume_held",
+    stillBlocked.deps,
+    { emitLifecycle: async () => {}, priorReceipts: [priorContact, priorTags] }
+  );
+  assert.equal(posted(stillBlocked.calls, AUTOMATION_ENTRY_EVENT_TAG), false);
+  assert.equal(posted(stillBlocked.calls, WORKFLOW_TRIGGER_TAG), false);
+  assert.equal(held.workflowResult, "blocked");
 });

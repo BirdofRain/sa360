@@ -6,11 +6,14 @@ import { parseSourceEnrichmentPolicyJson } from "../source-intake/source-enrichm
 import { buildLiveContactUpsertHttpBody, buildContactUpsertRequest } from "./ghl-delivery-request-builders.js";
 import type { GhlAdapterPlanContext } from "./ghl-delivery-adapter.types.js";
 import {
+  AUTOMATION_ENTRY_EVENT_TAG,
   classifyRemoteOutcome,
   deliveryRetryDisposition,
   nativeContactHttpFields,
   nativeDateOfBirthForContact,
+  partitionRoutingTags,
   planIntakeSummaryNote,
+  receiptFromPersistedStep,
   retryDecision,
   separateDeliveryResults,
   tagModePlan,
@@ -187,6 +190,34 @@ test("direct API is a proposal and tag mode only adds tags", () => {
   assert.deepEqual(direct.tagsToAdd, []);
   assert.equal(direct.enrollsByDirectApi, true);
   assert.equal(direct.replacesExistingTags, false);
+});
+
+test("a closed required-write gate withholds automation-entry tags and keeps routing tags", () => {
+  const open = partitionRoutingTags(
+    ["SA360::NICHE::VET", AUTOMATION_ENTRY_EVENT_TAG, "SA360::CLIENT::client_1", WORKFLOW_TRIGGER_TAG],
+    false
+  );
+  assert.deepEqual(open.withheldAutomationEntryTags, []);
+  assert.equal(open.tags.includes(AUTOMATION_ENTRY_EVENT_TAG), true);
+  const closed = partitionRoutingTags(open.tags, true);
+  assert.deepEqual(closed.tags, ["SA360::NICHE::VET", "SA360::CLIENT::client_1"]);
+  assert.deepEqual(closed.withheldAutomationEntryTags, [AUTOMATION_ENTRY_EVENT_TAG, WORKFLOW_TRIGGER_TAG]);
+  const stored = receiptFromPersistedStep({
+    stepType: "add_tags",
+    status: "succeeded",
+    responseRedactedJson: {
+      externalCallExecuted: true,
+      vetOperationReceipt: {
+        operation: "tags",
+        idempotencyKey: "run:tags",
+        outcome: "completed",
+        externalId: null,
+        httpStatus: 200,
+        withheldAutomationEntryTags: [AUTOMATION_ENTRY_EVENT_TAG, "SA360::NICHE::VET"],
+      },
+    },
+  });
+  assert.deepEqual(stored?.withheldAutomationEntryTags, [AUTOMATION_ENTRY_EVENT_TAG]);
 });
 
 test("intake-summary notes stay off unless explicitly enabled", () => {

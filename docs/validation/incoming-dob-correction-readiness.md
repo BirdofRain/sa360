@@ -1,6 +1,6 @@
 # Historical DOB correction readiness
 
-This file pins the unapplied 1,015-row correction. It does not apply it.
+This file pins the 1,015-row correction. The authorized production attempt did not commit.
 
 ## Pin
 
@@ -159,10 +159,28 @@ The rollback command without `--manifest` is not the command for this run. It se
 
 Expected field counts if every manifest row is still eligible at apply time: 1,015 `date_of_birth` fills, 1,011 new `consumer_age` fills, 4 existing `consumer_age` values preserved, 0 conflicting rows, 0 invalid rows, one audit row per written event, 0 destination writes. 48 of the 1,015 already have sheet, GHL, or person-admission evidence. Those rows are still canonical fills. They are not new deliveries.
 
+## Authorized attempt
+
+The pinned writer was invoked twice from the running API container, at November 3, 2026 11:57 PM and November 4, 2026 12:01 AM America/New_York. Neither invocation deployed this branch or started a worker. Both confirmed the manifest SHA256, the correction-file SHA256, database `defaultdb` on the expected host, audit schema `ready`, and 0 existing audit rows for these ids.
+
+Immediately before the write, both attempts read:
+
+- 1,014 plans `apply` / `fill_blank_canonical` and 1 plan `skip` / `already_canonical`
+- 1,014 blank dates of birth to fill, 1,009 blank ages to fill, 4 stored ages unchanged, 0 age changes
+- 901 linked inventory items, all `pending_review`; 0 in the projection source; 0 projection rows; 0 allocations; 0 eligibility assessments
+- 0 manifest-scoped and 0 global GHL outbox rows in `pending`, `executing`, or `uncertain`
+- delivery totals unchanged from the 8:14 PM census: 43 sheet jobs, 48 GHL outbox rows, 84 person admissions, 0 allocations, 0 buyer identities
+
+`cmvtkjy7z020snj0uivwpky0k` is the already-canonical row. Its `updatedAt` is November 3, 2026 10:51 PM America/New_York, after the preflight. Canonical date of birth and age were already present and matched the proposal. Provenance and reference were still blank, and the proposal would not fill them. It is not one of the four stored-age rows, and it has no audit row.
+
+`cmvzgznfu00agou0tlhh21j4f` is an apply plan that would fill a blank date of birth and reference fields and would leave `consumer_age` blank. Its `updatedAt` is still the November 2, 2026 intake time. The four stored ages still plan as preserved.
+
+Both writes threw Prisma `P2028` inside the first 25-row transaction. Prisma's default interactive transaction limit is 5 seconds, and this writer does not raise it. The transaction rolled back. After each attempt the manifest still had 0 audit rows, 0 canonical fills, and no new sheet job, GHL row, admission, allocation, buyer identity, inventory update, or projection row.
+
 ## Blocker
 
-The schema check returned `ready`. No production correction was applied. `IncomingDobCorrectionAudit` had 0 rows at 8:14 PM America/New_York.
+The schema is `ready`. The correction is not applied. 1,014 rows remain unwritten, and 1 row is already canonical. Another invocation of the unchanged writer fails with `P2028` before any commit. Raising the transaction limit is a change to the reviewed writer and was not part of this attempt. Do not roll back: there is no open apply. Do not edit the manifest.
 
-Before any later apply, read pending and executing `GhlAssociationDispatchOutbox` rows again. The zero count above is only the 8:14 PM observation. An open row would send the corrected payload on its first execution. This command does not create or drain that row.
+Before any later apply, read pending, executing, and uncertain `GhlAssociationDispatchOutbox` rows again. An open row would send the corrected payload on its first execution. This command does not create or drain that row.
 
 The 27 gap rows and 14 `date_copy` rows stay outside this manifest.

@@ -1,6 +1,6 @@
 # Historical DOB correction readiness
 
-This file pins the 1,015-row correction. The authorized production attempt did not commit.
+This file pins the 1,015-row correction. The reviewed retry committed 1,012 rows and skipped 3 that were already canonical.
 
 ## Pin
 
@@ -181,10 +181,20 @@ Three manifest rows are already canonical and will be skipped. Each has `normali
 
 Both writes threw Prisma `P2028` inside the first 25-row transaction. A later rolled-back timing batch on the same path measured no lock wait: the row lock and payload read took 31 ms, delivery reads 16 ms, updates including the catalog trigger 615 ms, and audit inserts 80 ms. Two normalizations per row, run inside the transaction, took 3.2 seconds. Database sessions were 13 of 25, with 0 sessions waiting on a lock. The 5-second default expired because that normalization ran while the transaction clock was open. The writer now prepares the proposal before the transaction, keeps the payload update and audit insert atomic, and sets an explicit 2-second `maxWait` and 10-second `timeout` on correction batches of 10. Other Prisma clients are unchanged. After each failed attempt the manifest still had 0 audit rows, 0 canonical fills, and no new sheet job, GHL row, admission, allocation, buyer identity, inventory update, or projection row.
 
-## Blocker
+## Applied result
 
-The schema is `ready`. The correction is not applied. The transaction bound above is the writer change for the next checked run. Do not roll back: there is no open apply. Do not edit the manifest.
+Reviewed commit `1059cd54367a3259a5f2772198966da0e07ca7a6` ran from the existing API container at database time `2026-11-04T15:12:53.595Z` (November 4, 2026 10:12:53 AM America/New_York). It did not deploy this branch or start a worker. The manifest SHA256 and correction-file SHA256 matched the pins above, the database was `defaultdb` on the expected host, and the audit schema was `ready`.
 
-Before any later apply, read pending, executing, and uncertain `GhlAssociationDispatchOutbox` rows again. An open row would send the corrected payload on its first execution. This command does not create or drain that row.
+The plan immediately before the write was 1,012 `apply` / `fill_blank_canonical` and 3 `skip` / `already_canonical`. That is two more already-canonical skips than the midnight attempts, and those two are the rows listed above that were updated independently after the failed attempts. The plan was 1,012 date-of-birth fills, 1,007 new ages, 4 stored ages preserved, and the one future-date row. Catalog projection source and projection rows were still 0. Manifest-scoped GHL `pending`, `executing`, and `uncertain` rows were 0. One global GHL outbox row was `uncertain`; it is not one of these 1,015 events, and the GHL row total stayed 48.
 
-The 27 gap rows and 14 `date_copy` rows stay outside this manifest.
+The first transaction wrote 10 rows. Its audit count was 10, and it created no sheet job, GHL row, admission, allocation, buyer identity, inventory update, or projection row. The remaining 1,002 rows then committed. No batch was retried.
+
+Reconciliation of all 1,015 ids:
+
+| Result | Count |
+| --- | --- |
+| Corrected and audited | 1,012 |
+| Already canonical, no correction audit | 3 |
+| Failed, skipped for another reason, or remaining | 0 |
+
+Audit totals: 1,012 apply, 0 rollback, 1,012 date-of-birth fills, 1,007 age fills, 4 ages preserved, 0 ages changed, 1,012 `externalDestinations` `unchanged`. `cmvzgznfu00agou0tlhh21j4f` has a date of birth and its age is still blank. The four stored ages are unchanged and their dates of birth were filled. Delivery totals stayed 43 sheet jobs, 48 GHL rows, 84 admissions, 0 allocations, and 0 buyer identities. Linked inventory stayed 901 `pending_review`. Do not roll back unless separately requested. Do not edit the manifest. The 27 gap rows and 14 `date_copy` rows stay outside it.

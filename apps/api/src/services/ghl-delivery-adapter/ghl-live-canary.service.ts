@@ -5,7 +5,9 @@ import {
 } from "../../lib/ghl-delivery-adapter-mode.js";
 import { runWithOngoingGhlWrite } from "../../lib/ghl-ongoing-delivery-scope.js";
 import { prisma } from "../../lib/db.js";
-import type { LifecycleEventSchema } from "../../schemas/lifecycle-event.schema.js";
+import { lifecycleEventSchema, type LifecycleEventSchema } from "../../schemas/lifecycle-event.schema.js";
+import { attachSourceAttributesToLifecyclePayload } from "../source-intake/source-enrichment-pipeline.service.js";
+import type { SourceAttributes, UnmappedSourceField } from "../source-intake/source-enrichment.types.js";
 import {
   recordLiveCanaryOutcomeAudit,
   warmEffectiveDeliveryAdapterMode,
@@ -35,7 +37,7 @@ import type { GhlAdapterPlanContext, SourceEnrichmentPlanContext } from "./ghl-d
 import { buildSourceEnrichmentDeliveryContext } from "../source-intake/source-enrichment.service.js";
 import { persistedCampaignRoutingRuleId } from "../association-ghl-delivery-source.js";
 import { ongoingRunDisposition } from "../ghl-destination-authorization.js";
-import { receiptFromPersistedStep, type VetOperationReceipt } from "./vet-ghl-delivery-contract.js";
+import { receiptFromPersistedStep, type VetDeliveryResults, type VetOperationReceipt } from "./vet-ghl-delivery-contract.js";
 
 async function campaignAgeReceivedAt(decisionId: string | null | undefined): Promise<string | null> {
   const id = decisionId?.trim();
@@ -67,6 +69,45 @@ export function recordedGhlSourceEnrichment(
     sourceEnrichmentPolicy: sourceEnrichment.sourceEnrichmentPolicy,
     normalizedPayload: lifecyclePayload,
     receivedAt,
+  };
+}
+
+async function loadPreviewLifecycle(decisionId: string | null | undefined): Promise<LifecycleEventSchema | undefined> {
+  const id = decisionId?.trim();
+  if (!id) return undefined;
+  const event = await prisma.sourceLeadEvent.findFirst({
+    where: { routingDryRunDecisionId: id },
+    orderBy: { receivedAt: "desc" },
+  });
+  if (!event) return undefined;
+  const parsed = lifecycleEventSchema.safeParse(event.normalizedPayloadJson);
+  if (!parsed.success) return undefined;
+  const enrichment = asRecord(event.enrichmentMetadataJson);
+  const attributes = asRecord(enrichment?.sourceAttributes);
+  if (!attributes) return parsed.data;
+  const unmapped = Array.isArray(enrichment?.unmappedSourceFields)
+    ? (enrichment.unmappedSourceFields as UnmappedSourceField[])
+    : [];
+  return attachSourceAttributesToLifecyclePayload(parsed.data, attributes as SourceAttributes, unmapped);
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+export async function loadRecordedDeliveryPreviewContext(
+  plan: LeadDeliveryPlan & { steps: LeadDeliveryPlanStep[] }
+): Promise<Pick<GhlAdapterPlanContext, "destinationFieldMapping" | "sourceEnrichment">> {
+  const loaded = await loadLiveCanaryContext(plan);
+  return {
+    destinationFieldMapping: loaded.destinationFieldMapping,
+    sourceEnrichment: await sourceEnrichmentPlanContext(
+      await loadPreviewLifecycle(plan.routingDryRunDecisionId),
+      plan.destinationClientAccountId,
+      loaded.rule,
+      plan.routingDryRunDecisionId
+    ),
   };
 }
 
@@ -261,7 +302,16 @@ export type RecordedGhlDeliveryResult = {
   workflowStarted: boolean;
   externalCallExecuted: boolean;
   errors: string[];
+  contactResult: VetDeliveryResults["contact"] | null;
+  noteResult: VetDeliveryResults["note"] | null;
+  workflowResult: VetDeliveryResults["workflow"] | null;
 };
+
+const NO_SEPARATED_RESULTS = {
+  contactResult: null,
+  noteResult: null,
+  workflowResult: null,
+} as const;
 
 /**
  * Writes one GHL run for an existing plan and records the outcome on that same row.
@@ -302,6 +352,7 @@ export async function executeRecordedGhlDelivery(
           return Boolean(response && typeof response === "object" && !Array.isArray(response) && (response as { externalCallExecuted?: boolean }).externalCallExecuted === true);
         }) : false,
         errors: [existing ? "remote_outcome_not_retried" : "run_not_found"],
+        ...NO_SEPARATED_RESULTS,
       };
     }
     priorReceipts = existing.stepRuns
@@ -349,6 +400,7 @@ export async function executeRecordedGhlDelivery(
         workflowStarted: false,
         externalCallExecuted: false,
         errors: [],
+        ...NO_SEPARATED_RESULTS,
       };
     }
   }
@@ -389,6 +441,7 @@ export async function executeRecordedGhlDelivery(
       workflowStarted: false,
       externalCallExecuted: false,
       errors: ["delivery_outcome_unrecorded"],
+      ...NO_SEPARATED_RESULTS,
     };
   }
 
@@ -430,6 +483,9 @@ export async function executeRecordedGhlDelivery(
     workflowStarted: execution.workflowStarted,
     externalCallExecuted,
     errors: execution.errors,
+    contactResult: execution.contactResult,
+    noteResult: execution.noteResult,
+    workflowResult: execution.workflowResult,
   };
 }
 

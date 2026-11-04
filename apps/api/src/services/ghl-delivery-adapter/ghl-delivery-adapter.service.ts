@@ -16,10 +16,13 @@ import {
   buildOpportunityRequest,
   buildTagRequest,
   buildWorkflowStartRequest,
+  planContactNamesFromContext,
   validateDeliveryPlanForGhlSimulation,
 } from "./ghl-delivery-request-builders.js";
+import { loadRecordedDeliveryPreviewContext } from "./ghl-live-canary.service.js";
 import { knownWritePlanBlocksAutomationEntry } from "./routing-tag-plan.js";
 import { planRoutingTagPreview } from "./vet-ghl-delivery-contract.js";
+import { presentVetWritePlan } from "./vet-ghl-write-plan.present.js";
 import type {
   GhlAdapterPlanContext,
   GhlAdapterSimulationResult,
@@ -158,7 +161,10 @@ function buildStepDrafts(
 
     switch (planStep.stepType) {
       case "create_or_update_contact":
-        request = contact as unknown as Record<string, unknown>;
+        request = {
+          ...(contact as unknown as Record<string, unknown>),
+          vetWritePlan: vetWritePlanForContext(ctx),
+        };
         stepErrors = validation.errors.filter((e) => e.includes("subaccount") || e.includes("lead_uid"));
         break;
       case "stamp_custom_fields":
@@ -233,6 +239,13 @@ export async function buildAdapterSimulation(
   }
 
   const ctx: GhlAdapterPlanContext = { plan, rule };
+  try {
+    const previewContext = await loadRecordedDeliveryPreviewContext(plan);
+    ctx.destinationFieldMapping = previewContext.destinationFieldMapping;
+    ctx.sourceEnrichment = previewContext.sourceEnrichment;
+  } catch {
+    // The simulation still previews identity fields when the recorded context cannot be loaded.
+  }
   const envMode = getGhlDeliveryAdapterMode();
   const recordMode = adapterSimulationRecordMode(envMode);
   const validation = validateDeliveryPlanForGhlSimulation(ctx);
@@ -294,6 +307,69 @@ export async function buildAdapterSimulation(
       probeResult,
     },
   };
+}
+
+function fieldMapForWritePlan(
+  ctx: GhlAdapterPlanContext
+): Record<string, { ghlFieldKey: string; requirement?: string | null }> {
+  const enriched = ctx.sourceEnrichment?.sourceAttributeFieldMap;
+  if (enriched) {
+    return Object.fromEntries(
+      Object.entries(enriched).map(([key, entry]) => [
+        key,
+        { ghlFieldKey: entry.ghlFieldKey, requirement: entry.requirement ?? null },
+      ])
+    );
+  }
+  const raw = ctx.destinationFieldMapping?.sourceAttributeFieldMapJson;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Record<string, { ghlFieldKey: string; requirement?: string | null }> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value === "string" && value.trim()) {
+      out[key] = { ghlFieldKey: value.trim(), requirement: "optional" };
+      continue;
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    const record = value as Record<string, unknown>;
+    const ghlFieldKey = typeof record.ghlFieldKey === "string" ? record.ghlFieldKey.trim() : "";
+    if (!ghlFieldKey) continue;
+    out[key] = {
+      ghlFieldKey,
+      requirement: typeof record.requirement === "string" ? record.requirement : null,
+    };
+  }
+  return out;
+}
+
+function vetWritePlanForContext(ctx: GhlAdapterPlanContext) {
+  const names = planContactNamesFromContext(ctx);
+  const notesEnabled =
+    ctx.destinationFieldMapping?.intakeSummaryNotesEnabled === true ||
+    ctx.sourceEnrichment?.sourceEnrichmentPolicy.intakeSummaryNotesEnabled === true;
+  return presentVetWritePlan({
+    native: {
+      firstName: names.firstName,
+      lastName: names.lastName,
+      email: ctx.plan.sourceEmail,
+      phone: ctx.plan.sourcePhoneE164,
+      source: "sa360",
+      normalizedPayload: ctx.sourceEnrichment?.normalizedPayload,
+      sourceAttributes: ctx.sourceEnrichment?.sourceAttributes ?? null,
+      receivedAt: ctx.sourceEnrichment?.receivedAt,
+    },
+    sourceAttributes: ctx.sourceEnrichment?.sourceAttributes ?? null,
+    fieldMap: fieldMapForWritePlan(ctx),
+    discoveredFields: ctx.destinationFieldMapping?.discoveredCustomFields ?? [],
+    ignoredCanonicalKeys: ctx.sourceEnrichment?.sourceEnrichmentPolicy.ignoredCanonicalKeys,
+    notesEnabled,
+    noteEvent: {
+      sourceLeadEventId: ctx.plan.sourceLeadUid?.trim() || ctx.plan.id,
+      clientAccountId: ctx.plan.destinationClientAccountId,
+      email: ctx.plan.sourceEmail,
+      phone: ctx.plan.sourcePhoneE164,
+      generatedAt: ctx.sourceEnrichment?.receivedAt ?? null,
+    },
+  });
 }
 
 export function assertGhlLiveModeNotAllowed(requestedMode?: string): void {

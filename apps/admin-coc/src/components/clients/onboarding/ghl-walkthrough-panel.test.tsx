@@ -114,6 +114,8 @@ function actions(overrides: Partial<GhlWalkthroughActions> = {}): GhlWalkthrough
     startConnect: async () => ({ ok: true, authorizeUrl: "https://example.test/connect" }),
     discover: async () => ({ ok: true, discovery: discovery() }),
     saveFieldMap: async () => ({ ok: true, deliveryEnabled: false }),
+    saveNotes: async () => ({ ok: true, deliveryEnabled: false, sourceEnrichmentPolicyJson: { intakeSummaryNotesEnabled: false } }),
+    previewIntakeNote: async () => ({ ok: true, contractVersion: "sa360_lead_note_v2", body: "SA360 lead", posted: false }),
     loadLeadAttributes: async () => ({ ok: true, sourceAttributes: {} }),
     saveWorkflow: async () => ({
       ok: true,
@@ -207,8 +209,140 @@ function line(container: HTMLElement, label: string): string {
   return node?.textContent ?? "";
 }
 
+test("the workflow proposal stays separate from the saved mode until it is selected and saved", async () => {
+  const seen: { body: RoutingRuleGhlConfigSaveBody | null } = { body: null };
+  render(
+    <GhlWalkthroughPanel
+      clientAccountId="client_sam"
+      leads={[lead()]}
+      location={location({
+        workflowTriggerMode: "tag_trigger",
+        vetWorkflowTriggerProposal: {
+          proposedMode: "direct_api",
+          storedMode: "tag_trigger",
+          changesExistingClients: false,
+        },
+      })}
+      connections={[connection()]}
+      sheetsCampaignEnabled={false}
+      actions={actions({
+        saveWorkflow: async (body) => {
+          seen.body = body;
+          return {
+            ok: true,
+            deliveryEnabled: false,
+            workflowTriggerMode: body.workflowTriggerMode ?? null,
+            workflowId: body.destinationWorkflowIdGhl ?? null,
+          };
+        },
+      })}
+    />
+  );
+  const proposal = screen.getByTestId("ghl-workflow-proposal");
+  assert.match(proposal.textContent ?? "", /Proposed mode/);
+  assert.match(proposal.textContent ?? "", /direct_api/);
+  assert.match(proposal.textContent ?? "", /tag_trigger/);
+  assert.match(proposal.textContent ?? "", /does not prove the workflow enrolled/);
+  assert.match(proposal.textContent ?? "", /cannot guarantee those triggers are absent/);
+  fireEvent.click(screen.getByRole("button", { name: "Discover workflows" }));
+  await screen.findByLabelText("Trigger mode");
+  assert.equal((screen.getByLabelText("Trigger mode") as HTMLSelectElement).value, "tag_trigger");
+  assert.equal(seen.body, null);
+  fireEvent.click(screen.getByRole("button", { name: "Select proposed direct_api" }));
+  assert.equal((screen.getByLabelText("Trigger mode") as HTMLSelectElement).value, "direct_api");
+  assert.equal(seen.body, null);
+  fireEvent.change(screen.getByLabelText("Workflow"), { target: { value: WORKFLOW_ID } });
+  fireEvent.click(screen.getByRole("button", { name: "Save selected workflow" }));
+  await waitFor(() => assert.equal(seen.body?.workflowTriggerMode, "direct_api"));
+  assert.equal("deliveryEnabled" in (seen.body ?? {}), false);
+});
+
+test("notes save keeps unrelated policy settings and does not send a lead", async () => {
+  const seen: { policy: Record<string, unknown> | null } = { policy: null };
+  let previewCalls = 0;
+  render(
+    <GhlWalkthroughPanel
+      clientAccountId="client_sam"
+      leads={[lead()]}
+      location={location({
+        sourceEnrichmentPolicyJson: {
+          aiContextRequired: ["branch_of_service"],
+          limitedAutomationBehavior: "queue_for_review",
+          intakeSummaryNotesEnabled: false,
+        },
+      })}
+      connections={[connection()]}
+      sheetsCampaignEnabled={false}
+      actions={actions({
+        saveNotes: async (input) => {
+          seen.policy = input.sourceEnrichmentPolicyJson;
+          return { ok: true, deliveryEnabled: false, sourceEnrichmentPolicyJson: input.sourceEnrichmentPolicyJson };
+        },
+        previewIntakeNote: async () => {
+          previewCalls += 1;
+          return { ok: true, contractVersion: "sa360_lead_note_v2", body: "SA360 lead\nFamily", posted: false };
+        },
+      })}
+    />
+  );
+  const box = screen.getByRole("checkbox", { name: "Enable intake-summary notes" }) as HTMLInputElement;
+  assert.equal(box.checked, false);
+  fireEvent.click(box);
+  fireEvent.click(screen.getByRole("button", { name: "Save notes setting" }));
+  await waitFor(() => assert.equal(seen.policy?.intakeSummaryNotesEnabled, true));
+  assert.deepEqual(seen.policy?.aiContextRequired, ["branch_of_service"]);
+  assert.equal(seen.policy?.limitedAutomationBehavior, "queue_for_review");
+  fireEvent.click(screen.getByRole("button", { name: "Preview intake-summary note" }));
+  const preview = await screen.findByTestId("ghl-note-preview");
+  assert.match(preview.textContent ?? "", /sa360_lead_note_v2/);
+  assert.match(preview.textContent ?? "", /Posted: no/);
+  assert.equal(previewCalls, 1);
+  assert.match(screen.getByTestId("ghl-contact-only-gap").textContent ?? "", /mode none is not a contact-only test/);
+});
+
+test("an ambiguous note result is shown apart from contact and workflow and is not retried", async () => {
+  render(
+    <GhlWalkthroughPanel
+      clientAccountId="client_sam"
+      leads={[lead()]}
+      location={location({ workflowId: WORKFLOW_ID, workflowTriggerMode: "direct_api" })}
+      connections={[connection()]}
+      sheetsCampaignEnabled={false}
+      actions={actions({
+        executeTest: async () => ({
+          ok: true,
+          result: {
+            status: "partial_success",
+            contactIdGhl: "contact_1",
+            opportunityIdGhl: null,
+            workflowStarted: true,
+            externalCallExecuted: true,
+            errors: [],
+            skippedDuplicate: false,
+            contactResult: "upserted",
+            noteResult: "ambiguous",
+            workflowResult: "enrolled",
+          },
+        }),
+      })}
+    />
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Preview GHL delivery" }));
+  await screen.findByTestId("ghl-delivery-preview");
+  fireEvent.click(screen.getByRole("button", { name: "Run one GHL test" }));
+  fireEvent.change(screen.getByLabelText("GHL test confirmation"), { target: { value: LIVE_CANARY_CONFIRMATION_TEXT } });
+  fireEvent.click(screen.getByRole("button", { name: "Execute one GHL test" }));
+  const result = await screen.findByTestId("ghl-test-result");
+  assert.match(result.textContent ?? "", /Contact upsert was accepted/);
+  assert.match(result.textContent ?? "", /note is ambiguous/);
+  assert.match(result.textContent ?? "", /does not verify the workflow ran/);
+  assert.match(result.textContent ?? "", /not retried from this screen/);
+  assert.equal((screen.getByRole("button", { name: "Run one GHL test" }) as HTMLButtonElement).disabled, true);
+  assert.equal(screen.queryByRole("button", { name: /retry/i }), null);
+});
+
 test("exact workflow id is saved without requiring the Select Time Zone name", async () => {
-  let saved: RoutingRuleGhlConfigSaveBody | null = null;
+  const seen: { body: RoutingRuleGhlConfigSaveBody | null } = { body: null };
   const { container } = render(
     <GhlWalkthroughPanel
       clientAccountId="client_sam"
@@ -218,7 +352,7 @@ test("exact workflow id is saved without requiring the Select Time Zone name", a
       sheetsCampaignEnabled={false}
       actions={actions({
         saveWorkflow: async (body) => {
-          saved = body;
+          seen.body = body;
           return { ok: true, deliveryEnabled: false, workflowTriggerMode: body.workflowTriggerMode ?? null, workflowId: body.destinationWorkflowIdGhl ?? null };
         },
       })}
@@ -239,11 +373,11 @@ test("exact workflow id is saved without requiring the Select Time Zone name", a
   await waitFor(() => {
     assert.match(line(container, "Saved trigger mode"), /direct_api/);
   });
-  assert.equal(saved?.destinationWorkflowIdGhl, WORKFLOW_ID);
-  assert.equal(saved?.workflowTriggerMode, "direct_api");
-  assert.equal(saved?.workflowStartRequired, true);
-  assert.equal(saved?.locationId, "loc_sam");
-  assert.equal("deliveryEnabled" in (saved ?? {}), false);
+  assert.equal(seen.body?.destinationWorkflowIdGhl, WORKFLOW_ID);
+  assert.equal(seen.body?.workflowTriggerMode, "direct_api");
+  assert.equal(seen.body?.workflowStartRequired, true);
+  assert.equal(seen.body?.locationId, "loc_sam");
+  assert.equal("deliveryEnabled" in (seen.body ?? {}), false);
   assert.match(line(container, "Saved workflow id"), new RegExp(WORKFLOW_ID));
   assert.match(line(container, "Saved trigger mode"), /direct_api/);
   assert.equal(markState(container, "GHL ongoing delivery"), "no");
@@ -467,7 +601,7 @@ test("ongoing GHL activation is a separate confirmation and lists omitted fields
 
 test("field ids are saved without enabling delivery, and blank values stay separate from missing mappings", async () => {
   const FIELD_ID = "ghl_field_primary_reason";
-  let saved: Record<string, { ghlFieldKey: string }> | null = null;
+  const seen: { map: Record<string, { ghlFieldKey: string }> | null } = { map: null };
   let saveCalls = 0;
   let deliveryFlagSent = false;
   render(
@@ -502,7 +636,7 @@ test("field ids are saved without enabling delivery, and blank values stay separ
         }),
         saveFieldMap: async (input) => {
           saveCalls += 1;
-          saved = input.sourceAttributeFieldMapJson;
+          seen.map = input.sourceAttributeFieldMapJson;
           deliveryFlagSent = "deliveryEnabled" in input;
           return { ok: true, deliveryEnabled: false };
         },
@@ -519,8 +653,8 @@ test("field ids are saved without enabling delivery, and blank values stay separ
   chooseGhlField("beneficiary", "ghl_field_beneficiary");
   assert.equal(saveCalls, 0);
   fireEvent.click(screen.getByRole("button", { name: "Save field ids" }));
-  await waitFor(() => assert.equal(saved?.primary_reason?.ghlFieldKey, FIELD_ID));
-  assert.equal(saved?.beneficiary?.ghlFieldKey, "ghl_field_beneficiary");
+  await waitFor(() => assert.equal(seen.map?.primary_reason?.ghlFieldKey, FIELD_ID));
+  assert.equal(seen.map?.beneficiary?.ghlFieldKey, "ghl_field_beneficiary");
   assert.equal(saveCalls, 1);
   assert.equal(deliveryFlagSent, false);
   fireEvent.click(screen.getByRole("button", { name: "Review this lead's field values" }));
@@ -536,7 +670,7 @@ test("field ids are saved without enabling delivery, and blank values stay separ
 test("an existing mapping reloads the same field id, and Unmapped removes only that row", async () => {
   const FIELD_ID = "ghl_field_primary_reason";
   const BENEFICIARY_ID = "ghl_field_beneficiary";
-  let saved: Record<string, { ghlFieldKey: string }> | null = null;
+  const seen: { map: Record<string, { ghlFieldKey: string }> | null } = { map: null };
   const customFields = [
     {
       id: FIELD_ID,
@@ -572,7 +706,7 @@ test("an existing mapping reloads the same field id, and Unmapped removes only t
             discovery: { ...discovery(), customFields },
           }),
           saveFieldMap: async (input) => {
-            saved = input.sourceAttributeFieldMapJson;
+            seen.map = input.sourceAttributeFieldMapJson;
             return { ok: true, deliveryEnabled: false };
           },
         })}
@@ -591,10 +725,10 @@ test("an existing mapping reloads the same field id, and Unmapped removes only t
   });
   fireEvent.keyDown(screen.getByRole("combobox", { name: "Search GHL fields for age" }), { key: "Enter" });
   fireEvent.click(screen.getByRole("button", { name: "Save field ids" }));
-  await waitFor(() => assert.equal(saved?.primary_reason?.ghlFieldKey, FIELD_ID));
-  assert.equal(saved?.beneficiary?.ghlFieldKey, BENEFICIARY_ID);
-  assert.equal(saved && "age" in saved, false);
-  assert.equal(JSON.stringify(saved).includes("typed-search-not-a-field"), false);
+  await waitFor(() => assert.equal(seen.map?.primary_reason?.ghlFieldKey, FIELD_ID));
+  assert.equal(seen.map?.beneficiary?.ghlFieldKey, BENEFICIARY_ID);
+  assert.equal(seen.map !== null && "age" in seen.map, false);
+  assert.equal(JSON.stringify(seen.map).includes("typed-search-not-a-field"), false);
   first.unmount();
 
   renderSaved();
@@ -602,6 +736,6 @@ test("an existing mapping reloads the same field id, and Unmapped removes only t
   await screen.findByRole("combobox", { name: "GHL field for primary_reason" });
   chooseGhlField("beneficiary", "Unmapped");
   fireEvent.click(screen.getByRole("button", { name: "Save field ids" }));
-  await waitFor(() => assert.equal(saved?.beneficiary, undefined));
-  assert.equal(saved?.primary_reason?.ghlFieldKey, FIELD_ID);
+  await waitFor(() => assert.equal(seen.map?.beneficiary, undefined));
+  assert.equal(seen.map?.primary_reason?.ghlFieldKey, FIELD_ID);
 });

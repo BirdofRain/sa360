@@ -13,6 +13,25 @@ import {
   savedFieldIds,
 } from "@/lib/clients/onboarding/ghl-field-coverage";
 import { describeGhlDeliveryPreview } from "@/lib/clients/onboarding/ghl-delivery-preview";
+import {
+  CONTACT_ONLY_TEST_GAP,
+  GHL_TRIGGER_UNVERIFIED,
+  TAG_DOES_NOT_PROVE_ENROLLMENT,
+  VET_NATIVE_CONTACT_KEYS,
+  VET_NATIVE_FIELD_LABELS,
+  VET_REVIEW_KEYS,
+  WORKFLOW_SEPARATION_COPY,
+  duplicateTargets,
+  enrollmentBlockers,
+  fieldSuggestions,
+  intakeSummaryNotesEnabled,
+  mergeIntakeSummaryNotes,
+  presentSeparatedOperations,
+  readVetWritePlan,
+  reviewSavedMappings,
+  savedMappingEntries,
+  unsafeBlindRetry,
+} from "@/lib/clients/onboarding/ghl-vet-setup-display";
 import type { SelectableLead } from "@/lib/clients/onboarding/view";
 import { LIVE_CANARY_CONFIRMATION_TEXT } from "@/lib/ghl-live-canary/types";
 import type { GhlDiscoveredCustomField, RoutingRuleGhlConfigSaveBody } from "@/lib/ghl-config/types";
@@ -85,9 +104,14 @@ export function GhlWalkthroughPanel({
   const [omittedCore, setOmittedCore] = useState<string[]>([]);
   const [omittedOptional, setOmittedOptional] = useState<string[]>([]);
   const [discoveredFields, setDiscoveredFields] = useState<GhlDiscoveredCustomField[]>([]);
+  const [discoveryLoaded, setDiscoveryLoaded] = useState(false);
   const [fieldMap, setFieldMap] = useState<Record<string, string>>(() =>
     savedFieldIds(location?.sourceAttributeFieldMapJson)
   );
+  const [fieldRequirements] = useState(() => savedMappingEntries(location?.sourceAttributeFieldMapJson));
+  const [policyJson, setPolicyJson] = useState<unknown>(location?.sourceEnrichmentPolicyJson ?? null);
+  const [notesEnabled, setNotesEnabled] = useState(() => intakeSummaryNotesEnabled(location?.sourceEnrichmentPolicyJson));
+  const [notePreview, setNotePreview] = useState<{ contractVersion: string | null; body: string | null } | null>(null);
   const [leadAttributes, setLeadAttributes] = useState<Record<string, string | null> | null>(null);
 
   const selectedConnection = locationRows.find((row) => row.locationId === selectedLocationId) ?? null;
@@ -121,7 +145,53 @@ export function GhlWalkthroughPanel({
     !duplicateBlocked &&
     !uncertain &&
     (preflight?.canExecute === true || activationBlockersOnly);
-  const canExecute = pausedDestinationTest && confirmText.trim() === LIVE_CANARY_CONFIRMATION_TEXT;
+  const unsafeOutcome = unsafeBlindRetry(execution ?? {});
+  const canExecute = pausedDestinationTest && confirmText.trim() === LIVE_CANARY_CONFIRMATION_TEXT && !unsafeOutcome;
+  const proposal = location?.vetWorkflowTriggerProposal ?? null;
+  const mappingEntries = useMemo(() => {
+    const entries = { ...fieldRequirements };
+    for (const [key, fieldId] of Object.entries(fieldMap)) {
+      if (!fieldId.trim()) {
+        delete entries[key];
+        continue;
+      }
+      entries[key] = {
+        ghlFieldKey: fieldId.trim(),
+        requirement: fieldRequirements[key]?.requirement ?? entries[key]?.requirement ?? "optional",
+      };
+    }
+    return entries;
+  }, [fieldMap, fieldRequirements]);
+  const reviewRows = useMemo(
+    () =>
+      reviewSavedMappings({
+        entries: mappingEntries,
+        keys: VET_REVIEW_KEYS,
+        fields: discoveredFields,
+        discoveryLoaded,
+      }),
+    [discoveredFields, discoveryLoaded, mappingEntries]
+  );
+  const duplicates = useMemo(
+    () => duplicateTargets({ entries: mappingEntries, fields: discoveredFields }),
+    [discoveredFields, mappingEntries]
+  );
+  const blockers = useMemo(
+    () =>
+      enrollmentBlockers({
+        entries: mappingEntries,
+        duplicates,
+        sourceValues: leadAttributes,
+        discoveryLoaded,
+        fields: discoveredFields,
+      }),
+    [discoveredFields, discoveryLoaded, duplicates, leadAttributes, mappingEntries]
+  );
+  const writePlan = useMemo(
+    () => readVetWritePlan(preview?.steps.find((step) => step.stepType === "create_or_update_contact")?.requestPreviewJson),
+    [preview]
+  );
+  const operationCopy = execution ? presentSeparatedOperations(execution) : null;
   const canActivate = activateConfirm.trim() === "ENABLE ONGOING GHL DELIVERY";
   const coverage = useMemo(
     () =>
@@ -186,6 +256,7 @@ export function GhlWalkthroughPanel({
     }
     const fields = result.discovery.customFields;
     setDiscoveredFields(fields);
+    setDiscoveryLoaded(true);
     setFieldMap((current) => resolveSavedFieldIds(current, fields));
     setWorkflows(result.discovery.workflows.map((item) => ({ id: item.id, name: item.name })));
     setFieldMapping({
@@ -231,9 +302,13 @@ export function GhlWalkthroughPanel({
     if (!selectedLocationId) return;
     setPending("fields");
     setError(null);
-    const sourceAttributeFieldMapJson: Record<string, { ghlFieldKey: string; requirement: "optional" }> = {};
+    const sourceAttributeFieldMapJson: Record<string, { ghlFieldKey: string; requirement: string }> = {};
     for (const [canonical, fieldId] of Object.entries(fieldMap)) {
-      if (fieldId.trim()) sourceAttributeFieldMapJson[canonical] = { ghlFieldKey: fieldId.trim(), requirement: "optional" };
+      if (!fieldId.trim()) continue;
+      sourceAttributeFieldMapJson[canonical] = {
+        ghlFieldKey: fieldId.trim(),
+        requirement: fieldRequirements[canonical]?.requirement ?? "optional",
+      };
     }
     const result = await actions.saveFieldMap({ locationId: selectedLocationId, sourceAttributeFieldMapJson });
     setPending(null);
@@ -242,6 +317,35 @@ export function GhlWalkthroughPanel({
       return;
     }
     if (result.deliveryEnabled !== null) setDeliveryEnabled(result.deliveryEnabled);
+  }
+
+  async function saveNotes() {
+    if (!selectedLocationId) return;
+    setPending("notes");
+    setError(null);
+    const sourceEnrichmentPolicyJson = mergeIntakeSummaryNotes(policyJson, notesEnabled);
+    const result = await actions.saveNotes({ locationId: selectedLocationId, sourceEnrichmentPolicyJson });
+    setPending(null);
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+    setPolicyJson(result.sourceEnrichmentPolicyJson);
+    setNotesEnabled(intakeSummaryNotesEnabled(result.sourceEnrichmentPolicyJson));
+    if (result.deliveryEnabled !== null) setDeliveryEnabled(result.deliveryEnabled);
+  }
+
+  async function previewNote() {
+    if (!eventId) return;
+    setPending("note-preview");
+    setError(null);
+    const result = await actions.previewIntakeNote(eventId);
+    setPending(null);
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+    setNotePreview({ contractVersion: result.contractVersion, body: result.body });
   }
 
   async function reviewLeadFields() {
@@ -383,6 +487,25 @@ export function GhlWalkthroughPanel({
           <span className="font-mono text-xs">{savedWorkflowId || "unset"}</span>
         </p>
       </div>
+      <div className="space-y-2 rounded-lg border border-slate-200 p-3 text-sm" data-testid="ghl-workflow-proposal">
+        <p>
+          <span className="font-medium">Proposed mode. </span>
+          {proposal ? proposal.proposedMode : "vetWorkflowTriggerProposal was not on this destination."}
+        </p>
+        <p>
+          <span className="font-medium">Stored mode on the proposal. </span>
+          {proposal ? proposal.storedMode ?? "unset" : savedTriggerMode ?? "unset"}
+        </p>
+        <p>{WORKFLOW_SEPARATION_COPY}</p>
+        <p>{TAG_DOES_NOT_PROVE_ENROLLMENT}</p>
+        <p>{GHL_TRIGGER_UNVERIFIED}</p>
+        <p>The proposal is not copied into the saved mode unless you select it and save.</p>
+        {proposal ? (
+          <Button type="button" variant="outline" onClick={() => setTriggerMode(proposal.proposedMode)}>
+            Select proposed direct_api
+          </Button>
+        ) : null}
+      </div>
       {locationError ? (
         <p className="text-sm text-amber-900" role="status">
           {locationError}
@@ -487,7 +610,8 @@ export function GhlWalkthroughPanel({
           </Label>
           <p className="text-xs text-slate-600 sm:col-span-2">
             direct_api enrolls the selected workflow id. tag_trigger adds the destination workflow tag and does not call
-            that id. none does not start a workflow.
+            that id. none does not start a workflow. The control starts from the saved mode. An empty saved mode stays
+            on the existing tag_trigger default. Selecting proposed direct_api does not save it.
           </p>
         </div>
       ) : null}
@@ -508,15 +632,82 @@ export function GhlWalkthroughPanel({
         <h3 className="text-sm font-semibold text-slate-900">GHL field mapping</h3>
         <p className="text-sm text-slate-600">
           Each row stores the discovered GHL field id. Saving this map does not enable ongoing delivery.
-          primary_reason stays its own field. It is not copied into Primary Concern.
+          primary_reason stays its own field. It is not copied into Primary Concern. Different field ids are not treated
+          as a verified match. date_of_birth is a custom field and stays separate from native dateOfBirth and from age.
         </p>
+        <div className="space-y-2 text-sm" data-testid="ghl-mapping-review">
+          {reviewRows.map((row) => {
+            const suggestion = fieldSuggestions({ key: row.key, fields: discoveredFields });
+            return (
+              <div key={row.key} className="rounded-md border border-slate-200 p-2">
+                <p className="font-mono text-xs">{row.key}</p>
+                <p>
+                  Saved field id: <span className="font-mono text-xs">{row.savedId ?? "missing"}</span>
+                  {row.fieldName ? ` · ${row.fieldName}` : ""}
+                </p>
+                <p>
+                  Destination status:{" "}
+                  {row.status === "saved" && row.fieldName
+                    ? "discovered name shown with the saved id"
+                    : row.status === "missing"
+                      ? "missing destination field"
+                      : row.status === "stale"
+                        ? "stale saved id. It is not in the discovered fields and was not cleared."
+                        : row.status === "unavailable"
+                          ? "destination fields are unavailable. The saved id was not cleared."
+                          : "saved id is kept until location fields are discovered"}
+                </p>
+                {suggestion.status === "one" && suggestion.fields[0] ? (
+                  <p>
+                    Suggestion, not a verified preset: {suggestion.fields[0].name} ·{" "}
+                    <span className="font-mono text-xs">{suggestion.fields[0].id}</span>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="ml-2"
+                      onClick={() => setFieldMap((current) => ({ ...current, [row.key]: suggestion.fields[0]!.id }))}
+                    >
+                      Select suggestion
+                    </Button>
+                  </p>
+                ) : null}
+                {suggestion.status === "ambiguous" ? (
+                  <p>
+                    Ambiguous suggestion. Not a verified preset. Choose one in the field list:{" "}
+                    {suggestion.fields.map((field) => `${field.name} · ${field.id}`).join(", ")}
+                  </p>
+                ) : null}
+              </div>
+            );
+          })}
+          {duplicates.length > 0 ? (
+            <div data-testid="ghl-duplicate-targets">
+              {duplicates.map((duplicate) => (
+                <p key={duplicate.fieldId}>
+                  Duplicate target {duplicate.fieldName ?? "unnamed field"} · {duplicate.fieldId}: {duplicate.keys.join(", ")}.
+                  Neither value is sent when both have a lead value, and workflow enrollment is blocked.
+                </p>
+              ))}
+            </div>
+          ) : null}
+          {blockers.length > 0 ? (
+            <div data-testid="ghl-enrollment-blockers">
+              {blockers.map((blocker) => (
+                <p key={blocker}>{blocker}</p>
+              ))}
+            </div>
+          ) : null}
+        </div>
         {discoveredFields.length === 0 ? (
           <p className="text-sm text-slate-600">Discover workflows to choose field ids from this location.</p>
         ) : (
           <div className="space-y-2">
             {CANONICAL_SURVEY_ATTRIBUTES.map((canonical) => (
               <Label key={canonical} className="grid gap-1 text-sm sm:grid-cols-[12rem_1fr] sm:items-center">
-                <span className="font-mono text-xs">{canonical}</span>
+                <span className="font-mono text-xs">
+                  {canonical === "date_of_birth" ? "date_of_birth custom" : canonical === "age" ? "age custom" : canonical}
+                </span>
                 <GhlFieldMappingSelect
                   canonical={canonical}
                   fields={discoveredFields}
@@ -561,6 +752,38 @@ export function GhlWalkthroughPanel({
             <p>Missing source values are mapped and blank. Missing mappings are not sent.</p>
           </div>
         ) : null}
+        <div className="space-y-2 border-t border-slate-200 pt-3" data-testid="ghl-intake-notes">
+          <h3 className="text-sm font-semibold text-slate-900">Intake-summary note</h3>
+          <p className="text-sm text-slate-600">
+            Notes stay off unless you enable them and save. The note uses sa360_lead_note_v2. A note failure is separate
+            from the contact and workflow results. Saving this flag does not send a lead.
+          </p>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              aria-label="Enable intake-summary notes"
+              checked={notesEnabled}
+              onChange={(event) => setNotesEnabled(event.target.checked)}
+            />
+            Enable intake-summary notes
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" disabled={pending !== null || !selectedLocationId} onClick={() => void saveNotes()}>
+              {pending === "notes" ? "Saving notes setting…" : "Save notes setting"}
+            </Button>
+            <Button type="button" variant="outline" disabled={pending !== null || !eventId} onClick={() => void previewNote()}>
+              {pending === "note-preview" ? "Previewing note…" : "Preview intake-summary note"}
+            </Button>
+          </div>
+          {notePreview ? (
+            <div className="space-y-1 text-sm" data-testid="ghl-note-preview">
+              <p>Contract: {notePreview.contractVersion ?? "sa360_lead_note_v2"}.</p>
+              <p>Posted: no.</p>
+              <p>{notesEnabled ? "The saved flag is the only thing that turns posting on." : "Notes stay off until this box is saved as enabled."}</p>
+              <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-md bg-slate-50 p-2 text-xs">{notePreview.body || "No note body."}</pre>
+            </div>
+          ) : null}
+        </div>
       </div>
 
       <div className="space-y-3 border-t border-slate-200 pt-4">
@@ -621,6 +844,44 @@ export function GhlWalkthroughPanel({
             </p>
             <p>{facts.persistedSimulation}</p>
             <p>Ongoing delivery changed: {facts.ongoingDeliveryChanged ? "yes" : "no"}.</p>
+            <div data-testid="ghl-native-write-plan">
+              <p>Native fields this delivery can send: {VET_NATIVE_CONTACT_KEYS.map((key) => VET_NATIVE_FIELD_LABELS[key]).join(", ")}.</p>
+              <p>Timezone is not written.</p>
+              <p>Native date of birth stays separate from mapped custom date_of_birth and from age.</p>
+              {writePlan ? (
+                <>
+                  {writePlan.native.map((row) => (
+                    <p key={row.key}>
+                      {row.label}: {row.disposition}
+                      {row.value ? ` ${row.value}` : ""}.
+                    </p>
+                  ))}
+                  {writePlan.customFields.map((row) => (
+                    <p key={`${row.key}-${row.disposition}`}>
+                      Custom {row.key}: {row.disposition}
+                      {row.fieldName ? ` ${row.fieldName}` : ""}
+                      {row.fieldId ? ` ${row.fieldId}` : ""}
+                      {row.value ? ` ${row.value}` : ""}.
+                    </p>
+                  ))}
+                  <p>
+                    Backend enrollment: {writePlan.enrollmentAllowed === false ? "blocked" : writePlan.enrollmentAllowed === true ? "not blocked by the write plan" : "not reported"}.
+                    {writePlan.enrollmentReason ? ` ${writePlan.enrollmentReason}` : ""}
+                  </p>
+                  <p>
+                    {writePlan.automationEntryDetail ??
+                      "SA360::EVENT::LEAD_CREATED is not reported on this write plan. This preview does not send it."}
+                  </p>
+                  <p>
+                    Note on this plan: {writePlan.noteEnabled ? "enabled" : "disabled"} · {writePlan.noteContract ?? "sa360_lead_note_v2"}.
+                    {writePlan.noteError ? ` ${writePlan.noteError}` : ""}
+                  </p>
+                  <p>This preview does not send a lead.</p>
+                </>
+              ) : (
+                <p>This simulation did not include the backend write plan. Dates of birth are not normalized on this screen.</p>
+              )}
+            </div>
           </div>
         ) : null}
         {preflight ? (
@@ -658,10 +919,13 @@ export function GhlWalkthroughPanel({
             The last GHL attempt is uncertain or still running. It is not sent again from this screen.
           </p>
         ) : null}
+        <p className="text-sm text-slate-700" data-testid="ghl-contact-only-gap">
+          {CONTACT_ONLY_TEST_GAP}
+        </p>
         <Button
           type="button"
           variant="destructive"
-          disabled={!pausedDestinationTest || pending !== null}
+          disabled={!pausedDestinationTest || pending !== null || unsafeOutcome}
           onClick={() => setConfirmOpen(true)}
         >
           Run one GHL test
@@ -697,8 +961,13 @@ export function GhlWalkthroughPanel({
             ) : null}
             <p>Contact id: {execution.contactIdGhl ?? "none"}.</p>
             <p>Workflow started: {execution.workflowStarted ? "yes" : "no"}.</p>
+            <p>Accepted enrollment is not verified workflow execution.</p>
             <p>Opportunity id: {execution.opportunityIdGhl ?? "none"}.</p>
             <p>Ongoing delivery changed: no.</p>
+            {operationCopy?.lines.map((line) => (
+              <p key={line}>{line}</p>
+            ))}
+            {unsafeOutcome ? <p>Ambiguous and rejected outcomes are not retried from this screen.</p> : null}
             {execution.errors.length > 0 ? <p>{execution.errors.join(" ")}</p> : null}
           </div>
         ) : null}

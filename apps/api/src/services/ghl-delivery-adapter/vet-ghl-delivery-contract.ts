@@ -316,6 +316,54 @@ export function nativeContactHttpFields(fields: Record<string, string | null | u
   return body;
 }
 
+export type VetNativeFieldDisposition = "send" | "omitted_missing" | "invalid";
+
+export type VetNativeFieldPlanRow = {
+  key: VetNativeContactKey;
+  disposition: VetNativeFieldDisposition;
+  value: string | null;
+};
+
+export type VetNativeFieldPlan = {
+  fields: VetNativeFieldPlanRow[];
+  /** Delivery does not write native Timezone or sa360_timezone. */
+  timezoneWritten: false;
+};
+
+function rawDateCandidate(input: Parameters<typeof vetNativeContactFields>[0]): string | null {
+  const direct = trimmed(input.dateOfBirth);
+  if (direct) return direct;
+  const contact = contactBag(input.normalizedPayload);
+  const fromContact = trimmed(contact?.dateOfBirth);
+  if (fromContact) return fromContact;
+  const fromAttributes = trimmed(input.sourceAttributes?.date_of_birth);
+  if (fromAttributes) return fromAttributes;
+  const routing = asRecord(asRecord(input.normalizedPayload)?.routing);
+  const intake = asRecord(routing?.source_intake);
+  return trimmed(asRecord(intake?.sourceAttributes)?.date_of_birth);
+}
+
+/**
+ * Native contact projection used by the live upsert. Age is not a native field.
+ * Invalid dates stay off the body; this does not add a second DOB parser.
+ */
+export function presentNativeContactPlan(input: Parameters<typeof vetNativeContactFields>[0]): VetNativeFieldPlan {
+  const projected = vetNativeContactFields(input);
+  const httpBody = nativeContactHttpFields(projected);
+  const rawDate = rawDateCandidate(input);
+  return {
+    timezoneWritten: false,
+    fields: VET_NATIVE_CONTACT_KEYS.map((key) => {
+      const value = httpBody[key] ?? null;
+      if (value) return { key, disposition: "send" as const, value };
+      if (key === "dateOfBirth" && rawDate && !projected.dateOfBirth) {
+        return { key, disposition: "invalid" as const, value: null };
+      }
+      return { key, disposition: "omitted_missing" as const, value: null };
+    }),
+  };
+}
+
 export type LocationFieldCollision = {
   fieldId: string;
   fieldName: string | null;

@@ -57,6 +57,9 @@ export async function testSelectedGhlDeliveryAction(
     errors: res.data.ok ? [] : [res.data.error ?? res.data.reason],
     skippedDuplicate: res.data.reason === "duplicate_blocked" || res.data.status === "skipped_duplicate",
     outcome: res.data.outcome,
+    contactResult: res.data.contactResult ?? null,
+    noteResult: res.data.noteResult ?? null,
+    workflowResult: res.data.workflowResult ?? null,
   };
   if (!res.data.ok) return { ok: false, error: res.error ?? res.data.error ?? res.data.reason, result };
   return { ok: true, result };

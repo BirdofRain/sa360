@@ -5,8 +5,11 @@
  * providerFunnelId=`fbpage:{pageId}:fbform:{formId}`. parentUrlKey stays empty
  * because that unique key is one value per provider, and a page has many forms.
  *
- * Campaign and ad overrides are intentionally not part of this key. A later
- * slice can add a more specific rule without changing this exact association.
+ * Campaign and ad overrides are intentionally not part of this key. A confirmed
+ * Page + Form row is compatible with today's capture, and it is not proof that
+ * every campaign on that form belongs to the same client. One-Click Resolve
+ * Source, which is not implemented here, must keep this key and add a more
+ * specific campaign scope when several campaigns share the form.
  */
 
 export const FACEBOOK_FORM_ASSOCIATION_PROVIDER = "facebook" as const;

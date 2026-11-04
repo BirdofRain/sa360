@@ -6,7 +6,7 @@ The edits below are the procedure for a later pass, after the evidence sheet
 is filled from a live session.
 
 This record coordinates with the COC setup PR #280
-(`cursor/coc-ghl-setup-ui-40f5`, head `7e787e86fbdbad0a08ddcb7f119191227d127db4`),
+(`cursor/coc-ghl-setup-ui-40f5`, head `7470912722ed6af763238275ea2a28863bed4b83`),
 which is stacked on PR #277. This document does not change that UI, the
 delivery writer, or Prisma.
 
@@ -39,9 +39,9 @@ name list from May 2026, not a current export and not a snapshot revision.
 
 Delivery writer under review, not merged: PR #277
 (`cursor/vet-ghl-delivery-contract-0184`, head
-`1ab4bb495382d00e1031b2102e1abc5aa8b56084`). The COC agent is building on that
-head. This preparation uses that writer's order. It does not copy
-`proposedMode` onto any client.
+`1c7428d1ab5ff8ee1ee97da7542a7551cf6745a7`). That head includes the
+required-write tag gate and the conditional tag preview. This preparation
+uses that writer's order. It does not copy `proposedMode` onto any client.
 
 ## 2. Locations that are not the authoritative source
 
@@ -89,7 +89,7 @@ for them is unverified.
 1. `POST /contacts/upsert` — identity and, on that PR, native `firstName`, `lastName`, `email`, `phone`, `address1`, `city`, `state`, `postalCode`, `country`, `dateOfBirth` (`YYYY-MM-DD` only), `source`. Custom fields are not on this body. Timezone is not a native key.
 2. Custom-field `PUT`, then source-attribute `PUT`.
 3. Optional intake note, only when `intakeSummaryNotesEnabled` is boolean `true`.
-4. `POST /contacts/{id}/tags` adds niche, source, and client tags and does not replace other tags. On the reviewed head `1ab4bb49` it also posts `SA360::EVENT::LEAD_CREATED` after a required stamp failure has already blocked explicit enrollment. Correction `cursor/withhold-automation-entry-tag-dc3b` withholds `SA360::EVENT::LEAD_CREATED`, `SA360::TRIGGER::NEW_LEAD`, and `SA360::TRIGGER::AI_READY` from that post while the required-write gate is closed, and still posts the niche, source, and client tags. Until the branch under test contains that correction, treat the event tag as a possible entry even when enrollment is blocked.
+4. `POST /contacts/{id}/tags` adds niche, source, and client tags and does not replace other tags. On head `1c7428d1` a closed required-write gate withholds `SA360::EVENT::LEAD_CREATED`, `SA360::TRIGGER::NEW_LEAD`, and `SA360::TRIGGER::AI_READY` from that post. Niche, source, and client tags still post. The event tag is posted when that gate is open, including a later resume that posts only the withheld tag. A simulation lists that tag as withheld or as planned only if required writes succeed. The preview does not send it.
 5. Opportunity and owner.
 6. One enrollment step, only when the required-write gate is open: `tag_trigger` adds `SA360::TRIGGER::NEW_LEAD`, or `direct_api` calls `POST /contacts/{id}/workflow/{destinationWorkflowIdGhl}` with no body. `direct_api` does not add `SA360::TRIGGER::NEW_LEAD`. Stored mode stays `tag_trigger` until an operator saves another mode. `proposedMode` is `direct_api` for display only (`changesExistingClients: false`).
 
@@ -98,7 +98,7 @@ If a published workflow uses one of the mechanisms below, the timing is the code
 | Mechanism | If it is configured | What remains unverified |
 | --- | --- | --- |
 | Contact Created | It can run on the upsert, before either custom-field `PUT`, and before survey fields, lead type, and timezone exist. Withholding a later tag does not stop it. | Whether any published workflow in the client destination uses Contact Created. |
-| `SA360::EVENT::LEAD_CREATED` | On the reviewed writer it is posted with the routing tags, including when explicit enrollment is blocked. After the correction, it is posted only when that gate is open, including a later resume that posts the withheld tag alone. It can be a second entry beside `direct_api` or `SA360::TRIGGER::NEW_LEAD`. | Whether a Contact Tag Added filter on this tag is published. |
+| `SA360::EVENT::LEAD_CREATED` | On head `1c7428d1` it is posted with the routing tags only when the required-write gate is open, including a later resume that posts the withheld tag alone. It can be a second entry beside `direct_api` or `SA360::TRIGGER::NEW_LEAD`. | Whether a Contact Tag Added filter on this tag is published. |
 | `SA360::TRIGGER::NEW_LEAD` | Only when stored mode is `tag_trigger` and the required-write gate is open, after tags, opportunity, and owner. | Whether the preparation workflow uses this tag, direct API enrollment, both, or neither. |
 | `SA360::TRIGGER::AI_READY` | Posted only on the same gated `tag_trigger` step, and only when enrichment says automation is ready. | Whether a listener on this tag is published. |
 | Inbound webhook | The location API does not send a webhook body. | Any trigger of type Inbound Webhook, and every action whose variable picker shows `inboundWebhookRequest`. |
@@ -183,7 +183,7 @@ Draft copy of the preparation workflow in the isolated test location. Suggested 
   - Saved mode will be `direct_api`: delete every trigger, including Contact Created, `SA360::EVENT::LEAD_CREATED`, and `SA360::TRIGGER::NEW_LEAD`. Enrollment is only the API `POST /contacts/{id}/workflow/{this workflow id}`.
   - Saved mode stays `tag_trigger`: the only trigger is Contact Tag Added for `SA360::TRIGGER::NEW_LEAD`. Remove Contact Created and `SA360::EVENT::LEAD_CREATED`.
   - Do not configure both.
-- Removing a tag listener in this draft does not change the API. On reviewed head `1ab4bb49` the writer still posts `SA360::EVENT::LEAD_CREATED` when enrollment is blocked. The correction branch withholds that tag, and `SA360::TRIGGER::NEW_LEAD` and `SA360::TRIGGER::AI_READY`, only while the required-write gate is closed. If a listener on the event tag is published, it is still a second entry on any run where the gate is open. Whether that listener exists is unverified.
+- Removing a tag listener in this draft does not change the API. Head `1c7428d1` withholds `SA360::EVENT::LEAD_CREATED`, `SA360::TRIGGER::NEW_LEAD`, and `SA360::TRIGGER::AI_READY` only while the required-write gate is closed. If a listener on the event tag is published, it is still a second entry on any run where the gate is open. Whether that listener exists is unverified.
 - Preserve these actions and record their targets before saving the test copy:
   - Assign User. Keep the same user id.
   - Internal notification. Keep the action in the canvas, and disable the send in this test copy. Record the original recipient.

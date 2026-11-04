@@ -48,7 +48,7 @@ head. This preparation uses that writer's order. It does not copy
 Do not treat any row below as LAL AI BOT-1. None was confirmed by a live
 location name plus URL.
 
-| ID or name | Where it came from | Why it is not the source |
+| ID or name | Where it came from | Why it is not the client destination |
 | --- | --- | --- |
 | `yCziKRW26eFg8IXAQZ73` | `SAM_TEST_GHL_LOCATION_ID`. Display name in tests: Sam's Test. | Survey text-field creation is limited to this id. The audit states it is not confirmed as the BOT-1 production location. |
 | `VPuMIhN6JpxdoXvvlekZ` | Direct-demo allowlist. | Demo location. |
@@ -202,7 +202,7 @@ For each branch:
 | --- | --- | --- | --- | --- | --- | --- |
 | | | | | | | |
 
-Missing means state, city, and postal code are all empty. Ambiguous means the state has more than one zone or the lookup returns blank. Do not invent a fallback zone. Copy the source branch, and record it.
+Missing means state, city, and postal code are all empty. Ambiguous means the state has more than one zone or the lookup returns blank. Do not invent a fallback zone. Copy the client destination's branch, and record it.
 
 Message custom values named in the May 2026 registry (`SA360_MSG_M2FT_BLUE_*`, `SA360_MSG_M2FT_GREEN_*`, `SA360_MSG_M2C_BLUE_*`, `SA360_MSG_M2C_GREEN_*`, `SA360_MSG_M2C5_*`) must not reference `inboundWebhookRequest`. Leave their send actions disabled in the test copy.
 

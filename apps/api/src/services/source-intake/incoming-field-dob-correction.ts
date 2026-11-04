@@ -20,7 +20,7 @@
  * not scan the window and add rows.
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, closeSync, fsyncSync, openSync, readFileSync } from "node:fs";
 
 import { Prisma, type PrismaClient } from "@prisma/client";
@@ -36,7 +36,21 @@ import {
 export const INCOMING_DOB_CORRECTION_VERSION = "incoming_field_dob_correction_v1" as const;
 export const INCOMING_DOB_CORRECTION_APPLY_CONFIRMATION = "APPLY CONFIRMED CAMPAIGN DOB CORRECTION";
 export const INCOMING_DOB_CORRECTION_ROLLBACK_CONFIRMATION = "ROLLBACK CONFIRMED CAMPAIGN DOB CORRECTION";
-export const INCOMING_DOB_CORRECTION_BATCH_SIZE = 25;
+export const INCOMING_DOB_CORRECTION_BATCH_SIZE = 10;
+/**
+ * Prisma's default interactive transaction expires at 5 seconds. A rolled-back
+ * production batch of 25 spent about 3.2 seconds normalizing twice per row
+ * inside the transaction, and under a second on the lock, delivery reads,
+ * catalog trigger, and audit insert. There was no lock wait. Normalization
+ * is prepared before the transaction. These bounds cover a 10-row batch,
+ * including one locked recompute, without changing any other Prisma client.
+ */
+export const INCOMING_DOB_CORRECTION_TRANSACTION_MAX_WAIT_MS = 2_000;
+export const INCOMING_DOB_CORRECTION_TRANSACTION_TIMEOUT_MS = 10_000;
+export const INCOMING_DOB_CORRECTION_TRANSACTION_OPTIONS = {
+  maxWait: INCOMING_DOB_CORRECTION_TRANSACTION_MAX_WAIT_MS,
+  timeout: INCOMING_DOB_CORRECTION_TRANSACTION_TIMEOUT_MS,
+} as const;
 export const INCOMING_DOB_CORRECTION_AUDIT_SUFFIX = ".dob-correction-audit.jsonl";
 export const INCOMING_DOB_CORRECTION_AUDIT_RELATION = "IncomingDobCorrectionAudit";
 /** Prisma migrations belong to Auth/Account. This process does not create the table. */
@@ -798,6 +812,68 @@ function reviewedCorrectionIds(
   return { ok: true, ids: unique };
 }
 
+function stableJson(value: unknown): string {
+  if (value === undefined) return "null";
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map((item) => stableJson(item)).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`).join(",")}}`;
+}
+
+function payloadHash(value: unknown): string {
+  return createHash("sha256").update(stableJson(value)).digest("hex");
+}
+
+type PreparedDobCorrection = {
+  rawHash: string;
+  proposal: { details: Record<string, unknown>; sourceAttributeDob: string | null } | null;
+  before: CanonicalDobAgeState;
+  action: DobCorrectionPlan["action"];
+  reason: string;
+};
+
+async function prepareDobCorrectionGroup(
+  db: PrismaClient,
+  ids: string[],
+  window: { receivedFrom: string; receivedTo: string | null }
+): Promise<Map<string, PreparedDobCorrection>> {
+  const rows = (await db.sourceLeadEvent.findMany({
+    where: { id: { in: ids } },
+    select: {
+      id: true,
+      sourceProvider: true,
+      sourceSystem: true,
+      sourceRouteKey: true,
+      sourceFunnelName: true,
+      clientAccountIdResolved: true,
+      status: true,
+      receivedAt: true,
+      deliveredAt: true,
+      normalizedAt: true,
+      createdAt: true,
+      updatedAt: true,
+      rawPayloadJson: true,
+      normalizedPayloadJson: true,
+      enrichmentMetadataJson: true,
+      routingResultJson: true,
+    },
+  })) as LockedEventRow[];
+  const emptyFlags = { sheets: new Set<string>(), ghl: new Set<string>(), allocated: new Set<string>() };
+  const prepared = new Map<string, PreparedDobCorrection>();
+  for (const row of rows) {
+    const snapshot = snapshotFromRow(row, emptyFlags);
+    const plan = planIncomingDobCorrection(snapshot, window);
+    prepared.set(row.id, {
+      rawHash: payloadHash(row.rawPayloadJson),
+      proposal: proposedFromNormalizer(snapshot),
+      before: plan.before,
+      action: plan.action,
+      reason: plan.reason,
+    });
+  }
+  return prepared;
+}
+
 function timestampsUntouched(
   updated: { receivedAt: Date; normalizedAt: Date | null; createdAt: Date; deliveredAt: Date | null },
   row: LockedEventRow
@@ -845,6 +921,7 @@ export async function applyIncomingDobCorrections(
   let auditExportFailed = false;
 
   for (const group of chunk(ids, INCOMING_DOB_CORRECTION_BATCH_SIZE)) {
+    const prepared = await prepareDobCorrectionGroup(db, group, window);
     const committed = await db.$transaction(async (tx) => {
       await assertAuditSchemaInTransaction(tx);
       const audits: DobCorrectionAudit[] = [];
@@ -860,18 +937,31 @@ export async function applyIncomingDobCorrections(
           batchSkipped.push({ id: row.id, reason: "changed_under_lock" });
           continue;
         }
+        const ready = prepared.get(row.id);
+        const rawUnchanged = ready != null && payloadHash(row.rawPayloadJson) === ready.rawHash && statesEqual(current, ready.before);
         const snapshot = snapshotFromRow(row, flags);
-        const plan = planIncomingDobCorrection(snapshot, window);
-        if (plan.action !== "apply") {
-          batchSkipped.push({ id: row.id, reason: plan.reason });
+        let proposed = rawUnchanged && ready ? ready.proposal : null;
+        if (rawUnchanged && ready && ready.action !== "apply") {
+          batchSkipped.push({ id: row.id, reason: ready.reason });
           continue;
         }
-        const proposed = proposedFromNormalizer(snapshot);
+        if (!rawUnchanged) {
+          const plan = planIncomingDobCorrection(snapshot, window);
+          if (plan.action !== "apply") {
+            batchSkipped.push({ id: row.id, reason: plan.reason });
+            continue;
+          }
+          proposed = proposedFromNormalizer(snapshot);
+        }
         if (!proposed) {
           batchSkipped.push({ id: row.id, reason: "raw_payload_unreadable" });
           continue;
         }
         const next = fillBlankCanonical(row.normalizedPayloadJson, proposed);
+        if (statesEqual(current, readCanonicalDobAgeState(next))) {
+          batchSkipped.push({ id: row.id, reason: "already_canonical" });
+          continue;
+        }
         const updated = await tx.sourceLeadEvent.update({
           where: { id: row.id },
           data: { normalizedPayloadJson: next as Prisma.InputJsonValue },
@@ -893,9 +983,13 @@ export async function applyIncomingDobCorrections(
           eventId: row.id,
           previousUpdatedAt: row.updatedAt.toISOString(),
           newUpdatedAt: updated.updatedAt.toISOString(),
-          alreadyDelivered: plan.alreadyDelivered,
-          before: plan.before,
-          after: plan.after,
+          alreadyDelivered:
+            row.deliveredAt != null ||
+            row.status === "delivered" ||
+            flags.sheets.has(row.id) ||
+            flags.ghl.has(row.id),
+          before: current,
+          after: readCanonicalDobAgeState(next),
           externalDestinations: "unchanged",
         };
         await insertDobCorrectionAudit(tx, audit);
@@ -903,7 +997,7 @@ export async function applyIncomingDobCorrections(
       }
       if (args.beforeCommit) await args.beforeCommit();
       return { audits, batchSkipped, seen };
-    });
+    }, INCOMING_DOB_CORRECTION_TRANSACTION_OPTIONS);
     writtenIds.push(...committed.audits.map((audit) => audit.eventId));
     skipped.push(...committed.batchSkipped);
     for (const id of group) {
@@ -1021,7 +1115,7 @@ export async function rollbackIncomingDobCorrections(
       }
       if (args.beforeCommit) await args.beforeCommit();
       return { audits, batchSkipped, seen };
-    });
+    }, INCOMING_DOB_CORRECTION_TRANSACTION_OPTIONS);
     writtenIds.push(...committed.audits.map((audit) => audit.eventId));
     skipped.push(...committed.batchSkipped);
     for (const target of group) {

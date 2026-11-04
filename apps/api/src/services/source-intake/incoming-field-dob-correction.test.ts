@@ -18,7 +18,9 @@ import {
 import {
   INCOMING_DOB_CORRECTION_APPLY_CONFIRMATION,
   INCOMING_DOB_CORRECTION_AUDIT_DDL,
+  INCOMING_DOB_CORRECTION_BATCH_SIZE,
   INCOMING_DOB_CORRECTION_ROLLBACK_CONFIRMATION,
+  INCOMING_DOB_CORRECTION_TRANSACTION_OPTIONS,
   applyIncomingDobCorrections,
   incomingDobCorrectionExitCode,
   partitionReviewedDobCorrectionPlans,
@@ -833,6 +835,128 @@ test("apply fills only blank canonical fields, is idempotent, and rolls back", a
     await db.$disconnect().catch(() => undefined);
     await holder.$disconnect();
     await restarted.$disconnect();
+  }
+});
+
+test("a birthday after the reference date fills DOB and leaves age blank", () => {
+  const plan = planIncomingDobCorrection(
+    snapshot({
+      rawPayload: {
+        ...(snapshot().rawPayload as object),
+        date: "11/03/2026",
+      },
+    }),
+    WINDOW
+  );
+  assert.equal(plan.action, "apply");
+  assert.equal(plan.reason, "fill_blank_canonical");
+  assert.equal(plan.after.date_of_birth, "2026-11-03");
+  assert.equal(plan.after.consumer_age, null);
+  assert.equal(plan.after.consumer_age_reference_date, "2026-11-02");
+  assert.equal(plan.after.consumer_age_reference_rule, "submitted_at_utc_date_else_received_at_utc_date");
+});
+
+test("a failed later batch rolls back only itself and a resume writes the remainder", async () => {
+  const databaseUrl = assertSafeTestDatabaseUrl(process.env.SA360_TEST_DATABASE_URL);
+  const db = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+  const created: string[] = [];
+  const batchCount = INCOMING_DOB_CORRECTION_BATCH_SIZE + 1;
+  const blank = readCanonicalDobAgeState({
+    lead_details: { coverage_note: "keep-me" },
+    routing: { source_intake: { sourceAttributes: { branch: "Army" } } },
+  });
+  try {
+    await dropAuditTable(db);
+    await createAuditTable(db);
+    const ids: string[] = [];
+    for (let index = 0; index < batchCount; index += 1) {
+      const row = await db.sourceLeadEvent.create({
+        data: {
+          sourceProvider: "leadcapture_io",
+          sourceSystem: "leadcapture_io_nextgen",
+          sourceType: "webhook",
+          sourceLeadId: `dob-batch-${Date.now()}-${index}`,
+          status: "received",
+          receivedAt: new Date("2026-11-02T18:00:00.000Z"),
+          normalizedAt: new Date("2026-11-02T18:00:05.000Z"),
+          rawPayloadJson: {
+            provider: "leadcapture_io",
+            sa360_source_system: "leadcapture_io_nextgen",
+            lead_id: "11111111-2222-4333-8444-555555555555",
+            submitted_at: "2026-11-02T18:00:00.000Z",
+            parent_url: "https://go.lifeinsuranceforvets.com/learn-julia-dodge",
+            first_name: "Pat",
+            email: EMAIL,
+            date: "03/13/1955",
+          },
+          normalizedPayloadJson: {
+            contact: { email: EMAIL, first_name: "Pat" },
+            lead_details: { coverage_note: "keep-me" },
+            routing: {
+              niche_key: "vet",
+              source_intake: {
+                submitted_at: "2026-11-02T18:00:00.000Z",
+                sourceAttributes: { branch: "Army" },
+              },
+            },
+          },
+        },
+      });
+      created.push(row.id);
+      ids.push(row.id);
+    }
+    const optionsSeen: unknown[] = [];
+    const original = db.$transaction.bind(db);
+    db.$transaction = ((callback: never, options?: never) => {
+      optionsSeen.push(options);
+      return original(callback, options);
+    }) as typeof db.$transaction;
+    const base = {
+      databaseUrl,
+      expectedDbHost: "127.0.0.1:5432",
+      operator: "correction-test",
+      confirm: INCOMING_DOB_CORRECTION_APPLY_CONFIRMATION,
+      limit: batchCount,
+      auditFile: "",
+      receivedFrom: WINDOW.receivedFrom,
+      receivedTo: WINDOW.receivedTo,
+      ids,
+      expectedCount: batchCount,
+      expectedBeforeById: Object.fromEntries(ids.map((id) => [id, blank])),
+    };
+    let batches = 0;
+    await assert.rejects(
+      () => applyIncomingDobCorrections(db, {
+        ...base,
+        beforeCommit: () => {
+          batches += 1;
+          if (batches > 1) throw new Error("batch_two_failed");
+        },
+      }),
+      /batch_two_failed/
+    );
+    assert.deepEqual(optionsSeen[0], INCOMING_DOB_CORRECTION_TRANSACTION_OPTIONS);
+    const audits = await readDobCorrectionAuditsFromDb(db);
+    assert.equal(audits.length, INCOMING_DOB_CORRECTION_BATCH_SIZE);
+    const committed = new Set(audits.map((row) => row.eventId));
+    assert.equal(committed.has(ids[ids.length - 1]!), false);
+    const remainder = await db.sourceLeadEvent.findUniqueOrThrow({ where: { id: ids[ids.length - 1]! } });
+    assert.equal(readCanonicalDobAgeState(remainder.normalizedPayloadJson).date_of_birth, null);
+    const resumed = await applyIncomingDobCorrections(db, {
+      ...base,
+      expectedBeforeById: { [ids[ids.length - 1]!]: blank },
+    });
+    assert.equal(resumed.complete, true);
+    assert.deepEqual(resumed.writtenIds, [ids[ids.length - 1]]);
+    assert.equal(resumed.skipped.filter((row) => row.reason === "already_canonical").length, INCOMING_DOB_CORRECTION_BATCH_SIZE);
+    assert.equal((await readDobCorrectionAuditsFromDb(db)).length, batchCount);
+    const filled = await db.sourceLeadEvent.findUniqueOrThrow({ where: { id: ids[ids.length - 1]! } });
+    assert.equal(readCanonicalDobAgeState(filled.normalizedPayloadJson).date_of_birth, "1955-03-13");
+    assert.equal(filled.normalizedAt?.toISOString(), "2026-11-02T18:00:05.000Z");
+  } finally {
+    if (created.length > 0) await db.sourceLeadEvent.deleteMany({ where: { id: { in: created } } });
+    await dropAuditTable(db);
+    await db.$disconnect();
   }
 });
 

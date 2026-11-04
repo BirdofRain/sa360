@@ -20,7 +20,7 @@ The manifest `ids` and `expectedCount` are the only apply scope. The gap assessm
 
 ## What apply writes
 
-One transaction per batch of 25 can change only:
+One transaction per batch of 10 can change only:
 
 - `SourceLeadEvent.normalizedPayloadJson`, and only blank canonical fields: `lead_details.date_of_birth`, `date_of_birth_provenance`, `consumer_age`, `consumer_age_provenance`, `consumer_age_reference_date`, `consumer_age_reference_rule`, and `consumer_age_conflict` when that flag is null. `routing.source_intake.sourceAttributes.date_of_birth` is copied only when the canonical DOB was blank, that object already exists, and that attribute is blank.
 - `SourceLeadEvent.updatedAt`, because Prisma `@updatedAt` moves. `receivedAt`, `normalizedAt`, `createdAt`, and `deliveredAt` are checked and the transaction throws if they move.
@@ -171,15 +171,19 @@ Immediately before the write, both attempts read:
 - 0 manifest-scoped and 0 global GHL outbox rows in `pending`, `executing`, or `uncertain`
 - delivery totals unchanged from the 8:14 PM census: 43 sheet jobs, 48 GHL outbox rows, 84 person admissions, 0 allocations, 0 buyer identities
 
-`cmvtkjy7z020snj0uivwpky0k` is the already-canonical row. Its `updatedAt` is November 3, 2026 10:51 PM America/New_York, after the preflight. Canonical date of birth and age were already present and matched the proposal. Provenance and reference were still blank, and the proposal would not fill them. It is not one of the four stored-age rows, and it has no audit row.
+Three manifest rows are already canonical and will be skipped. Each has `normalizedAt` null, no `IncomingDobCorrectionAudit` row, and a linked inventory item still `pending_review` whose `updatedAt` is about 50 ms after the event. That pairing is the available evidence of an independent payload update. This correction does not invent an actor for those writes and does not insert an audit row for them.
 
-`cmvzgznfu00agou0tlhh21j4f` is an apply plan that would fill a blank date of birth and reference fields and would leave `consumer_age` blank. Its `updatedAt` is still the November 2, 2026 intake time. The four stored ages still plan as preserved.
+- `cmvtkjy7z020snj0uivwpky0k`, event `updatedAt` November 3, 2026 10:51:57 PM America/New_York
+- `cmvsonz5a000rnj0u1y4us8na`, event `updatedAt` November 4, 2026 12:07:34 AM America/New_York
+- `cmvzi7v4j00cwou0t1lacjss0`, event `updatedAt` November 4, 2026 10:02:39 AM America/New_York
 
-Both writes threw Prisma `P2028` inside the first 25-row transaction. Prisma's default interactive transaction limit is 5 seconds, and this writer does not raise it. The transaction rolled back. After each attempt the manifest still had 0 audit rows, 0 canonical fills, and no new sheet job, GHL row, admission, allocation, buyer identity, inventory update, or projection row.
+`cmvzgznfu00agou0tlhh21j4f` remains an apply. Its raw `date` parses, and the reference rule `submitted_at_utc_date_else_received_at_utc_date` selects `submitted_at`. The parsed date is after that reference date, so the derived age is refused as `future_date_of_birth` and stays blank. The manifest's 1,011 recoverable ages counted blank stored ages, not ages the normalizer can derive. This row's `updatedAt` is still its November 2, 2026 intake time. The four stored ages still plan as preserved.
+
+Both writes threw Prisma `P2028` inside the first 25-row transaction. A later rolled-back timing batch on the same path measured no lock wait: the row lock and payload read took 31 ms, delivery reads 16 ms, updates including the catalog trigger 615 ms, and audit inserts 80 ms. Two normalizations per row, run inside the transaction, took 3.2 seconds. Database sessions were 13 of 25, with 0 sessions waiting on a lock. The 5-second default expired because that normalization ran while the transaction clock was open. The writer now prepares the proposal before the transaction, keeps the payload update and audit insert atomic, and sets an explicit 2-second `maxWait` and 10-second `timeout` on correction batches of 10. Other Prisma clients are unchanged. After each failed attempt the manifest still had 0 audit rows, 0 canonical fills, and no new sheet job, GHL row, admission, allocation, buyer identity, inventory update, or projection row.
 
 ## Blocker
 
-The schema is `ready`. The correction is not applied. 1,014 rows remain unwritten, and 1 row is already canonical. Another invocation of the unchanged writer fails with `P2028` before any commit. Raising the transaction limit is a change to the reviewed writer and was not part of this attempt. Do not roll back: there is no open apply. Do not edit the manifest.
+The schema is `ready`. The correction is not applied. The transaction bound above is the writer change for the next checked run. Do not roll back: there is no open apply. Do not edit the manifest.
 
 Before any later apply, read pending, executing, and uncertain `GhlAssociationDispatchOutbox` rows again. An open row would send the corrected payload on its first execution. This command does not create or drain that row.
 

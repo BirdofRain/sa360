@@ -23,6 +23,7 @@ function config(overrides: Partial<MetaWebhookConfig> = {}): MetaWebhookConfig {
     appSecret: "secret",
     accessToken: "tok",
     accessTokenPageId: null,
+    unboundPageTokenEnabled: true,
     graphApiVersion: "v22.0",
     masterClientAccountId: "lal_master_vet",
     directIntakeEnabled: false,
@@ -312,6 +313,34 @@ test("Page-bound token is only used for its own Page; other Pages are retained w
     .metaLeadgenFetch;
   assert.equal(fetchMeta.state, "failed");
   assert.equal(fetchMeta.graphOutcome, "token_unavailable");
+});
+
+test("global intake flags skip Graph before any Page token is selected", async () => {
+  const leadgenId = "lead_flags_before_token";
+  const harness = memoryHarness(leadgenId);
+  let resolved = 0;
+  const result = await processMetaLeadgenFetch(
+    { leadgenId, sourceLeadEventId: `evt_${leadgenId}`, jobId: "job_flags" },
+    {
+      getMetaWebhookConfigImpl: () => config({ intakeEnabled: false, graphFetchEnabled: false }),
+      resolvePageTokenImpl: async () => {
+        resolved += 1;
+        return {
+          ok: true,
+          accessToken: "should-not-be-selected",
+          scope: "page_bound",
+          source: "stored_page",
+        };
+      },
+      fetchMetaLeadDetailsImpl: async () => {
+        throw new Error("Graph must not run while intake flags are off");
+      },
+      ...harness.deps,
+    }
+  );
+  assert.equal(result.ok, true);
+  if (result.ok) assert.equal(result.skipped, "flags_disabled");
+  assert.equal(resolved, 0);
 });
 
 test("Page-bound token proceeds for its own Page", async () => {

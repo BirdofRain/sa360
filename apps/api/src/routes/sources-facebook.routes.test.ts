@@ -33,6 +33,7 @@ function config(overrides: Partial<MetaWebhookConfig> = {}): MetaWebhookConfig {
     appSecret: null,
     accessToken: "tok",
     accessTokenPageId: null,
+    unboundPageTokenEnabled: false,
     graphApiVersion: "v22.0",
     masterClientAccountId: "lal_master_vet",
     directIntakeEnabled: intakeEnabled,

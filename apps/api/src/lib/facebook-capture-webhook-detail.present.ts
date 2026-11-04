@@ -75,6 +75,10 @@ function presentGraphFetch(
     graph_error_code: fetch?.graphErrorCode ?? null,
     graph_error_message: fetch?.graphErrorMessage ?? null,
     token_scope: fetch?.tokenScope ?? null,
+    token_source: fetch?.tokenSource ?? null,
+    token_block_reason: fetch?.tokenBlockReason ?? null,
+    credential_id: fetch?.credentialId ?? null,
+    token_fingerprint: fetch?.tokenFingerprint ?? null,
     live_delivery: false,
     capi_dispatched: false,
   };

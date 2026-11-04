@@ -13,6 +13,7 @@ function pilotConfig(overrides: Partial<MetaWebhookConfig> = {}): MetaWebhookCon
     appSecret: "s",
     accessToken: "tok",
     accessTokenPageId: null,
+    unboundPageTokenEnabled: false,
     graphApiVersion: "v25.0",
     masterClientAccountId: null,
     directIntakeEnabled: false,

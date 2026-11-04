@@ -214,36 +214,63 @@ test("Graph API version defaults to v25.0 (matches the app dashboard) and honors
 
 test("resolveMetaPageAccessToken binds one token to one Page and never leaks the token", () => {
   const token = "EAAB-pilot-token-value";
-  // Unbound: single-token posture, operator owns the assumption.
-  assert.deepEqual(resolveMetaPageAccessToken("102720336121632", { accessToken: token, accessTokenPageId: null }), {
-    ok: true,
+  // Unbound env token is fail-closed unless the operator opts in.
+  const unboundOff = resolveMetaPageAccessToken("102720336121632", {
     accessToken: token,
-    scope: "unbound",
+    accessTokenPageId: null,
+    unboundPageTokenEnabled: false,
   });
+  assert.equal(unboundOff.ok, false);
+  if (!unboundOff.ok) {
+    assert.equal(unboundOff.reason, "unbound_token_disabled");
+    assert.equal(unboundOff.diagnostic.includes(token), false);
+  }
+  // Explicit legacy opt-in still uses the single env token.
+  assert.deepEqual(
+    resolveMetaPageAccessToken("102720336121632", {
+      accessToken: token,
+      accessTokenPageId: null,
+      unboundPageTokenEnabled: true,
+    }),
+    { ok: true, accessToken: token, scope: "unbound", source: "env_unbound" }
+  );
   // Bound and matching.
   assert.deepEqual(
-    resolveMetaPageAccessToken("102720336121632", { accessToken: token, accessTokenPageId: "102720336121632" }),
-    { ok: true, accessToken: token, scope: "page_bound" }
+    resolveMetaPageAccessToken("102720336121632", {
+      accessToken: token,
+      accessTokenPageId: "102720336121632",
+    }),
+    { ok: true, accessToken: token, scope: "page_bound", source: "env_page" }
   );
   // Bound and a different Page: terminal with diagnostic, token not used.
-  const other = resolveMetaPageAccessToken("999", { accessToken: token, accessTokenPageId: "102720336121632" });
+  const other = resolveMetaPageAccessToken("9999999999", {
+    accessToken: token,
+    accessTokenPageId: "102720336121632",
+  });
   assert.equal(other.ok, false);
   if (!other.ok) {
     assert.equal(other.reason, "page_token_not_configured");
-    assert.match(other.diagnostic, /Page 999/);
+    assert.match(other.diagnostic, /9999999999/);
     assert.match(other.diagnostic, /102720336121632/);
     assert.equal(other.diagnostic.includes(token), false);
   }
   // Bound but the notification has no Page ID.
-  const unknown = resolveMetaPageAccessToken(undefined, { accessToken: token, accessTokenPageId: "102720336121632" });
+  const unknown = resolveMetaPageAccessToken(undefined, {
+    accessToken: token,
+    accessTokenPageId: "102720336121632",
+  });
   assert.equal(unknown.ok, false);
   if (!unknown.ok) assert.equal(unknown.reason, "page_id_unknown");
   // No token at all.
-  const missing = resolveMetaPageAccessToken("102720336121632", { accessToken: null, accessTokenPageId: null });
+  const missing = resolveMetaPageAccessToken("102720336121632", {
+    accessToken: null,
+    accessTokenPageId: null,
+  });
   assert.equal(missing.ok, false);
   if (!missing.ok) {
     assert.equal(missing.reason, "missing_access_token");
     assert.match(missing.diagnostic, /META_PAGE_ACCESS_TOKEN/);
+    assert.equal(missing.diagnostic.includes(token), false);
   }
 });
 

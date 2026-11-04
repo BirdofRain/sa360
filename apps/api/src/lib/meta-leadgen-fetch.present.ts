@@ -23,6 +23,10 @@ export type MetaLeadgenFetchPresentation = {
   graphErrorCode: string | null;
   graphErrorMessage: string | null;
   tokenScope: string | null;
+  tokenSource: string | null;
+  tokenBlockReason: string | null;
+  credentialId: string | null;
+  tokenFingerprint: string | null;
   liveDelivery: false;
   capiDispatched: false;
 };
@@ -50,6 +54,10 @@ export function presentMetaLeadgenFetch(enrichmentJson: unknown): MetaLeadgenFet
     graphErrorCode: asString(graphError?.code),
     graphErrorMessage: asString(graphError?.message),
     tokenScope: asString(bag.tokenScope),
+    tokenSource: asString(bag.tokenSource),
+    tokenBlockReason: asString(bag.tokenBlockReason),
+    credentialId: asString(bag.credentialId),
+    tokenFingerprint: asString(bag.tokenFingerprint),
     liveDelivery: false,
     capiDispatched: false,
   };

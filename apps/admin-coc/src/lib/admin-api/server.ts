@@ -907,6 +907,9 @@ export type SelectedGhlDeliveryResponse = {
   contactIdGhl: string | null;
   opportunityIdGhl: string | null;
   workflowStarted: boolean | null;
+  contactResult?: string | null;
+  noteResult?: string | null;
+  workflowResult?: string | null;
   omittedCoreFields: string[];
   omittedOptionalFields: string[];
 };

@@ -1,3 +1,4 @@
+import { previewOnboardingNoteAction } from "@/app/actions/client-onboarding-v2";
 import { discoverGhlLocationConfigAction, saveClientGhlConfigAction } from "@/app/actions/ghl-config";
 import { linkGhlConnectionClientAction, loadGhlConnectionsAction, startGhlOAuthConnectAction } from "@/app/actions/ghl-connections";
 import { loadGhlLiveCanaryPreflightAction } from "@/app/actions/ghl-live-canary";
@@ -67,6 +68,28 @@ export function liveGhlWalkthroughActions(clientAccountId: string): GhlWalkthrou
       });
       if (!res.ok) return { ok: false, error: res.error };
       return { ok: true, deliveryEnabled: res.ghlDestination?.deliveryEnabled ?? null };
+    },
+    saveNotes: async (input) => {
+      const res = await saveClientGhlConfigAction(clientAccountId, {
+        locationId: input.locationId,
+        sourceEnrichmentPolicyJson: input.sourceEnrichmentPolicyJson,
+      });
+      if (!res.ok) return { ok: false, error: res.error };
+      return {
+        ok: true,
+        deliveryEnabled: res.ghlDestination?.deliveryEnabled ?? null,
+        sourceEnrichmentPolicyJson: res.ghlDestination?.sourceEnrichmentPolicyJson ?? input.sourceEnrichmentPolicyJson,
+      };
+    },
+    previewIntakeNote: async (sourceLeadEventId) => {
+      const res = await previewOnboardingNoteAction(clientAccountId, sourceLeadEventId);
+      if (!res.ok) return { ok: false, error: res.error };
+      return {
+        ok: true,
+        contractVersion: res.data.contractVersion,
+        body: res.data.body,
+        posted: false,
+      };
     },
     loadLeadAttributes: async (sourceLeadEventId) => loadStoredLeadSourceAttributesAction(sourceLeadEventId),
     saveWorkflow: async (body) => {

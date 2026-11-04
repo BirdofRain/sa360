@@ -8,10 +8,12 @@
 export const CANONICAL_SURVEY_ATTRIBUTES = [
   "best_time_to_call",
   "age",
+  "date_of_birth",
   "marital_status",
   "desired_coverage",
   "branch_of_service",
   "primary_reason",
+  "applied_for_other_insurance",
   "beneficiary",
   "military_status",
   "sex",

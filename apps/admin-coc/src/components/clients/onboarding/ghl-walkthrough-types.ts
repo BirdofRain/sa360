@@ -7,11 +7,17 @@ export type GhlWalkthroughLocation = {
   locationName: string | null;
   workflowId: string | null;
   workflowTriggerMode: string | null;
+  vetWorkflowTriggerProposal?: {
+    proposedMode: "direct_api";
+    storedMode: string | null;
+    changesExistingClients: false;
+  } | null;
   deliveryEnabled: boolean | null;
   opportunityCreationEnabled: boolean | null;
   pipelineId: string | null;
   stageId: string | null;
   sourceAttributeFieldMapJson?: unknown;
+  sourceEnrichmentPolicyJson?: unknown;
 };
 
 export type GhlWalkthroughConnection = {
@@ -47,6 +53,9 @@ export type GhlWalkthroughExecution = {
   errors: string[];
   skippedDuplicate: boolean;
   outcome?: "skipped" | "executed" | "held";
+  contactResult?: string | null;
+  noteResult?: string | null;
+  workflowResult?: string | null;
 };
 
 export type GhlWalkthroughActions = {
@@ -58,8 +67,15 @@ export type GhlWalkthroughActions = {
   ) => Promise<{ ok: true; discovery: GhlLocationConfigDiscoveryResponse } | { ok: false; error: string }>;
   saveFieldMap: (input: {
     locationId: string;
-    sourceAttributeFieldMapJson: Record<string, { ghlFieldKey: string; requirement: "optional" }>;
+    sourceAttributeFieldMapJson: Record<string, { ghlFieldKey: string; requirement: string }>;
   }) => Promise<{ ok: true; deliveryEnabled: boolean | null } | { ok: false; error: string }>;
+  saveNotes: (input: {
+    locationId: string;
+    sourceEnrichmentPolicyJson: Record<string, unknown>;
+  }) => Promise<{ ok: true; deliveryEnabled: boolean | null; sourceEnrichmentPolicyJson: unknown } | { ok: false; error: string }>;
+  previewIntakeNote: (
+    sourceLeadEventId: string
+  ) => Promise<{ ok: true; contractVersion: string | null; body: string | null; posted: false } | { ok: false; error: string }>;
   loadLeadAttributes: (
     sourceLeadEventId: string
   ) => Promise<{ ok: true; sourceAttributes: Record<string, string | null> } | { ok: false; error: string }>;

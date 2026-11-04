@@ -13,6 +13,11 @@ export type ClientGhlDestination = {
   defaultAssignedUserIdGhl: string | null;
   destinationWorkflowIdGhl: string | null;
   workflowTriggerMode?: string | null;
+  vetWorkflowTriggerProposal?: {
+    proposedMode: "direct_api";
+    storedMode: string | null;
+    changesExistingClients: false;
+  } | null;
   destinationPipelineIdGhl: string | null;
   destinationPipelineStageIdGhl: string | null;
   pipelineStageContactingIdGhl: string | null;

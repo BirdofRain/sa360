@@ -103,11 +103,13 @@ function projectGhlLocation(config: ClientDeliveryConfigResponse): GhlWalkthroug
     locationName: config.locationName,
     workflowId: destination?.destinationWorkflowIdGhl ?? null,
     workflowTriggerMode: destination?.workflowTriggerMode ?? null,
+    vetWorkflowTriggerProposal: destination?.vetWorkflowTriggerProposal ?? null,
     deliveryEnabled: destination?.deliveryEnabled ?? null,
     opportunityCreationEnabled: destination?.opportunityCreationEnabled ?? null,
     pipelineId: destination?.destinationPipelineIdGhl ?? null,
     stageId: destination?.destinationPipelineStageIdGhl ?? null,
     sourceAttributeFieldMapJson: destination?.sourceAttributeFieldMapJson ?? null,
+    sourceEnrichmentPolicyJson: destination?.sourceEnrichmentPolicyJson ?? null,
   };
 }
 

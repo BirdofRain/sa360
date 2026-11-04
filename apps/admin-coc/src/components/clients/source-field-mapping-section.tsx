@@ -13,12 +13,18 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { CANONICAL_SURVEY_ATTRIBUTES } from "@/lib/clients/onboarding/ghl-field-coverage";
+import {
+  VET_REVIEW_KEYS,
+  duplicateTargets,
+  reviewSavedMappings,
+  savedMappingEntries,
+} from "@/lib/clients/onboarding/ghl-vet-setup-display";
 import type { ClientGhlDestination } from "@/lib/clients/types";
 import type { GhlDiscoveredCustomField } from "@/lib/ghl-config/types";
 
 const CANONICAL_ATTRIBUTES = CANONICAL_SURVEY_ATTRIBUTES;
 
-type FieldRequirement = "optional" | "automation_required" | "ignored";
+type FieldRequirement = "optional" | "automation_required" | "delivery_required" | "ignored";
 
 type MappingEntry = {
   ghlFieldKey: string;
@@ -39,7 +45,7 @@ function parseMap(raw: unknown): Record<string, MappingEntry> {
       out[key] = {
         ghlFieldKey,
         requirement:
-          req === "automation_required" || req === "ignored" ? req : "optional",
+          req === "automation_required" || req === "delivery_required" || req === "ignored" ? req : "optional",
       };
     }
   }
@@ -65,6 +71,16 @@ export function SourceFieldMappingSection({
   const [message, setMessage] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
+  const review = reviewSavedMappings({
+    entries: savedMappingEntries(map),
+    keys: VET_REVIEW_KEYS,
+    fields: discoveredCustomFields,
+    discoveryLoaded: discoveredCustomFields.length > 0,
+  });
+  const duplicates = duplicateTargets({
+    entries: savedMappingEntries(map),
+    fields: discoveredCustomFields,
+  });
   const fieldOptions = discoveredCustomFields
     .map((f) => ({
       key: f.fieldKey ?? f.key ?? f.id,
@@ -113,7 +129,21 @@ export function SourceFieldMappingSection({
         <h3 className="font-medium">Source survey field mapping</h3>
         <p className="text-xs text-muted-foreground">
           Map canonical intake attributes to discovered GHL contact fields. No redeploy required.
+          applied_for_other_insurance has no invented destination id. date_of_birth here is the custom field, not native dateOfBirth.
         </p>
+      </div>
+      <div className="space-y-1 text-xs" data-testid="source-mapping-review">
+        {review.map((row) => (
+          <p key={row.key}>
+            {row.key}: {row.fieldName ? `${row.fieldName} · ` : ""}
+            {row.savedId ?? "missing"} · {row.status}
+          </p>
+        ))}
+        {duplicates.map((duplicate) => (
+          <p key={duplicate.fieldId}>
+            Duplicate target {duplicate.fieldName ?? duplicate.fieldId}: {duplicate.keys.join(", ")}
+          </p>
+        ))}
       </div>
       <Table>
         <TableHeader>
@@ -161,6 +191,7 @@ export function SourceFieldMappingSection({
                     }
                   >
                     <option value="optional">Optional</option>
+                    <option value="delivery_required">Required for delivery</option>
                     <option value="automation_required">Require for AI</option>
                     <option value="ignored">Ignore</option>
                   </select>

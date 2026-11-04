@@ -35,6 +35,7 @@ import {
   type DeliveryRunDispositionInput,
 } from "./ghl-destination-authorization.js";
 import { executeRecordedGhlDelivery } from "./ghl-delivery-adapter/ghl-live-canary.service.js";
+import type { VetDeliveryResults } from "./ghl-delivery-adapter/vet-ghl-delivery-contract.js";
 
 export type AssociationDeliveryResult = {
   outcome: "skipped" | "executed" | "held";
@@ -45,6 +46,9 @@ export type AssociationDeliveryResult = {
   contactIdGhl: string | null;
   opportunityIdGhl: string | null;
   workflowStarted: boolean | null;
+  contactResult: VetDeliveryResults["contact"] | null;
+  noteResult: VetDeliveryResults["note"] | null;
+  workflowResult: VetDeliveryResults["workflow"] | null;
   omittedCoreFields: string[];
   omittedOptionalFields: string[];
 };
@@ -97,6 +101,9 @@ export type AssociationDeliveryDeps = {
     contactIdGhl?: string | null;
     opportunityIdGhl?: string | null;
     workflowStarted?: boolean | null;
+    contactResult?: VetDeliveryResults["contact"] | null;
+    noteResult?: VetDeliveryResults["note"] | null;
+    workflowResult?: VetDeliveryResults["workflow"] | null;
   }>;
 };
 
@@ -109,6 +116,9 @@ const quiet = (reason: string, omitted?: Pick<DestinationFacts, "omittedCoreFiel
   contactIdGhl: null,
   opportunityIdGhl: null,
   workflowStarted: null,
+  contactResult: null,
+  noteResult: null,
+  workflowResult: null,
   omittedCoreFields: omitted?.omittedCoreFields ?? [],
   omittedOptionalFields: omitted?.omittedOptionalFields ?? [],
 });
@@ -158,6 +168,9 @@ async function deliverLoadedPlan(
       contactIdGhl: null,
       opportunityIdGhl: null,
       workflowStarted: null,
+      contactResult: null,
+      noteResult: null,
+      workflowResult: null,
       omittedCoreFields: input.facts.omittedCoreFields,
       omittedOptionalFields: input.facts.omittedOptionalFields,
     };
@@ -178,6 +191,9 @@ async function deliverLoadedPlan(
     contactIdGhl: execution.contactIdGhl ?? null,
     opportunityIdGhl: execution.opportunityIdGhl ?? null,
     workflowStarted: execution.workflowStarted ?? null,
+    contactResult: execution.contactResult ?? null,
+    noteResult: execution.noteResult ?? null,
+    workflowResult: execution.workflowResult ?? null,
     omittedCoreFields: input.facts.omittedCoreFields,
     omittedOptionalFields: input.facts.omittedOptionalFields,
   };

@@ -178,6 +178,29 @@ test("a selected test does not send an event that already has a GHL delivery rec
   assert.equal(executes, 0);
 });
 
+test("a selected test keeps contact, note, and workflow outcomes separate", async () => {
+  const gate = deps({
+    execute: async () => ({
+      held: false,
+      status: "partial_success",
+      runId: "run_partial",
+      externalCallExecuted: true,
+      errors: [],
+      contactResult: "upserted",
+      noteResult: "ambiguous",
+      workflowResult: "enrolled",
+    }),
+  });
+  const sent = await executeSelectedGhlDeliveryTest(
+    { clientAccountId: CLIENT, planId: "plan_1", confirmation: DELIVER_ONE_GHL_TEST },
+    gate
+  );
+  assert.equal(sent.contactResult, "upserted");
+  assert.equal(sent.noteResult, "ambiguous");
+  assert.equal(sent.workflowResult, "enrolled");
+  assert.equal(sent.outcome, "executed");
+});
+
 test("a selected test loads the stored lead and does not turn ongoing delivery on", async () => {
   let seen: { mode: string; lifecycle: boolean; confirmation: string | null } | null = null;
   const gate = deps({

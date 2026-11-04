@@ -14,6 +14,7 @@ import {
   partitionRoutingTags,
   planRoutingTagPreview,
   planIntakeSummaryNote,
+  presentNativeContactPlan,
   receiptFromPersistedStep,
   retryDecision,
   separateDeliveryResults,
@@ -104,6 +105,28 @@ test("duplicate location targets drop both values and block enrollment", () => {
   });
   assert.equal(enrollment.allowed, false);
   assert.match(enrollment.reason ?? "", /Duplicate custom field targets/);
+});
+
+test("native plan sends an ISO date of birth and omits blanks without writing timezone", () => {
+  const plan = presentNativeContactPlan({
+    firstName: "Sam",
+    lastName: " ",
+    email: "sam@example.com",
+    source: "sa360",
+    sourceAttributes: { date_of_birth: "1955-03-13", age: "71" },
+    receivedAt: "2026-03-13T12:00:00.000Z",
+  });
+  assert.equal(plan.timezoneWritten, false);
+  assert.equal(plan.fields.find((field) => field.key === "dateOfBirth")?.disposition, "send");
+  assert.equal(plan.fields.find((field) => field.key === "dateOfBirth")?.value, "1955-03-13");
+  assert.equal(plan.fields.find((field) => field.key === "lastName")?.disposition, "omitted_missing");
+  assert.equal(plan.fields.some((field) => field.key === "dateOfBirth"), true);
+  assert.equal(plan.fields.some((field) => (field.key as string) === "age"), false);
+  const invalid = presentNativeContactPlan({
+    sourceAttributes: { date_of_birth: "not-a-date" },
+  });
+  assert.equal(invalid.fields.find((field) => field.key === "dateOfBirth")?.disposition, "invalid");
+  assert.equal(invalid.fields.find((field) => field.key === "dateOfBirth")?.value, null);
 });
 
 test("DOB is a native ISO date and age stays off the contact body", () => {

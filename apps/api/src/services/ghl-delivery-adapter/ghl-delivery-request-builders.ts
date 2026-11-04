@@ -9,7 +9,7 @@ import type {
   GhlBackupSheetPreview,
   GhlValidationResult,
 } from "./ghl-delivery-adapter.types.js";
-import { AUTOMATION_ENTRY_EVENT_TAG, vetNativeContactFields } from "./vet-ghl-delivery-contract.js";
+import { AUTOMATION_ENTRY_EVENT_TAG, presentNativeContactPlan, vetNativeContactFields } from "./vet-ghl-delivery-contract.js";
 
 function trim(v: string | null | undefined): string | null {
   const t = v?.trim();
@@ -143,7 +143,7 @@ export function buildContactUpsertRequest(
   const locationId = trim(ctx.plan.destinationSubaccountIdGhl) ?? "";
   const customFields = customFieldsOverride ?? buildCustomFieldsMap(ctx);
   const names = planContactNamesFromContext(ctx);
-  const native = vetNativeContactFields({
+  const nativeInput = {
     firstName: names.firstName,
     lastName: names.lastName,
     email: planContactField(ctx, "email"),
@@ -152,11 +152,13 @@ export function buildContactUpsertRequest(
     normalizedPayload: ctx.sourceEnrichment?.normalizedPayload,
     sourceAttributes: ctx.sourceEnrichment?.sourceAttributes ?? null,
     receivedAt: ctx.sourceEnrichment?.receivedAt,
-  });
+  };
+  const native = vetNativeContactFields(nativeInput);
   return {
     method: "POST",
     path: "/contacts/upsert",
     locationId,
+    nativeFieldPlan: presentNativeContactPlan(nativeInput),
     body: {
       firstName: native.firstName ?? null,
       lastName: native.lastName ?? null,

@@ -71,6 +71,8 @@ export type GhlContactUpsertPreview = {
     source: string;
     customFields: Record<string, string | null>;
   };
+  /** Read-only projection. Not copied onto the live upsert body. */
+  nativeFieldPlan?: import("./vet-ghl-delivery-contract.js").VetNativeFieldPlan;
 };
 
 export type GhlCustomFieldStampPreview = {

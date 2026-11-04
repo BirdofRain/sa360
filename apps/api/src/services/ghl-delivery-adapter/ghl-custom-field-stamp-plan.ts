@@ -43,6 +43,11 @@ export type SkippedCustomFieldEntry = {
   isCoreRequired: boolean;
 };
 
+export type CustomFieldTargetCollision = {
+  fieldId: string;
+  logicalKeys: string[];
+};
+
 export type TypedCustomFieldStampPlan = {
   textBatch: CustomFieldStampBuildResult;
   optionBatch: CustomFieldStampBuildResult;
@@ -50,6 +55,8 @@ export type TypedCustomFieldStampPlan = {
   attemptedTextFields: string[];
   skippedOptionFields: string[];
   unsatisfiedRequiredCoreFields: Sa360LogicalFieldKey[];
+  /** Logical keys that shared one GHL field id. None of those values are sent. */
+  collisions: CustomFieldTargetCollision[];
 };
 
 const OPTION_DATA_TYPES = new Set([
@@ -141,6 +148,13 @@ function pushPutItem(
   });
 }
 
+function dropField(batch: CustomFieldStampBuildResult, fieldId: string): string | null {
+  const diagnostic = batch.diagnostics.find((item) => item.ghlFieldId === fieldId);
+  batch.apiPayload = batch.apiPayload.filter((item) => item.id !== fieldId);
+  batch.diagnostics = batch.diagnostics.filter((item) => item.ghlFieldId !== fieldId);
+  return diagnostic?.logicalKey ?? null;
+}
+
 export function buildTypedCustomFieldStampPlan(input: {
   idMap: Record<string, string>;
   values: Record<string, string | null | undefined>;
@@ -156,6 +170,38 @@ export function buildTypedCustomFieldStampPlan(input: {
   const skippedOptionFields: string[] = [];
   const usedTextIds = new Set<string>();
   const usedOptionIds = new Set<string>();
+  const collisions: CustomFieldTargetCollision[] = [];
+  const fieldOwners = new Map<string, "text" | "option">();
+
+  const putField = (
+    batch: CustomFieldStampBuildResult,
+    batchName: "text" | "option",
+    usedIds: Set<string>,
+    item: {
+      logicalKey: string;
+      ghlFieldId: string;
+      ghlFieldKey: string;
+      value: string;
+      dataType: string | null;
+    }
+  ) => {
+    const owner = fieldOwners.get(item.ghlFieldId);
+    if (owner || usedIds.has(item.ghlFieldId)) {
+      const previous = owner ? dropField(owner === "text" ? textBatch : optionBatch, item.ghlFieldId) : null;
+      const keys = [previous, item.logicalKey].filter((key): key is string => Boolean(key));
+      const existing = collisions.find((collision) => collision.fieldId === item.ghlFieldId);
+      if (existing) {
+        for (const key of keys) if (!existing.logicalKeys.includes(key)) existing.logicalKeys.push(key);
+      } else {
+        collisions.push({ fieldId: item.ghlFieldId, logicalKeys: keys });
+      }
+      fieldOwners.delete(item.ghlFieldId);
+      usedIds.add(item.ghlFieldId);
+      return;
+    }
+    fieldOwners.set(item.ghlFieldId, batchName);
+    pushPutItem(batch, item, usedIds);
+  };
 
   for (const [logicalKey, raw] of Object.entries(input.values)) {
     const value = raw?.trim();
@@ -194,11 +240,7 @@ export function buildTypedCustomFieldStampPlan(input: {
 
     if (category === "text_safe") {
       attemptedTextFields.push(logicalKey);
-      pushPutItem(
-        textBatch,
-        { logicalKey, ghlFieldId, ghlFieldKey, value, dataType },
-        usedTextIds
-      );
+      putField(textBatch, "text", usedTextIds, { logicalKey, ghlFieldId, ghlFieldKey, value, dataType });
       continue;
     }
 
@@ -214,11 +256,7 @@ export function buildTypedCustomFieldStampPlan(input: {
         continue;
       }
       attemptedTextFields.push(logicalKey);
-      pushPutItem(
-        textBatch,
-        { logicalKey, ghlFieldId, ghlFieldKey, value, dataType },
-        usedTextIds
-      );
+      putField(textBatch, "text", usedTextIds, { logicalKey, ghlFieldId, ghlFieldKey, value, dataType });
       continue;
     }
 
@@ -234,11 +272,7 @@ export function buildTypedCustomFieldStampPlan(input: {
         continue;
       }
       attemptedTextFields.push(logicalKey);
-      pushPutItem(
-        textBatch,
-        { logicalKey, ghlFieldId, ghlFieldKey, value, dataType },
-        usedTextIds
-      );
+      putField(textBatch, "text", usedTextIds, { logicalKey, ghlFieldId, ghlFieldKey, value, dataType });
       continue;
     }
 
@@ -291,11 +325,13 @@ export function buildTypedCustomFieldStampPlan(input: {
         continue;
       }
 
-      pushPutItem(
-        optionBatch,
-        { logicalKey, ghlFieldId, ghlFieldKey, value: resolved.ghlValue, dataType },
-        usedOptionIds
-      );
+      putField(optionBatch, "option", usedOptionIds, {
+        logicalKey,
+        ghlFieldId,
+        ghlFieldKey,
+        value: resolved.ghlValue,
+        dataType,
+      });
       continue;
     }
 
@@ -312,14 +348,19 @@ export function buildTypedCustomFieldStampPlan(input: {
     .filter((s) => s.isCoreRequired)
     .map((s) => s.logicalKey)
     .filter((k): k is Sa360LogicalFieldKey => isCoreRequiredLogicalKey(k));
+  const stampedKeys = new Set([
+    ...textBatch.diagnostics.map((item) => item.logicalKey),
+    ...optionBatch.diagnostics.map((item) => item.logicalKey),
+  ]);
 
   return {
     textBatch,
     optionBatch,
     skipped,
-    attemptedTextFields,
+    attemptedTextFields: attemptedTextFields.filter((key) => stampedKeys.has(key)),
     skippedOptionFields,
     unsatisfiedRequiredCoreFields,
+    collisions,
   };
 }
 
@@ -337,6 +378,7 @@ export function buildLegacyCustomFieldStampPlan(input: {
     attemptedTextFields: built.diagnostics.map((d) => d.logicalKey),
     skippedOptionFields: [],
     unsatisfiedRequiredCoreFields: [],
+    collisions: [],
   };
 }
 

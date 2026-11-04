@@ -1,6 +1,7 @@
 import { projectCampaignDobAge } from "../consumer-age/campaign-dob-age.js";
 import type { GhlDiscoveredCustomField } from "../ghl-config-discovery/ghl-config-discovery.types.js";
 import { buildCustomFieldsForPutFromMap } from "../ghl-delivery-adapter/ghl-live-transport.js";
+import { validateLocationCustomFieldTargets } from "../ghl-delivery-adapter/vet-ghl-delivery-contract.js";
 import type { SourceAttributes, SourceAttributeFieldMappingEntry } from "./source-enrichment.types.js";
 
 function indexDiscovered(fields: GhlDiscoveredCustomField[]): {
@@ -70,6 +71,12 @@ function campaignStampValues(input: {
   };
 }
 
+export type SourceAttributeFieldCollision = {
+  fieldId: string;
+  fieldName: string | null;
+  canonicalKeys: string[];
+};
+
 export type SourceAttributeStampPlan = {
   valuesByLogicalKey: Record<string, string | null>;
   idMap: Record<string, string>;
@@ -78,6 +85,10 @@ export type SourceAttributeStampPlan = {
   /** Mapped to a discovered field id, but this lead has no value. Not sent. */
   missingSourceKeys: string[];
   skippedKeys: string[];
+  /** Two canonical keys resolved to one location field. Neither value is sent. */
+  collisions: SourceAttributeFieldCollision[];
+  /** delivery_required keys that were omitted, unmapped, or colliding. */
+  unresolvedDeliveryRequired: string[];
 };
 
 /**
@@ -133,7 +144,32 @@ export function buildSourceAttributeStampPlan(input: {
     mappableKeys.push(canonical);
   }
 
-  return { valuesByLogicalKey, idMap, mappableKeys, unmappedKeys, missingSourceKeys, skippedKeys };
+  const validation = validateLocationCustomFieldTargets({
+    fieldMap: input.fieldMap,
+    discoveredFields: input.discoveredFields,
+    values: valuesByLogicalKey,
+    unmappedKeys,
+    missingSourceKeys,
+  });
+  for (const collision of validation.collisions) {
+    for (const key of collision.canonicalKeys) {
+      delete valuesByLogicalKey[key];
+      delete idMap[key];
+    }
+  }
+  const collided = new Set(validation.collisions.flatMap((collision) => collision.canonicalKeys));
+  const writable = mappableKeys.filter((key) => !collided.has(key));
+
+  return {
+    valuesByLogicalKey,
+    idMap,
+    mappableKeys: writable,
+    unmappedKeys,
+    missingSourceKeys,
+    skippedKeys,
+    collisions: validation.collisions,
+    unresolvedDeliveryRequired: validation.unresolvedDeliveryRequired,
+  };
 }
 
 export function buildSourceAttributeStampPayload(

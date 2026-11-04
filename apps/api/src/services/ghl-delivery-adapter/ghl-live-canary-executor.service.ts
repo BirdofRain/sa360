@@ -58,6 +58,18 @@ import {
   isRequiredDeliveryPathComplete,
   liveCanaryRunSummaryForStatus,
 } from "./ghl-live-canary-step-requirements.js";
+import {
+  classifyRemoteOutcome,
+  noteIdFromResponse,
+  operationIdempotencyKey,
+  planIntakeSummaryNote,
+  retryDecision,
+  separateDeliveryResults,
+  tagModePlan,
+  workflowEnrollmentAllowed,
+  type VetOperation,
+  type VetOperationReceipt,
+} from "./vet-ghl-delivery-contract.js";
 
 export type LiveCanaryStepOutcome = {
   stepOrder: number;
@@ -86,7 +98,32 @@ export type LiveCanaryExecutionResult = {
   summary: string;
   errors: string[];
   warnings: string[];
+  contactResult: "upserted" | "failed" | "replayed" | "ambiguous" | "rejected" | "not_attempted";
+  noteResult: "disabled" | "persisted" | "failed" | "ambiguous" | "rejected" | "skipped";
+  workflowResult: "enrolled" | "not_enrolled" | "ambiguous" | "rejected" | "skipped" | "blocked" | "replayed";
 };
+
+function ghlDeliveryWrite(
+  deps: GhlLiveHttpDeps,
+  method: string,
+  path: string,
+  options?: {
+    body?: unknown;
+    query?: Record<string, string>;
+    timeoutMs?: number;
+    allowRetry?: boolean;
+    locationId?: string | null;
+  }
+) {
+  return ghlLiveJson(deps, method, path, { ...options, allowRetry: false });
+}
+
+function withReceipt(
+  response: Record<string, unknown> | null | undefined,
+  receipt: VetOperationReceipt
+): Prisma.InputJsonValue {
+  return { ...(response ?? {}), vetOperationReceipt: receipt };
+}
 
 const defaultDeps: GhlLiveHttpDeps = { fetch: globalThis.fetch.bind(globalThis) };
 
@@ -138,6 +175,7 @@ export async function executeLiveCanaryGhlSteps(
       eventName: LifecycleEventNameInternal,
       contactIdGhl?: string | null
     ) => Promise<void>;
+    priorReceipts?: VetOperationReceipt[];
   }
 ): Promise<LiveCanaryExecutionResult> {
   const emitLifecycle =
@@ -159,6 +197,11 @@ export async function executeLiveCanaryGhlSteps(
   let opportunityConfigured = false;
   const stepFlags = getLiveCanaryStepRequirementFlags(ctx);
   const OWNER_SKIP_MESSAGE = "Owner assignment skipped — no valid GHL user configured.";
+  const priorReceipts = opts?.priorReceipts ?? [];
+  const priorFor = (operation: VetOperation) =>
+    priorReceipts.find((receipt) => receipt.operation === operation) ?? null;
+  let workflowBlockReason: string | null = null;
+  let duplicateTargetsBlocked = false;
 
   const pushOutcome = (outcome: Omit<LiveCanaryStepOutcome, "stepOrder"> & { stepOrder?: number }) => {
     stepOutcomes.push({ stepOrder: outcome.stepOrder ?? order++, ...outcome });
@@ -172,42 +215,110 @@ export async function executeLiveCanaryGhlSteps(
   {
     const startedAt = new Date();
     const preview = contactUpsertPreview;
-    const upsertBody = buildLiveContactUpsertHttpBody(preview);
-    const res = await ghlLiveJson(deps, preview.method, preview.path, {
-      body: upsertBody,
-      locationId: ghlLocationId,
-    });
-    contactIdGhl = extractContactIdFromGhlResponse(res.json);
-    const ok = res.ok && Boolean(contactIdGhl);
-    const ghlError = ok ? null : parseGhlApiErrorSummary(res.text, res.json);
-    if (!ok) {
+    const prior = priorFor("contact");
+    const decision = retryDecision(prior);
+    if (decision === "skip_completed" && prior?.externalId) {
+      contactIdGhl = prior.externalId;
+      pushOutcome({
+        stepType: "create_or_update_contact",
+        deliveryPlanStepId: findPlanStepId(ctx, "create_or_update_contact"),
+        status: "succeeded",
+        targetSystem: "ghl",
+        targetId: preview.locationId,
+        externalId: contactIdGhl,
+        errorCode: null,
+        errorSummary: null,
+        warnings: ["Completed contact upsert was not repeated."],
+        requestRedactedJson: null,
+        responseRedactedJson: withReceipt(
+          { externalCallExecuted: false, replayedFromReceipt: true, contactIdGhl },
+          prior
+        ),
+        startedAt,
+        completedAt: new Date(),
+        externalCallExecuted: false,
+      });
+    } else if (decision === "hold_ambiguous" || decision === "hold_rejected") {
       contactFailed = true;
-      errors.push(ghlError ?? "Contact upsert failed.");
-    }
-    pushOutcome({
-      stepType: "create_or_update_contact",
-      deliveryPlanStepId: findPlanStepId(ctx, "create_or_update_contact"),
-      status: ok ? "succeeded" : "failed",
-      targetSystem: "ghl",
-      targetId: preview.locationId,
-      externalId: contactIdGhl,
-      errorCode: ok ? null : `http_${res.status || "transport"}`,
-      errorSummary: ok ? null : ghlError,
-      warnings: [],
-      requestRedactedJson: res.redactedRequest as Prisma.InputJsonValue,
-      responseRedactedJson: {
-        ...(res.redactedResponse ?? {}),
+      const summary =
+        decision === "hold_ambiguous"
+          ? "Contact upsert has an ambiguous remote outcome and was not repeated."
+          : "Contact upsert was rejected by GHL and was not repeated.";
+      errors.push(summary);
+      pushOutcome({
+        stepType: "create_or_update_contact",
+        deliveryPlanStepId: findPlanStepId(ctx, "create_or_update_contact"),
+        status: "failed",
+        targetSystem: "ghl",
+        targetId: preview.locationId,
+        externalId: prior?.externalId ?? null,
+        errorCode: decision,
+        errorSummary: summary,
+        warnings: [],
+        requestRedactedJson: null,
+        responseRedactedJson: withReceipt(
+          { externalCallExecuted: false, replayedFromReceipt: true },
+          prior!
+        ),
+        startedAt,
+        completedAt: new Date(),
+        externalCallExecuted: false,
+      });
+    } else {
+      const upsertBody = buildLiveContactUpsertHttpBody(preview);
+      const res = await ghlDeliveryWrite(deps, preview.method, preview.path, {
+        body: upsertBody,
+        locationId: ghlLocationId,
+      });
+      contactIdGhl = extractContactIdFromGhlResponse(res.json);
+      const ok = res.ok && Boolean(contactIdGhl);
+      const ghlError = ok ? null : parseGhlApiErrorSummary(res.text, res.json);
+      const receiptOutcome = classifyRemoteOutcome({
+        attempted: true,
+        httpStatus: res.status,
+        ok,
+        externalId: contactIdGhl,
+        requiresExternalId: true,
+      });
+      if (!ok) {
+        contactFailed = true;
+        errors.push(ghlError ?? "Contact upsert failed.");
+      }
+      pushOutcome({
+        stepType: "create_or_update_contact",
+        deliveryPlanStepId: findPlanStepId(ctx, "create_or_update_contact"),
+        status: ok ? "succeeded" : "failed",
+        targetSystem: "ghl",
+        targetId: preview.locationId,
+        externalId: contactIdGhl,
+        errorCode: ok ? null : `http_${res.status || "transport"}`,
+        errorSummary: ok ? null : ghlError,
+        warnings: receiptOutcome === "ambiguous" ? ["Ambiguous contact upsert outcome."] : [],
+        requestRedactedJson: res.redactedRequest as Prisma.InputJsonValue,
+        responseRedactedJson: withReceipt(
+          {
+            ...(res.redactedResponse ?? {}),
+            externalCallExecuted: true,
+            contactIdGhl,
+          },
+          {
+            operation: "contact",
+            idempotencyKey: operationIdempotencyKey(idempotencyKey, "contact"),
+            outcome: receiptOutcome,
+            externalId: contactIdGhl,
+            httpStatus: res.status,
+          }
+        ),
+        startedAt,
+        completedAt: new Date(),
         externalCallExecuted: true,
-        contactIdGhl,
-      } as Prisma.InputJsonValue,
-      startedAt,
-      completedAt: new Date(),
-      externalCallExecuted: true,
-    });
+      });
+    }
   }
 
   if (contactFailed) {
     await emitLifecycle("delivery_failed", contactIdGhl);
+    const separated = separateDeliveryResults(stepOutcomes);
     return {
       contactIdGhl,
       opportunityIdGhl,
@@ -217,6 +328,9 @@ export async function executeLiveCanaryGhlSteps(
       summary: "Contact creation failed; remaining GHL write steps were not executed.",
       errors,
       warnings,
+      contactResult: separated.contact,
+      noteResult: separated.note,
+      workflowResult: separated.workflow,
     };
   }
 
@@ -260,6 +374,14 @@ export async function executeLiveCanaryGhlSteps(
       optionMap,
       discoveredFields: ctx.destinationFieldMapping?.discoveredCustomFields,
     });
+    if (stampPlan.collisions.length > 0) {
+      duplicateTargetsBlocked = true;
+      const detail = stampPlan.collisions
+        .map((collision) => `${collision.logicalKeys.join(" + ")} → ${collision.fieldId}`)
+        .join("; ");
+      workflowBlockReason = `Duplicate custom field targets block workflow enrollment: ${detail}.`;
+      errors.push(workflowBlockReason);
+    }
     const stampReport = buildCustomFieldStampReport(
       stamp.customFields,
       fieldMapping.idMap,
@@ -348,11 +470,21 @@ export async function executeLiveCanaryGhlSteps(
       let textRedactedResponse: Record<string, unknown> = { externalCallExecuted: true };
       let textErrorDetail: string | null = null;
       let textPutRes: Awaited<ReturnType<typeof ghlLiveJson>> | null = null;
+      const stampPrior = priorFor("custom_fields");
+      const stampDecision = retryDecision(stampPrior);
+      if (stampDecision === "hold_ambiguous" || stampDecision === "hold_rejected") {
+        textOk = false;
+        textErrorDetail =
+          stampDecision === "hold_ambiguous"
+            ? "Custom field write has an ambiguous remote outcome and was not repeated."
+            : "Custom field write was rejected and was not repeated.";
+        warnings.push(textErrorDetail);
+      }
 
-      if (stampPlan.textBatch.apiPayload.length > 0) {
+      if (stampDecision === "execute" && stampPlan.textBatch.apiPayload.length > 0) {
         const textShape = summarizeCustomFieldsPutPayload(stampPlan.textBatch);
         textShape.mappingSource = fieldMapping.source;
-        textPutRes = await ghlLiveJson(
+        textPutRes = await ghlDeliveryWrite(
           deps,
           "PUT",
           `/contacts/${encodeURIComponent(contactIdGhl)}`,
@@ -389,11 +521,11 @@ export async function executeLiveCanaryGhlSteps(
       let optionErrorDetail: string | null = null;
       let optionPutRes: Awaited<ReturnType<typeof ghlLiveJson>> | null = null;
 
-      if (textOk && stampPlan.optionBatch.apiPayload.length > 0) {
+      if (stampDecision === "execute" && textOk && stampPlan.optionBatch.apiPayload.length > 0) {
         optionAttempted = true;
         const optionShape = summarizeCustomFieldsPutPayload(stampPlan.optionBatch);
         optionShape.mappingSource = fieldMapping.source;
-        optionPutRes = await ghlLiveJson(
+        optionPutRes = await ghlDeliveryWrite(
           deps,
           "PUT",
           `/contacts/${encodeURIComponent(contactIdGhl)}`,
@@ -521,26 +653,67 @@ export async function executeLiveCanaryGhlSteps(
         putContactBodyKeys: ["customFields"],
       };
 
+      const stampHttpAttempted = Boolean(textPutRes || optionPutRes);
+      const stampOutcome = stampHttpAttempted
+        ? classifyRemoteOutcome({
+            attempted: true,
+            httpStatus: textOk ? optionResStatus : textResStatus,
+            ok: resolution.status === "succeeded" || resolution.status === "partial_success",
+            externalId: null,
+            requiresExternalId: false,
+          })
+        : stampDecision === "skip_completed"
+          ? "completed"
+          : stampDecision === "hold_rejected"
+            ? "rejected"
+            : stampDecision === "hold_ambiguous"
+              ? "ambiguous"
+              : "failed_before_send";
       pushOutcome({
         stepType: "stamp_custom_fields",
         deliveryPlanStepId: findPlanStepId(ctx, "stamp_custom_fields"),
-        status: resolution.status,
+        status:
+          stampDecision === "skip_completed"
+            ? "succeeded"
+            : stampDecision === "hold_ambiguous" || stampDecision === "hold_rejected"
+              ? "failed"
+              : resolution.status,
         targetSystem: "ghl",
         targetId: contactIdGhl,
         externalId: null,
         errorCode:
-          resolution.status === "succeeded" || resolution.status === "partial_success"
+          stampDecision !== "execute"
+            ? stampDecision === "skip_completed"
+              ? null
+              : stampDecision
+            : resolution.status === "succeeded" || resolution.status === "partial_success"
+              ? null
+              : `http_${textOk ? optionResStatus : textResStatus || "transport"}`,
+        errorSummary:
+          stampDecision === "skip_completed"
             ? null
-            : `http_${textOk ? optionResStatus : textResStatus || "transport"}`,
-        errorSummary: resolution.errorSummary,
-        warnings: resolution.warnings,
+            : stampDecision === "hold_ambiguous" || stampDecision === "hold_rejected"
+              ? textErrorDetail
+              : resolution.errorSummary,
+        warnings: stampDecision === "skip_completed" ? ["Completed custom field write was not repeated."] : resolution.warnings,
         requestRedactedJson: stampRequestMeta as Prisma.InputJsonValue,
-        responseRedactedJson: {
-          ...(optionRedactedResponse ?? textRedactedResponse),
-        } as Prisma.InputJsonValue,
+        responseRedactedJson: withReceipt(
+          stampPrior && stampDecision !== "execute"
+            ? { externalCallExecuted: false, replayedFromReceipt: true }
+            : { ...(optionRedactedResponse ?? textRedactedResponse) },
+          stampPrior && stampDecision !== "execute"
+            ? stampPrior
+            : {
+                operation: "custom_fields",
+                idempotencyKey: operationIdempotencyKey(idempotencyKey, "custom_fields"),
+                outcome: stampOutcome,
+                externalId: null,
+                httpStatus: stampHttpAttempted ? (textOk ? optionResStatus : textResStatus) : null,
+              }
+        ),
         startedAt,
         completedAt: new Date(),
-        externalCallExecuted: true,
+        externalCallExecuted: stampHttpAttempted,
       });
     }
   }
@@ -557,9 +730,87 @@ export async function executeLiveCanaryGhlSteps(
       normalizedPayload: ctx.sourceEnrichment.normalizedPayload,
       receivedAt: ctx.sourceEnrichment.receivedAt,
     });
+    if (stampPlan.collisions.length > 0) {
+      duplicateTargetsBlocked = true;
+      const detail = stampPlan.collisions
+        .map((collision) => `${collision.canonicalKeys.join(" + ")} → ${collision.fieldName ?? collision.fieldId}`)
+        .join("; ");
+      workflowBlockReason = `Duplicate custom field targets block workflow enrollment: ${detail}.`;
+      errors.push(workflowBlockReason);
+    }
+    if (stampPlan.unresolvedDeliveryRequired.length > 0) {
+      workflowBlockReason =
+        workflowBlockReason ??
+        `Required source fields were not written: ${stampPlan.unresolvedDeliveryRequired.join(", ")}.`;
+    }
     const payload = buildSourceAttributeStampPayload(stampPlan);
-    if (payload.apiPayload.length > 0) {
-      const res = await ghlLiveJson(deps, "PUT", `/contacts/${encodeURIComponent(contactIdGhl)}`, {
+    const sourcePrior = priorFor("source_attributes");
+    const sourceDecision = retryDecision(sourcePrior);
+    if (sourceDecision === "skip_completed") {
+      pushOutcome({
+        stepType: "stamp_source_attributes",
+        deliveryPlanStepId: findPlanStepId(ctx, "stamp_source_attributes"),
+        status: "succeeded",
+        targetSystem: "ghl",
+        targetId: contactIdGhl,
+        externalId: null,
+        errorCode: null,
+        errorSummary: null,
+        warnings: ["Completed source-attribute write was not repeated."],
+        requestRedactedJson: null,
+        responseRedactedJson: withReceipt({ externalCallExecuted: false, replayedFromReceipt: true }, sourcePrior!),
+        startedAt,
+        completedAt: new Date(),
+        externalCallExecuted: false,
+      });
+    } else if (sourceDecision === "hold_ambiguous" || sourceDecision === "hold_rejected") {
+      pushOutcome({
+        stepType: "stamp_source_attributes",
+        deliveryPlanStepId: findPlanStepId(ctx, "stamp_source_attributes"),
+        status: "failed",
+        targetSystem: "ghl",
+        targetId: contactIdGhl,
+        externalId: null,
+        errorCode: sourceDecision,
+        errorSummary: "Source-attribute write was not repeated.",
+        warnings: [],
+        requestRedactedJson: null,
+        responseRedactedJson: withReceipt({ externalCallExecuted: false, replayedFromReceipt: true }, sourcePrior!),
+        startedAt,
+        completedAt: new Date(),
+        externalCallExecuted: false,
+      });
+    } else if (stampPlan.collisions.length > 0 && payload.apiPayload.length === 0) {
+      pushOutcome({
+        stepType: "stamp_source_attributes",
+        deliveryPlanStepId: findPlanStepId(ctx, "stamp_source_attributes"),
+        status: "failed",
+        targetSystem: "ghl",
+        targetId: contactIdGhl,
+        externalId: null,
+        errorCode: "duplicate_field_target",
+        errorSummary: workflowBlockReason,
+        warnings: ["Colliding source fields were omitted and not sent."],
+        requestRedactedJson: {
+          collisions: stampPlan.collisions,
+          missingSourceKeys: stampPlan.missingSourceKeys,
+        } as Prisma.InputJsonValue,
+        responseRedactedJson: withReceipt(
+          { externalCallExecuted: false },
+          {
+            operation: "source_attributes",
+            idempotencyKey: operationIdempotencyKey(idempotencyKey, "source_attributes"),
+            outcome: "failed_before_send",
+            externalId: null,
+            httpStatus: null,
+          }
+        ),
+        startedAt,
+        completedAt: new Date(),
+        externalCallExecuted: false,
+      });
+    } else if (payload.apiPayload.length > 0) {
+      const res = await ghlDeliveryWrite(deps, "PUT", `/contacts/${encodeURIComponent(contactIdGhl)}`, {
         body: { customFields: payload.apiPayload },
         locationId: ghlLocationId,
       });
@@ -571,24 +822,40 @@ export async function executeLiveCanaryGhlSteps(
       pushOutcome({
         stepType: "stamp_source_attributes",
         deliveryPlanStepId: findPlanStepId(ctx, "stamp_source_attributes"),
-        status: ok ? "succeeded" : "optional_failed",
+        status: stampPlan.collisions.length > 0 ? "failed" : ok ? "succeeded" : "optional_failed",
         targetSystem: "ghl",
         targetId: contactIdGhl,
         externalId: null,
-        errorCode: ok ? null : `http_${res.status || "transport"}`,
-        errorSummary: detail,
+        errorCode: stampPlan.collisions.length > 0 ? "duplicate_field_target" : ok ? null : `http_${res.status || "transport"}`,
+        errorSummary: stampPlan.collisions.length > 0 ? workflowBlockReason : detail,
         warnings: ok ? [] : ["Optional source attribute stamp failed; contact delivery preserved."],
         requestRedactedJson: {
           mappableKeys: stampPlan.mappableKeys,
           unmappedKeys: stampPlan.unmappedKeys,
           missingSourceKeys: stampPlan.missingSourceKeys,
           skippedKeys: stampPlan.skippedKeys,
+          collisions: stampPlan.collisions,
           fieldCount: payload.apiPayload.length,
         } as Prisma.InputJsonValue,
-        responseRedactedJson: {
-          ...(res.redactedResponse ?? {}),
-          externalCallExecuted: true,
-        } as Prisma.InputJsonValue,
+        responseRedactedJson: withReceipt(
+          {
+            ...(res.redactedResponse ?? {}),
+            externalCallExecuted: true,
+          },
+          {
+            operation: "source_attributes",
+            idempotencyKey: operationIdempotencyKey(idempotencyKey, "source_attributes"),
+            outcome: classifyRemoteOutcome({
+              attempted: true,
+              httpStatus: res.status,
+              ok,
+              externalId: contactIdGhl,
+              requiresExternalId: false,
+            }),
+            externalId: contactIdGhl,
+            httpStatus: res.status,
+          }
+        ),
         startedAt,
         completedAt: new Date(),
         externalCallExecuted: true,
@@ -616,7 +883,16 @@ export async function executeLiveCanaryGhlSteps(
           missingSourceKeys: stampPlan.missingSourceKeys,
           skippedKeys: stampPlan.skippedKeys,
         } as Prisma.InputJsonValue,
-        responseRedactedJson: { externalCallExecuted: false } as Prisma.InputJsonValue,
+        responseRedactedJson: withReceipt(
+          { externalCallExecuted: false },
+          {
+            operation: "source_attributes",
+            idempotencyKey: operationIdempotencyKey(idempotencyKey, "source_attributes"),
+            outcome: "skipped",
+            externalId: null,
+            httpStatus: null,
+          }
+        ),
         startedAt,
         completedAt: new Date(),
         externalCallExecuted: false,
@@ -624,11 +900,178 @@ export async function executeLiveCanaryGhlSteps(
     }
   }
 
-  // add_tags
+  const requiredStamp = stepOutcomes.find((step) => step.stepType === "stamp_custom_fields");
+  if (stepFlags.stampRequired && requiredStamp?.status === "failed") {
+    workflowBlockReason =
+      workflowBlockReason ?? "Workflow enrollment waits until required custom field writes succeed.";
+  }
+
+  const notesEnabled =
+    ctx.destinationFieldMapping?.intakeSummaryNotesEnabled === true ||
+    ctx.sourceEnrichment?.sourceEnrichmentPolicy.intakeSummaryNotesEnabled === true;
+  if (contactIdGhl && notesEnabled) {
+    const startedAt = new Date();
+    const notePlan = planIntakeSummaryNote({
+      enabled: true,
+      sourceLeadEventId: ctx.plan.sourceLeadUid?.trim() || ctx.plan.id,
+      clientAccountId: ctx.plan.destinationClientAccountId,
+      firstName: contactUpsertPreview.body.firstName,
+      lastName: contactUpsertPreview.body.lastName,
+      phone: contactUpsertPreview.body.phone,
+      email: contactUpsertPreview.body.email,
+      state: contactUpsertPreview.body.state,
+      leadType: ctx.plan.nicheKey,
+      sourceAttributes: ctx.sourceEnrichment?.sourceAttributes ?? null,
+      generatedAt: ctx.sourceEnrichment?.receivedAt ?? null,
+      idempotencyKey,
+    });
+    const notePrior = priorFor("note");
+    const noteDecision = retryDecision(notePrior);
+    if (noteDecision === "skip_completed") {
+      pushOutcome({
+        stepType: "write_intake_summary_note",
+        deliveryPlanStepId: findPlanStepId(ctx, "write_intake_summary_note"),
+        status: "succeeded",
+        targetSystem: "ghl",
+        targetId: contactIdGhl,
+        externalId: notePrior?.externalId ?? null,
+        errorCode: null,
+        errorSummary: null,
+        warnings: ["Completed intake-summary note was not repeated."],
+        requestRedactedJson: null,
+        responseRedactedJson: withReceipt({ externalCallExecuted: false, replayedFromReceipt: true }, notePrior!),
+        startedAt,
+        completedAt: new Date(),
+        externalCallExecuted: false,
+      });
+    } else if (noteDecision === "hold_ambiguous" || noteDecision === "hold_rejected") {
+      warnings.push("Intake-summary note was not repeated.");
+      pushOutcome({
+        stepType: "write_intake_summary_note",
+        deliveryPlanStepId: findPlanStepId(ctx, "write_intake_summary_note"),
+        status: "optional_failed",
+        targetSystem: "ghl",
+        targetId: contactIdGhl,
+        externalId: notePrior?.externalId ?? null,
+        errorCode: noteDecision,
+        errorSummary: "Intake-summary note was not repeated.",
+        warnings: [],
+        requestRedactedJson: null,
+        responseRedactedJson: withReceipt({ externalCallExecuted: false, replayedFromReceipt: true }, notePrior!),
+        startedAt,
+        completedAt: new Date(),
+        externalCallExecuted: false,
+      });
+    } else if (!("plan" in notePlan) || !notePlan.plan) {
+      pushOutcome({
+        stepType: "write_intake_summary_note",
+        deliveryPlanStepId: findPlanStepId(ctx, "write_intake_summary_note"),
+        status: "skipped",
+        targetSystem: "ghl",
+        targetId: contactIdGhl,
+        externalId: null,
+        errorCode: "error" in notePlan ? notePlan.error : "note_unavailable",
+        errorSummary: "error" in notePlan ? notePlan.error : "Intake-summary note was not posted.",
+        warnings: [],
+        requestRedactedJson: null,
+        responseRedactedJson: withReceipt(
+          { externalCallExecuted: false },
+          {
+            operation: "note",
+            idempotencyKey: operationIdempotencyKey(idempotencyKey, "note", 1),
+            outcome: "skipped",
+            externalId: null,
+            httpStatus: null,
+          }
+        ),
+        startedAt,
+        completedAt: new Date(),
+        externalCallExecuted: false,
+      });
+    } else {
+      let noteId: string | null = null;
+      let noteOk = true;
+      let noteStatus = 200;
+      let noteError: string | null = null;
+      let noteResponse: Record<string, unknown> = {};
+      for (const part of notePlan.plan.parts) {
+        const res = await ghlDeliveryWrite(deps, "POST", `/contacts/${encodeURIComponent(contactIdGhl)}/notes`, {
+          body: { title: part.title, body: part.body },
+          locationId: ghlLocationId,
+        });
+        noteStatus = res.status;
+        noteResponse = { ...(res.redactedResponse ?? {}) };
+        noteId = noteIdFromResponse(res.json);
+        noteOk = res.ok && Boolean(noteId);
+        if (!noteOk) {
+          noteError = parseGhlApiErrorSummary(res.text, res.json) ?? "Intake-summary note failed.";
+          break;
+        }
+      }
+      const noteOutcome = classifyRemoteOutcome({
+        attempted: true,
+        httpStatus: noteStatus,
+        ok: noteOk,
+        externalId: noteId,
+        requiresExternalId: true,
+      });
+      if (!noteOk && noteError) warnings.push(`Intake-summary note (non-blocking): ${noteError}`);
+      pushOutcome({
+        stepType: "write_intake_summary_note",
+        deliveryPlanStepId: findPlanStepId(ctx, "write_intake_summary_note"),
+        status: noteOk ? "succeeded" : "optional_failed",
+        targetSystem: "ghl",
+        targetId: contactIdGhl,
+        externalId: noteId,
+        errorCode: noteOk ? null : `http_${noteStatus || "transport"}`,
+        errorSummary: noteError,
+        warnings: noteOk ? [] : ["Optional intake-summary note failed; contact delivery preserved."],
+        requestRedactedJson: { contract: "sa360_lead_note_v2", parts: notePlan.plan.parts.length } as Prisma.InputJsonValue,
+        responseRedactedJson: withReceipt(
+          { ...noteResponse, externalCallExecuted: true, noteId },
+          {
+            operation: "note",
+            idempotencyKey: operationIdempotencyKey(idempotencyKey, "note", 1),
+            outcome: noteOutcome,
+            externalId: noteId,
+            httpStatus: noteStatus,
+          }
+        ),
+        startedAt,
+        completedAt: new Date(),
+        externalCallExecuted: true,
+      });
+    }
+  }
+
+  // add_tags — POST adds these tags and does not replace unrelated contact tags.
   {
     const startedAt = new Date();
     const tagsPreview = buildTagRequest(ctx);
-    const res = await ghlLiveJson(
+    const tagPrior = priorFor("tags");
+    const tagDecision = retryDecision(tagPrior);
+    if (tagDecision !== "execute") {
+      pushOutcome({
+        stepType: "add_tags",
+        deliveryPlanStepId: findPlanStepId(ctx, "add_tags"),
+        status: tagDecision === "skip_completed" ? "succeeded" : "failed",
+        targetSystem: "ghl",
+        targetId: contactIdGhl,
+        externalId: null,
+        errorCode: tagDecision === "skip_completed" ? null : tagDecision,
+        errorSummary: tagDecision === "skip_completed" ? null : "Tag add was not repeated.",
+        warnings: ["Existing contact tags were left unchanged."],
+        requestRedactedJson: { tagWrite: "add_only", replacesExistingTags: false } as Prisma.InputJsonValue,
+        responseRedactedJson: withReceipt(
+          { externalCallExecuted: false, replayedFromReceipt: true, tagWrite: "add_only", replacesExistingTags: false },
+          tagPrior!
+        ),
+        startedAt,
+        completedAt: new Date(),
+        externalCallExecuted: false,
+      });
+    } else {
+    const res = await ghlDeliveryWrite(
       deps,
       tagsPreview.method,
       `/contacts/${encodeURIComponent(contactIdGhl!)}/tags`,
@@ -647,15 +1090,37 @@ export async function executeLiveCanaryGhlSteps(
       errorCode: ok ? null : `http_${res.status || "transport"}`,
       errorSummary: ok ? null : tagError,
       warnings: ok ? [] : ["Non-fatal tag failure."],
-      requestRedactedJson: res.redactedRequest as Prisma.InputJsonValue,
-      responseRedactedJson: {
-        ...(res.redactedResponse ?? {}),
-        externalCallExecuted: true,
+      requestRedactedJson: {
+        ...(res.redactedRequest ?? {}),
+        tagWrite: "add_only",
+        replacesExistingTags: false,
       } as Prisma.InputJsonValue,
+      responseRedactedJson: withReceipt(
+        {
+          ...(res.redactedResponse ?? {}),
+          externalCallExecuted: true,
+          tagWrite: "add_only",
+          replacesExistingTags: false,
+        },
+        {
+          operation: "tags",
+          idempotencyKey: operationIdempotencyKey(idempotencyKey, "tags"),
+          outcome: classifyRemoteOutcome({
+            attempted: true,
+            httpStatus: res.status,
+            ok,
+            externalId: null,
+            requiresExternalId: false,
+          }),
+          externalId: null,
+          httpStatus: res.status,
+        }
+      ),
       startedAt,
       completedAt: new Date(),
       externalCallExecuted: true,
     });
+    }
   }
 
   // create_or_update_opportunity
@@ -700,7 +1165,7 @@ export async function executeLiveCanaryGhlSteps(
     });
   } else if (oppPreview && oppBody) {
     const startedAt = new Date();
-    const res = await ghlLiveJson(deps, oppPreview.method, oppPreview.path, {
+    const res = await ghlDeliveryWrite(deps, oppPreview.method, oppPreview.path, {
       body: oppBody,
       locationId: ghlLocationId,
     });
@@ -756,7 +1221,7 @@ export async function executeLiveCanaryGhlSteps(
   const ownerPreview = buildAssignOwnerRequest(ctx);
   if (ownerPreview && contactIdGhl) {
     const startedAt = new Date();
-    const res = await ghlLiveJson(deps, ownerPreview.method, `/contacts/${encodeURIComponent(contactIdGhl)}`, {
+    const res = await ghlDeliveryWrite(deps, ownerPreview.method, `/contacts/${encodeURIComponent(contactIdGhl)}`, {
       body: { assignedTo: ownerPreview.assignedTo },
       locationId: ghlLocationId,
     });
@@ -819,7 +1284,86 @@ export async function executeLiveCanaryGhlSteps(
   // start_workflow / workflow trigger (tag or direct API per destination config)
   const workflowTriggerMode = resolveWorkflowTriggerMode(ctx);
   const wfPreview = buildWorkflowStartRequest(ctx);
-  if (workflowTriggerMode === "none") {
+  const workflowPrior = priorFor("workflow");
+  const workflowDecision = retryDecision(workflowPrior);
+  const enrollment = workflowEnrollmentAllowed({
+    contactCompleted: Boolean(contactIdGhl) && !contactFailed,
+    requiredCustomFieldStampFailed: stepFlags.stampRequired && requiredStamp?.status === "failed",
+    collisions: duplicateTargetsBlocked ? [{ fieldId: "duplicate", fieldName: null, canonicalKeys: [] }] : [],
+    unresolvedDeliveryRequired: workflowBlockReason?.startsWith("Required source fields") ? ["required"] : [],
+  });
+  if (!enrollment.allowed && !workflowBlockReason) workflowBlockReason = enrollment.reason;
+  if (workflowDecision === "skip_completed") {
+    workflowStarted = workflowTriggerMode === "direct_api";
+    pushOutcome({
+      stepType: "start_workflow",
+      deliveryPlanStepId: findPlanStepId(ctx, "start_workflow"),
+      status: "succeeded",
+      targetSystem: "ghl",
+      targetId: wfPreview?.workflowId ?? WORKFLOW_TRIGGER_TAG,
+      externalId: contactIdGhl,
+      errorCode: null,
+      errorSummary: null,
+      warnings: ["Completed workflow entry was not repeated."],
+      requestRedactedJson: null,
+      responseRedactedJson: withReceipt(
+        { externalCallExecuted: false, replayedFromReceipt: true, workflowStarted: true },
+        workflowPrior!
+      ),
+      startedAt: new Date(),
+      completedAt: new Date(),
+      externalCallExecuted: false,
+    });
+  } else if (workflowDecision === "hold_ambiguous" || workflowDecision === "hold_rejected") {
+    const summary =
+      workflowDecision === "hold_ambiguous"
+        ? "Workflow entry has an ambiguous remote outcome and was not repeated."
+        : "Workflow entry was rejected and was not repeated.";
+    warnings.push(summary);
+    pushOutcome({
+      stepType: "start_workflow",
+      deliveryPlanStepId: findPlanStepId(ctx, "start_workflow"),
+      status: stepFlags.workflowRequired ? "failed" : "optional_failed",
+      targetSystem: "ghl",
+      targetId: wfPreview?.workflowId ?? null,
+      externalId: contactIdGhl,
+      errorCode: workflowDecision,
+      errorSummary: summary,
+      warnings: [summary],
+      requestRedactedJson: null,
+      responseRedactedJson: withReceipt({ externalCallExecuted: false, replayedFromReceipt: true }, workflowPrior!),
+      startedAt: new Date(),
+      completedAt: new Date(),
+      externalCallExecuted: false,
+    });
+  } else if (workflowBlockReason && workflowTriggerMode !== "none") {
+    warnings.push(workflowBlockReason);
+    pushOutcome({
+      stepType: "start_workflow",
+      deliveryPlanStepId: findPlanStepId(ctx, "start_workflow"),
+      status: "skipped",
+      targetSystem: "ghl",
+      targetId: wfPreview?.workflowId ?? WORKFLOW_TRIGGER_TAG,
+      externalId: contactIdGhl,
+      errorCode: "workflow_blocked",
+      errorSummary: workflowBlockReason,
+      warnings: [workflowBlockReason],
+      requestRedactedJson: null,
+      responseRedactedJson: withReceipt(
+        { externalCallExecuted: false, workflowBlocked: true },
+        {
+          operation: "workflow",
+          idempotencyKey: operationIdempotencyKey(idempotencyKey, "workflow"),
+          outcome: "failed_before_send",
+          externalId: null,
+          httpStatus: null,
+        }
+      ),
+      startedAt: new Date(),
+      completedAt: new Date(),
+      externalCallExecuted: false,
+    });
+  } else if (workflowTriggerMode === "none") {
     pushOutcome({
       stepType: "start_workflow",
       deliveryPlanStepId: findPlanStepId(ctx, "start_workflow"),
@@ -839,15 +1383,15 @@ export async function executeLiveCanaryGhlSteps(
   } else if (workflowTriggerMode === "tag_trigger" && contactIdGhl && !opportunityFailed) {
     const startedAt = new Date();
     const enrichment = ctx.sourceEnrichment;
-    const workflowTags = [
-      WORKFLOW_TRIGGER_TAG,
-      ...buildPostDeliveryWorkflowTags({
+    const workflowTags = tagModePlan({
+      mode: "tag_trigger",
+      extraTags: buildPostDeliveryWorkflowTags({
         automationReadiness: enrichment?.automationReadiness ?? "limited",
         enrichmentStatus: enrichment?.enrichmentStatus ?? "none",
         hasUnmappedFields: (enrichment?.unmappedSourceFieldKeys.length ?? 0) > 0,
       }),
-    ];
-    const res = await ghlLiveJson(
+    }).tagsToAdd;
+    const res = await ghlDeliveryWrite(
       deps,
       "POST",
       `/contacts/${encodeURIComponent(contactIdGhl)}/tags`,
@@ -871,12 +1415,34 @@ export async function executeLiveCanaryGhlSteps(
       errorCode: ok ? null : `http_${res.status || "transport"}`,
       errorSummary: ok ? WORKFLOW_TAG_TRIGGER_DETAIL : tagError,
       warnings: ok ? [WORKFLOW_TAG_TRIGGER_DETAIL] : [],
-      requestRedactedJson: res.redactedRequest as Prisma.InputJsonValue,
-      responseRedactedJson: {
-        ...(res.redactedResponse ?? {}),
-        externalCallExecuted: true,
-        workflowTriggerMode: "tag_trigger",
+      requestRedactedJson: {
+        ...(res.redactedRequest ?? {}),
+        tagWrite: "add_only",
+        replacesExistingTags: false,
+        tags: workflowTags,
       } as Prisma.InputJsonValue,
+      responseRedactedJson: withReceipt(
+        {
+          ...(res.redactedResponse ?? {}),
+          externalCallExecuted: true,
+          workflowTriggerMode: "tag_trigger",
+          tagWrite: "add_only",
+          replacesExistingTags: false,
+        },
+        {
+          operation: "workflow",
+          idempotencyKey: operationIdempotencyKey(idempotencyKey, "workflow"),
+          outcome: classifyRemoteOutcome({
+            attempted: true,
+            httpStatus: res.status,
+            ok,
+            externalId: contactIdGhl,
+            requiresExternalId: false,
+          }),
+          externalId: contactIdGhl,
+          httpStatus: res.status,
+        }
+      ),
       startedAt,
       completedAt: new Date(),
       externalCallExecuted: true,
@@ -904,7 +1470,7 @@ export async function executeLiveCanaryGhlSteps(
     const startedAt = new Date();
     const path = `/contacts/${encodeURIComponent(contactIdGhl)}/workflow/${encodeURIComponent(wfPreview.workflowId)}`;
     // Enrollment is scoped by the contact. GHL rejects a locationId property on this body.
-    const res = await ghlLiveJson(deps, wfPreview.method, path, {
+    const res = await ghlDeliveryWrite(deps, wfPreview.method, path, {
       locationId: ghlLocationId,
     });
     workflowStarted = res.ok;
@@ -944,12 +1510,27 @@ export async function executeLiveCanaryGhlSteps(
             ]
           : [],
       requestRedactedJson: res.redactedRequest as Prisma.InputJsonValue,
-      responseRedactedJson: {
-        ...(res.redactedResponse ?? {}),
-        externalCallExecuted: true,
-        workflowStarted: res.ok,
-        workflowTriggerMode: "direct_api",
-      } as Prisma.InputJsonValue,
+      responseRedactedJson: withReceipt(
+        {
+          ...(res.redactedResponse ?? {}),
+          externalCallExecuted: true,
+          workflowStarted: res.ok,
+          workflowTriggerMode: "direct_api",
+        },
+        {
+          operation: "workflow",
+          idempotencyKey: operationIdempotencyKey(idempotencyKey, "workflow"),
+          outcome: classifyRemoteOutcome({
+            attempted: true,
+            httpStatus: res.status,
+            ok: res.ok,
+            externalId: contactIdGhl,
+            requiresExternalId: false,
+          }),
+          externalId: contactIdGhl,
+          httpStatus: res.status,
+        }
+      ),
       startedAt,
       completedAt: new Date(),
       externalCallExecuted: true,
@@ -995,12 +1576,13 @@ export async function executeLiveCanaryGhlSteps(
     stepOutcomes,
     opportunityConfigured
   );
-  const runStatus = deriveLiveCanaryRunStatus({
+  let runStatus = deriveLiveCanaryRunStatus({
     stepOutcomes,
     flags: stepFlags,
     contactIdGhl,
     opportunityConfigured,
   });
+  if (duplicateTargetsBlocked) runStatus = "failed";
 
   if (runStatus === "succeeded" || runStatus === "partial_success") {
     await emitLifecycle("lead_delivered", contactIdGhl);
@@ -1008,7 +1590,10 @@ export async function executeLiveCanaryGhlSteps(
     await emitLifecycle("delivery_failed", contactIdGhl);
   }
 
-  const summary = liveCanaryRunSummaryForStatus(runStatus, requiredPathComplete);
+  const summary = duplicateTargetsBlocked
+    ? workflowBlockReason ?? "Duplicate custom field targets blocked workflow enrollment."
+    : liveCanaryRunSummaryForStatus(runStatus, requiredPathComplete);
+  const separated = separateDeliveryResults(stepOutcomes);
 
   return {
     contactIdGhl,
@@ -1019,6 +1604,9 @@ export async function executeLiveCanaryGhlSteps(
     summary,
     errors,
     warnings,
+    contactResult: separated.contact,
+    noteResult: separated.note,
+    workflowResult: separated.workflow,
   };
 }
 

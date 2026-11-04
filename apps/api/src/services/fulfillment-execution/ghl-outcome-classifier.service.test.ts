@@ -22,6 +22,9 @@ function makeExecution(
     errors: [],
     warnings: [],
     stepOutcomes: [],
+    contactResult: "not_attempted",
+    noteResult: "disabled",
+    workflowResult: "not_enrolled",
     ...overrides,
   };
 }

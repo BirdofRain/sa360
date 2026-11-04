@@ -50,7 +50,7 @@ export function associationDispatchRecovery(input: {
     if (input.now.getTime() - started < leaseMs) return "wait";
     // A recorded failure whose steps prove the call never left SA360 can be
     // retried on the same run. No run means the outcome is unknown.
-    if (disposition === "retry") return "deliver";
+    if (disposition === "retry" || disposition === "resume") return "deliver";
     return "mark_uncertain";
   }
   if (input.status === "pending") return "deliver";

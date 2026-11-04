@@ -9,6 +9,7 @@ import type {
   GhlBackupSheetPreview,
   GhlValidationResult,
 } from "./ghl-delivery-adapter.types.js";
+import { vetNativeContactFields } from "./vet-ghl-delivery-contract.js";
 
 function trim(v: string | null | undefined): string | null {
   const t = v?.trim();
@@ -113,19 +114,25 @@ export function buildLiveCanaryCustomFieldsMap(
   };
 }
 
-/** Live GHL upsert: core contact fields only; SA360 custom fields are stamped in a follow-up PUT. */
+/** Live GHL upsert: native contact fields only. Empty values are omitted. Custom fields are a later PUT. */
 export function buildLiveContactUpsertHttpBody(
   preview: GhlContactUpsertPreview
 ): Record<string, unknown> {
   const body: Record<string, unknown> = {
     locationId: preview.locationId,
   };
-  if (preview.body.email) body.email = preview.body.email;
-  if (preview.body.phone) body.phone = preview.body.phone;
-  if (preview.body.source) body.source = preview.body.source;
-  if (preview.body.firstName) body.firstName = preview.body.firstName;
-  if (preview.body.lastName) body.lastName = preview.body.lastName;
-  if (preview.body.state) body.state = preview.body.state;
+  const native = preview.body;
+  if (native.email) body.email = native.email;
+  if (native.phone) body.phone = native.phone;
+  if (native.source) body.source = native.source;
+  if (native.firstName) body.firstName = native.firstName;
+  if (native.lastName) body.lastName = native.lastName;
+  if (native.address1) body.address1 = native.address1;
+  if (native.city) body.city = native.city;
+  if (native.state) body.state = native.state;
+  if (native.postalCode) body.postalCode = native.postalCode;
+  if (native.country) body.country = native.country;
+  if (native.dateOfBirth) body.dateOfBirth = native.dateOfBirth;
   return body;
 }
 
@@ -136,17 +143,32 @@ export function buildContactUpsertRequest(
   const locationId = trim(ctx.plan.destinationSubaccountIdGhl) ?? "";
   const customFields = customFieldsOverride ?? buildCustomFieldsMap(ctx);
   const names = planContactNamesFromContext(ctx);
+  const native = vetNativeContactFields({
+    firstName: names.firstName,
+    lastName: names.lastName,
+    email: planContactField(ctx, "email"),
+    phone: planContactField(ctx, "phone"),
+    source: "sa360",
+    normalizedPayload: ctx.sourceEnrichment?.normalizedPayload,
+    sourceAttributes: ctx.sourceEnrichment?.sourceAttributes ?? null,
+    receivedAt: ctx.sourceEnrichment?.receivedAt,
+  });
   return {
     method: "POST",
     path: "/contacts/upsert",
     locationId,
     body: {
-      firstName: names.firstName,
-      lastName: names.lastName,
-      email: planContactField(ctx, "email"),
-      phone: planContactField(ctx, "phone"),
-      state: null,
-      source: "sa360",
+      firstName: native.firstName ?? null,
+      lastName: native.lastName ?? null,
+      email: native.email ?? null,
+      phone: native.phone ?? null,
+      address1: native.address1 ?? null,
+      city: native.city ?? null,
+      state: native.state ?? null,
+      postalCode: native.postalCode ?? null,
+      country: native.country ?? null,
+      dateOfBirth: native.dateOfBirth ?? null,
+      source: native.source ?? "sa360",
       customFields,
     },
   };

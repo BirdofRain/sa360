@@ -57,4 +57,55 @@ test("uncertain and completed GHL runs are not retried", () => {
     }),
     true
   );
+  assert.equal(
+    ongoingRunDisposition({
+      status: "failed",
+      stepRuns: [
+        {
+          stepType: "create_or_update_contact",
+          status: "succeeded",
+          externalId: "contact_1",
+          errorCode: null,
+          responseRedactedJson: { externalCallExecuted: true },
+        },
+        {
+          stepType: "stamp_source_attributes",
+          status: "failed",
+          errorCode: "validation",
+          responseRedactedJson: { externalCallExecuted: false },
+        },
+      ],
+    }),
+    "resume"
+  );
+  assert.equal(
+    ongoingRunDisposition({
+      status: "failed",
+      stepRuns: [
+        {
+          stepType: "start_workflow",
+          status: "failed",
+          externalId: null,
+          errorCode: "http_500",
+          responseRedactedJson: { externalCallExecuted: true },
+        },
+      ],
+    }),
+    "hold"
+  );
+  assert.equal(
+    ongoingRunDisposition({
+      status: "failed",
+      stepRuns: [
+        {
+          stepType: "create_or_update_contact",
+          status: "failed",
+          externalId: null,
+          errorCode: "http_422",
+          responseRedactedJson: { externalCallExecuted: true },
+        },
+      ],
+    }),
+    "hold"
+  );
 });

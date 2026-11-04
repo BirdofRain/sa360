@@ -353,4 +353,134 @@ describe("buyer CSV release recording", { skip: !runIntegration }, () => {
       `elapsedMs=${elapsedMs}\nrowCount=${PACKAGE_ROWS}\nidentityCount=${PACKAGE_ROWS}\nsha256=${stored.contentSha256}\n`
     );
   });
+
+  it("commits a delivering allocation and an already-committed inventory row", async () => {
+    const seeded = await seedPackage(1, "predicates");
+    const allocation = await db.leadAllocation.findFirstOrThrow({
+      where: { leadOrderId: seeded.order.id },
+      select: { id: true, leadInventoryItemId: true },
+    });
+    assert.ok(allocation.leadInventoryItemId);
+    await db.leadAllocation.update({
+      where: { id: allocation.id },
+      data: { status: "delivering" },
+    });
+    await db.leadInventoryItem.update({
+      where: { id: allocation.leadInventoryItemId },
+      data: { status: "committed", committedAt: new Date("2026-11-01T00:00:00.000Z") },
+    });
+
+    const released = await markSpreadsheetDelivered(
+      {
+        exportId: seeded.packageRow.id,
+        confirmationPhrase: "MARK SPREADSHEET DELIVERED",
+        idempotencyKey: `relrec-${stamp}-predicates`,
+        deliveredBy: "release-recording-test",
+      },
+      db,
+      { send: async () => ({ ok: true, id: "should-not-send" }) }
+    );
+    assert.equal(released.ok, true);
+    if (!released.ok) return;
+    assert.equal(released.idempotentReplay, false);
+    assert.equal(
+      (await db.leadAllocation.findUniqueOrThrow({ where: { id: allocation.id } })).status,
+      "committed"
+    );
+    assert.equal(
+      (await db.leadInventoryItem.findUniqueOrThrow({ where: { id: allocation.leadInventoryItemId } })).status,
+      "committed"
+    );
+    assert.equal(await db.buyerDeliveredIdentity.count({ where: { leadAllocationId: allocation.id } }), 1);
+  });
+
+  it("rolls the whole release back when an inventory row is outside the status predicate", async () => {
+    const seeded = await seedPackage(2, "inventory-count");
+    const items = await db.leadInventoryItem.findMany({
+      where: { leadAllocations: { some: { leadOrderId: seeded.order.id } } },
+      select: { id: true },
+      orderBy: { id: "asc" },
+    });
+    assert.equal(items.length, 2);
+    await db.leadInventoryItem.update({
+      where: { id: items[0]!.id },
+      data: { status: "withdrawn" },
+    });
+
+    const released = await markSpreadsheetDelivered(
+      {
+        exportId: seeded.packageRow.id,
+        confirmationPhrase: "MARK SPREADSHEET DELIVERED",
+        idempotencyKey: `relrec-${stamp}-inventory-count`,
+        deliveredBy: "release-recording-test",
+      },
+      db,
+      { send: async () => ({ ok: true, id: "should-not-send" }) }
+    );
+    assert.equal(released.ok, false);
+    if (released.ok) return;
+    assert.equal(released.code, "release_row_count");
+    assert.equal(released.details?.table, "LeadInventoryItem");
+    assert.equal(released.details?.expected, 2);
+    assert.equal(released.details?.actual, 1);
+
+    const stored = await db.leadDeliveryExportPackage.findUniqueOrThrow({
+      where: { id: seeded.packageRow.id },
+    });
+    assert.equal(stored.spreadsheetDeliveredAt, null);
+    assert.equal(stored.spreadsheetDeliveryIdempotencyKey, null);
+    assert.equal(stored.customerReleaseNotifyStatus, null);
+    assert.equal(await db.leadAllocation.count({ where: { leadOrderId: seeded.order.id, status: "reserved" } }), 2);
+    assert.equal(await db.leadAllocation.count({ where: { leadOrderId: seeded.order.id, status: "committed" } }), 0);
+    assert.equal(await db.buyerDeliveredIdentity.count({ where: { leadAllocationId: { in: seeded.allocationIds } } }), 0);
+    assert.equal(await db.companySheetsDispatchIntent.count({ where: { exportPackageId: seeded.packageRow.id } }), 0);
+    const afterItems = await db.leadInventoryItem.findMany({
+      where: { id: { in: items.map((item) => item.id) } },
+      select: { id: true, status: true },
+    });
+    assert.equal(afterItems.find((item) => item.id === items[0]!.id)?.status, "withdrawn");
+    assert.equal(afterItems.find((item) => item.id === items[1]!.id)?.status, "reserved");
+  });
+
+  it("rolls the whole release back when a buyer identity is already recorded", async () => {
+    const seeded = await seedPackage(2, "identity-count");
+    const first = await db.leadAllocation.findFirstOrThrow({
+      where: { id: seeded.allocationIds[0] },
+      select: { id: true, sourceLeadEventId: true, leadInventoryItemId: true },
+    });
+    await db.buyerDeliveredIdentity.create({
+      data: {
+        clientAccountId,
+        sourceLeadEventId: first.sourceLeadEventId,
+        leadAllocationId: first.id,
+        leadInventoryItemId: first.leadInventoryItemId,
+      },
+    });
+
+    const released = await markSpreadsheetDelivered(
+      {
+        exportId: seeded.packageRow.id,
+        confirmationPhrase: "MARK SPREADSHEET DELIVERED",
+        idempotencyKey: `relrec-${stamp}-identity-count`,
+        deliveredBy: "release-recording-test",
+      },
+      db,
+      { send: async () => ({ ok: true, id: "should-not-send" }) }
+    );
+    assert.equal(released.ok, false);
+    if (released.ok) return;
+    assert.equal(released.code, "release_row_count");
+    assert.equal(released.details?.table, "BuyerDeliveredIdentity");
+    assert.equal(released.details?.expected, 2);
+    assert.equal(released.details?.actual, 1);
+
+    const stored = await db.leadDeliveryExportPackage.findUniqueOrThrow({
+      where: { id: seeded.packageRow.id },
+    });
+    assert.equal(stored.spreadsheetDeliveredAt, null);
+    assert.equal(stored.spreadsheetDeliveryIdempotencyKey, null);
+    assert.equal(await db.leadAllocation.count({ where: { leadOrderId: seeded.order.id, status: "reserved" } }), 2);
+    assert.equal(await db.buyerDeliveredIdentity.count({ where: { leadAllocationId: { in: seeded.allocationIds } } }), 1);
+    assert.equal(await db.companySheetsDispatchIntent.count({ where: { exportPackageId: seeded.packageRow.id } }), 0);
+  });
 });

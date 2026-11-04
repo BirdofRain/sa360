@@ -51,7 +51,12 @@ describe("buyer-csv-export allowlist", () => {
     const releaseSlice = src.slice(markAt, src.indexOf("async function attachCustomerReleaseNotification"));
     assert.equal(releaseSlice.includes("for (const allocation of allocations)"), false);
     assert.match(releaseSlice, /id:\s*\{\s*in:\s*allocationIds\s*\}/);
+    assert.match(releaseSlice, /status:\s*\{\s*in:\s*\["reserved", "delivering"\]\s*\}/);
     assert.match(releaseSlice, /id:\s*\{\s*in:\s*itemIds\s*\}/);
+    assert.match(releaseSlice, /status:\s*\{\s*in:\s*\["reserved", "committed"\]\s*\}/);
+    assert.match(releaseSlice, /allocationUpdated\.count !== allocationIds\.length/);
+    assert.match(releaseSlice, /itemUpdated\.count !== itemIds\.length/);
+    assert.match(releaseSlice, /identityWrite\.count !== identityRows\.length/);
     assert.equal(releaseSlice.includes("timeout:"), false);
   });
 

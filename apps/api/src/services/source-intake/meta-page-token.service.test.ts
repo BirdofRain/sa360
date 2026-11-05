@@ -154,3 +154,81 @@ test("unknown Pages, expiry, and missing scopes fail closed without using anothe
     else process.env.META_TOKEN_ENCRYPTION_KEY = saved;
   }
 });
+
+test("enabling a test Page does not let the pilot env token fetch the pilot or the test Page", async () => {
+  const saved = process.env.META_TOKEN_ENCRYPTION_KEY;
+  process.env.META_TOKEN_ENCRYPTION_KEY = KEY;
+  const pilotPage = PAGE_A;
+  const testPageId = PAGE_B;
+  const envToken = "EAAB-pilot-env-token-value-not-real";
+  try {
+    const grants = new Map([
+      [
+        testPageId,
+        {
+          pageId: testPageId,
+          captureEnabled: true,
+          credential: {
+            id: "cred_test",
+            status: "active" as const,
+            expiresAt: null,
+            scopes: ["leads_retrieval", "pages_manage_ads", "pages_read_engagement"],
+            tokenCiphertext: encryptMetaToken(TOKEN_B),
+            tokenFingerprint: metaTokenFingerprint(TOKEN_B),
+            lastDiagnostic: null,
+          },
+        },
+      ],
+      [
+        pilotPage,
+        {
+          pageId: pilotPage,
+          captureEnabled: false,
+          credential: {
+            id: "cred_pilot_hold",
+            status: "active" as const,
+            expiresAt: null,
+            scopes: [] as string[],
+            tokenCiphertext: encryptMetaToken(TOKEN_A),
+            tokenFingerprint: metaTokenFingerprint(TOKEN_A),
+            lastDiagnostic: null,
+          },
+        },
+      ],
+    ]);
+    const bound = config({
+      accessToken: envToken,
+      accessTokenPageId: pilotPage,
+      unboundPageTokenEnabled: false,
+    });
+    const findGrantImpl = async (pageId: string) => grants.get(pageId) ?? null;
+
+    const testPage = await resolveMetaCapturePageToken(testPageId, bound, { findGrantImpl });
+    assert.equal(testPage.ok, true);
+    if (testPage.ok) {
+      assert.equal(testPage.accessToken, TOKEN_B);
+      assert.equal(testPage.source, "stored_page");
+      assert.notEqual(testPage.accessToken, envToken);
+    }
+
+    const pilot = await resolveMetaCapturePageToken(pilotPage, bound, { findGrantImpl });
+    assert.equal(pilot.ok, false);
+    if (!pilot.ok) {
+      assert.equal(pilot.reason, "capture_not_allowlisted");
+      assert.equal(pilot.diagnostic.includes(envToken), false);
+      assert.equal(pilot.diagnostic.includes(TOKEN_A), false);
+    }
+
+    const withoutHold = await resolveMetaCapturePageToken(pilotPage, bound, {
+      findGrantImpl: async () => null,
+    });
+    assert.equal(withoutHold.ok, true);
+    if (withoutHold.ok) {
+      assert.equal(withoutHold.source, "env_page");
+      assert.equal(withoutHold.accessToken, envToken);
+    }
+  } finally {
+    if (saved === undefined) delete process.env.META_TOKEN_ENCRYPTION_KEY;
+    else process.env.META_TOKEN_ENCRYPTION_KEY = saved;
+  }
+});

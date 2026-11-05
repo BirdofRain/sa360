@@ -32,7 +32,7 @@ function config(overrides: Partial<MetaWebhookConfig> = {}): MetaWebhookConfig {
     verifyToken: "vt-123",
     appSecret: null,
     accessToken: "tok",
-    accessTokenPageId: null,
+    accessTokenPageId: "page_1",
     unboundPageTokenEnabled: false,
     graphApiVersion: "v22.0",
     masterClientAccountId: "lal_master_vet",
@@ -356,6 +356,74 @@ test("POST /webhooks/meta/leadgen accepts a valid signed payload", async () => {
   assert.equal(processCalls, 0);
   assert.equal(fetchCalls, 0);
   assert.equal(enqueueCalls, 1);
+  await app.close();
+});
+
+test("a signed lead for a Page other than the bound pilot is stored and not queued", async () => {
+  const secret = "s3cr3t";
+  const payload = JSON.stringify({
+    object: "page",
+    entry: [
+      {
+        id: "page_test",
+        time: 1_710_000_000,
+        changes: [
+          {
+            field: "leadgen",
+            value: {
+              leadgen_id: "lead_other_page",
+              form_id: "form_9",
+              page_id: "page_test",
+              created_time: 1_710_000_000,
+            },
+          },
+        ],
+      },
+    ],
+  });
+  let enqueueCalls = 0;
+  let fetchCalls = 0;
+  const merges: Array<{ patch: { tokenBlockReason?: string } }> = [];
+  const app = await buildApp(
+    config({
+      appSecret: secret,
+      intakeEnabled: true,
+      graphFetchEnabled: true,
+      accessTokenPageId: "page_1",
+      unboundPageTokenEnabled: false,
+    }),
+    {
+      enqueueImpl: async () => {
+        enqueueCalls += 1;
+        return { enqueued: true, jobId: "should-not-queue" };
+      },
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        return { ok: true, status: 200, body: { id: "lead_other_page", field_data: [] } };
+      },
+      mergeMetaImpl: async (_leadgenId, _eventId, patch) => {
+        merges.push({ patch: patch as { tokenBlockReason?: string } });
+      },
+    }
+  );
+  const res = await app.inject({
+    method: "POST",
+    url: META_LEADGEN_ROUTE,
+    headers: {
+      "content-type": "application/json",
+      "x-hub-signature-256": sign(secret, payload),
+    },
+    payload,
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json() as { queued: number; results: Array<{ queued: boolean; tokenBlockReason?: string }> };
+  assert.equal(body.queued, 0);
+  assert.equal(enqueueCalls, 0);
+  assert.equal(fetchCalls, 0);
+  assert.equal(body.results[0]?.queued, false);
+  assert.equal(body.results[0]?.tokenBlockReason, "page_token_not_configured");
+  assert.equal(merges[0]?.patch.tokenBlockReason, "page_token_not_configured");
+  assert.equal(JSON.stringify(res.json()).includes("EAAB"), false);
   await app.close();
 });
 

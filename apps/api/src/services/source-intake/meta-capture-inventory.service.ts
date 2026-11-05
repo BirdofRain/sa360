@@ -294,23 +294,31 @@ export async function loadMetaCaptureInventory(input?: {
     } else if (!isMetaTokenEncryptionConfigured()) {
       notes.push("META_TOKEN_ENCRYPTION_KEY is not configured. Live discovery was skipped.");
     } else {
-      const accessToken = decryptMetaToken(credential.tokenCiphertext);
-      const discover = input.discoverImpl ?? discoverMetaAuthorizedAssets;
-      discovery = await discover({
-        credentialId: credential.id,
-        accessToken,
-        appSecret: process.env.META_APP_SECRET?.trim() || null,
-        appId: credential.appId ?? process.env.META_APP_ID?.trim() ?? null,
-        pageIds: credential.pageGrants.map((grant) => grant.pageId),
-      });
-      for (const form of discovery.forms.items) {
-        evidence.push({
-          pageId: form.pageId,
-          formId: form.id,
-          formName: form.name,
-          formStatus: form.status,
-          origins: ["graph"],
+      let accessToken: string;
+      try {
+        accessToken = decryptMetaToken(credential.tokenCiphertext);
+      } catch {
+        notes.push("The stored credential could not be decrypted. Live discovery was skipped. Confirm META_TOKEN_ENCRYPTION_KEY, then retry.");
+        accessToken = "";
+      }
+      if (accessToken) {
+        const discover = input.discoverImpl ?? discoverMetaAuthorizedAssets;
+        discovery = await discover({
+          credentialId: credential.id,
+          accessToken,
+          appSecret: process.env.META_APP_SECRET?.trim() || null,
+          appId: credential.appId ?? process.env.META_APP_ID?.trim() ?? null,
+          pageIds: credential.pageGrants.map((grant) => grant.pageId),
         });
+        for (const form of discovery.forms.items) {
+          evidence.push({
+            pageId: form.pageId,
+            formId: form.id,
+            formName: form.name,
+            formStatus: form.status,
+            origins: ["graph"],
+          });
+        }
       }
     }
   } else {

@@ -139,6 +139,50 @@ Do all of these before any production flag change. None of them are done by this
     from that list. Confirm associations only through the existing Facebook Intake
     association endpoint.
 
+## Pilot Page isolation
+
+The current pilot Page is authorized by `META_PAGE_ACCESS_TOKEN` plus
+`META_PAGE_ACCESS_TOKEN_PAGE_ID`. That env token is used only when a notification
+Page id equals that bound id **and** that Page has no `MetaPageCaptureGrant` row.
+Enabling a different Page's grant does not select the pilot token for the test
+Page, and it does not by itself turn the global flags on.
+
+Turning `SA360_META_LEAD_ADS_INTAKE_ENABLED` and
+`SA360_META_LEAD_ADS_GRAPH_FETCH_ENABLED` on while the pilot has no grant **does**
+queue and fetch the pilot through that env-token path. A disabled grant is the
+switch that suppresses it. A stored grant is authoritative: `captureEnabled: false`
+does not fall through to the env token, and the webhook does not enqueue Graph.
+
+Set this configuration before any test Page is allowed to fetch:
+
+| Variable | Required value |
+| --- | --- |
+| `SA360_META_UNBOUND_PAGE_TOKEN_ENABLED` | unset or `false` |
+| `FACEBOOK_DIRECT_INTAKE_ENABLED` | unset |
+| `SA360_META_LEAD_ADS_ROUTING_ENABLED` | `false` |
+| `META_PAGE_ACCESS_TOKEN_PAGE_ID` | the pilot Page id |
+| Pilot `MetaPageCaptureGrant.captureEnabled` | `false` |
+| Test Page `MetaPageCaptureGrant.captureEnabled` | `true`, on its own credential |
+| `SA360_META_LEAD_ADS_INTAKE_ENABLED` | `true` only after the pilot grant exists |
+| `SA360_META_LEAD_ADS_GRAPH_FETCH_ENABLED` | `true` only after the pilot grant exists |
+
+Order:
+
+1. Leave both global flags false. If they were already true, set them false and
+   wait until queued jobs finish as `flags_disabled`. A job already running
+   checks the flags before Graph.
+2. Store a credential whose only pilot Page grant is `captureEnabled: false`.
+   The stored ciphertext is not used while the grant is off. Do not omit this
+   row. With no row, the bound env token is the fallback and the pilot fetches.
+3. Store the test Page on a different credential with `captureEnabled: true`.
+4. Then set the intake and Graph flags true.
+
+After that, a pilot notification is retained with `tokenBlockReason`
+`capture_not_allowlisted` and is not queued. A test-Page notification queues
+with `tokenSource` `stored_page`. `SA360_META_UNBOUND_PAGE_TOKEN_ENABLED=true`
+would authorize an unbound env token for every Page that has no grant. Leave
+it false.
+
 ## One-Page capture-only activation
 
 Use this only after the prerequisites. It does not subscribe the Page by itself.

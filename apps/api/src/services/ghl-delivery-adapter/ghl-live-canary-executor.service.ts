@@ -12,6 +12,7 @@ import {
   buildTagRequest,
   buildWorkflowStartRequest,
   isOpportunityDeliveryExpected,
+  isValidGhlAssignedUserId,
   validateLiveOpportunityPreflight,
 } from "./ghl-delivery-request-builders.js";
 import {
@@ -50,6 +51,8 @@ import {
   buildSourceAttributeStampPayload,
   buildSourceAttributeStampPlan,
 } from "../source-intake/source-attribute-stamp.service.js";
+import { parseSourceEnrichmentPolicyJson } from "../source-intake/source-enrichment.service.js";
+import { tagsWithoutLiteralVetTrigger } from "./lal-ai-bot1-vet-snapshot.js";
 import { saveLifecycleEvent } from "../event-service.js";
 import type { LifecycleEventNameInternal } from "../../schemas/lifecycle-event-names.js";
 import {
@@ -127,6 +130,17 @@ function withReceipt(
 
 const defaultDeps: GhlLiveHttpDeps = { fetch: globalThis.fetch.bind(globalThis) };
 
+function assignedToFromGhlContact(json: unknown): string | null {
+  if (!json || typeof json !== "object" || Array.isArray(json)) return null;
+  const root = json as Record<string, unknown>;
+  const contact =
+    root.contact && typeof root.contact === "object" && !Array.isArray(root.contact)
+      ? (root.contact as Record<string, unknown>)
+      : root;
+  const value = contact.assignedTo ?? contact.assignedUserId;
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
 function workflowDirectApiSkipDetail(locationId: string | null): string {
   const loc = locationId?.trim() || "this subaccount";
   return `Direct workflow API enrollment may not be supported for this workflow — verify it is published for ${loc}, or use a tag-based GHL trigger for long-term launch.`;
@@ -202,6 +216,13 @@ export async function executeLiveCanaryGhlSteps(
     priorReceipts.find((receipt) => receipt.operation === operation) ?? null;
   let workflowBlockReason: string | null = null;
   let duplicateTargetsBlocked = false;
+  let contactAssignedTo: string | null = null;
+  const lalWebform =
+    parseSourceEnrichmentPolicyJson(ctx.destinationFieldMapping?.sourceEnrichmentPolicyJson)
+      .lalAiBot1VetWebform === true;
+  const lalPrimaryUserId = parseSourceEnrichmentPolicyJson(
+    ctx.destinationFieldMapping?.sourceEnrichmentPolicyJson
+  ).lalAiBot1PrimaryUserId;
 
   const pushOutcome = (outcome: Omit<LiveCanaryStepOutcome, "stepOrder"> & { stepOrder?: number }) => {
     stepOutcomes.push({ stepOrder: outcome.stepOrder ?? order++, ...outcome });
@@ -271,6 +292,7 @@ export async function executeLiveCanaryGhlSteps(
         locationId: ghlLocationId,
       });
       contactIdGhl = extractContactIdFromGhlResponse(res.json);
+      contactAssignedTo = assignedToFromGhlContact(res.json);
       const ok = res.ok && Boolean(contactIdGhl);
       const ghlError = ok ? null : parseGhlApiErrorSummary(res.text, res.json);
       const receiptOutcome = classifyRemoteOutcome({
@@ -1071,11 +1093,12 @@ export async function executeLiveCanaryGhlSteps(
         externalCallExecuted: false,
       });
     } else {
+    const tagsToAdd = lalWebform ? tagsWithoutLiteralVetTrigger(tagsPreview.tags) : tagsPreview.tags;
     const res = await ghlDeliveryWrite(
       deps,
       tagsPreview.method,
       `/contacts/${encodeURIComponent(contactIdGhl!)}/tags`,
-      { body: { tags: tagsPreview.tags }, locationId: ghlLocationId }
+      { body: { tags: tagsToAdd }, locationId: ghlLocationId }
     );
     const ok = res.ok;
     const tagError = ok ? null : parseGhlApiErrorSummary(res.text, res.json);
@@ -1126,8 +1149,10 @@ export async function executeLiveCanaryGhlSteps(
   // create_or_update_opportunity
   const oppPreview = buildOpportunityRequest(ctx);
   const oppBody = contactIdGhl ? buildLiveOpportunityHttpBody(ctx, contactIdGhl) : null;
-  opportunityConfigured = Boolean(oppPreview && oppBody);
-  const opportunityExpected = isOpportunityDeliveryExpected(ctx);
+  const snapshotOwnsInitialOpportunity = lalWebform;
+  opportunityConfigured = !snapshotOwnsInitialOpportunity && Boolean(oppPreview && oppBody);
+  const opportunityExpected =
+    !snapshotOwnsInitialOpportunity && isOpportunityDeliveryExpected(ctx);
   const oppPreflight = opportunityExpected
     ? validateLiveOpportunityPreflight(ctx, contactIdGhl)
     : { ok: true, issues: [], missingConfig: [] };
@@ -1163,7 +1188,7 @@ export async function executeLiveCanaryGhlSteps(
       completedAt: new Date(),
       externalCallExecuted: false,
     });
-  } else if (oppPreview && oppBody) {
+  } else if (!snapshotOwnsInitialOpportunity && oppPreview && oppBody) {
     const startedAt = new Date();
     const res = await ghlDeliveryWrite(deps, oppPreview.method, oppPreview.path, {
       body: oppBody,
@@ -1207,7 +1232,9 @@ export async function executeLiveCanaryGhlSteps(
       targetId: null,
       externalId: null,
       errorCode: null,
-      errorSummary: "Opportunity not configured for this rule.",
+      errorSummary: snapshotOwnsInitialOpportunity
+        ? "Workflow 8 creates the initial Veteran / New Lead opportunity."
+        : "Opportunity not configured for this rule.",
       warnings: [],
       requestRedactedJson: null,
       responseRedactedJson: { externalCallExecuted: false } as Prisma.InputJsonValue,
@@ -1217,12 +1244,34 @@ export async function executeLiveCanaryGhlSteps(
     });
   }
 
-  // assign_owner
-  const ownerPreview = buildAssignOwnerRequest(ctx);
-  if (ownerPreview && contactIdGhl) {
+  // assign_owner — before workflow enrollment so #8 can notify that owner.
+  const explicitOwner = isValidGhlAssignedUserId(ctx.rule?.defaultAssignedUserIdGhl)
+    ? ctx.rule.defaultAssignedUserIdGhl.trim()
+    : null;
+  const fallbackPrimary =
+    lalWebform && isValidGhlAssignedUserId(lalPrimaryUserId) ? lalPrimaryUserId.trim() : null;
+  const ownerId = explicitOwner ?? fallbackPrimary ?? buildAssignOwnerRequest(ctx)?.assignedTo ?? null;
+  if (lalWebform && contactIdGhl && contactAssignedTo) {
+    pushOutcome({
+      stepType: "assign_owner",
+      deliveryPlanStepId: findPlanStepId(ctx, "assign_owner"),
+      status: "skipped",
+      targetSystem: "ghl",
+      targetId: contactAssignedTo,
+      externalId: contactIdGhl,
+      errorCode: null,
+      errorSummary: "Existing contact owner was left unchanged.",
+      warnings: ["Manual owner reassignment was preserved."],
+      requestRedactedJson: null,
+      responseRedactedJson: { externalCallExecuted: false, assignedTo: contactAssignedTo } as Prisma.InputJsonValue,
+      startedAt: new Date(),
+      completedAt: new Date(),
+      externalCallExecuted: false,
+    });
+  } else if (ownerId && contactIdGhl) {
     const startedAt = new Date();
-    const res = await ghlDeliveryWrite(deps, ownerPreview.method, `/contacts/${encodeURIComponent(contactIdGhl)}`, {
-      body: { assignedTo: ownerPreview.assignedTo },
+    const res = await ghlDeliveryWrite(deps, "PUT", `/contacts/${encodeURIComponent(contactIdGhl)}`, {
+      body: { assignedTo: ownerId },
       locationId: ghlLocationId,
     });
     const ok = res.ok;
@@ -1238,7 +1287,7 @@ export async function executeLiveCanaryGhlSteps(
     if (!ok) {
       const msg =
         ownerError ??
-        `Configured owner ID may be invalid for this location (${ownerPreview.assignedTo}).`;
+        `Configured owner ID may be invalid for this location (${ownerId}).`;
       if (ownerOptional) warnings.push(msg);
       else errors.push(msg);
     }
@@ -1247,7 +1296,7 @@ export async function executeLiveCanaryGhlSteps(
       deliveryPlanStepId: findPlanStepId(ctx, "assign_owner"),
       status: ok ? "succeeded" : ownerOptional ? "optional_failed" : "failed",
       targetSystem: "ghl",
-      targetId: ownerPreview.assignedTo,
+      targetId: ownerId,
       externalId: contactIdGhl,
       errorCode: ok ? null : `http_${res.status || "transport"}`,
       errorSummary: ok ? null : ownerError,

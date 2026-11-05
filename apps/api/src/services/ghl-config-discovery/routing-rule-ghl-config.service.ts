@@ -25,7 +25,8 @@ import {
 import { findLatestGhlLocationConfigSnapshot } from "../../repositories/ghl-location-config-snapshot.repository.js";
 import { snapshotToDiscoveryResult } from "./ghl-config-discovery.present.js";
 import { detectSa360RequiredCustomFields } from "./ghl-config-discovery.service.js";
-import type { GhlDiscoveredCustomField } from "./ghl-config-discovery.types.js";
+import type { GhlDiscoveredCustomField, GhlDiscoveredLocation, GhlDiscoveredUser, GhlDiscoveredWorkflow } from "./ghl-config-discovery.types.js";
+import { lalAiBot1VetSavePatch } from "../ghl-delivery-adapter/lal-ai-bot1-vet-snapshot.js";
 import { SA360_DEMO_CUSTOM_FIELD_OPTION_MAP } from "@sa360/shared";
 import { DIRECT_DEMO_CANONICAL_LOCATION_ID } from "../../lib/direct-demo-delivery-config.js";
 import {
@@ -49,7 +50,7 @@ export type SaveRoutingRuleGhlConfigResult =
       fieldMapping: Sa360FieldMappingSaveReport;
     }
   | { notFound: true }
-  | { error: string; code: "LOCATION_MISMATCH" | "NOT_CONNECTED" | "VALIDATION" };
+  | { error: string; code: "LOCATION_MISMATCH" | "NOT_CONNECTED" | "VALIDATION" | "LAL_WEBFORM_NOT_FOUND" };
 
 export function buildMergedSa360OptionMapForGhlConfigSave(input: {
   existingDest: ClientGhlDestination | null | undefined;
@@ -200,6 +201,37 @@ export async function saveRoutingRuleGhlConfig(
     mergedFieldMap,
     body.customFieldStampRequired ?? existingDest?.customFieldStampRequired ?? false
   );
+  const location = snap?.locationJson as GhlDiscoveredLocation | null;
+  const lalPatch = lalAiBot1VetSavePatch({
+    applyDemoRetarget: body.applyLalAiBot1WebformConfiguration === true,
+    existingWorkflowId: existingDest?.destinationWorkflowIdGhl ?? existing.destinationWorkflowIdGhl,
+    existingWorkflowTriggerMode: existingDest?.workflowTriggerMode,
+    existingAssignedUserId: existingDest?.defaultAssignedUserIdGhl ?? existing.defaultAssignedUserIdGhl,
+    requestedWorkflowId: body.destinationWorkflowIdGhl,
+    requestedWorkflowTriggerMode: body.workflowTriggerMode,
+    requestedAssignedUserId: body.defaultAssignedUserIdGhl,
+    locationId,
+    locationPrimaryUserId: location?.primaryUserId,
+    workflows: (snap?.workflowsJson as GhlDiscoveredWorkflow[] | null) ?? [],
+    users: (snap?.usersJson as GhlDiscoveredUser[] | null) ?? [],
+    discoveredFields: snapFields,
+    savedSourceAttributeMap: existingDest?.sourceAttributeFieldMapJson ?? existing.sourceAttributeFieldMapJson,
+    requestedSourceAttributeMap: body.sourceAttributeFieldMapJson,
+    savedPolicy: existingDest?.sourceEnrichmentPolicyJson,
+    requestedPolicy: body.sourceEnrichmentPolicyJson,
+  });
+  if (!lalPatch.ok) return lalPatch;
+  const lal = lalPatch.configuration;
+  const effectiveBody = lal.applied
+    ? {
+        ...body,
+        destinationWorkflowIdGhl: lal.destinationWorkflowIdGhl,
+        workflowTriggerMode: lal.workflowTriggerMode ?? body.workflowTriggerMode,
+        defaultAssignedUserIdGhl: lal.defaultAssignedUserIdGhl ?? body.defaultAssignedUserIdGhl,
+        sourceAttributeFieldMapJson: lal.sourceAttributeFieldMap,
+        sourceEnrichmentPolicyJson: lal.sourceEnrichmentPolicy,
+      }
+    : body;
   const destMapping: ClientDestinationFieldMapping = {
     sa360CustomFieldIdMapJson: mergedFieldMap,
     sa360CustomFieldOptionMapJson: mergedOptionMap,
@@ -210,14 +242,14 @@ export async function saveRoutingRuleGhlConfig(
     workflowStartRequired:
       body.workflowStartRequired ?? existingDest?.workflowStartRequired ?? false,
     workflowTriggerMode:
-      body.workflowTriggerMode ?? existingDest?.workflowTriggerMode ?? "tag_trigger",
+      effectiveBody.workflowTriggerMode ?? existingDest?.workflowTriggerMode ?? "tag_trigger",
   };
 
   const merged = mergeRuleForAssessment(existing, {
     destinationPipelineIdGhl: body.destinationPipelineIdGhl,
     destinationPipelineStageIdGhl: body.destinationPipelineStageIdGhl,
-    destinationWorkflowIdGhl: body.destinationWorkflowIdGhl,
-    defaultAssignedUserIdGhl: body.defaultAssignedUserIdGhl,
+    destinationWorkflowIdGhl: effectiveBody.destinationWorkflowIdGhl,
+    defaultAssignedUserIdGhl: effectiveBody.defaultAssignedUserIdGhl,
     snapshotInstalled: body.snapshotInstalled,
     requiredFieldsInstalled: body.requiredFieldsInstalled,
     ghlConnectionStatus: ghlStatus,
@@ -234,8 +266,9 @@ export async function saveRoutingRuleGhlConfig(
   const data: Prisma.CampaignRoutingRuleUpdateInput = {
     destinationPipelineIdGhl: trimOrNull(body.destinationPipelineIdGhl),
     destinationPipelineStageIdGhl: trimOrNull(body.destinationPipelineStageIdGhl),
-    destinationWorkflowIdGhl: trimOrNull(body.destinationWorkflowIdGhl),
-    defaultAssignedUserIdGhl: trimOrNull(body.defaultAssignedUserIdGhl),
+    destinationWorkflowIdGhl: trimOrNull(effectiveBody.destinationWorkflowIdGhl),
+    defaultAssignedUserIdGhl: trimOrNull(effectiveBody.defaultAssignedUserIdGhl),
+    ...(lal.applied ? { opportunityCreationEnabled: false } : {}),
     ghlConnectionStatus: ghlStatus,
     ...persistedReadinessAfterAssessment(assessment),
   };
@@ -256,11 +289,12 @@ export async function saveRoutingRuleGhlConfig(
     buildDestinationUpsertData(
       locationId,
       existingDest,
-      body,
+      effectiveBody,
       mergedFieldMap,
       mergedOptionMap,
       ghlStatus,
-      snap?.locationName
+      snap?.locationName,
+      lal.applied ? { opportunityCreationEnabled: false } : undefined
     )
   );
 

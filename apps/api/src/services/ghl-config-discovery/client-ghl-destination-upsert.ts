@@ -29,7 +29,8 @@ export function buildDestinationUpsertData(
   mergedFieldMap: Record<string, string>,
   mergedOptionMap: Record<string, Record<string, string>>,
   ghlStatus: string,
-  snapLocationName: string | null | undefined
+  snapLocationName: string | null | undefined,
+  options?: { opportunityCreationEnabled?: boolean }
 ): Omit<Prisma.ClientGhlDestinationCreateInput, "clientAccount"> {
   return {
     destinationSubaccountIdGhl: existing?.destinationSubaccountIdGhl ?? locationId,
@@ -53,7 +54,8 @@ export function buildDestinationUpsertData(
     pipelineStageShowedIdGhl: existing?.pipelineStageShowedIdGhl ?? null,
     pipelineStageSoldIdGhl: existing?.pipelineStageSoldIdGhl ?? null,
     pipelineStageDeadIdGhl: existing?.pipelineStageDeadIdGhl ?? null,
-    opportunityCreationEnabled: existing?.opportunityCreationEnabled ?? true,
+    opportunityCreationEnabled:
+      options?.opportunityCreationEnabled ?? existing?.opportunityCreationEnabled ?? true,
     sa360CustomFieldIdMapJson: mergedFieldMap as Prisma.InputJsonValue,
     sa360CustomFieldOptionMapJson: mergedOptionMap as Prisma.InputJsonValue,
     customFieldStampRequired:

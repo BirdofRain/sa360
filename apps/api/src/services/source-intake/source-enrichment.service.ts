@@ -71,6 +71,11 @@ export function parseSourceEnrichmentPolicyJson(raw: unknown): SourceEnrichmentP
         ? limitedAutomationBehavior
         : "basic_voice_ai",
     intakeSummaryNotesEnabled: record.intakeSummaryNotesEnabled === true,
+    lalAiBot1VetWebform: record.lalAiBot1VetWebform === true,
+    lalAiBot1PrimaryUserId:
+      typeof record.lalAiBot1PrimaryUserId === "string" && record.lalAiBot1PrimaryUserId.trim()
+        ? record.lalAiBot1PrimaryUserId.trim()
+        : null,
   };
 }
 

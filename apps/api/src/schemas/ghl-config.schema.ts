@@ -44,6 +44,11 @@ export const routingRuleGhlConfigBodySchema = z
     sourceEnrichmentPolicyJson: z.record(z.unknown()).optional(),
     sourceFieldAliasOverridesJson: z.record(z.array(z.string())).optional(),
     confirmLocationMismatch: z.boolean().optional(),
+    /**
+     * Opt-in retarget for an existing destination, such as the Onboarding Demo
+     * Leadform tag trigger. Absent or false does not change a saved workflow.
+     */
+    applyLalAiBot1WebformConfiguration: z.boolean().optional(),
   })
   .strict();
 

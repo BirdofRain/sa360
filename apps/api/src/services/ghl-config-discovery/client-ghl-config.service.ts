@@ -32,6 +32,8 @@ import { buildFieldMappingSaveReport } from "../sa360-custom-field-mapping.servi
 import type { GhlDiscoveredCustomField } from "./ghl-config-discovery.types.js";
 import { snapshotToDiscoveryResult } from "./ghl-config-discovery.present.js";
 import { detectSa360RequiredCustomFields } from "./ghl-config-discovery.service.js";
+import { lalAiBot1VetSavePatch } from "../ghl-delivery-adapter/lal-ai-bot1-vet-snapshot.js";
+import type { GhlDiscoveredLocation, GhlDiscoveredUser, GhlDiscoveredWorkflow } from "./ghl-config-discovery.types.js";
 
 export type ClientDeliveryConfigSummary = {
   clientAccountId: string;
@@ -53,7 +55,7 @@ export type SaveClientGhlConfigResult =
       fieldMapping: ReturnType<typeof buildFieldMappingSaveReport>;
     }
   | { notFound: true }
-  | { error: string; code: "LOCATION_MISMATCH" | "NOT_CONNECTED" | "VALIDATION" };
+  | { error: string; code: "LOCATION_MISMATCH" | "NOT_CONNECTED" | "VALIDATION" | "LAL_WEBFORM_NOT_FOUND" };
 
 function resolveLocationId(
   queryLocationId: string | undefined,
@@ -216,17 +218,49 @@ export async function saveClientGhlConfig(
     mergedFieldMap,
     body.customFieldStampRequired ?? existingDest?.customFieldStampRequired ?? false
   );
+  const location = snap?.locationJson as GhlDiscoveredLocation | null;
+  const lalPatch = lalAiBot1VetSavePatch({
+    applyDemoRetarget: body.applyLalAiBot1WebformConfiguration === true,
+    existingWorkflowId: existingDest?.destinationWorkflowIdGhl,
+    existingWorkflowTriggerMode: existingDest?.workflowTriggerMode,
+    existingAssignedUserId: existingDest?.defaultAssignedUserIdGhl,
+    requestedWorkflowId: body.destinationWorkflowIdGhl,
+    requestedWorkflowTriggerMode: body.workflowTriggerMode,
+    requestedAssignedUserId: body.defaultAssignedUserIdGhl,
+    locationId,
+    locationPrimaryUserId: location?.primaryUserId,
+    workflows: (snap?.workflowsJson as GhlDiscoveredWorkflow[] | null) ?? [],
+    users: (snap?.usersJson as GhlDiscoveredUser[] | null) ?? [],
+    discoveredFields: snapFields,
+    savedSourceAttributeMap: existingDest?.sourceAttributeFieldMapJson,
+    requestedSourceAttributeMap: body.sourceAttributeFieldMapJson,
+    savedPolicy: existingDest?.sourceEnrichmentPolicyJson,
+    requestedPolicy: body.sourceEnrichmentPolicyJson,
+  });
+  if (!lalPatch.ok) return lalPatch;
+  const lal = lalPatch.configuration;
+  const effectiveBody = lal.applied
+    ? {
+        ...body,
+        destinationWorkflowIdGhl: lal.destinationWorkflowIdGhl,
+        workflowTriggerMode: lal.workflowTriggerMode ?? body.workflowTriggerMode,
+        defaultAssignedUserIdGhl: lal.defaultAssignedUserIdGhl ?? body.defaultAssignedUserIdGhl,
+        sourceAttributeFieldMapJson: lal.sourceAttributeFieldMap,
+        sourceEnrichmentPolicyJson: lal.sourceEnrichmentPolicy,
+      }
+    : body;
 
   const upserted = await upsertClientGhlDestination(
     client.clientAccountId,
     buildDestinationUpsertData(
       locationId,
       existingDest,
-      body,
+      effectiveBody,
       mergedFieldMap,
       mergedOptionMap,
       ghlStatus,
-      snap?.locationName ?? connection.locationName
+      snap?.locationName ?? connection.locationName,
+      lal.applied ? { opportunityCreationEnabled: false } : undefined
     )
   );
 

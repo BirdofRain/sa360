@@ -34,6 +34,14 @@ export type SourceEnrichmentPolicy = {
    * enable delivery.
    */
   intakeSummaryNotesEnabled?: boolean;
+  /**
+   * LAL AI BOT-1 VET Webform delivery. Only an explicit true enrolls workflow
+   * #8 by direct API and leaves its opportunity, bot status, and timezone to GHL.
+   * It does not enable delivery.
+   */
+  lalAiBot1VetWebform?: boolean;
+  /** Sub-account primary user resolved from the location payload or a unique account owner. */
+  lalAiBot1PrimaryUserId?: string | null;
 };
 
 export type UnmappedSourceField = {

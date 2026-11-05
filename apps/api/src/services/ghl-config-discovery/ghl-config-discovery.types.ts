@@ -39,6 +39,13 @@ export type GhlDiscoveredUser = {
   id: string;
   name: string;
   email: string | null;
+  /** Account role from GHL (`owner`, `admin`, or `user`). Absent on older snapshots. */
+  role?: string | null;
+  /** `account` is a sub-account user. `agency` is not the sub-account primary user. */
+  userType?: string | null;
+  locationIds?: string[];
+  /** Explicit primary flag from the user payload. List order is not a primary flag. */
+  isPrimary?: boolean;
 };
 
 export type GhlDiscoveredCustomField = {
@@ -60,6 +67,11 @@ export type GhlDiscoveredLocation = {
   name: string | null;
   companyId: string | null;
   timezone: string | null;
+  /**
+   * Declared sub-account primary user, when the location payload includes one.
+   * This is not the first user in the users list and not the OAuth connecting user.
+   */
+  primaryUserId?: string | null;
 };
 
 export type GhlRequiredFieldsReport = {

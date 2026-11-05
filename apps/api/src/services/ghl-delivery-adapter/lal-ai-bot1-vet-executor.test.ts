@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { GhlAdapterPlanContext } from "./ghl-delivery-adapter.types.js";
 import { executeLiveCanaryGhlSteps } from "./ghl-live-canary-executor.service.js";
 import type { GhlLiveHttpDeps } from "./ghl-live-transport.js";
+import type { VetOperationReceipt } from "./vet-ghl-delivery-contract.js";
 import {
   enableLiveCanaryRuntimeForTests,
   resetDeliveryRuntimeTestState,
@@ -152,10 +153,13 @@ test("webform delivery writes the contact and survey answer, assigns the selecte
   assert.equal(calls.filter((call) => call.url.includes("/opportunities")).length, 0);
   assert.equal(calls[upsertAt]?.body?.firstName, "Matt");
   assert.equal("timezone" in (calls[upsertAt]?.body ?? {}), false);
-  assert.equal(
-    calls.some((call) => Array.isArray(call.body?.tags) && (call.body.tags as string[]).some((tag) => tag.toLowerCase() === "vet")),
-    false
-  );
+  const tags = calls.flatMap((call) => (Array.isArray(call.body?.tags) ? (call.body.tags as string[]) : []));
+  assert.equal(tags.some((tag) => tag.toLowerCase() === "vet"), false);
+  assert.equal(tags.includes("SA360::NICHE::VET"), true);
+  assert.equal(tags.includes("SA360::EVENT::LEAD_CREATED"), true);
+  assert.equal(tags.includes("SA360::TRIGGER::NEW_LEAD"), false);
+  assert.equal(tags.includes("SA360::TRIGGER::AI_READY"), false);
+  assert.equal(calls.some((call) => call.method === "GET"), false);
   assert.equal(result.workflowResult, "enrolled");
   assert.equal(result.workflowStarted, true);
   assert.equal(result.contactResult, "upserted");
@@ -179,4 +183,115 @@ test("an existing contact owner is kept and the primary user is used only when n
   assert.equal(owner?.body?.assignedTo, "user_primary_1");
   assert.equal(primary.calls.filter((call) => call.url.includes("/workflow/")).length, 1);
   assert.equal(primary.calls.filter((call) => call.url.includes("/opportunities")).length, 0);
+});
+
+function completedContactReceipt(): VetOperationReceipt {
+  return {
+    operation: "contact",
+    idempotencyKey: "idem_lal_resume:contact",
+    outcome: "completed",
+    externalId: "contact_vet",
+    httpStatus: 200,
+  };
+}
+
+function resumeHarness(input: { assignedTo: string | null; getStatus?: number }): { deps: GhlLiveHttpDeps; calls: Call[] } {
+  const calls: Call[] = [];
+  const deps: GhlLiveHttpDeps = {
+    fetch: async (inputRequest, init) => {
+      const call: Call = {
+        method: init?.method ?? "GET",
+        url: String(inputRequest),
+        body: typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : null,
+      };
+      calls.push(call);
+      const contactRead =
+        call.method === "GET" &&
+        call.url.includes("/contacts/contact_vet") &&
+        !call.url.includes("/contacts/upsert") &&
+        !call.url.includes("/tags") &&
+        !call.url.includes("/workflow/");
+      if (contactRead) {
+        if ((input.getStatus ?? 200) >= 400) {
+          return new Response(JSON.stringify({ message: "unavailable" }), { status: input.getStatus });
+        }
+        return new Response(
+          JSON.stringify({ contact: { id: "contact_vet", assignedTo: input.assignedTo } }),
+          { status: 200 }
+        );
+      }
+      if (call.url.includes("/contacts/upsert")) {
+        return new Response(JSON.stringify({ contact: { id: "contact_vet", assignedTo: null } }), { status: 200 });
+      }
+      if (call.url.includes("/opportunities")) {
+        return new Response(JSON.stringify({ opportunity: { id: "opp_should_not_exist" } }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    },
+  };
+  return { deps, calls };
+}
+
+test("a resumed webform delivery reads the current assignee and does not write the destination default over it", async () => {
+  arm();
+  const changed = resumeHarness({ assignedTo: "user_operator_2" });
+  const changedResult = await executeLiveCanaryGhlSteps(ctx("user_agent_1"), "idem_lal_resume", changed.deps, {
+    emitLifecycle: async () => {},
+    priorReceipts: [completedContactReceipt()],
+  });
+  assert.equal(changed.calls.some((call) => call.url.includes("/contacts/upsert")), false);
+  assert.equal(
+    changed.calls.some((call) => call.method === "GET" && call.url.includes("/contacts/contact_vet")),
+    true
+  );
+  assert.equal(changed.calls.some((call) => call.body?.assignedTo === "user_agent_1"), false);
+  assert.equal(
+    changedResult.stepOutcomes.find((step) => step.stepType === "assign_owner")?.targetId,
+    "user_operator_2"
+  );
+  assert.equal(changed.calls.filter((call) => call.url.includes("/workflow/wf_location_webform")).length, 1);
+  assert.equal(changed.calls.filter((call) => call.url.includes("/opportunities")).length, 0);
+
+  const alreadyDefault = resumeHarness({ assignedTo: "user_agent_1" });
+  await executeLiveCanaryGhlSteps(ctx("user_agent_1"), "idem_lal_resume_default", alreadyDefault.deps, {
+    emitLifecycle: async () => {},
+    priorReceipts: [completedContactReceipt()],
+  });
+  assert.equal(alreadyDefault.calls.some((call) => call.method === "PUT" && call.body?.assignedTo), false);
+
+  const unassigned = resumeHarness({ assignedTo: null });
+  await executeLiveCanaryGhlSteps(ctx("user_agent_1"), "idem_lal_resume_empty", unassigned.deps, {
+    emitLifecycle: async () => {},
+    priorReceipts: [completedContactReceipt()],
+  });
+  const owner = unassigned.calls.find((call) => call.method === "PUT" && call.body?.assignedTo);
+  assert.equal(owner?.body?.assignedTo, "user_agent_1");
+
+  const unread = resumeHarness({ assignedTo: "user_operator_2", getStatus: 500 });
+  await executeLiveCanaryGhlSteps(ctx("user_agent_1"), "idem_lal_resume_unread", unread.deps, {
+    emitLifecycle: async () => {},
+    priorReceipts: [completedContactReceipt()],
+  });
+  assert.equal(unread.calls.some((call) => call.body?.assignedTo), false);
+});
+
+test("a resumed delivery outside this profile still writes its configured owner", async () => {
+  arm();
+  const outside = ctx("user_agent_1");
+  outside.destinationFieldMapping = {
+    ...outside.destinationFieldMapping!,
+    sourceEnrichmentPolicyJson: {},
+  };
+  outside.sourceEnrichment = {
+    ...outside.sourceEnrichment!,
+    sourceEnrichmentPolicy: {},
+  };
+  const { deps, calls } = resumeHarness({ assignedTo: "user_operator_2" });
+  await executeLiveCanaryGhlSteps(outside, "idem_other_resume", deps, {
+    emitLifecycle: async () => {},
+    priorReceipts: [completedContactReceipt()],
+  });
+  assert.equal(calls.some((call) => call.method === "GET" && call.url.includes("/contacts/contact_vet")), false);
+  assert.equal(calls.some((call) => call.body?.assignedTo === "user_agent_1"), true);
+  assert.equal(calls.some((call) => call.url.includes("/opportunities")), true);
 });

@@ -219,6 +219,7 @@ export async function executeLiveCanaryGhlSteps(
   let workflowBlockReason: string | null = null;
   let duplicateTargetsBlocked = false;
   let contactAssignedTo: string | null = null;
+  let contactWriteReplayed = false;
   const lalWebform =
     parseSourceEnrichmentPolicyJson(ctx.destinationFieldMapping?.sourceEnrichmentPolicyJson)
       .lalAiBot1VetWebform === true;
@@ -242,6 +243,7 @@ export async function executeLiveCanaryGhlSteps(
     const decision = retryDecision(prior);
     if (decision === "skip_completed" && prior?.externalId) {
       contactIdGhl = prior.externalId;
+      contactWriteReplayed = true;
       pushOutcome({
         stepType: "create_or_update_contact",
         deliveryPlanStepId: findPlanStepId(ctx, "create_or_update_contact"),
@@ -1350,6 +1352,17 @@ export async function executeLiveCanaryGhlSteps(
   const fallbackPrimary =
     lalWebform && isValidGhlAssignedUserId(lalPrimaryUserId) ? lalPrimaryUserId.trim() : null;
   const ownerId = explicitOwner ?? fallbackPrimary ?? buildAssignOwnerRequest(ctx)?.assignedTo ?? null;
+  let ownerUnreadable = false;
+  if (lalWebform && contactWriteReplayed && contactIdGhl && !contactAssignedTo) {
+    const observed = await ghlDeliveryWrite(deps, "GET", `/contacts/${encodeURIComponent(contactIdGhl)}`, {
+      locationId: ghlLocationId,
+    });
+    if (observed.ok) {
+      contactAssignedTo = assignedToFromGhlContact(observed.json);
+    } else {
+      ownerUnreadable = true;
+    }
+  }
   if (lalWebform && contactIdGhl && contactAssignedTo) {
     pushOutcome({
       stepType: "assign_owner",
@@ -1360,9 +1373,28 @@ export async function executeLiveCanaryGhlSteps(
       externalId: contactIdGhl,
       errorCode: null,
       errorSummary: "Existing contact owner was left unchanged.",
-      warnings: ["Manual owner reassignment was preserved."],
+      warnings: ["This contact's assignee was left in place. The destination default was not written over it."],
       requestRedactedJson: null,
       responseRedactedJson: { externalCallExecuted: false, assignedTo: contactAssignedTo } as Prisma.InputJsonValue,
+      startedAt: new Date(),
+      completedAt: new Date(),
+      externalCallExecuted: false,
+    });
+  } else if (lalWebform && ownerUnreadable && contactIdGhl) {
+    const summary = "Contact owner could not be read, so the destination default was not written.";
+    warnings.push(summary);
+    pushOutcome({
+      stepType: "assign_owner",
+      deliveryPlanStepId: findPlanStepId(ctx, "assign_owner"),
+      status: "skipped",
+      targetSystem: "ghl",
+      targetId: null,
+      externalId: contactIdGhl,
+      errorCode: null,
+      errorSummary: summary,
+      warnings: [summary],
+      requestRedactedJson: null,
+      responseRedactedJson: { externalCallExecuted: false } as Prisma.InputJsonValue,
       startedAt: new Date(),
       completedAt: new Date(),
       externalCallExecuted: false,

@@ -1,5 +1,6 @@
 import type { DeliveryTarget, PrismaClient } from "@prisma/client";
 
+import { isCustomWebhookDeliveryEnabled } from "../../lib/custom-webhook-env.js";
 import { isGoogleSheetsLf2PlanningExcluded } from "../../lib/google-sheets-env.js";
 import { getDeliveryAdapter } from "./delivery-adapter.registry.js";
 import {
@@ -25,7 +26,8 @@ export async function planDeliveryInstructionsForAllocation(
     leadAllocationId: string;
     clientAccountId: string;
   },
-  db: PrismaClient = prisma
+  db: PrismaClient = prisma,
+  env: NodeJS.ProcessEnv = process.env
 ): Promise<DeliveryPlanningResult> {
   const allocation = await db.leadAllocation.findUnique({
     where: { id: input.leadAllocationId.trim() },
@@ -41,8 +43,16 @@ export async function planDeliveryInstructionsForAllocation(
   const listed = await listEnabledDeliveryTargetsForClient(input.clientAccountId, db);
   // google_sheets.v1 is destination-configured only in Phase 1C. Excluding it here
   // is the execution gate: planning must not emit DeliveryInstructions for it, even
-  // if a row is accidentally enabled/required.
-  const targets = listed.filter((target) => !isGoogleSheetsLf2PlanningExcluded(target.adapterKey));
+  // if a row is accidentally enabled/required. google_sheets.company.v1 stays excluded
+  // with it. webhook.generic.v1 has no sender yet, so an enabled row stays out of live
+  // planning until SA360_CUSTOM_WEBHOOK_DELIVERY_ENABLED is the exact string true.
+  const targets = listed.filter((target) => {
+    if (isGoogleSheetsLf2PlanningExcluded(target.adapterKey)) return false;
+    if (target.adapterKey.trim() === "webhook.generic.v1" && !isCustomWebhookDeliveryEnabled(env)) {
+      return false;
+    }
+    return true;
+  });
   if (targets.length === 0) {
     return { ok: false, code: "no_enabled_targets", reasons: ["no_enabled_delivery_targets"] };
   }

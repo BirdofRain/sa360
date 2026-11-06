@@ -45,6 +45,7 @@ export type ClientDeletionImpact = {
     inconsistentAssociationEnrichmentSnapshots: number;
     inconsistentAssociationNormalizedSnapshots: number;
     inconsistentAssociationSnapshotRows: number;
+    deliverySuccessNotifications: number;
   };
   /** SourceFunnel rows that name this client. A row using both fields appears once. */
   affectedRows: ClientDeletionAffectedRow[];
@@ -113,6 +114,7 @@ export async function getClientDeletionImpact(
     onboardingAuditEventsRetained,
     sourceFunnels,
     inconsistentSnapshots,
+    deliverySuccessNotifications,
   ] = await Promise.all([
     countRoutingRulesForClient(id),
     prisma.ghlLocationConnection.count({ where: { clientAccountId: id } }),
@@ -134,6 +136,7 @@ export async function getClientDeletionImpact(
       orderBy: { id: "asc" },
     }),
     listInconsistentCurrentAssociationSnapshots(id, prisma),
+    prisma.deliverySuccessNotification.count({ where: { clientAccountId: id } }),
   ]);
   const funnelReferences = summarizeSourceFunnelClientReferences(id, sourceFunnels);
   const associationSnapshotRows = inconsistentSnapshots.rows.map((row) => ({
@@ -177,6 +180,11 @@ export async function getClientDeletionImpact(
   if (client.portalEnabled) {
     blockers.push("Client portal is enabled for this account.");
   }
+  if (deliverySuccessNotifications > 0) {
+    blockers.push(
+      `${deliverySuccessNotifications} delivery success notification record(s) retain this client's send history and block deletion.`
+    );
+  }
 
   return {
     clientAccountId: id,
@@ -198,6 +206,7 @@ export async function getClientDeletionImpact(
       inconsistentAssociationEnrichmentSnapshots: inconsistentSnapshots.enrichmentReferences,
       inconsistentAssociationNormalizedSnapshots: inconsistentSnapshots.normalizedReferences,
       inconsistentAssociationSnapshotRows: associationSnapshotRows.length,
+      deliverySuccessNotifications,
     },
     affectedRows: funnelReferences.affectedRows,
     associationSnapshotRows,
@@ -209,6 +218,9 @@ export async function getClientDeletionImpact(
         ? "The mutable onboarding setup document will be deleted."
         : "No mutable onboarding setup document exists.",
       `${onboardingAuditEventsRetained} onboarding audit event(s) will be retained with the historical client identity.`,
+      deliverySuccessNotifications > 0
+        ? `${deliverySuccessNotifications} delivery success notification record(s) block deletion and are not removed.`
+        : "No delivery success notification history blocks deletion.",
     ].join(" "),
   };
 }

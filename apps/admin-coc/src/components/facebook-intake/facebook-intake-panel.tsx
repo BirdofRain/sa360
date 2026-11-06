@@ -103,6 +103,9 @@ export function FacebookIntakePanel({
           does not deliver the lead. GHL location, snapshot, and custom-field setup are not capture
           requirements.
         </p>
+        <a className="mt-2 inline-block text-sm underline" href="/facebook-intake/source-resolution">
+          Open the read-only Source Resolution review
+        </a>
       </div>
 
       <WarningBanner tone="info" title="Four separate outcomes">

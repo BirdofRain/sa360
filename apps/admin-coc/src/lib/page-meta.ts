@@ -61,6 +61,13 @@ const routes: { prefix: string; meta: PageMeta }[] = [
     },
   },
   {
+    prefix: "/facebook-intake/source-resolution",
+    meta: {
+      title: "Source Resolution review",
+      description: "Read-only Facebook SourceFunnel and unresolved Meta Lead Ads review.",
+    },
+  },
+  {
     prefix: "/facebook-intake",
     meta: {
       title: "Facebook Intake",

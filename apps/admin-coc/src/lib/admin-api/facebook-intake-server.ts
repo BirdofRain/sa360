@@ -11,6 +11,10 @@ import {
   sanitizeMetaCaptureHealth,
   type MetaCaptureHealthView,
 } from "../facebook-intake/meta-capture-health";
+import {
+  sanitizeSourceResolutionReview,
+  type SourceResolutionReviewView,
+} from "../facebook-intake/source-resolution";
 
 type AssociationListResponse = {
   ok: true;
@@ -112,4 +116,25 @@ export async function loadMetaCaptureHealth(): Promise<{
   const health = sanitizeMetaCaptureHealth(res.data);
   if (!health) return { health: null, error: "Meta capture health response was not readable." };
   return { health, error: null };
+}
+
+export async function loadFacebookSourceResolutionReview(query: {
+  pageId?: string;
+  formId?: string;
+  classification?: string;
+  offset?: string;
+}): Promise<{ review: SourceResolutionReviewView | null; error: string | null }> {
+  const params = new URLSearchParams();
+  if (query.pageId) params.set("pageId", query.pageId);
+  if (query.formId) params.set("formId", query.formId);
+  if (query.classification) params.set("classification", query.classification);
+  if (query.offset) params.set("offset", query.offset);
+  if (query.pageId && query.formId) params.set("includeEvents", "1");
+  if (query.classification === "cannot_identify") params.set("includeEvents", "1");
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  const res = await adminFetchJson<Record<string, unknown>>(`/admin/v1/facebook-source-resolution${suffix}`);
+  if (!res.ok) return { review: null, error: formatAdminApiError(res) };
+  const review = sanitizeSourceResolutionReview(res.data);
+  if (!review) return { review: null, error: "Source Resolution review response was not readable." };
+  return { review, error: null };
 }

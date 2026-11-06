@@ -240,34 +240,38 @@ const evidenceSelect = {
   customWebhookAttemptId: true,
 } as const;
 
+/**
+ * Fill only null evidence columns. One statement, evaluated on the locked row,
+ * so a Sheets write cannot clear a GHL receipt id and a GHL write cannot clear
+ * a Sheets receipt id. A non-null column is kept. Status is not updated, so a
+ * terminal sent row stays sent.
+ */
 async function fillEvidence(
   db: NotificationDb,
   idempotencyKey: string,
   evidence: DeliverySuccessEvidence
 ): Promise<RecordDeliverySuccessNotificationResult> {
-  const existing = await db.deliverySuccessNotification.findUnique({
+  if (evidence.sheetsJobId || evidence.ghlLiveRunId || evidence.customWebhookAttemptId) {
+    await db.$executeRaw`
+      UPDATE "DeliverySuccessNotification"
+      SET
+        "sheetsJobId" = COALESCE("sheetsJobId", CAST(${evidence.sheetsJobId} AS TEXT)),
+        "ghlLiveRunId" = COALESCE("ghlLiveRunId", CAST(${evidence.ghlLiveRunId} AS TEXT)),
+        "customWebhookAttemptId" = COALESCE(
+          "customWebhookAttemptId",
+          CAST(${evidence.customWebhookAttemptId} AS TEXT)
+        ),
+        "updatedAt" = transaction_timestamp()
+      WHERE "idempotencyKey" = ${idempotencyKey}
+    `;
+  }
+  const row = await db.deliverySuccessNotification.findUnique({
     where: { idempotencyKey },
     select: evidenceSelect,
   });
-  if (!existing) {
+  if (!row) {
     throw new Error("Delivery success notification disappeared after a unique conflict.");
   }
-  const data: Prisma.DeliverySuccessNotificationUpdateInput = {};
-  if (evidence.sheetsJobId && !existing.sheetsJobId) data.sheetsJobId = evidence.sheetsJobId;
-  if (evidence.ghlLiveRunId && !existing.ghlLiveRunId) data.ghlLiveRunId = evidence.ghlLiveRunId;
-  if (evidence.customWebhookAttemptId && !existing.customWebhookAttemptId) {
-    data.customWebhookAttemptId = evidence.customWebhookAttemptId;
-  }
-  if (Object.keys(data).length > 0) {
-    await db.deliverySuccessNotification.update({
-      where: { id: existing.id },
-      data,
-    });
-  }
-  const row = await db.deliverySuccessNotification.findUniqueOrThrow({
-    where: { id: existing.id },
-    select: evidenceSelect,
-  });
   return { ok: true, inserted: false, ...row };
 }
 

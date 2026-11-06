@@ -1,4 +1,4 @@
-import { readFacebookId } from "./facebook-form-association.js";
+import { facebookFormProviderFunnelId, readFacebookId } from "./facebook-form-association.js";
 
 /**
  * Read-only classification for Facebook Source Resolution review.
@@ -42,6 +42,34 @@ export function emptyOutcomeCounts(): StoredAssociationOutcomeCounts {
     absent: 0,
     other: 0,
   };
+}
+
+/**
+ * Association lookup for the read-only review.
+ * A Form ID without a Page ID still narrows the SourceFunnel list.
+ * Page-only, Page+Form, and unfiltered lookups keep their existing bounds.
+ */
+export function facebookAssociationIdFilter(input: {
+  pageId: string | null;
+  formId: string | null;
+}):
+  | { kind: "exact"; providerFunnelId: string }
+  | { kind: "page"; prefix: string }
+  | { kind: "form"; prefix: string; suffix: string }
+  | { kind: "all"; prefix: string } {
+  if (input.pageId && input.formId) {
+    return {
+      kind: "exact",
+      providerFunnelId: facebookFormProviderFunnelId(input.pageId, input.formId),
+    };
+  }
+  if (input.pageId) {
+    return { kind: "page", prefix: `fbpage:${input.pageId}:fbform:` };
+  }
+  if (input.formId) {
+    return { kind: "form", prefix: "fbpage:", suffix: `:fbform:${input.formId}` };
+  }
+  return { kind: "all", prefix: "fbpage:" };
 }
 
 export function readStoredAssociationOutcome(value: string | null | undefined): StoredAssociationOutcome {

@@ -5,6 +5,7 @@ import {
   classifySourceResolutionGroup,
   emptyOutcomeCounts,
   explainUnstampedGroup,
+  facebookAssociationIdFilter,
   type SourceResolutionOwner,
 } from "./facebook-source-resolution-review.js";
 
@@ -83,4 +84,27 @@ test("unstamped explanations follow the stored settlement outcome", () => {
     explainUnstampedGroup({ classification: "cannot_identify", outcomes: emptyOutcomeCounts() }),
     /cannot be matched/
   );
+});
+
+test("association lookup keeps a form-only filter", () => {
+  assert.deepEqual(facebookAssociationIdFilter({ pageId: null, formId: "1977370106440985" }), {
+    kind: "form",
+    prefix: "fbpage:",
+    suffix: ":fbform:1977370106440985",
+  });
+  assert.deepEqual(facebookAssociationIdFilter({ pageId: "222591640945329", formId: null }), {
+    kind: "page",
+    prefix: "fbpage:222591640945329:fbform:",
+  });
+  assert.deepEqual(
+    facebookAssociationIdFilter({ pageId: "222591640945329", formId: "1977370106440985" }),
+    {
+      kind: "exact",
+      providerFunnelId: "fbpage:222591640945329:fbform:1977370106440985",
+    }
+  );
+  assert.deepEqual(facebookAssociationIdFilter({ pageId: null, formId: null }), {
+    kind: "all",
+    prefix: "fbpage:",
+  });
 });

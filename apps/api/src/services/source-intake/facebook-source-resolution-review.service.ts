@@ -6,6 +6,7 @@ import {
   classifySourceResolutionGroup,
   emptyOutcomeCounts,
   explainUnstampedGroup,
+  facebookAssociationIdFilter,
   type SourceResolutionClassification,
   type SourceResolutionOwner,
   type StoredAssociationOutcome,
@@ -501,17 +502,15 @@ async function loadAssociations(
   db: PrismaClient,
   input: { pageId: string | null; formId: string | null; limit: number; offset: number }
 ): Promise<SourceResolutionReview["associations"]> {
-  const providerFunnelId =
-    input.pageId && input.formId
-      ? facebookFormProviderFunnelId(input.pageId, input.formId)
-      : null;
+  const filter = facebookAssociationIdFilter(input);
   const where: Prisma.SourceFunnelWhereInput = {
     provider: "facebook",
-    ...(providerFunnelId
-      ? { providerFunnelId }
-      : input.pageId
-        ? { providerFunnelId: { startsWith: `fbpage:${input.pageId}:fbform:` } }
-        : { providerFunnelId: { startsWith: "fbpage:" } }),
+    providerFunnelId:
+      filter.kind === "exact"
+        ? filter.providerFunnelId
+        : filter.kind === "form"
+          ? { startsWith: filter.prefix, endsWith: filter.suffix }
+          : { startsWith: filter.prefix },
   };
   const [total, rows] = await Promise.all([
     db.sourceFunnel.count({ where }),

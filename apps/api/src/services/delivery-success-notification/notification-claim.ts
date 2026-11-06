@@ -1,7 +1,5 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 
-import { isDeliverySuccessNotifyEnabled } from "../../lib/delivery-success-notification-env.js";
-
 export const DELIVERY_SUCCESS_NOTIFICATION_STATUS = {
   pending: "pending",
   sending: "sending",
@@ -13,32 +11,27 @@ export const DELIVERY_SUCCESS_NOTIFICATION_STATUS = {
 export type DeliverySuccessNotificationStatus =
   (typeof DELIVERY_SUCCESS_NOTIFICATION_STATUS)[keyof typeof DELIVERY_SUCCESS_NOTIFICATION_STATUS];
 
-export const DELIVERY_SUCCESS_CHANNEL = {
-  company_sheets: "company_sheets",
-  ghl_location_api: "ghl_location_api",
-  custom_webhook: "custom_webhook",
-} as const;
-
-export type DeliverySuccessChannel =
-  (typeof DELIVERY_SUCCESS_CHANNEL)[keyof typeof DELIVERY_SUCCESS_CHANNEL];
-
 /** Stale in-flight claims may be reclaimed after this window. */
 export const DELIVERY_SUCCESS_NOTIFY_STALE_CLAIM_MS = 10 * 60 * 1000;
 
 /** Matches sendTransactionalEmail's Idempotency-Key cap. This module does not send. */
 export const DELIVERY_SUCCESS_RESEND_IDEMPOTENCY_KEY_MAX = 256;
 
-const CHANNELS = new Set<string>(Object.values(DELIVERY_SUCCESS_CHANNEL));
-
 export type NotificationDb = PrismaClient | Prisma.TransactionClient;
 
-export type InsertPendingDeliverySuccessNotificationResult = {
+export type DeliverySuccessEvidence = {
+  sheetsJobId: string | null;
+  ghlLiveRunId: string | null;
+  customWebhookAttemptId: string | null;
+};
+
+export type RecordDeliverySuccessNotificationResult = {
   ok: true;
   inserted: boolean;
   id: string;
   idempotencyKey: string;
   status: DeliverySuccessNotificationStatus;
-};
+} & DeliverySuccessEvidence;
 
 export type ClaimDeliverySuccessNotificationResult =
   | {
@@ -64,20 +57,13 @@ export type ClaimDeliverySuccessNotificationResult =
       claimCount: 0;
     };
 
-export type ArmDeliverySuccessNotificationCursorResult =
-  | { ok: true; armed: false; reason: "notify_disabled" }
-  | { ok: true; armed: true; armedAt: Date; newlyArmed: boolean };
-
 export function deliverySuccessNotificationIdempotencyKey(
-  channel: DeliverySuccessChannel,
-  receiptId: string
+  clientAccountId: string,
+  sourceLeadEventId: string
 ): string {
-  assertChannel(channel);
-  const id = receiptId.trim();
-  if (!id) {
-    throw new Error("Canonical receipt id is required.");
-  }
-  return `${channel}:${id}`;
+  const clientId = requireIdentityPart(clientAccountId, "Client account id");
+  const leadId = requireIdentityPart(sourceLeadEventId, "Source lead id");
+  return `client_lead:${clientId}:${leadId}`;
 }
 
 export function deliverySuccessResendIdempotencyKey(idempotencyKey: string): string {
@@ -85,73 +71,61 @@ export function deliverySuccessResendIdempotencyKey(idempotencyKey: string): str
 }
 
 /**
- * A receipt is eligible only when the cursor is armed and completion is
- * strictly after armedAt. Equal and earlier completions stay unnotified.
+ * A lead is eligible only while the client preference is on and completion is
+ * strictly after enabledAt. Equal and earlier completions, and the disabled
+ * gap before a later re-enable, stay unnotified.
  */
-export function isCanonicalReceiptEligibleForNotification(input: {
-  armedAt: Date | null;
+export function isSourceLeadEligibleForClientNotification(input: {
+  enabled: boolean;
+  enabledAt: Date | null;
   completedAt: Date;
 }): boolean {
-  if (input.armedAt == null) return false;
-  return input.completedAt.getTime() > input.armedAt.getTime();
+  if (!input.enabled || input.enabledAt == null) return false;
+  return input.completedAt.getTime() > input.enabledAt.getTime();
 }
 
 /**
- * Insert pending once. A second insert for the same key is a no-op and does
- * not change status, including a terminal sent row. This function does not send.
+ * Insert one pending row per client and source lead. A second channel fills
+ * a null evidence column on that row. It does not insert another row and it
+ * does not change status, including a terminal sent row. This function does not send.
  */
-export async function insertPendingDeliverySuccessNotification(
+export async function recordDeliverySuccessNotification(
   db: NotificationDb,
   input: {
     clientAccountId: string;
-    channel: DeliverySuccessChannel;
-    receiptId: string;
-    sourceLeadEventId?: string | null;
+    sourceLeadEventId: string;
+    sheetsJobId?: string | null;
+    ghlLiveRunId?: string | null;
+    customWebhookAttemptId?: string | null;
   }
-): Promise<InsertPendingDeliverySuccessNotificationResult> {
-  const clientAccountId = input.clientAccountId.trim();
-  if (!clientAccountId) {
-    throw new Error("Client account id is required.");
-  }
+): Promise<RecordDeliverySuccessNotificationResult> {
+  const clientAccountId = requireIdentityPart(input.clientAccountId, "Client account id");
+  const sourceLeadEventId = requireIdentityPart(input.sourceLeadEventId, "Source lead id");
   const idempotencyKey = deliverySuccessNotificationIdempotencyKey(
-    input.channel,
-    input.receiptId
+    clientAccountId,
+    sourceLeadEventId
   );
-  const sourceLeadEventId = input.sourceLeadEventId?.trim() || null;
+  const evidence = {
+    sheetsJobId: blankToNull(input.sheetsJobId),
+    ghlLiveRunId: blankToNull(input.ghlLiveRunId),
+    customWebhookAttemptId: blankToNull(input.customWebhookAttemptId),
+  };
   try {
     const created = await db.deliverySuccessNotification.create({
       data: {
         idempotencyKey,
         clientAccountId,
-        channel: input.channel,
-        receiptId: input.receiptId.trim(),
         sourceLeadEventId,
         status: DELIVERY_SUCCESS_NOTIFICATION_STATUS.pending,
         attemptCount: 0,
+        ...evidence,
       },
-      select: { id: true, status: true, idempotencyKey: true },
+      select: evidenceSelect,
     });
-    return {
-      ok: true,
-      inserted: true,
-      id: created.id,
-      idempotencyKey: created.idempotencyKey,
-      status: created.status,
-    };
+    return { ok: true, inserted: true, ...created };
   } catch (error) {
     if (!isUniqueConstraintError(error)) throw error;
-    const existing = await db.deliverySuccessNotification.findUnique({
-      where: { idempotencyKey },
-      select: { id: true, status: true, idempotencyKey: true },
-    });
-    if (!existing) throw error;
-    return {
-      ok: true,
-      inserted: false,
-      id: existing.id,
-      idempotencyKey: existing.idempotencyKey,
-      status: existing.status,
-    };
+    return fillEvidence(db, idempotencyKey, evidence);
   }
 }
 
@@ -178,7 +152,7 @@ export function deliverySuccessNotificationClaimWhere(
 
 /**
  * Conditional claim from pending or failed, or from sending older than 10 minutes,
- * to sending. Exactly one row may match the idempotency key. sent and skipped
+ * to sending. Exactly one row may match the client-lead key. sent and skipped
  * are not claimable. This function does not send email.
  */
 export async function claimDeliverySuccessNotification(
@@ -257,63 +231,60 @@ export async function claimDeliverySuccessNotification(
   };
 }
 
-/**
- * First observation that the notify flag is exact true.
- * Sets armedAt only while it is null. Never moves an existing armedAt.
- * Does not insert a notification row. Returns before a query when the flag is off.
- */
-export async function armDeliverySuccessNotificationCursor(
+const evidenceSelect = {
+  id: true,
+  idempotencyKey: true,
+  status: true,
+  sheetsJobId: true,
+  ghlLiveRunId: true,
+  customWebhookAttemptId: true,
+} as const;
+
+async function fillEvidence(
   db: NotificationDb,
-  options: { now?: Date; env?: NodeJS.ProcessEnv } = {}
-): Promise<ArmDeliverySuccessNotificationCursorResult> {
-  if (!isDeliverySuccessNotifyEnabled(options.env)) {
-    return { ok: true, armed: false, reason: "notify_disabled" };
-  }
-  const now = options.now ?? new Date();
-  const existing = await db.deliverySuccessNotificationCursor.findUnique({
-    where: { singleton: true },
-    select: { armedAt: true },
+  idempotencyKey: string,
+  evidence: DeliverySuccessEvidence
+): Promise<RecordDeliverySuccessNotificationResult> {
+  const existing = await db.deliverySuccessNotification.findUnique({
+    where: { idempotencyKey },
+    select: evidenceSelect,
   });
-  if (existing?.armedAt) {
-    return { ok: true, armed: true, armedAt: existing.armedAt, newlyArmed: false };
-  }
   if (!existing) {
-    try {
-      const created = await db.deliverySuccessNotificationCursor.create({
-        data: { singleton: true, armedAt: now },
-        select: { armedAt: true },
-      });
-      if (!created.armedAt) {
-        throw new Error("Delivery success notification cursor armed without a timestamp.");
-      }
-      return { ok: true, armed: true, armedAt: created.armedAt, newlyArmed: true };
-    } catch (error) {
-      if (!isUniqueConstraintError(error)) throw error;
-    }
+    throw new Error("Delivery success notification disappeared after a unique conflict.");
   }
-  const updated = await db.deliverySuccessNotificationCursor.updateMany({
-    where: { singleton: true, armedAt: null },
-    data: { armedAt: now },
-  });
-  const row = await db.deliverySuccessNotificationCursor.findUnique({
-    where: { singleton: true },
-    select: { armedAt: true },
-  });
-  if (!row?.armedAt) {
-    throw new Error("Delivery success notification cursor is missing armedAt.");
+  const data: Prisma.DeliverySuccessNotificationUpdateInput = {};
+  if (evidence.sheetsJobId && !existing.sheetsJobId) data.sheetsJobId = evidence.sheetsJobId;
+  if (evidence.ghlLiveRunId && !existing.ghlLiveRunId) data.ghlLiveRunId = evidence.ghlLiveRunId;
+  if (evidence.customWebhookAttemptId && !existing.customWebhookAttemptId) {
+    data.customWebhookAttemptId = evidence.customWebhookAttemptId;
   }
-  return {
-    ok: true,
-    armed: true,
-    armedAt: row.armedAt,
-    newlyArmed: updated.count === 1,
-  };
+  if (Object.keys(data).length > 0) {
+    await db.deliverySuccessNotification.update({
+      where: { id: existing.id },
+      data,
+    });
+  }
+  const row = await db.deliverySuccessNotification.findUniqueOrThrow({
+    where: { id: existing.id },
+    select: evidenceSelect,
+  });
+  return { ok: true, inserted: false, ...row };
 }
 
-function assertChannel(channel: string): asserts channel is DeliverySuccessChannel {
-  if (!CHANNELS.has(channel)) {
-    throw new Error("Unknown delivery success channel.");
+function requireIdentityPart(value: string, label: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new Error(`${label} is required.`);
   }
+  if (trimmed.includes(":")) {
+    throw new Error(`${label} must not contain ':'.`);
+  }
+  return trimmed;
+}
+
+function blankToNull(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
 }
 
 function isUniqueConstraintError(error: unknown): boolean {

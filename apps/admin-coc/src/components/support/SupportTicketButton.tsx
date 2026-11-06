@@ -23,14 +23,16 @@ export function SupportTicketModal({
   open,
   onOpenChange,
   contextOverride,
+  initialCategory = "GENERAL",
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   contextOverride?: SupportTicketContextOverride;
+  initialCategory?: (typeof SUPPORT_TICKET_CATEGORIES)[number];
 }) {
   const [description, setDescription] = useState("");
   const [subject, setSubject] = useState("");
-  const [category, setCategory] = useState<string>("GENERAL");
+  const [category, setCategory] = useState<string>(initialCategory);
   const [priority, setPriority] = useState<string>("NORMAL");
   const [requesterName, setRequesterName] = useState("");
   const [requesterEmail, setRequesterEmail] = useState("");
@@ -42,7 +44,7 @@ export function SupportTicketModal({
   const reset = useCallback(() => {
     setDescription("");
     setSubject("");
-    setCategory("GENERAL");
+    setCategory(initialCategory);
     setPriority("NORMAL");
     setRequesterName("");
     setRequesterEmail("");
@@ -50,7 +52,7 @@ export function SupportTicketModal({
     setError(null);
     setSuccessTicketNumber(null);
     setPending(false);
-  }, []);
+  }, [initialCategory]);
 
   const handleOpenChange = useCallback(
     (next: boolean) => {
@@ -267,11 +269,13 @@ export function SupportTicketButton({
   className,
   variant = "floating",
   label = "Need help?",
+  initialCategory = "GENERAL",
 }: {
   contextOverride?: SupportTicketContextOverride;
   className?: string;
   variant?: "floating" | "inline";
   label?: string;
+  initialCategory?: (typeof SUPPORT_TICKET_CATEGORIES)[number];
 }) {
   const [open, setOpen] = useState(false);
 
@@ -291,7 +295,12 @@ export function SupportTicketButton({
         <LifeBuoy className="size-4" aria-hidden />
         {label}
       </Button>
-      <SupportTicketModal open={open} onOpenChange={setOpen} contextOverride={contextOverride} />
+      <SupportTicketModal
+        open={open}
+        onOpenChange={setOpen}
+        contextOverride={contextOverride}
+        initialCategory={initialCategory}
+      />
     </>
   );
 }

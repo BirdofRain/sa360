@@ -23,6 +23,7 @@ import {
   ShieldCheck,
   ShoppingCart,
   Upload,
+  Users,
   Webhook,
   Workflow,
   LifeBuoy,
@@ -53,7 +54,8 @@ export const COC_ORDERS_HREF = "/orders";
  * `/agent-workspace` stay. The unwired `/review` sidebar entry stays off;
  * the route itself is unchanged. Bulk Imports and Support Tickets are not
  * listed here — `visibleAdminNavItems` and `adminToolsSectionItems` append
- * them only when their flags are on.
+ * them only when their flags are on. Team Workspace is appended to this
+ * group the same way when its flag is the exact string true.
  */
 export const teamNav: NavItem[] = [
   { href: "/", label: "Command Center", icon: GaugeCircle },
@@ -114,6 +116,13 @@ export const supportTicketsNavItem: NavItem = {
   icon: LifeBuoy,
 };
 
+/** Shown when NEXT_PUBLIC_SA360_TEAM_WORKSPACE_ENABLED is exact true. */
+export const teamWorkspaceNavItem: NavItem = {
+  href: "/team-workspace",
+  label: "Team Workspace",
+  icon: Users,
+};
+
 /** Planning routes rendered inside Admin Tools. */
 export const planningNav: NavItem[] = adminToolsNav.filter((item) =>
   ["/launch-kanban", "/workflow", "/architecture", "/planning/pivot-archive"].includes(
@@ -121,14 +130,20 @@ export const planningNav: NavItem[] = adminToolsNav.filter((item) =>
   )
 );
 
+export function teamSectionItems(options: { teamWorkspace: boolean }): NavItem[] {
+  return options.teamWorkspace ? [...teamNav, teamWorkspaceNavItem] : [...teamNav];
+}
+
 export function visibleAdminNavItems(options: {
   bulkImports: boolean;
   supportTickets: boolean;
+  teamWorkspace?: boolean;
 }): NavItem[] {
+  const team = teamSectionItems({ teamWorkspace: options.teamWorkspace === true });
   const adminTools = [...adminToolsNav];
   if (options.bulkImports) adminTools.push(bulkImportsNavItem);
   if (options.supportTickets) adminTools.push(supportTicketsNavItem);
-  return [...teamNav, ...adminTools];
+  return [...team, ...adminTools];
 }
 
 export function adminToolsSectionItems(options: {

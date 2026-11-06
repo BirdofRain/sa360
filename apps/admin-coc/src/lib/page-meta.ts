@@ -117,6 +117,13 @@ const routes: { prefix: string; meta: PageMeta }[] = [
     },
   },
   {
+    prefix: "/team-workspace",
+    meta: {
+      title: "Team Workspace",
+      description: "Read-only client setup, delivery choices, and support context.",
+    },
+  },
+  {
     prefix: "/clients/",
     meta: {
       title: "Client Detail",

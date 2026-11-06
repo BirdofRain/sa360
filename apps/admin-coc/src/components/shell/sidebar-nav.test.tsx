@@ -30,6 +30,7 @@ let SidebarNav: typeof import("./sidebar-nav.tsx").SidebarNav;
 test.before(async () => {
   process.env.NEXT_PUBLIC_SA360_SUPPORT_TICKETS_ENABLED = "false";
   process.env.NEXT_PUBLIC_SA360_BULK_SOURCE_IMPORTS_ENABLED = "false";
+  delete process.env.NEXT_PUBLIC_SA360_TEAM_WORKSPACE_ENABLED;
   ({ SidebarNav } = await import("./sidebar-nav.tsx"));
 });
 
@@ -106,4 +107,17 @@ test("observer sidebar is the existing allowlist and has no admin groups", () =>
   assert.equal(links.length, OBSERVER_DOCUMENT_PATHS.length);
   assert.deepEqual([...links].sort(), [...OBSERVER_DOCUMENT_PATHS].sort());
   assert.equal(screen.getByRole("link", { name: "Webhook Monitor" }).getAttribute("aria-current"), "page");
+  assert.equal(screen.queryByRole("link", { name: "Team Workspace" }), null);
+});
+
+test("team workspace appears in the team group only when its flag is exact true", () => {
+  process.env.NEXT_PUBLIC_SA360_TEAM_WORKSPACE_ENABLED = "true";
+  const shown = render(<SidebarNav />);
+  assert.equal(screen.getByRole("link", { name: "Team Workspace" }).getAttribute("href"), "/team-workspace");
+  shown.unmount();
+
+  process.env.NEXT_PUBLIC_SA360_TEAM_WORKSPACE_ENABLED = "yes";
+  render(<SidebarNav />);
+  assert.equal(screen.queryByRole("link", { name: "Team Workspace" }), null);
+  delete process.env.NEXT_PUBLIC_SA360_TEAM_WORKSPACE_ENABLED;
 });

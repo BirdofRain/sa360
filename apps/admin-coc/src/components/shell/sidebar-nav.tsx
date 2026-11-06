@@ -10,12 +10,13 @@ import { isBulkSourceImportsEnabled } from "@/lib/bulk-imports/config";
 import { isNavItemActive, resolveActiveNavHref } from "@/lib/bulk-imports/nav-active";
 import {
   adminToolsSectionItems,
-  teamNav,
+  teamSectionItems,
   visibleAdminNavItems,
   type NavItem,
 } from "@/lib/nav";
 import { deriveObserverNavigation } from "@/lib/nav-visibility";
 import { isSupportTicketsEnabled } from "@/lib/support-tickets/config";
+import { isTeamWorkspaceEnabled } from "@/lib/team-workspace/config";
 import { cn } from "@/lib/utils";
 
 /** Heavy ops pages that execute expensive Admin API work in RSC — do not prefetch. */
@@ -99,7 +100,13 @@ export function SidebarNav() {
   const canMutate = useAdminCocCanMutate();
   const showSupport = canMutate && isSupportTicketsEnabled();
   const showBulkImports = canMutate && isBulkSourceImportsEnabled();
-  const sectionOptions = { bulkImports: showBulkImports, supportTickets: showSupport };
+  const showTeamWorkspace = canMutate && isTeamWorkspaceEnabled();
+  const sectionOptions = {
+    bulkImports: showBulkImports,
+    supportTickets: showSupport,
+    teamWorkspace: showTeamWorkspace,
+  };
+  const teamItems = teamSectionItems({ teamWorkspace: showTeamWorkspace });
   const adminItems = visibleAdminNavItems(sectionOptions);
   const adminSection = adminToolsSectionItems(sectionOptions);
   const observerItems = deriveObserverNavigation(adminItems);
@@ -121,7 +128,7 @@ export function SidebarNav() {
           <div className="px-2 pb-1 pt-2 text-[10px] uppercase tracking-wider text-slate-400">
             Team
           </div>
-          <NavRows items={teamNav} pathname={pathname} activeItems={activeItems} />
+          <NavRows items={teamItems} pathname={pathname} activeItems={activeItems} />
           <button
             type="button"
             className="mt-3 flex w-full items-center gap-1 rounded-md px-2 py-1.5 text-left text-[10px] uppercase tracking-wider text-slate-400 hover:bg-slate-100 hover:text-slate-600"

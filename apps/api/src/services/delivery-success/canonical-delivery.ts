@@ -27,8 +27,10 @@ const SHEETS_TEST_KINDS = new Set(["canary", "campaign_test", "onboarding_captur
 const SHEETS_OPEN_STATUSES = new Set(["queued", "running", "retryable", "uncertain"]);
 const GHL_PRODUCTION_MODE = "ongoing_association";
 const GHL_REJECTED_MODES = new Set(["location_api", "live_canary", "paused_location_test"]);
-const GHL_OPEN_STATUSES = new Set(["partial_success", "executing", "failed", "skipped_duplicate"]);
+const GHL_QUALIFYING_STATUSES = new Set(["succeeded", "partial_success"]);
+const GHL_OPEN_STATUSES = new Set(["executing", "failed", "skipped_duplicate"]);
 const GHL_OPEN_OUTBOX = new Set(["uncertain", "executing"]);
+const BAD_OPERATION_OUTCOMES = new Set(["ambiguous", "rejected", "failed_before_send"]);
 
 export type CanonicalDeliveryVerdict = {
   channel: typeof COMPANY_SHEETS_CANONICAL_CHANNEL | typeof GHL_CANONICAL_CHANNEL;
@@ -46,7 +48,12 @@ export type CompanySheetsJobSnapshot = {
   status: string;
   clientAccountId: string;
   sourceLeadEventId: string | null;
+  idempotencyKey: string;
   rowsWritten: number;
+  /**
+   * The writer clears this when a job leaves `uncertain`. A succeeded receipt
+   * often has it null. It is not a success signal.
+   */
   appendStartedAt: Date | null;
   finishedAt: Date | null;
 };
@@ -65,6 +72,8 @@ export type CompanySheetsIntentSnapshot = {
   kind: string;
   clientAccountId: string;
   sourceLeadEventId: string | null;
+  /** When set, it must be this job. A null job id does not disqualify the intent. */
+  jobId?: string | null;
   createdAt: Date;
 };
 
@@ -80,6 +89,11 @@ export type CompanySheetsCanonicalInput =
       destination: CompanySheetsDestinationSnapshot | null;
       intent: CompanySheetsIntentSnapshot | null;
       spreadsheetDeliveredAt?: Date | null;
+      /**
+       * `ClientOnboardingTestAttemptKey` values loaded by the scanner.
+       * Null means they were not loaded, which is not a pass.
+       */
+      onboardingTestAttemptKeys: string[] | null;
     }
   | { evidence: "permission_probe"; at?: Date | null }
   | { evidence: "header_write"; at?: Date | null }
@@ -107,8 +121,18 @@ export type GhlCanonicalInput = {
     clientAccountId: string;
     workflowStartRequired: boolean;
   } | null;
-  /** Missing profile means notes are off. A mismatched client is not canonical. */
-  profile: {
+  /** True when this delivery plan configured an opportunity write. */
+  opportunityConfigured: boolean;
+  /**
+   * Writer setting from the destination field map or source-enrichment policy.
+   * A note is never a hard failure. `ClientOnboardingDestinationProfile.notesEnabled`
+   * is not read.
+   */
+  intakeSummaryNotesEnabled: boolean;
+  /** Onboarding profile flag. Present so callers can see it is not the note requirement. */
+  onboardingProfileNotesEnabled?: boolean;
+  /** Missing profile is ignored. `notesEnabled` on this object is not a requirement. */
+  profile?: {
     clientAccountId: string;
     notesEnabled: boolean;
   } | null;
@@ -122,6 +146,11 @@ export type GhlCanonicalInput = {
   } | null;
   /** Set when a `ClientOnboardingTestAttempt` belongs to this run. */
   onboardingTestAttemptId?: string | null;
+  /**
+   * `ClientOnboardingTestAttemptKey` values loaded by the scanner.
+   * Null means they were not loaded, which is not a pass.
+   */
+  onboardingTestAttemptKeys: string[] | null;
 };
 
 type StoredReceipt = {
@@ -165,8 +194,9 @@ export function canonicalCompanySheetsDelivery(input: CompanySheetsCanonicalInpu
   const sourceLeadEventId = text(job.sourceLeadEventId);
   if (!sourceLeadEventId) add(reasons, "source_lead_event_missing");
   else if (sourceLeadEventId === SYNTHETIC_CAMPAIGN_TEST_EVENT) add(reasons, "synthetic_campaign_test");
+  if (isOnboardingTestKey(job.idempotencyKey)) add(reasons, "onboarding_test_key");
+  assessOnboardingKeys(input.onboardingTestAttemptKeys, [job.idempotencyKey], reasons);
 
-  if (!present(job.appendStartedAt)) add(reasons, "append_started_at_missing");
   if (!present(job.finishedAt)) add(reasons, "finished_at_missing");
 
   const rows = input.rows.filter((row) => row.jobId == null || row.jobId === job.id);
@@ -183,6 +213,9 @@ export function canonicalCompanySheetsDelivery(input: CompanySheetsCanonicalInpu
   } else {
     if (intent.kind !== "campaign_lead") add(reasons, "dispatch_intent_kind");
     if (intent.clientAccountId !== job.clientAccountId) add(reasons, "dispatch_intent_client_mismatch");
+    if (intent.jobId != null && intent.jobId !== "" && intent.jobId !== job.id) {
+      add(reasons, "dispatch_intent_job_mismatch");
+    }
     if (sourceLeadEventId && intent.sourceLeadEventId !== sourceLeadEventId) {
       add(reasons, "dispatch_intent_event_mismatch");
     }
@@ -203,20 +236,23 @@ export function canonicalCompanySheetsDelivery(input: CompanySheetsCanonicalInpu
 }
 
 export function canonicalGhlDelivery(input: GhlCanonicalInput): CanonicalDeliveryVerdict {
-  const { run, destination, profile, outbox } = input;
+  const { run, destination, outbox } = input;
   const reasons: string[] = [];
   const results = separateDeliveryResults(input.steps);
   const contactStep = stepOf(input.steps, "create_or_update_contact");
-  const noteStep = stepOf(input.steps, "write_intake_summary_note");
   const workflowStep = stepOf(input.steps, "start_workflow");
   const contactReceipt = storedReceipt(contactStep);
-  const noteReceipt = storedReceipt(noteStep);
   const workflowReceipt = storedReceipt(workflowStep);
+  const workflowRequired = destination?.workflowStartRequired === true;
+  // The onboarding profile flag and the writer note switch are not success gates.
+  void input.onboardingProfileNotesEnabled;
+  void input.intakeSummaryNotesEnabled;
+  void input.profile?.notesEnabled;
 
   if (run.mode !== GHL_PRODUCTION_MODE) {
     add(reasons, GHL_REJECTED_MODES.has(run.mode) ? `mode_${run.mode}` : "mode_not_ongoing_association");
   }
-  if (run.status !== "succeeded") {
+  if (!GHL_QUALIFYING_STATUSES.has(run.status)) {
     add(reasons, GHL_OPEN_STATUSES.has(run.status) ? `status_${run.status}` : "status_not_succeeded");
   }
   if (!present(run.completedAt)) add(reasons, "completed_at_missing");
@@ -224,27 +260,24 @@ export function canonicalGhlDelivery(input: GhlCanonicalInput): CanonicalDeliver
   if (text(input.onboardingTestAttemptId) || isOnboardingTestKey(run.idempotencyKey)) {
     add(reasons, "onboarding_test_attempt");
   }
+  const receiptKeys: string[] = [];
   for (const step of input.steps) {
     const receipt = storedReceipt(step);
-    if (receipt && isOnboardingTestKey(receipt.idempotencyKey)) add(reasons, "onboarding_test_attempt");
+    if (!receipt) continue;
+    receiptKeys.push(receipt.idempotencyKey);
+    if (isOnboardingTestKey(receipt.idempotencyKey)) add(reasons, "onboarding_test_attempt");
   }
+  assessOnboardingKeys(input.onboardingTestAttemptKeys, [run.idempotencyKey, ...receiptKeys], reasons);
 
   if (!destination) add(reasons, "destination_missing");
   else if (destination.clientAccountId !== run.destinationClientAccountId) add(reasons, "client_mismatch");
-  if (profile && profile.clientAccountId !== run.destinationClientAccountId) {
-    add(reasons, "notes_profile_client_mismatch");
-  }
 
   assessContact(results, contactStep, contactReceipt, reasons);
-  for (const step of input.steps) {
-    const derived = receiptFromPersistedStep(step);
-    if (!derived) continue;
-    if (derived.outcome === "ambiguous" || derived.outcome === "rejected" || derived.outcome === "failed_before_send") {
-      add(reasons, `operation_outcome_${derived.outcome}`);
-    }
-  }
-  assessWorkflow(results, workflowStep, workflowReceipt, destination?.workflowStartRequired === true, reasons);
-  assessNote(results, noteReceipt, profile?.notesEnabled === true, reasons);
+  flagBadOutcome(contactStep, reasons);
+  assessTags(input.steps, reasons);
+  assessOpportunity(input.steps, input.opportunityConfigured, reasons);
+  assessWorkflow(results, workflowReceipt, workflowRequired, reasons);
+  if (workflowRequired) flagBadOutcome(workflowStep, reasons);
   assessOutbox(outbox, run, reasons);
 
   return {
@@ -273,33 +306,60 @@ function assessContact(
   if (!externalId) add(reasons, "contact_external_id_missing");
 }
 
+function assessTags(steps: GhlCanonicalStep[], reasons: string[]) {
+  const step = stepOf(steps, "add_tags");
+  if (!step || step.status !== "succeeded") add(reasons, "tags_not_written");
+  flagBadOutcome(step, reasons);
+}
+
+function assessOpportunity(steps: GhlCanonicalStep[], configured: boolean, reasons: string[]) {
+  if (!configured) return;
+  const step = stepOf(steps, "create_or_update_opportunity");
+  if (!step || step.status !== "succeeded") add(reasons, "opportunity_not_written");
+  flagBadOutcome(step, reasons);
+}
+
 function assessWorkflow(
   results: VetDeliveryResults,
-  step: GhlCanonicalStep | undefined,
   receipt: StoredReceipt | null,
   required: boolean,
   reasons: string[]
 ) {
+  if (!required) return;
   const proven = receipt?.operation === "workflow" && receipt.outcome === "completed";
   const enrolled = results.workflow === "enrolled" || results.workflow === "replayed";
-  if (enrolled) {
-    // A note receipt, a contact upsert, or an HTTP status cannot prove enrollment.
-    if (!proven) add(reasons, "workflow_not_proven");
-    return;
-  }
-  if (!required && results.workflow === "skipped") return;
-  if (!required && results.workflow === "not_enrolled" && !step) return;
-  add(reasons, "workflow_not_enrolled");
+  if (enrolled && proven) return;
+  // A note receipt, a contact upsert, or an HTTP status cannot prove enrollment.
+  add(reasons, enrolled ? "workflow_not_proven" : "workflow_not_enrolled");
 }
 
-function assessNote(results: VetDeliveryResults, receipt: StoredReceipt | null, notesEnabled: boolean, reasons: string[]) {
-  const proven = receipt?.operation === "note" && receipt.outcome === "completed";
-  if (results.note === "persisted") {
-    if (!proven) add(reasons, "note_not_proven");
+function flagBadOutcome(step: GhlCanonicalStep | undefined, reasons: string[]) {
+  const outcome = operationOutcome(step);
+  if (outcome && BAD_OPERATION_OUTCOMES.has(outcome)) add(reasons, `operation_outcome_${outcome}`);
+}
+
+function operationOutcome(step: GhlCanonicalStep | undefined): string | null {
+  if (!step) return null;
+  return storedReceipt(step)?.outcome ?? receiptFromPersistedStep(step)?.outcome ?? null;
+}
+
+function assessOnboardingKeys(
+  keys: string[] | null | undefined,
+  candidates: Array<string | null | undefined>,
+  reasons: string[]
+) {
+  if (keys == null) {
+    add(reasons, "onboarding_test_keys_not_supplied");
     return;
   }
-  if (!notesEnabled && results.note === "disabled") return;
-  add(reasons, "note_not_satisfied");
+  const loaded = new Set(keys.map((key) => key.trim()).filter((key) => key.length > 0));
+  for (const candidate of candidates) {
+    const value = text(candidate);
+    if (value && loaded.has(value)) {
+      add(reasons, "onboarding_test_attempt");
+      return;
+    }
+  }
 }
 
 function assessOutbox(

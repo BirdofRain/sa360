@@ -25,8 +25,9 @@ function campaignJob(): Extract<CompanySheetsCanonicalInput, { evidence: "campai
       status: "succeeded",
       clientAccountId: CLIENT,
       sourceLeadEventId: EVENT,
+      idempotencyKey: `lead:${CLIENT}:${EVENT}`,
       rowsWritten: 1,
-      appendStartedAt: APPENDED,
+      appendStartedAt: null,
       finishedAt: FINISHED,
     },
     rows: [{ jobId: "job_1", status: "written" }],
@@ -35,9 +36,11 @@ function campaignJob(): Extract<CompanySheetsCanonicalInput, { evidence: "campai
       kind: "campaign_lead",
       clientAccountId: CLIENT,
       sourceLeadEventId: EVENT,
+      jobId: "job_1",
       createdAt: CUTOFF,
     },
     spreadsheetDeliveredAt: null,
+    onboardingTestAttemptKeys: [],
   };
 }
 
@@ -63,7 +66,13 @@ function step(
   return { stepType, status, externalId, responseRedactedJson };
 }
 
-function qualifyingSteps(options?: { notes?: boolean; workflow?: "enrolled" | "replayed" | "skipped" | "absent"; contact?: "upserted" | "replayed" }): GhlCanonicalStep[] {
+function replaceStep(input: GhlCanonicalInput, stepType: string, next: GhlCanonicalStep) {
+  const index = input.steps.findIndex((item) => item.stepType === stepType);
+  if (index >= 0) input.steps[index] = next;
+  else input.steps.push(next);
+}
+
+function qualifyingSteps(options?: { notes?: boolean; workflow?: "enrolled" | "replayed" | "skipped" | "absent"; contact?: "upserted" | "replayed"; ownerSkipped?: boolean }): GhlCanonicalStep[] {
   const notes = options?.notes ?? true;
   const workflow = options?.workflow ?? "enrolled";
   const contact = options?.contact ?? "upserted";
@@ -76,7 +85,16 @@ function qualifyingSteps(options?: { notes?: boolean; workflow?: "enrolled" | "r
         ? { replayedFromReceipt: true, ...receipt("contact", "completed", "contact_1") }
         : receipt("contact", "completed", "contact_1")
     ),
+    step("add_tags", "succeeded", null, receipt("tags", "completed", null, "ghl-association:evt_campaign_1:tags")),
   ];
+  if (options?.ownerSkipped) {
+    steps.push(
+      step("assign_owner", "skipped", "contact_1", {
+        externalCallExecuted: false,
+        assignedTo: "user_existing",
+      })
+    );
+  }
   if (notes) {
     steps.push(step("write_intake_summary_note", "succeeded", "note_1", receipt("note", "completed", "note_1")));
   }
@@ -111,19 +129,26 @@ function ghlRun(options?: {
   workflowRequired?: boolean;
   workflow?: "enrolled" | "replayed" | "skipped" | "absent";
   contact?: "upserted" | "replayed";
+  ownerSkipped?: boolean;
+  status?: string;
+  intakeSummaryNotesEnabled?: boolean;
+  onboardingProfileNotesEnabled?: boolean;
 }): GhlCanonicalInput {
   const notes = options?.notes ?? true;
   return {
     run: {
       id: "run_1",
       mode: "ongoing_association",
-      status: "succeeded",
+      status: options?.status ?? "succeeded",
       completedAt: COMPLETING,
       destinationClientAccountId: CLIENT,
       idempotencyKey: "ghl-association:evt_campaign_1",
     },
-    steps: qualifyingSteps({ notes, workflow: options?.workflow, contact: options?.contact }),
+    steps: qualifyingSteps({ notes, workflow: options?.workflow, contact: options?.contact, ownerSkipped: options?.ownerSkipped }),
     destination: { clientAccountId: CLIENT, workflowStartRequired: options?.workflowRequired ?? true },
+    opportunityConfigured: false,
+    intakeSummaryNotesEnabled: options?.intakeSummaryNotesEnabled ?? false,
+    onboardingProfileNotesEnabled: options?.onboardingProfileNotesEnabled ?? false,
     profile: { clientAccountId: CLIENT, notesEnabled: notes },
     outbox: {
       status: "settled",
@@ -134,10 +159,14 @@ function ghlRun(options?: {
       liveRunId: "run_1",
     },
     onboardingTestAttemptId: null,
+    onboardingTestAttemptKeys: [],
   };
 }
 
-test("a completed company Sheets campaign delivery is canonical", () => {
+test("a succeeded Sheets campaign job with appendStartedAt null is canonical", () => {
+  const input = campaignJob();
+  assert.equal(input.job.appendStartedAt, null);
+  assert.equal(input.job.idempotencyKey, `lead:${CLIENT}:${EVENT}`);
   const verdict = canonicalCompanySheetsDelivery({
     ...campaignJob(),
     spreadsheetDeliveredAt: new Date("2026-10-05T12:00:00.000Z"),
@@ -180,6 +209,11 @@ test("Sheets test, probe, incomplete, and aged-release evidence is not canonical
     { name: "running", input: jobWith({ status: "running" }), reason: "status_running" },
     { name: "retryable", input: jobWith({ status: "retryable" }), reason: "status_retryable" },
     { name: "uncertain", input: jobWith({ status: "uncertain", appendStartedAt: null }), reason: "status_uncertain" },
+    {
+      name: "onboarding test key",
+      input: jobWith({ idempotencyKey: "onboarding-test:run_1:sheets" }),
+      reason: "onboarding_test_key",
+    },
     { name: "no rows written", input: jobWith({ rowsWritten: 0 }, { rows: [] }), reason: "rows_written_missing" },
     { name: "pending row", input: jobWith({}, { rows: [{ status: "pending" }] }), reason: "row_not_written" },
     {
@@ -187,7 +221,6 @@ test("Sheets test, probe, incomplete, and aged-release evidence is not canonical
       input: jobWith({ rowsWritten: 2 }, { rows: [{ status: "written" }] }),
       reason: "rows_not_confirmed",
     },
-    { name: "missing append", input: jobWith({ appendStartedAt: null }), reason: "append_started_at_missing" },
     { name: "missing finish", input: jobWith({ finishedAt: null }), reason: "finished_at_missing" },
     {
       name: "client mismatch",
@@ -210,6 +243,23 @@ test("Sheets test, probe, incomplete, and aged-release evidence is not canonical
     },
     { name: "missing intent", input: jobWith({}, { intent: null }), reason: "dispatch_intent_missing" },
     { name: "missing cutoff", input: jobWith({}, { destination: { clientAccountId: CLIENT, campaignDispatchNotBefore: null } }), reason: "cutoff_missing" },
+    {
+      name: "other job",
+      input: jobWith({}, {
+        intent: { kind: "campaign_lead", clientAccountId: CLIENT, sourceLeadEventId: EVENT, jobId: "job_other", createdAt: CUTOFF },
+      }),
+      reason: "dispatch_intent_job_mismatch",
+    },
+    {
+      name: "test keys not loaded",
+      input: jobWith({}, { onboardingTestAttemptKeys: null }),
+      reason: "onboarding_test_keys_not_supplied",
+    },
+    {
+      name: "linked sheets test key",
+      input: jobWith({}, { onboardingTestAttemptKeys: [`lead:${CLIENT}:${EVENT}`] }),
+      reason: "onboarding_test_attempt",
+    },
     {
       name: "other event",
       input: jobWith({}, {
@@ -243,7 +293,7 @@ test("Sheets test, probe, incomplete, and aged-release evidence is not canonical
 });
 
 test("a Sheets job that became uncertain after the append started is not canonical", () => {
-  const verdict = canonicalCompanySheetsDelivery(jobWith({ status: "uncertain" }));
+  const verdict = canonicalCompanySheetsDelivery(jobWith({ status: "uncertain", appendStartedAt: APPENDED }));
   assert.equal(verdict.canonical, false);
   assert.deepEqual(verdict.reasons, ["status_uncertain", "uncertain_after_append"]);
 });
@@ -272,7 +322,7 @@ test("replayed contact and workflow are canonical, and a skipped workflow is can
   assert.equal(absent.canonical, true);
 });
 
-test("GHL location_api, partial success, and test runs are not canonical", () => {
+test("GHL location_api, open runs, and test runs are not canonical", () => {
   const cases: Array<{ name: string; mutate: (input: GhlCanonicalInput) => void; reason: string }> = [
     { name: "location api", mutate: (input) => { input.run.mode = "location_api"; }, reason: "mode_location_api" },
     { name: "live canary", mutate: (input) => { input.run.mode = "live_canary"; }, reason: "mode_live_canary" },
@@ -280,11 +330,6 @@ test("GHL location_api, partial success, and test runs are not canonical", () =>
       name: "paused test",
       mutate: (input) => { input.run.mode = "paused_location_test"; },
       reason: "mode_paused_location_test",
-    },
-    {
-      name: "partial success",
-      mutate: (input) => { input.run.status = "partial_success"; },
-      reason: "status_partial_success",
     },
     { name: "executing", mutate: (input) => { input.run.status = "executing"; }, reason: "status_executing" },
     { name: "failed", mutate: (input) => { input.run.status = "failed"; }, reason: "status_failed" },
@@ -318,7 +363,7 @@ test("GHL location_api, partial success, and test runs are not canonical", () =>
     {
       name: "required workflow skipped",
       mutate: (input) => {
-        input.steps[2] = step("start_workflow", "skipped", null, {
+        replaceStep(input, "start_workflow", step("start_workflow", "skipped", null, {
           externalCallExecuted: false,
           vetOperationReceipt: {
             operation: "workflow",
@@ -327,16 +372,19 @@ test("GHL location_api, partial success, and test runs are not canonical", () =>
             httpStatus: null,
             idempotencyKey: "assoc:workflow",
           },
-        });
+        }));
       },
       reason: "workflow_not_enrolled",
     },
     {
-      name: "required note absent",
-      mutate: (input) => {
-        input.steps = input.steps.filter((item) => item.stepType !== "write_intake_summary_note");
-      },
-      reason: "note_not_satisfied",
+      name: "test keys not loaded",
+      mutate: (input) => { input.onboardingTestAttemptKeys = null; },
+      reason: "onboarding_test_keys_not_supplied",
+    },
+    {
+      name: "linked attempt key",
+      mutate: (input) => { input.onboardingTestAttemptKeys = ["assoc:contact"]; },
+      reason: "onboarding_test_attempt",
     },
   ];
   for (const entry of cases) {
@@ -378,10 +426,10 @@ test("HTTP 2xx without a contact receipt or contact id is not canonical", () => 
 
 test("a note id or a contact upsert does not prove workflow enrollment", () => {
   const noteAsWorkflow = ghlRun();
-  noteAsWorkflow.steps[2] = step("start_workflow", "succeeded", "note_1", {
+  replaceStep(noteAsWorkflow, "start_workflow", step("start_workflow", "succeeded", "note_1", {
     httpStatus: 200,
     ...receipt("note", "completed", "note_1"),
-  });
+  }));
   const noteProof = canonicalGhlDelivery(noteAsWorkflow);
   assert.equal(noteProof.canonical, false);
   assert.deepEqual(noteProof.reasons, ["workflow_not_proven"]);
@@ -393,36 +441,96 @@ test("a note id or a contact upsert does not prove workflow enrollment", () => {
   assert.deepEqual(inferred.reasons, ["workflow_not_enrolled"]);
 });
 
-test("GHL ambiguous, rejected, failed, and incomplete operations are not canonical", () => {
-  const ambiguous = ghlRun();
-  ambiguous.steps.push(
+test("optional GHL failures do not disqualify a proven required path", () => {
+  const ambiguousFields = ghlRun();
+  ambiguousFields.steps.push(
     step("stamp_custom_fields", "optional_failed", null, receipt("custom_fields", "ambiguous", null))
   );
-  assert.ok(canonicalGhlDelivery(ambiguous).reasons.includes("operation_outcome_ambiguous"));
+  assert.equal(canonicalGhlDelivery(ambiguousFields).canonical, true);
 
-  const rejected = ghlRun();
-  rejected.steps.push(step("add_tags", "failed", null, receipt("tags", "rejected", null)));
-  assert.ok(canonicalGhlDelivery(rejected).reasons.includes("operation_outcome_rejected"));
+  const failedNote = ghlRun({ intakeSummaryNotesEnabled: true });
+  replaceStep(failedNote, "write_intake_summary_note", step("write_intake_summary_note", "failed", null, receipt("note", "failed_before_send", null)));
+  assert.equal(canonicalGhlDelivery(failedNote).canonical, true);
 
-  const failed = ghlRun();
-  failed.steps[1] = step("write_intake_summary_note", "failed", null, receipt("note", "failed_before_send", null));
-  const failedVerdict = canonicalGhlDelivery(failed);
-  assert.equal(failedVerdict.canonical, false);
-  assert.ok(failedVerdict.reasons.includes("operation_outcome_failed_before_send"));
-  assert.ok(failedVerdict.reasons.includes("note_not_satisfied"));
+  const skippedNote = ghlRun({ notes: false, workflowRequired: false, workflow: "skipped", intakeSummaryNotesEnabled: true });
+  skippedNote.steps.push(step("write_intake_summary_note", "skipped", null, receipt("note", "skipped", null)));
+  assert.equal(canonicalGhlDelivery(skippedNote).canonical, true);
 
-  const notesOffButSkipped = ghlRun({ notes: false, workflowRequired: false, workflow: "skipped" });
-  notesOffButSkipped.steps.push(step("write_intake_summary_note", "skipped", null, receipt("note", "skipped", null)));
-  assert.ok(canonicalGhlDelivery(notesOffButSkipped).reasons.includes("note_not_satisfied"));
-
-  const workflowOptionalButBlocked = ghlRun({ workflowRequired: false });
-  workflowOptionalButBlocked.steps[2] = step("start_workflow", "skipped", null, {
+  const optionalWorkflow = ghlRun({ workflowRequired: false });
+  replaceStep(optionalWorkflow, "start_workflow", step("start_workflow", "skipped", null, {
     workflowBlocked: true,
     ...receipt("workflow", "failed_before_send", null),
+  }));
+  assert.equal(canonicalGhlDelivery(optionalWorkflow).canonical, true);
+});
+
+test("a required GHL tag or opportunity failure is not canonical", () => {
+  const rejectedTags = ghlRun();
+  replaceStep(rejectedTags, "add_tags", step("add_tags", "failed", null, receipt("tags", "rejected", null)));
+  const tags = canonicalGhlDelivery(rejectedTags);
+  assert.equal(tags.canonical, false);
+  assert.ok(tags.reasons.includes("operation_outcome_rejected"));
+  assert.ok(tags.reasons.includes("tags_not_written"));
+
+  const missingOpportunity = ghlRun();
+  missingOpportunity.opportunityConfigured = true;
+  assert.ok(canonicalGhlDelivery(missingOpportunity).reasons.includes("opportunity_not_written"));
+});
+
+test("partial_success qualifies when the only miss is a skipped existing owner", () => {
+  const keptOwner = ghlRun({
+    status: "partial_success",
+    ownerSkipped: true,
+    notes: false,
+    intakeSummaryNotesEnabled: false,
+    onboardingProfileNotesEnabled: true,
   });
-  const blocked = canonicalGhlDelivery(workflowOptionalButBlocked);
-  assert.equal(blocked.canonical, false);
-  assert.ok(blocked.reasons.includes("workflow_not_enrolled"));
+  keptOwner.profile = { clientAccountId: CLIENT, notesEnabled: true };
+  const verdict = canonicalGhlDelivery(keptOwner);
+  assert.equal(keptOwner.steps.some((item) => item.stepType === "assign_owner" && item.status === "skipped"), true);
+  assert.deepEqual(verdict.reasons, []);
+  assert.equal(verdict.canonical, true);
+  assert.equal(verdict.channel, "ghl_location_api");
+});
+
+test("partial_success does not qualify when the required workflow failed", () => {
+  const missedWorkflow = ghlRun({ status: "partial_success", ownerSkipped: true });
+  replaceStep(missedWorkflow, "start_workflow", step("start_workflow", "optional_failed", "contact_1", {
+    httpStatus: 500,
+    ...receipt("workflow", "ambiguous", "contact_1"),
+  }));
+  const verdict = canonicalGhlDelivery(missedWorkflow);
+  assert.equal(verdict.canonical, false);
+  assert.ok(verdict.reasons.includes("workflow_not_enrolled"));
+  assert.ok(verdict.reasons.includes("operation_outcome_ambiguous"));
+});
+
+test("partial_success without a contact receipt or external id is not canonical", () => {
+  const missingReceipt = ghlRun({ status: "partial_success", ownerSkipped: true, notes: false });
+  replaceStep(missingReceipt, "create_or_update_contact", step("create_or_update_contact", "succeeded", "contact_1", {
+    externalCallExecuted: true,
+    httpStatus: 200,
+  }));
+  assert.deepEqual(canonicalGhlDelivery(missingReceipt).reasons, ["contact_not_proven"]);
+
+  const missingId = ghlRun({ status: "partial_success", ownerSkipped: true, notes: false });
+  replaceStep(missingId, "create_or_update_contact", step("create_or_update_contact", "succeeded", null, receipt("contact", "completed", null)));
+  assert.ok(canonicalGhlDelivery(missingId).reasons.includes("contact_external_id_missing"));
+});
+
+test("the onboarding profile note flag is not the GHL note requirement", () => {
+  const wrongSource = ghlRun({
+    notes: false,
+    intakeSummaryNotesEnabled: false,
+    onboardingProfileNotesEnabled: true,
+  });
+  wrongSource.profile = { clientAccountId: CLIENT, notesEnabled: true };
+  const verdict = canonicalGhlDelivery(wrongSource);
+  assert.equal(verdict.canonical, true);
+  assert.equal(verdict.reasons.includes("note_not_satisfied"), false);
+
+  const writerNotesOn = ghlRun({ notes: false, intakeSummaryNotesEnabled: true, onboardingProfileNotesEnabled: false });
+  assert.equal(canonicalGhlDelivery(writerNotesOn).canonical, true);
 });
 
 test("an unsettled GHL association outbox is not canonical", () => {

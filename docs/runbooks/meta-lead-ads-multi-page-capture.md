@@ -75,6 +75,15 @@ Additive migration `20261104230000_meta_multi_page_capture_foundation`:
 
 No existing column changes. No backfill.
 
+`20261106010000_meta_capture_sa360_app_grants` grants `sa360_app` `SELECT`,
+`INSERT`, `UPDATE`, and `DELETE` on those three tables. PostgreSQL default
+privileges do not grant new tables to `sa360_app`. The migration does not set
+`ALTER DEFAULT PRIVILEGES`. Production `prisma migrate deploy` runs as
+`doadmin`, which owns the tables. The API uses `sa360_app` only where that
+login is already the runtime role. `META_TOKEN_ENCRYPTION_KEY` can stay unset
+on the first deploy: credential writes return `encryption_not_configured`, and
+the global capture flags stay false unless an operator sets them.
+
 ## Admin API
 
 All routes require `x-sa360-admin-key`. Responses omit tokens and ciphertext.

@@ -4,8 +4,8 @@
  * This module only reads. It does not update rows, replay intake, change
  * inventory, routing, allocations, receipts, or timestamps, and it does not
  * enqueue delivery. The report omits raw dates, ages, names, and contact
- * values. A later update is described by `INCOMING_DOB_LATER_UPDATE_POLICY`
- * and is not implemented here.
+ * values. A later update is described by `INCOMING_DOB_LATER_UPDATE_POLICY`.
+ * The writer lives in `incoming-field-dob-correction.ts`. This module does not write.
  */
 
 import type { PrismaClient } from "@prisma/client";
@@ -15,10 +15,7 @@ import { normalizeLeadCaptureIoWebhookToLifecyclePayload } from "./leadcapture-i
 import { normalizeLeadCaptureParentUrl } from "./leadcapture-parent-url.js";
 import {
   bindingTreatsDateAsBirthday,
-  CONFIRMED_ERIKS_VEIDEMANIS_PARENT_URL_KEY,
-  CONFIRMED_ERIKS_VEIDEMANIS_PROVIDER_FUNNEL_ID,
-  CONFIRMED_JULIA_DODGE_PARENT_URL_KEY,
-  CONFIRMED_JULIA_DODGE_SOURCE_FUNNEL_ID,
+  confirmedCampaignSourceLeadIds,
   confirmedDateOfBirthBindings,
   matchScopedIncomingFieldBinding,
   normalizeSourceFieldKey,
@@ -31,19 +28,94 @@ export const INCOMING_DOB_RECOVERY_REPORT_VERSION = "incoming_field_dob_recovery
 export const KNOWN_DOB_RECOVERY_EVENT_ID = "cmvzggvc00091ou0t9a644muo";
 
 /**
- * Monday, October 26, 2026 00:00 in America/New_York (EDT, UTC-4).
- * The default window runs from this instant through the time of the read.
+ * Monday, October 26, 2026 00:00 in America/New_York (EDT, UTC-4)
+ * through Tuesday, November 3, 2026 10:36 in America/New_York (EST, UTC-5).
+ * The reader defaults to this fixed end. It does not use the clock.
  */
 export const INCOMING_DOB_RECOVERY_WINDOW_START = "2026-10-26T04:00:00.000Z";
+export const INCOMING_DOB_RECOVERY_WINDOW_END = "2026-11-03T15:36:00.000Z";
+
+/**
+ * Tuesday, November 3, 2026 12:42 PM America/New_York (EST, UTC-5).
+ * Deployment f9cbbcf4 of fcb1324 became active at 17:42:28Z. This start is
+ * only for the separate released-intake inspection. It does not replace
+ * the historical window above.
+ */
+export const INCOMING_DOB_RELEASED_INTAKE_INSPECTION_START = "2026-11-03T17:42:00.000Z";
+
+export type IncomingDobRecoveryAdminAssessment = "historical" | "released_intake";
+
+/**
+ * Historical reads keep the fixed window and ignore the clock. Released-intake
+ * reads start at the active-deploy instant. An omitted end on that read is the
+ * supplied clock and is printed with the report.
+ */
+export function resolveIncomingDobRecoveryAdminWindow(input: {
+  releasedIntake: boolean;
+  receivedFrom?: string | null;
+  receivedTo?: string | null;
+  now?: Date;
+}): {
+  assessment: IncomingDobRecoveryAdminAssessment;
+  receivedFrom: string;
+  receivedTo: string;
+  receivedToSource: "argument" | "process_clock" | "historical_window_end";
+} {
+  const assessment: IncomingDobRecoveryAdminAssessment = input.releasedIntake ? "released_intake" : "historical";
+  const receivedFrom =
+    input.receivedFrom?.trim() ||
+    (input.releasedIntake ? INCOMING_DOB_RELEASED_INTAKE_INSPECTION_START : INCOMING_DOB_RECOVERY_WINDOW_START);
+  const explicitTo = input.receivedTo?.trim();
+  if (explicitTo) {
+    return { assessment, receivedFrom, receivedTo: explicitTo, receivedToSource: "argument" };
+  }
+  if (input.releasedIntake) {
+    return {
+      assessment,
+      receivedFrom,
+      receivedTo: (input.now ?? new Date()).toISOString(),
+      receivedToSource: "process_clock",
+    };
+  }
+  return {
+    assessment,
+    receivedFrom,
+    receivedTo: INCOMING_DOB_RECOVERY_WINDOW_END,
+    receivedToSource: "historical_window_end",
+  };
+}
+
+/**
+ * Next-gen captures recorded in the API log after release caa52d66.
+ * The log has ids and receipt times only. It does not establish form or DOB.
+ */
+export const RELEASE_WINDOW_INSPECTION_EVENT_IDS = [
+  "cmw0tfpgl0001jv0tp3bk0kz1",
+  "cmw0tlwqv000fjv0te77z8c2x",
+  "cmw0tng0m000tjv0t1cfwreyt",
+  "cmw0tyaw30015jv0tcj17bkhe",
+  "cmw0u7gyn001xjv0tfubwz6tz",
+  "cmw0u8hbx002bjv0t0nas5wot",
+] as const;
+
+/** Historical reads always include the known event and the six morning ids. Released-intake reads do not. */
+export function incomingDobRecoveryAdminInspectionIds(input: {
+  releasedIntake: boolean;
+  extraIds?: readonly string[];
+}): string[] {
+  const extra = (input.extraIds ?? []).map((id) => id.trim()).filter(Boolean);
+  if (input.releasedIntake) return [...new Set(extra)];
+  return [...new Set([KNOWN_DOB_RECOVERY_EVENT_ID, ...RELEASE_WINDOW_INSPECTION_EVENT_IDS, ...extra])];
+}
 
 export const INCOMING_DOB_RECOVERY_DEFAULT_LIMIT = 5_000;
 export const INCOMING_DOB_RECOVERY_MAX_LIMIT = 20_000;
 
 export const INCOMING_DOB_LATER_UPDATE_POLICY = {
   writes: false,
-  implemented: false,
+  implemented: true,
   concurrency:
-    "Re-read confirmed eligible rows with SELECT … FOR UPDATE SKIP LOCKED, one small batch per transaction. Recompute from the retained raw payload with the same normalizer inside the lock. If the class is no longer eligible, write nothing.",
+    "Re-read confirmed eligible rows with SELECT … FOR UPDATE SKIP LOCKED, one small batch per transaction. Recompute from the retained raw payload with the same normalizer inside the lock. Skip the write when the locked row is outside the window, the class is no longer eligible, or the locked canonical state differs from the reviewed before-image. A row the lock skips is pending. Pending rows stay in the completion count and the run is incomplete.",
   compareAndSet:
     "Write only when the stored lead_details date_of_birth and consumer_age are still blank or still equal the recomputed proposal. A nonblank stored value that disagrees is left in place and recorded as a disagreement. Do not overwrite it.",
   fields:
@@ -53,7 +125,7 @@ export const INCOMING_DOB_LATER_UPDATE_POLICY = {
   untouched:
     "Do not change rawPayloadJson, status, routingResultJson, deliveryResultJson, inventory, allocations, delivery receipts, or any queue. Do not enqueue Sheets or GHL delivery.",
   evidence:
-    "Insert a separate operator audit row with the event id, the previous updatedAt, the new updatedAt, and the before and after canonical date_of_birth, consumer_age, provenance, and conflict fields. Do not copy contact values or the raw payload into that audit. This dry-run report does not print those values.",
+    "Each committed correction inserts one IncomingDobCorrectionAudit row in the same transaction as the normalizedPayloadJson update. That row stores the event id, operator, previous updatedAt, new updatedAt, and the before and after canonical date_of_birth, consumer_age, provenance, reference, conflict, and sourceAttributes.date_of_birth. Contact values and the raw payload are not copied. A local JSONL file may supplement the row after commit and is not the source of rollback. Apply and rollback refuse until Auth/Account adds this table with the documented columns, primary key, event index, and action check. A table name alone is not enough. This assessment report does not print those values.",
   idempotent:
     "A second run classifies the row unchanged once the stored canonical values equal the proposal, so the compare-and-set writes nothing.",
 } as const;
@@ -63,18 +135,12 @@ export const INCOMING_DOB_UPSTREAM_PAYLOAD_CHANGE = {
   birthdayField: "date_of_birth",
   submissionTimeField: "submitted_at",
   jsonKeysNotQuestionLabels: true,
-  forms: [
-    {
-      page: CONFIRMED_JULIA_DODGE_PARENT_URL_KEY,
-      sourceFunnelId: CONFIRMED_JULIA_DODGE_SOURCE_FUNNEL_ID,
-      providerFunnelId: null,
-    },
-    {
-      page: CONFIRMED_ERIKS_VEIDEMANIS_PARENT_URL_KEY,
-      sourceFunnelId: null,
-      providerFunnelId: CONFIRMED_ERIKS_VEIDEMANIS_PROVIDER_FUNNEL_ID,
-    },
-  ],
+  forms: confirmedDateOfBirthBindings().map((binding) => ({
+    bindingId: binding.id,
+    page: binding.parentUrlKey ?? null,
+    sourceFunnelId: binding.sourceFunnelId ?? null,
+    providerFunnelId: binding.providerFunnelId ?? null,
+  })),
   instruction:
     "Send the birthday answer as the JSON key date_of_birth. A question label that still says Date is not that key. Send the submission timestamp as the JSON key submitted_at. Confirmed pages that still send date remain readable. Legacy forms keep date + time as the submission calendar. Do not edit live forms from this repository.",
 } as const;
@@ -85,6 +151,7 @@ export const INCOMING_DOB_RECOVERY_GAPS = [
   "GHL discovery in sam-test-survey-text-fields.ts still treats a field named gender as the sex stamp target. This change does not edit that mapping or the GHL mapping dropdowns.",
   "When the GHL source-attribute stamp has the lifecycle payload, Age and consumer_age send projectCampaignDobAge().age and date_of_birth sends canonical YYYY-MM-DD. A stamp without that payload still reads sourceAttributes only. The onboarding note still says age is not calculated from DOB.",
   "The localhost recovery command refuses remote database hosts. Its local counts are not a production census. The separate admin-API reader is GET-only and still cannot see Sheets jobs or lead allocations.",
+  "This recovery reads the raw key date. Registry bindings whose DOB step webhooks date_copy are not correction candidates. Plain date on those pages stays a non-birthday field.",
   "CamelCase answer keys now fingerprint as their underscored form. A route that previously snapshotted dateOfBirth as dateofbirth can show one schema-drift warning.",
 ] as const;
 
@@ -450,7 +517,7 @@ export function buildIncomingDobRecoveryReport(input: {
         `${b.sourceSystem}|${b.formKey}|${b.clientAccountId}`
       )
     ),
-    confirmedDateOfBirthBindingIds: confirmedDateOfBirthBindings().map((binding) => binding.id),
+    confirmedDateOfBirthBindingIds: listConfirmedDateOfBirthBindingIds(),
     laterUpdate: INCOMING_DOB_LATER_UPDATE_POLICY,
     upstreamPayloadChange: INCOMING_DOB_UPSTREAM_PAYLOAD_CHANGE,
     gaps: INCOMING_DOB_RECOVERY_GAPS,
@@ -486,17 +553,21 @@ export async function readIncomingDobRecoverySnapshots(
     receivedTo: Date | null;
     knownEventId: string;
     limit: number;
+    onlyIds?: readonly string[];
   }
 ): Promise<{ rows: IncomingDobRecoverySnapshot[]; truncated: boolean }> {
+  const onlyIds = [...new Set((query.onlyIds ?? []).map((id) => id.trim()).filter(Boolean))];
   const receivedAt: { gte: Date; lte?: Date } = { gte: query.receivedFrom };
   if (query.receivedTo) receivedAt.lte = query.receivedTo;
   const events = (await db.sourceLeadEvent.findMany({
-    where: {
-      sourceProvider: "leadcapture_io",
-      OR: [{ receivedAt }, { id: query.knownEventId }],
-    },
+    where: onlyIds.length > 0
+      ? { id: { in: onlyIds } }
+      : {
+          sourceProvider: "leadcapture_io",
+          OR: [{ receivedAt }, { id: query.knownEventId }],
+        },
     orderBy: [{ receivedAt: "asc" }, { id: "asc" }],
-    take: query.limit + 1,
+    take: onlyIds.length > 0 ? onlyIds.length : query.limit + 1,
     select: {
       id: true,
       sourceProvider: true,
@@ -513,7 +584,7 @@ export async function readIncomingDobRecoverySnapshots(
       routingResultJson: true,
     },
   })) as EventRow[];
-  const truncated = events.length > query.limit;
+  const truncated = onlyIds.length > 0 ? false : events.length > query.limit;
   const page = truncated ? events.slice(0, query.limit) : events;
   const ids = page.map((event) => event.id);
   const sheetsDelivered = new Set<string>();
@@ -570,17 +641,113 @@ export async function readIncomingDobRecoverySnapshots(
   };
 }
 
+export function listConfirmedDateOfBirthBindingIds(): readonly string[] {
+  return confirmedDateOfBirthBindings().map((binding) => binding.id);
+}
+
+export type ConfirmedSourceLeadLookup = {
+  sourceLeadId: string;
+  bindingIds: readonly string[];
+  status: "resolved" | "pending";
+  eventId: string | null;
+  matchCount: number;
+  reason: "matched" | "not_in_fetched_details" | "multiple_matches" | "pagination_incomplete";
+};
+
+function rawProviderLeadId(raw: unknown): string | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const value = (raw as Record<string, unknown>).lead_id;
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+/**
+ * Match a confirmed provider lead id to a fetched SourceLeadEvent.
+ * The provider UUID is never compared to the event id. An incomplete page
+ * stays pending even when one fetched row matches.
+ */
+export function matchConfirmedSourceLeadEvents(
+  rows: ReadonlyArray<{ id: string; rawPayload: unknown }>,
+  options?: { paginationComplete?: boolean }
+): ConfirmedSourceLeadLookup[] {
+  const paginationComplete = options?.paginationComplete !== false;
+  const grouped = new Map<string, string[]>();
+  for (const entry of confirmedCampaignSourceLeadIds()) {
+    const bindingIds = grouped.get(entry.sourceLeadId) ?? [];
+    bindingIds.push(entry.bindingId);
+    grouped.set(entry.sourceLeadId, bindingIds);
+  }
+  return [...grouped.entries()].map(([sourceLeadId, bindingIds]) => {
+    const eventIds = [
+      ...new Set(rows.filter((row) => rawProviderLeadId(row.rawPayload) === sourceLeadId).map((row) => row.id)),
+    ];
+    if (!paginationComplete) {
+      return {
+        sourceLeadId,
+        bindingIds,
+        status: "pending" as const,
+        eventId: null,
+        matchCount: eventIds.length,
+        reason: "pagination_incomplete" as const,
+      };
+    }
+    if (eventIds.length === 1) {
+      return {
+        sourceLeadId,
+        bindingIds,
+        status: "resolved" as const,
+        eventId: eventIds[0] ?? null,
+        matchCount: 1,
+        reason: "matched" as const,
+      };
+    }
+    return {
+      sourceLeadId,
+      bindingIds,
+      status: "pending" as const,
+      eventId: null,
+      matchCount: eventIds.length,
+      reason: (eventIds.length === 0 ? "not_in_fetched_details" : "multiple_matches") as
+        | "not_in_fetched_details"
+        | "multiple_matches",
+    };
+  });
+}
+
 export type IncomingDobRecoveryExpectation = {
   dateOfBirth: string | null;
   consumerAge: string | null;
   referenceDate: string | null;
   provenance: string | null;
   conflict: boolean;
-  storedDateOfBirth: string | null;
-  storedConsumerAge: string | null;
+  /** Recomputed from the raw payload. This is not a stored production value. */
+  proposedRecoveryIsProductionVerification: false;
 };
 
-/** Canonical DOB and age recomputed from the retained raw payload. Contact fields are omitted. */
+export type StoredCanonicalDobAge = {
+  dateOfBirth: string | null;
+  dateOfBirthProvenance: string | null;
+  consumerAge: string | null;
+  consumerAgeProvenance: string | null;
+  referenceDate: string | null;
+  referenceRule: string | null;
+  conflict: boolean | null;
+};
+
+function storedCanonicalDobAge(payload: unknown): StoredCanonicalDobAge {
+  const details = asRecord(asRecord(payload)?.lead_details) ?? {};
+  const conflict = details.consumer_age_conflict;
+  return {
+    dateOfBirth: cellText(details.date_of_birth) || null,
+    dateOfBirthProvenance: cellText(details.date_of_birth_provenance) || null,
+    consumerAge: cellText(details.consumer_age) || null,
+    consumerAgeProvenance: cellText(details.consumer_age_provenance) || null,
+    referenceDate: cellText(details.consumer_age_reference_date) || null,
+    referenceRule: cellText(details.consumer_age_reference_rule) || null,
+    conflict: conflict === true || conflict === false ? conflict : null,
+  };
+}
+
+/** Proposed DOB and age recomputed from the retained raw payload. Contact fields are omitted. */
 export function describeIncomingDobRecoveryExpectation(
   snapshot: IncomingDobRecoverySnapshot
 ): IncomingDobRecoveryExpectation | null {
@@ -599,8 +766,179 @@ export function describeIncomingDobRecoveryExpectation(
     referenceDate: cellText(details.consumer_age_reference_date) || null,
     provenance: cellText(details.consumer_age_provenance) || null,
     conflict: details.consumer_age_conflict === true,
-    storedDateOfBirth: storedDob(snapshot.normalizedPayload) || null,
-    storedConsumerAge: storedAge(snapshot.normalizedPayload) || null,
+    proposedRecoveryIsProductionVerification: false,
+  };
+}
+
+export type IncomingDobFormIdentity = {
+  confirmedBindingId: string | null;
+  parentUrlKey: string | null;
+  /** Internal SourceFunnel.id when the stored enrichment or routing recorded one. */
+  sourceFunnelId: string | null;
+  /** External LeadCapture funnel UUID. This is not SourceFunnel.id. */
+  providerFunnelId: string | null;
+};
+
+export type IncomingDobRecoveryInspection = {
+  id: string;
+  receivedAt: string;
+  submittedAt: string | null;
+  parentUrlKey: string | null;
+  sourceFunnelId: string | null;
+  sourceSystem: string;
+  formIdentity: IncomingDobFormIdentity;
+  rawDate: string | null;
+  rawDateCount: number;
+  storedCanonical: StoredCanonicalDobAge;
+  proposedRecovery: IncomingDobRecoveryExpectation | null;
+};
+
+function formIdentityFor(snapshot: IncomingDobRecoverySnapshot): IncomingDobFormIdentity {
+  const raw = asRecord(snapshot.rawPayload);
+  const sourceFunnelId = readStoredSourceFunnelId(snapshot);
+  if (!raw) {
+    return { confirmedBindingId: null, parentUrlKey: null, sourceFunnelId, providerFunnelId: null };
+  }
+  const binding = matchScopedIncomingFieldBinding({
+    provider: cellText(raw.provider) || cellText(raw.sa360_source_platform) || snapshot.sourceProvider,
+    sourceSystem: cellText(raw.sa360_source_system) || snapshot.sourceSystem,
+    sourceFunnelId,
+    providerFunnelId: readSuppliedProviderFunnelId(raw),
+    parentUrlKey: parentUrlKey(raw),
+    sourceRouteKey: snapshot.sourceRouteKey,
+  });
+  return {
+    confirmedBindingId: binding?.id ?? null,
+    parentUrlKey: parentUrlKey(raw),
+    sourceFunnelId,
+    providerFunnelId: readSuppliedProviderFunnelId(raw),
+  };
+}
+
+export type IncomingDobCorrectionManifest = {
+  writes: false;
+  externalDestinations: "unchanged";
+  window: { receivedFrom: string; receivedTo: string | null };
+  ids: string[];
+  expectedCount: number;
+  heldDeliveredIds: string[];
+  outsideWindow: number;
+  counts: IncomingDobRecoveryReport["counts"];
+  reasons: Record<string, number>;
+  byBinding: Array<{
+    bindingId: string;
+    formKey: string;
+    eligible: number;
+    unchanged: number;
+    conflicting: number;
+    invalid: number;
+    skipped: number;
+    recoverableDob: number;
+    recoverableAge: number;
+    routing: Record<string, number>;
+  }>;
+};
+
+/**
+ * Reviewed apply scope for the fixed window. Ids are eligible rows with no
+ * delivery evidence. Delivered eligible ids are listed separately and are not
+ * part of expectedCount. No payload values are copied.
+ */
+export function buildIncomingDobCorrectionManifest(input: {
+  rows: IncomingDobRecoverySnapshot[];
+  receivedFrom: string;
+  receivedTo: string | null;
+}): IncomingDobCorrectionManifest {
+  const window = { receivedFrom: input.receivedFrom, receivedTo: input.receivedTo };
+  const statusById = new Map(input.rows.map((row) => [row.id, row.status]));
+  const bindingById = new Map(input.rows.map((row) => [row.id, formIdentityFor(row).confirmedBindingId]));
+  const assessments = input.rows.map((row) => assessIncomingDobRecoveryRow(row, window));
+  const counted = assessments.filter((row) => row.inWindow);
+  const counts: IncomingDobCorrectionManifest["counts"] = {
+    eligible: 0,
+    unchanged: 0,
+    conflicting: 0,
+    invalid: 0,
+    skipped: 0,
+    alreadyDelivered: 0,
+    alreadyDeliveredEligible: 0,
+  };
+  const reasons: Record<string, number> = {};
+  const groups = new Map<string, IncomingDobCorrectionManifest["byBinding"][number]>();
+  const ids: string[] = [];
+  const heldDeliveredIds: string[] = [];
+
+  for (const row of counted) {
+    counts[row.recoveryClass] += 1;
+    reasons[`${row.recoveryClass}:${row.reason}`] = (reasons[`${row.recoveryClass}:${row.reason}`] ?? 0) + 1;
+    if (row.alreadyDelivered) counts.alreadyDelivered += 1;
+    if (row.alreadyDelivered && row.recoveryClass === "eligible") counts.alreadyDeliveredEligible += 1;
+    if (!row.dateMeansBirthday) continue;
+    const bindingId = bindingById.get(row.id) ?? "unbound";
+    const group = groups.get(bindingId) ?? {
+      bindingId,
+      formKey: row.formKey,
+      eligible: 0,
+      unchanged: 0,
+      conflicting: 0,
+      invalid: 0,
+      skipped: 0,
+      recoverableDob: 0,
+      recoverableAge: 0,
+      routing: {},
+    };
+    group[row.recoveryClass] += 1;
+    if (row.recoveryClass === "eligible" && row.missingCanonicalDob) group.recoverableDob += 1;
+    if (row.recoveryClass === "eligible" && row.missingCanonicalAge) group.recoverableAge += 1;
+    const routingStatus = statusById.get(row.id) ?? "unknown";
+    group.routing[routingStatus] = (group.routing[routingStatus] ?? 0) + 1;
+    groups.set(bindingId, group);
+    if (row.recoveryClass !== "eligible") continue;
+    if (row.alreadyDelivered) heldDeliveredIds.push(row.id);
+    else ids.push(row.id);
+  }
+
+  return {
+    writes: false,
+    externalDestinations: "unchanged",
+    window,
+    ids,
+    expectedCount: ids.length,
+    heldDeliveredIds,
+    outsideWindow: assessments.length - counted.length,
+    counts,
+    reasons,
+    byBinding: [...groups.values()].sort((a, b) => a.bindingId.localeCompare(b.bindingId)),
+  };
+}
+
+/**
+ * One stored event, for an operator checking a specific id.
+ * Returns the raw `date` text and canonical DOB/age only. Contact fields are omitted.
+ */
+export function describeIncomingDobRecoveryInspection(
+  snapshot: IncomingDobRecoverySnapshot
+): IncomingDobRecoveryInspection {
+  const raw = asRecord(snapshot.rawPayload);
+  const dates = raw ? [...new Set(dateValues(visibleDateLayers(raw, snapshot.sourceSystem)))] : [];
+  const routing = asRecord(asRecord(snapshot.normalizedPayload)?.routing);
+  const submittedAt =
+    cellText(asRecord(routing?.source_intake)?.submitted_at) ||
+    (raw ? cellText(raw.submitted_at) : "") ||
+    null;
+  const formIdentity = formIdentityFor(snapshot);
+  return {
+    id: snapshot.id,
+    receivedAt: snapshot.receivedAt,
+    submittedAt,
+    parentUrlKey: formIdentity.parentUrlKey,
+    sourceFunnelId: formIdentity.sourceFunnelId,
+    sourceSystem: snapshot.sourceSystem,
+    formIdentity,
+    rawDate: dates.length === 1 ? dates[0]! : null,
+    rawDateCount: dates.length,
+    storedCanonical: storedCanonicalDobAge(snapshot.normalizedPayload),
+    proposedRecovery: describeIncomingDobRecoveryExpectation(snapshot),
   };
 }
 

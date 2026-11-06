@@ -1063,6 +1063,10 @@ model ClientAccount {
   historicalCampaignAliases HistoricalCampaignAlias[] @relation("HistoricalCampaignAliasOrigin")
   historicalAliasPreviousOriginEvents HistoricalCampaignAliasEvent[] @relation("HistoricalCampaignAliasEventPreviousOrigin")
   historicalAliasNextOriginEvents HistoricalCampaignAliasEvent[] @relation("HistoricalCampaignAliasEventNextOrigin")
+  /// Outbound custom webhook configuration. enabled defaults false and does not arm delivery.
+  customWebhookDestination ClientCustomWebhookDestination?
+  /// Internal successful-delivery emails. Restrict so account deletion cannot erase a sent row.
+  deliverySuccessNotifications DeliverySuccessNotification[]
 
   @@index([status])
 }
@@ -2597,6 +2601,8 @@ model DeliveryTarget {
   createdAt            DateTime              @default(now())
   updatedAt            DateTime              @updatedAt
   deliveryInstructions DeliveryInstruction[]
+  /// Optional secret row for webhook.generic.v1. The signing secret is not stored here.
+  customWebhookDestination ClientCustomWebhookDestination?
 
   @@index([clientAccountId, enabled])
   @@index([adapterKey])
@@ -4061,4 +4067,87 @@ model MetaFormCandidate {
 
   @@unique([pageId, formId, sourceLabel])
   @@index([pageId])
+}
+
+/// Closed channel vocabulary for a canonical delivery receipt.
+/// company_sheets, ghl_location_api, and custom_webhook are the only values.
+enum DeliverySuccessChannel {
+  company_sheets
+  ghl_location_api
+  custom_webhook
+}
+
+/// Same words as the customer release notifier. Do not add synonyms.
+enum DeliverySuccessNotificationStatus {
+  pending
+  sending
+  sent
+  skipped
+  failed
+}
+
+/// One outbound custom webhook destination per client account.
+/// The signing secret is AES-256-GCM ciphertext under SA360_CUSTOM_WEBHOOK_SECRET_KEY.
+/// Plaintext and ciphertext never belong in DeliveryTarget.configMetadataJson, logs, or tickets.
+/// enabled defaults to false. Creating this row does not set DeliveryTarget.enabled
+/// and does not send a webhook. There is no relation that cascades a send.
+model ClientCustomWebhookDestination {
+  id                       String          @id @default(cuid())
+  clientAccountId          String          @unique
+  clientAccount            ClientAccount   @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Cascade)
+  /// Optional webhook.generic.v1 target. Unique when set. SetNull does not send.
+  deliveryTargetId         String?         @unique
+  deliveryTarget           DeliveryTarget? @relation(fields: [deliveryTargetId], references: [id], onDelete: SetNull)
+  endpointUrl              String
+  /// AES-256-GCM ciphertext (`iv.tag.ciphertext`, base64url). Server-side only.
+  signingSecretCiphertext  String
+  /// SHA-256 prefix of the plaintext secret. Not itself a secret.
+  signingSecretFingerprint String
+  enabled                  Boolean         @default(false)
+  revision                 Int             @default(1)
+  createdAt                DateTime        @default(now())
+  updatedAt                DateTime        @updatedAt
+}
+
+/// One internal email per canonical receipt. The receipt id is a reference, not a
+/// foreign key, so this row cannot change a Sheets job, a GHL run, a source lead,
+/// or an export package. sent is terminal. skipped is not retried by the ordinary scan.
+/// idempotencyKey is company_sheets:{jobId}, ghl_location_api:{liveRunId},
+/// or custom_webhook:{attemptId}.
+model DeliverySuccessNotification {
+  id                String                            @id @default(cuid())
+  idempotencyKey    String                            @unique
+  clientAccountId   String
+  clientAccount     ClientAccount                     @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Restrict)
+  channel           DeliverySuccessChannel
+  /// Sheets job id, GHL live-run id, or future webhook attempt id.
+  receiptId         String
+  /// Optional source lead id. Not a foreign key.
+  sourceLeadEventId String?
+  status            DeliverySuccessNotificationStatus @default(pending)
+  claimedAt         DateTime?
+  attemptCount      Int                               @default(0)
+  sentAt            DateTime?
+  /// Provider message id after a later assignment sends. The claim primitive never sets it.
+  providerMessageId String?
+  lastError         String?
+  skipReason        String?
+  createdAt         DateTime                          @default(now())
+  updatedAt         DateTime                          @updatedAt
+
+  @@index([status, claimedAt])
+  @@index([clientAccountId, createdAt])
+}
+
+/// One row. armedAt stays null until the first scan that observes
+/// SA360_DELIVERY_SUCCESS_NOTIFY_ENABLED as the exact string true.
+/// That scan sets armedAt to the current time and inserts nothing.
+/// armedAt is never moved earlier. Receipts that completed while the flag
+/// was off, or at the armed instant, are not notified.
+model DeliverySuccessNotificationCursor {
+  /// Constrained to true in SQL so the table holds a single row.
+  singleton Boolean   @id @default(true)
+  armedAt   DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 }

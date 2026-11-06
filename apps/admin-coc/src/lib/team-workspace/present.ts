@@ -196,21 +196,26 @@ function deliveryDestination(workspace: WorkspaceAvailability): TeamWorkspaceSte
   );
 }
 
+/**
+ * The per-client preference is off until a verified recipient exists.
+ * This step does not read the process kill switch, and it does not save a choice.
+ */
 function notifications(workspace: WorkspaceAvailability): TeamWorkspaceStep {
-  const enabled = workspace.availability === "ready" && workspace.body.notifications.enabled;
-  if (enabled) {
-    return step(
-      "delivery_notifications",
-      "pending",
-      "The server notification flag is on. This page cannot save the one on/off choice.",
-      ["Nothing is emailed from Team Workspace.", "Notification rows are not listed here."]
-    );
-  }
+  const loaded = workspace.availability === "ready";
   return step(
     "delivery_notifications",
     "unavailable",
-    "Delivery notification is off. The one on/off choice is not saved from this page.",
-    ["Nothing is emailed from Team Workspace.", "Notification rows are not listed here."]
+    "Notify this client when a lead is successfully delivered is off.",
+    loaded
+      ? [
+          "A verified recipient has to be saved in Admin C.O.C. before this can be turned on.",
+          "This page does not collect an email address and does not send email.",
+          "Notification rows are not listed here. An empty list is not a failed delivery.",
+        ]
+      : [
+          "The preference could not be read. It stays off on this page.",
+          "This page does not collect an email address and does not send email.",
+        ]
   );
 }
 

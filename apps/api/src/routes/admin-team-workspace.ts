@@ -33,7 +33,7 @@ export const adminTeamWorkspaceRoutes: FastifyPluginAsync<TeamWorkspaceRouteOpti
     if (!clientAccountId) {
       return reply.status(404).send({ ok: false, error: "client_not_found" });
     }
-    const result = await readTeamWorkspaceClient(clientAccountId, db, env);
+    const result = await readTeamWorkspaceClient(clientAccountId, db);
     if (!result.ok) return reply.status(result.statusCode).send({ ok: false, error: result.code });
     return reply.send(result.body);
   });

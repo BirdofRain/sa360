@@ -48,8 +48,13 @@ export type TeamWorkspaceRead = {
     };
   };
   recentCanonicalDeliveries: TeamWorkspaceCanonicalDelivery[];
-  notifications: {
+  clientNotification: {
     enabled: boolean;
+    canEnable: boolean;
+    blockedReason: "recipient_not_verified" | null;
+    recipientVerified: boolean;
+  };
+  notifications: {
     items: [];
   };
 };

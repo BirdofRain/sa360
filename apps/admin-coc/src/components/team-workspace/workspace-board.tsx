@@ -137,17 +137,19 @@ function ReportIssue({
 function NotificationChoice() {
   return (
     <fieldset disabled className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
-      <legend className="px-1 text-xs font-medium text-slate-600">One notification choice</legend>
+      <legend className="px-1 text-xs font-medium text-slate-600">Client notification</legend>
       <label className="flex items-start gap-2 text-sm text-slate-800">
         <input
           type="checkbox"
           disabled
           defaultChecked={false}
-          aria-label="Email the team when a delivery succeeds"
+          aria-label="Notify this client when a lead is successfully delivered"
         />
-        <span>Email the team when a delivery succeeds</span>
+        <span>Notify this client when a lead is successfully delivered</span>
       </label>
-      <p className="mt-2 text-xs text-slate-600">This switch is off and is not saved.</p>
+      <p className="mt-2 text-xs text-slate-600">
+        This choice is off. A verified recipient in Admin C.O.C. is required before it can be turned on.
+      </p>
     </fieldset>
   );
 }

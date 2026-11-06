@@ -281,7 +281,14 @@ test("a known client returns the read contract without secrets or canonical clai
     endpointHost: "hooks.example.test",
   });
   assert.deepEqual(body.recentCanonicalDeliveries, []);
-  assert.deepEqual(body.notifications, { enabled: false, items: [] });
+  assert.deepEqual(body.clientNotification, {
+    enabled: false,
+    canEnable: false,
+    blockedReason: "recipient_not_verified",
+    recipientVerified: false,
+  });
+  assert.deepEqual(body.notifications, { items: [] });
+  assert.equal(Object.hasOwn(body.notifications, "enabled"), false);
   const serialized = response.body;
   for (const secret of [LOCATION, PHONE, EMAIL, SECRET_URL, SIGNING_SECRET, "token_secret", "sig=abcdef"]) {
     assert.equal(serialized.includes(secret), false, secret);
@@ -324,7 +331,7 @@ test("a client with no setup or destinations stays undecided and unconfigured", 
   await app.close();
 });
 
-test("notification flag is reported without items, and POST is not a route", async () => {
+test("the process notify flag is not a client preference, and POST is not a route", async () => {
   const { app, calls } = await buildApp({
     env: env({ SA360_DELIVERY_SUCCESS_NOTIFY_ENABLED: "true" }),
   });
@@ -333,7 +340,16 @@ test("notification flag is reported without items, and POST is not a route", asy
     url: `/admin/v1/team-workspace/clients/${CLIENT}`,
     headers: { "x-sa360-admin-key": ADMIN_KEY },
   });
-  assert.deepEqual(read.json().notifications, { enabled: true, items: [] });
+  const body = read.json();
+  assert.deepEqual(body.clientNotification, {
+    enabled: false,
+    canEnable: false,
+    blockedReason: "recipient_not_verified",
+    recipientVerified: false,
+  });
+  assert.deepEqual(body.notifications, { items: [] });
+  assert.equal(JSON.stringify(body).includes("SA360_DELIVERY_SUCCESS_NOTIFY_ENABLED"), false);
+  assert.equal(JSON.stringify(body).includes("recipientEmail"), false);
   const write = await app.inject({
     method: "POST",
     url: `/admin/v1/team-workspace/clients/${CLIENT}`,

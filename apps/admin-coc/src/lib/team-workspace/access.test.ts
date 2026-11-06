@@ -98,6 +98,9 @@ test("workspace files do not add writes, roles, or a second ticket route", () =>
   assert.equal(source.includes("x-sa360-admin-key"), false);
   assert.equal(source.includes("OBSERVER_DOCUMENT_PATHS"), false);
   assert.equal(source.includes("prisma"), false);
+  assert.equal(source.includes("SA360_DELIVERY_SUCCESS_NOTIFY_ENABLED"), false);
+  assert.equal(source.includes("recipientEmail"), false);
+  assert.equal(source.includes("Email the team"), false);
 });
 
 test("an observer and a signed-out session do not call the admin API", async () => {

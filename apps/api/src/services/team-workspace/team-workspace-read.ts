@@ -56,8 +56,18 @@ export type TeamWorkspaceRead = {
     };
   };
   recentCanonicalDeliveries: [];
+  /**
+   * Per-client preference. This is not the process kill switch
+   * `SA360_DELIVERY_SUCCESS_NOTIFY_ENABLED`. Until the preference table
+   * exists, the read returns the disabled object and does not query one.
+   */
+  clientNotification: {
+    enabled: false;
+    canEnable: false;
+    blockedReason: "recipient_not_verified";
+    recipientVerified: false;
+  };
   notifications: {
-    enabled: boolean;
     items: [];
   };
 };
@@ -78,9 +88,16 @@ export function isTeamWorkspaceApiEnabled(env: NodeJS.ProcessEnv = process.env):
   return env.SA360_TEAM_WORKSPACE_ENABLED?.trim() === "true";
 }
 
-function isNotifyFlagEnabled(env: NodeJS.ProcessEnv): boolean {
-  return env.SA360_DELIVERY_SUCCESS_NOTIFY_ENABLED?.trim() === "true";
-}
+/**
+ * Disabled until `ClientDeliveryNotificationPreference` is on master.
+ * The process kill switch is not consulted and is not returned.
+ */
+const CLIENT_NOTIFICATION_UNAVAILABLE = {
+  enabled: false,
+  canEnable: false,
+  blockedReason: "recipient_not_verified",
+  recipientVerified: false,
+} as const;
 
 function isDestinationChoice(value: unknown): value is DestinationChoice {
   return typeof value === "string" && (DESTINATION_CHOICES as readonly string[]).includes(value);
@@ -143,8 +160,7 @@ function webhookSummary(targets: WebhookTargetRow[]): TeamWorkspaceRead["destina
 
 export async function readTeamWorkspaceClient(
   clientAccountId: string,
-  db: PrismaClient,
-  env: NodeJS.ProcessEnv = process.env
+  db: PrismaClient
 ): Promise<{ ok: true; body: TeamWorkspaceRead } | TeamWorkspaceReadFailure> {
   if (!TEAM_WORKSPACE_CLIENT_ID.test(clientAccountId)) {
     return { ok: false, code: "client_not_found", statusCode: 404 };
@@ -226,8 +242,8 @@ export async function readTeamWorkspaceClient(
       customWebhook: webhookSummary(client.deliveryTargets),
     },
     recentCanonicalDeliveries: [],
+    clientNotification: CLIENT_NOTIFICATION_UNAVAILABLE,
     notifications: {
-      enabled: isNotifyFlagEnabled(env),
       items: [],
     },
   };

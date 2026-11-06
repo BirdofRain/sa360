@@ -84,7 +84,7 @@ function view(): TeamWorkspaceClientView {
         id: "delivery_notifications",
         title: "Delivery notifications",
         status: "unavailable",
-        summary: "Delivery notification is off.",
+        summary: "Notify this client when a lead is successfully delivered is off.",
         details: ["Nothing is emailed from Team Workspace."],
       },
       {
@@ -121,7 +121,7 @@ test("the board shows truthful step states, a disabled notification choice, and 
   assert.equal(screen.getByText("Complete").textContent, "Complete");
   assert.equal(screen.getAllByText("Unavailable").length >= 3, true);
   assert.equal(screen.getByText("Pending").textContent, "Pending");
-  const choice = screen.getByRole("checkbox", { name: "Email the team when a delivery succeeds" });
+  const choice = screen.getByRole("checkbox", { name: "Notify this client when a lead is successfully delivered" });
   assert.equal((choice as HTMLInputElement).disabled, true);
   assert.equal((choice as HTMLInputElement).checked, false);
   assert.equal(screen.queryByRole("button", { name: /save|activate|enable/i }), null);

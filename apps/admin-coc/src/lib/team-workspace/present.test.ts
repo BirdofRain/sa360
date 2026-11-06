@@ -38,7 +38,13 @@ function workspace(overrides: Partial<TeamWorkspaceRead> = {}): TeamWorkspaceRea
       customWebhook: { present: false, enabled: false, endpointHost: null },
     },
     recentCanonicalDeliveries: [],
-    notifications: { enabled: false, items: [] },
+    clientNotification: {
+      enabled: false,
+      canEnable: false,
+      blockedReason: "recipient_not_verified",
+      recipientVerified: false,
+    },
+    notifications: { items: [] },
     ...overrides,
   };
 }
@@ -74,6 +80,9 @@ test("an empty client stays pending and does not look activated", () => {
   assert.match(model.view.setupLine, /not an operational switch/i);
   assert.equal(model.view.steps.find((step) => step.status === "complete" && step.id === "completion"), undefined);
   assert.match(model.view.steps.find((step) => step.id === "setup_verification")?.summary ?? "", /does not confirm a live delivery/i);
+  const notification = model.view.steps.find((step) => step.id === "delivery_notifications");
+  assert.match(notification?.summary ?? "", /is off/);
+  assert.equal(/server notification flag|SA360_DELIVERY_SUCCESS_NOTIFY/i.test(JSON.stringify(notification)), false);
 });
 
 test("a partial client with a saved GoHighLevel row is not treated as live", () => {
@@ -247,6 +256,20 @@ test("the parser drops secrets, full webhook URLs, and a false operational flag"
     setupRequest: { ...workspace().setupRequest, operational: true },
   });
   assert.equal(operational, null);
+
+  const killSwitch = parseTeamWorkspaceResponse({
+    ...workspace(),
+    notifications: { enabled: true, items: [] },
+  });
+  assert.equal(killSwitch?.clientNotification.enabled, false);
+  assert.equal(JSON.stringify(killSwitch).includes('"enabled":true'), false);
+
+  const missingPreference = parseTeamWorkspaceResponse({
+    ...workspace(),
+    clientNotification: undefined,
+    notifications: { enabled: true, items: [] },
+  });
+  assert.equal(missingPreference, null);
   assert.equal(readAdminErrorCode(404, JSON.stringify({ error: "team_workspace_disabled" })), "team_workspace_disabled");
   assert.equal(readAdminErrorCode(500, "<html>token</html>"), "request_failed");
 });

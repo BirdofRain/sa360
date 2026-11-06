@@ -80,7 +80,8 @@ export function parseTeamWorkspaceResponse(data: unknown): TeamWorkspaceRead | n
   const sheets = record(destinations?.companySheets);
   const webhook = record(destinations?.customWebhook);
   const notifications = record(body.notifications);
-  if (!client || !setup || !ghl || !sheets || !webhook || !notifications) return null;
+  const preference = record(body.clientNotification);
+  if (!client || !setup || !ghl || !sheets || !webhook || !notifications || !preference) return null;
   if (!isSafeTeamWorkspaceId(client.clientAccountId)) return null;
   const clientDisplayName = text(client.clientDisplayName, 200);
   const status = text(client.status, 40);
@@ -103,7 +104,15 @@ export function parseTeamWorkspaceResponse(data: unknown): TeamWorkspaceRead | n
   const agedDispatchEnabled = flag(sheets.agedDispatchEnabled);
   const webhookPresent = flag(webhook.present);
   const webhookEnabled = flag(webhook.enabled);
-  const notifyEnabled = flag(notifications.enabled);
+  const preferenceEnabled = flag(preference.enabled);
+  const canEnable = flag(preference.canEnable);
+  const recipientVerified = flag(preference.recipientVerified);
+  const blockedReason =
+    preference.blockedReason === null
+      ? null
+      : preference.blockedReason === "recipient_not_verified"
+        ? "recipient_not_verified"
+        : undefined;
   if (
     ghlConfigured === null ||
     deliveryEnabled === null ||
@@ -113,12 +122,17 @@ export function parseTeamWorkspaceResponse(data: unknown): TeamWorkspaceRead | n
     agedDispatchEnabled === null ||
     webhookPresent === null ||
     webhookEnabled === null ||
-    notifyEnabled === null ||
+    preferenceEnabled === null ||
+    canEnable === null ||
+    recipientVerified === null ||
+    blockedReason === undefined ||
     !Array.isArray(notifications.items) ||
     !Array.isArray(body.recentCanonicalDeliveries)
   ) {
     return null;
   }
+  if (preferenceEnabled && (!canEnable || !recipientVerified || blockedReason !== null)) return null;
+  if (canEnable && !recipientVerified) return null;
 
   const deliveryMode = ghl.deliveryMode === null ? null : text(ghl.deliveryMode, 40);
   if (ghl.deliveryMode !== null && (deliveryMode === null || !SAFE_MODE.test(deliveryMode))) return null;
@@ -159,7 +173,13 @@ export function parseTeamWorkspaceResponse(data: unknown): TeamWorkspaceRead | n
       customWebhook: { present: webhookPresent, enabled: webhookEnabled, endpointHost },
     },
     recentCanonicalDeliveries,
-    notifications: { enabled: notifyEnabled, items: [] },
+    clientNotification: {
+      enabled: preferenceEnabled,
+      canEnable,
+      blockedReason,
+      recipientVerified,
+    },
+    notifications: { items: [] },
   };
 }
 

@@ -59,11 +59,18 @@ function parseLocation(json: unknown, locationId: string): GhlDiscoveredLocation
     root && typeof root === "object" && !Array.isArray(root)
       ? (root as Record<string, unknown>)
       : {};
+  const primaryUser = o.primaryUser;
+  const primaryRecord =
+    primaryUser && typeof primaryUser === "object" && !Array.isArray(primaryUser)
+      ? (primaryUser as Record<string, unknown>)
+      : null;
   return {
     id: str(o.id) ?? locationId,
     name: str(o.name) ?? str(o.locationName),
     companyId: str(o.companyId),
     timezone: str(o.timezone),
+    primaryUserId:
+      str(o.primaryUserId) ?? str(o.primary_user_id) ?? str(primaryRecord?.id) ?? str(primaryRecord?.userId),
   };
 }
 
@@ -118,20 +125,33 @@ function parseWorkflows(json: unknown): GhlDiscoveredWorkflow[] {
 
 function parseUsers(json: unknown): GhlDiscoveredUser[] {
   return asArray(json)
-    .map((item) => {
+    .map((item): GhlDiscoveredUser | null => {
       if (!item || typeof item !== "object" || Array.isArray(item)) return null;
       const u = item as Record<string, unknown>;
       const id = str(u.id);
       if (!id) return null;
       const fullName = [str(u.firstName), str(u.lastName)].filter(Boolean).join(" ").trim();
       const name = str(u.name) ?? (fullName || null);
+      const roles =
+        u.roles && typeof u.roles === "object" && !Array.isArray(u.roles)
+          ? (u.roles as Record<string, unknown>)
+          : {};
+      const locationIds = [roles.locationIds, u.locationIds]
+        .flatMap((value) => (Array.isArray(value) ? value : []))
+        .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+        .map((value) => value.trim());
+      const role = str(u.role) ?? str(roles.role);
       return {
         id,
         name: name ?? id,
         email: str(u.email),
+        role,
+        userType: str(u.type) ?? str(roles.type),
+        locationIds,
+        isPrimary: u.isPrimary === true || u.primary === true || role?.toLowerCase() === "owner",
       };
     })
-    .filter((x): x is GhlDiscoveredUser => x !== null);
+    .filter((user): user is GhlDiscoveredUser => user !== null);
 }
 
 function parsePicklistOptions(raw: unknown): string[] | null {

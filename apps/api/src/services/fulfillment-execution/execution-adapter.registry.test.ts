@@ -40,3 +40,21 @@ test("google_sheets.v1 has no execution adapter and cannot deliverLive", () => {
   assert.equal(getExecutionAdapter("google_sheets.v1"), null);
   assert.equal(listRegisteredExecutionAdapterKeys().includes("google_sheets.v1"), false);
 });
+
+test("webhook.generic.v1 is simulate-only and existing execution adapters stay", () => {
+  const keys = listRegisteredExecutionAdapterKeys();
+  assert.equal(keys.includes("webhook.generic.v1"), true);
+  assert.equal(keys.includes("ghl.crm.v1"), true);
+  assert.equal(keys.includes("file_export.csv.v1"), true);
+  assert.equal(keys.includes("test.simulated.v1"), true);
+  assert.equal(keys.includes("google_sheets.v1"), false);
+  assert.equal(keys.includes("google_sheets.company.v1"), false);
+
+  const webhook = getExecutionAdapter("webhook.generic.v1");
+  assert.ok(webhook);
+  assert.equal(Object.hasOwn(webhook, "deliverLive"), false);
+  assert.equal(typeof getExecutionAdapter("ghl.crm.v1")?.deliverLive, "function");
+  assert.equal(getExecutionAdapter("file_export.csv.v1")?.deliverLive, undefined);
+  assert.equal(getExecutionAdapter("google_sheets.v1"), null);
+  assert.equal(getExecutionAdapter("google_sheets.company.v1"), null);
+});

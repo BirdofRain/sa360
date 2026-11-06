@@ -1,4 +1,5 @@
 import type { DeliveryAdapterValidateResult } from "../fulfillment-shadow/delivery-adapter.registry.js";
+import { customWebhookExecutionAdapter } from "./custom-webhook-execution.adapter.js";
 import { fileExportCsvExecutionAdapter } from "./file-export-csv-execution.adapter.js";
 import { ghlCrmExecutionAdapter } from "./ghl-crm-execution.adapter.js";
 import type {
@@ -62,6 +63,7 @@ const EXECUTION_REGISTRY = new Map<string, ExecutionAdapterContract>([
   [testSimulatedAdapter.adapterKey, testSimulatedAdapter],
   [ghlCrmExecutionAdapter.adapterKey, ghlCrmExecutionAdapter],
   [fileExportCsvExecutionAdapter.adapterKey, fileExportCsvExecutionAdapter],
+  [customWebhookExecutionAdapter.adapterKey, customWebhookExecutionAdapter],
 ]);
 
 export function registerExecutionAdapter(adapter: ExecutionAdapterContract): void {

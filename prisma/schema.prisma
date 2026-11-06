@@ -1063,6 +1063,12 @@ model ClientAccount {
   historicalCampaignAliases HistoricalCampaignAlias[] @relation("HistoricalCampaignAliasOrigin")
   historicalAliasPreviousOriginEvents HistoricalCampaignAliasEvent[] @relation("HistoricalCampaignAliasEventPreviousOrigin")
   historicalAliasNextOriginEvents HistoricalCampaignAliasEvent[] @relation("HistoricalCampaignAliasEventNextOrigin")
+  /// Outbound custom webhook configuration. enabled defaults false and does not arm delivery.
+  customWebhookDestination ClientCustomWebhookDestination?
+  /// Per-client notification on/off choice. Defaults disabled and cascades without sending.
+  deliveryNotificationPreference ClientDeliveryNotificationPreference?
+  /// One send record per source lead. Restrict so account deletion cannot erase send history.
+  deliverySuccessNotifications DeliverySuccessNotification[]
 
   @@index([status])
 }
@@ -2597,6 +2603,8 @@ model DeliveryTarget {
   createdAt            DateTime              @default(now())
   updatedAt            DateTime              @updatedAt
   deliveryInstructions DeliveryInstruction[]
+  /// Optional secret row for webhook.generic.v1. The signing secret is not stored here.
+  customWebhookDestination ClientCustomWebhookDestination?
 
   @@index([clientAccountId, enabled])
   @@index([adapterKey])
@@ -4061,4 +4069,95 @@ model MetaFormCandidate {
 
   @@unique([pageId, formId, sourceLabel])
   @@index([pageId])
+}
+
+/// v1 notification channel. SMS is not a value until a later assignment implements it.
+enum ClientDeliveryNotificationChannel {
+  email
+}
+
+/// Same words as the customer release notifier. Do not add synonyms.
+enum DeliverySuccessNotificationStatus {
+  pending
+  sending
+  sent
+  skipped
+  failed
+}
+
+/// One outbound custom webhook destination per client account.
+/// The signing secret is AES-256-GCM ciphertext under SA360_CUSTOM_WEBHOOK_SECRET_KEY.
+/// Plaintext and ciphertext never belong in DeliveryTarget.configMetadataJson, logs, or tickets.
+/// enabled defaults to false. Creating this row does not set DeliveryTarget.enabled
+/// and does not send a webhook. There is no relation that cascades a send.
+model ClientCustomWebhookDestination {
+  id                       String          @id @default(cuid())
+  clientAccountId          String          @unique
+  clientAccount            ClientAccount   @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Cascade)
+  /// Optional webhook.generic.v1 target. Unique when set. SetNull does not send.
+  deliveryTargetId         String?         @unique
+  deliveryTarget           DeliveryTarget? @relation(fields: [deliveryTargetId], references: [id], onDelete: SetNull)
+  endpointUrl              String
+  /// AES-256-GCM ciphertext (`iv.tag.ciphertext`, base64url). Server-side only.
+  signingSecretCiphertext  String
+  /// SHA-256 prefix of the plaintext secret. Not itself a secret.
+  signingSecretFingerprint String
+  enabled                  Boolean         @default(false)
+  revision                 Int             @default(1)
+  createdAt                DateTime        @default(now())
+  updatedAt                DateTime        @updatedAt
+}
+
+/// Per-client on/off choice for a successful-delivery email.
+/// enabled defaults false. SQL check ClientDeliveryNotifyPref_enabled_verified_chk
+/// rejects enabled=true unless recipientEmail, recipientEmailVerifiedAt, and
+/// enabledAt are present and channel is email. Deleting the client cascades
+/// this configuration and does not send. This row does not arm GHL, Sheets, or webhooks.
+model ClientDeliveryNotificationPreference {
+  id                        String                            @id @default(cuid())
+  clientAccountId           String                            @unique
+  clientAccount             ClientAccount                     @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Cascade)
+  enabled                   Boolean                           @default(false)
+  channel                   ClientDeliveryNotificationChannel @default(email)
+  /// One lowercase mailbox. Null until an admin records it. Not portalLoginEmail.
+  recipientEmail            String?
+  /// Set in the same admin save that records the address. Not a verification message.
+  recipientEmailVerifiedAt  DateTime?
+  /// Transaction time of the latest off-to-on transition. Never moves backward.
+  /// Receipts at or before this instant are not notified. Null while never enabled.
+  enabledAt                 DateTime?
+  disabledAt                DateTime?
+  /// Optimistic token for the later on/off write. This migration does not mount that route.
+  revision                  Int                               @default(1)
+  createdAt                 DateTime                          @default(now())
+  updatedAt                 DateTime                          @updatedAt
+}
+
+/// One client email per source lead, even when GHL and Sheets both qualify.
+/// idempotencyKey is client_lead:{clientAccountId}:{sourceLeadEventId}.
+/// Evidence ids are nullable and are not foreign keys, so this row cannot
+/// change a Sheets job, a GHL run, or a webhook attempt. sent is terminal.
+/// ON DELETE RESTRICT: client deletion must not erase send history.
+model DeliverySuccessNotification {
+  id                      String                            @id @default(cuid())
+  idempotencyKey          String                            @unique
+  clientAccountId         String
+  clientAccount           ClientAccount                     @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Restrict)
+  sourceLeadEventId       String
+  sheetsJobId             String?
+  ghlLiveRunId            String?
+  customWebhookAttemptId  String?
+  status                  DeliverySuccessNotificationStatus @default(pending)
+  claimedAt               DateTime?
+  attemptCount            Int                               @default(0)
+  sentAt                  DateTime?
+  /// Provider message id after a later assignment sends. The claim primitive never sets it.
+  providerMessageId       String?
+  lastError               String?
+  skipReason              String?
+  createdAt               DateTime                          @default(now())
+  updatedAt               DateTime                          @updatedAt
+
+  @@unique([clientAccountId, sourceLeadEventId], map: "DeliverySuccessNotification_client_lead_key")
+  @@index([status, claimedAt])
 }

@@ -27,6 +27,7 @@ test("dashboard routes no longer fall through to Command Center", () => {
     "/source-intake": "Source Intake Queue",
     "/source-intake/imports/new": "Bulk Imports",
     "/facebook-intake": "Facebook Intake",
+    "/facebook-intake/source-resolution": "Source Resolution review",
     "/automation-dashboard": "Automation Visibility",
     "/direct-delivery-demo": "Direct Delivery Demo",
     "/ghl-connections": "GHL Connections",

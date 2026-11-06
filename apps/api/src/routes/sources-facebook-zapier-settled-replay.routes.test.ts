@@ -69,6 +69,7 @@ test("a settled Zapier capture is a Meta replay and does not enqueue Graph fetch
     appSecret: secret,
     accessToken: "tok",
     accessTokenPageId: null,
+    unboundPageTokenEnabled: false,
     graphApiVersion: "v22.0",
     masterClientAccountId: "lal_master_vet",
     directIntakeEnabled: true,

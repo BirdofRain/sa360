@@ -133,10 +133,11 @@ Two independent tests:
 - **Why Page-bound:** a notification for any other Page now settles as
   `graphOutcome=token_unavailable` with an explanation instead of a confusing OAuth error. The
   raw notification is retained and can be requeued once a token exists.
-- **Multi-Page (not in this PR):** requires a **System User token** from the Business Manager
-  with the Pages assigned, or per-Page tokens persisted in the database (new table/columns →
-  Auth/Account lane migration). The code path that must grow is `resolveMetaPageAccessToken`;
-  no other code assumes a single Page.
+- **Multi-Page:** encrypted per-Page credentials and a default-off capture grant now live
+  behind `resolveMetaCapturePageToken`. See `docs/runbooks/meta-lead-ads-multi-page-capture.md`.
+  An unbound env token is no longer used for every Page unless
+  `SA360_META_UNBOUND_PAGE_TOKEN_ENABLED=true`. The one-Page pilot above is unchanged when
+  `META_PAGE_ACCESS_TOKEN_PAGE_ID` is set and that Page has no stored grant.
 
 ---
 

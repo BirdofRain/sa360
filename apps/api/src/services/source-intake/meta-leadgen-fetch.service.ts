@@ -2,9 +2,12 @@ import type { Prisma } from "@prisma/client";
 import { logger } from "../../lib/logger.js";
 import {
   getMetaWebhookConfig,
-  resolveMetaPageAccessToken,
+  type MetaPageTokenBlockReason,
+  type MetaPageTokenSource,
   type MetaWebhookConfig,
 } from "../../lib/meta-webhook.js";
+import { redactMetaSecretText } from "../../lib/meta-token-encryption.js";
+import { resolveMetaCapturePageToken } from "./meta-page-token.service.js";
 import { isSettledCaptureOnlyFacebookEvent } from "./facebook-capture-provenance.js";
 import {
   FACEBOOK_LEAD_PROVIDER,
@@ -69,6 +72,12 @@ export type MetaLeadgenFetchMeta = {
   graphError?: MetaGraphErrorDetail | null;
   /** Which Page the configured token was bound to when Graph was called. */
   tokenScope?: "page_bound" | "unbound";
+  /** Where the token came from. Never a token value. */
+  tokenSource?: MetaPageTokenSource;
+  /** Set when Graph was not called because no authorized Page token exists. */
+  tokenBlockReason?: MetaPageTokenBlockReason;
+  credentialId?: string;
+  tokenFingerprint?: string;
   liveDelivery: false;
   capiDispatched: false;
 };
@@ -115,6 +124,7 @@ export type ProcessMetaLeadgenFetchDeps = {
    * metadata is persisted, while the canonical lock is not held.
    */
   beforeGraphFailurePersistImpl?: () => Promise<void>;
+  resolvePageTokenImpl?: typeof resolveMetaCapturePageToken;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -143,6 +153,10 @@ export function readMetaLeadgenFetchMeta(enrichment: unknown): MetaLeadgenFetchM
     graphStatus: typeof bag.graphStatus === "number" ? bag.graphStatus : undefined,
     graphError: (asRecord(bag.graphError) as MetaGraphErrorDetail | null) ?? null,
     tokenScope: bag.tokenScope as MetaLeadgenFetchMeta["tokenScope"],
+    tokenSource: bag.tokenSource as MetaLeadgenFetchMeta["tokenSource"],
+    tokenBlockReason: bag.tokenBlockReason as MetaLeadgenFetchMeta["tokenBlockReason"],
+    credentialId: typeof bag.credentialId === "string" ? bag.credentialId : undefined,
+    tokenFingerprint: typeof bag.tokenFingerprint === "string" ? bag.tokenFingerprint : undefined,
     liveDelivery: false,
     capiDispatched: false,
   };
@@ -424,6 +438,15 @@ export async function processMetaLeadgenFetch(
   let fields: FacebookLeadFields | null = null;
   let graphBody: Record<string, unknown> | null = null;
   let tokenScope: MetaLeadgenFetchMeta["tokenScope"];
+  let tokenSource: MetaPageTokenSource | undefined;
+  let tokenCredentialId: string | undefined;
+  let tokenFingerprint: string | undefined;
+  const tokenMeta = () => ({
+    ...(tokenScope ? { tokenScope } : {}),
+    ...(tokenSource ? { tokenSource } : {}),
+    ...(tokenCredentialId ? { credentialId: tokenCredentialId } : {}),
+    ...(tokenFingerprint ? { tokenFingerprint } : {}),
+  });
 
   if (!gate.hydrated) {
     const fixtureBody = fixtureMode
@@ -466,9 +489,11 @@ export async function processMetaLeadgenFetch(
       fields = mapMetaLeadToFacebookFields(fixtureBody, envelope);
     } else {
       // A Page access token only reads leads for its own Page. Resolve the token
-      // for this notification's Page before calling Graph; a missing or
-      // mismatched token is terminal for this job (requeue after configuring).
-      const token = resolveMetaPageAccessToken(envelope.pageId, config);
+      // for this notification's Page before calling Graph; a missing,
+      // mismatched, or not-yet-allowlisted token is terminal for this job
+      // (requeue after configuring). The raw notification stays on the row.
+      const resolveToken = deps.resolvePageTokenImpl ?? resolveMetaCapturePageToken;
+      const token = await resolveToken(envelope.pageId, config);
       if (!token.ok) {
         if (deps.beforeGraphFailurePersistImpl) {
           await deps.beforeGraphFailurePersistImpl();
@@ -485,6 +510,8 @@ export async function processMetaLeadgenFetch(
             graphOutcome: "token_unavailable",
             graphStatus: 0,
             graphError: null,
+            tokenBlockReason: token.reason,
+            ...(token.credentialId ? { credentialId: token.credentialId } : {}),
             liveDelivery: false,
             capiDispatched: false,
           },
@@ -504,6 +531,7 @@ export async function processMetaLeadgenFetch(
           sourceLeadEventId: gate.eventId,
           pageId: envelope.pageId ?? null,
           reason: token.reason,
+          credentialId: token.credentialId ?? null,
         });
         return {
           ok: false,
@@ -515,15 +543,19 @@ export async function processMetaLeadgenFetch(
         };
       }
       tokenScope = token.scope;
+      tokenSource = token.source;
+      tokenCredentialId = token.credentialId;
+      tokenFingerprint = token.tokenFingerprint;
 
       let lead: MetaGraphLeadResult;
       try {
         lead = await fetchImpl(leadgenId, { ...config, accessToken: token.accessToken });
       } catch (err) {
+        const message = err instanceof Error ? err.message : "graph_fetch_threw";
         lead = {
           ok: false,
           status: 0,
-          body: { error: err instanceof Error ? err.message : "graph_fetch_threw" },
+          body: { error: redactMetaSecretText(message, [token.accessToken, config.appSecret]) },
         };
       }
       graphFetched = true;
@@ -547,7 +579,7 @@ export async function processMetaLeadgenFetch(
             graphOutcome,
             graphStatus,
             graphError,
-            tokenScope,
+            ...tokenMeta(),
             liveDelivery: false,
             capiDispatched: false,
           },
@@ -643,7 +675,7 @@ export async function processMetaLeadgenFetch(
             graphOutcome,
             graphStatus: graphFetched ? graphStatus : graphOutcome === "skipped_fixture" ? 200 : undefined,
             graphError: null,
-            ...(tokenScope ? { tokenScope } : {}),
+            ...tokenMeta(),
             liveDelivery: false,
             capiDispatched: false,
           },
@@ -709,7 +741,7 @@ export async function processMetaLeadgenFetch(
       graphOutcome,
       graphStatus: graphFetched ? graphStatus : graphOutcome === "skipped_fixture" ? 200 : undefined,
       graphError: null,
-      ...(tokenScope ? { tokenScope } : {}),
+      ...tokenMeta(),
       liveDelivery: false,
       capiDispatched: false,
     },

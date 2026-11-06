@@ -3975,3 +3975,90 @@ model IncomingDobCorrectionAudit {
 
   @@index([eventId, createdAt], map: "IncomingDobCorrectionAudit_eventId_createdAt_idx")
 }
+
+/// How a stored Meta Graph credential was issued. A system user credential may
+/// authorize many Pages; each Page still has its own capture grant.
+enum MetaGraphCredentialKind {
+  page_access_token
+  system_user
+}
+
+/// Operator-facing credential health. `active` is the only status the fetcher uses.
+enum MetaGraphCredentialStatus {
+  active
+  disabled
+  expired
+  revoked
+  missing_permission
+}
+
+/// Encrypted Meta Page or System User token for Lead Ads Graph retrieval.
+/// Plaintext is never stored. The encryption key is META_TOKEN_ENCRYPTION_KEY
+/// and is not shared with GHL or Google. Creating a row does not enable intake,
+/// Graph fetch, routing, delivery, or Page capture.
+model MetaGraphCredential {
+  id               String                     @id @default(cuid())
+  kind             MetaGraphCredentialKind
+  /// Operator label. Never a token or secret.
+  label            String
+  /// AES-256-GCM ciphertext (`iv.tag.ciphertext`, base64url). Server-side only.
+  tokenCiphertext  String
+  /// SHA-256 prefix so operators can tell credentials apart. Not a secret.
+  tokenFingerprint String
+  tokenVersion     Int                        @default(1)
+  appId            String?
+  /// Null means Meta reported no expiry (long-lived Page token).
+  expiresAt        DateTime?
+  /// Scopes observed from debug_token. Empty until an operator runs diagnostics.
+  scopes           Json                       @default("[]")
+  status           MetaGraphCredentialStatus  @default(active)
+  lastCheckedAt    DateTime?
+  /// Token-free diagnostic from the last check or Graph refusal.
+  lastDiagnostic   String?
+  createdAt        DateTime                   @default(now())
+  updatedAt        DateTime                   @updatedAt
+  pageGrants       MetaPageCaptureGrant[]
+
+  @@index([status])
+}
+
+/// Page-level capture allowlist. Default false, so storing a token does not
+/// authorize Graph retrieval for that Page. Independent of the global Meta
+/// intake, Graph fetch, routing, and delivery flags.
+model MetaPageCaptureGrant {
+  id             String              @id @default(cuid())
+  pageId         String              @unique
+  pageName       String?
+  credentialId   String
+  credential     MetaGraphCredential @relation(fields: [credentialId], references: [id], onDelete: Restrict)
+  captureEnabled Boolean             @default(false)
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  @@index([credentialId])
+  @@index([captureEnabled])
+}
+
+/// Candidate Page + Form evidence supplied by an operator registry or a later
+/// read-only discovery diff. Not client ownership. Import must not create a
+/// ClientAccount or write SourceFunnel.originClientAccountId.
+model MetaFormCandidate {
+  id           String   @id @default(cuid())
+  pageId       String
+  formId       String
+  pageName     String?
+  formName     String?
+  campaignId   String?
+  campaignName String?
+  adsetId      String?
+  adId         String?
+  adAccountId  String?
+  /// Operator source name, for example sanitized_campaign_registry.
+  sourceLabel  String
+  note         String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([pageId, formId, sourceLabel])
+  @@index([pageId])
+}

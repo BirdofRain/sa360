@@ -15,6 +15,13 @@ export type MetaLeadgenEnvelope = {
   formId?: string;
   adId?: string;
   adgroupId?: string;
+  adAccountId?: string;
+  campaignId?: string;
+  utmSource?: string;
+  utmMedium?: string;
+  utmCampaign?: string;
+  utmContent?: string;
+  utmTerm?: string;
   createdTime?: string;
 };
 
@@ -59,6 +66,13 @@ export function extractLeadgenEnvelopes(body: unknown): MetaLeadgenEnvelope[] {
         formId: asString(v.form_id),
         adId: asString(v.ad_id),
         adgroupId: asString(v.adgroup_id),
+        adAccountId: asString(v.ad_account_id),
+        campaignId: asString(v.campaign_id),
+        utmSource: asString(v.utm_source),
+        utmMedium: asString(v.utm_medium),
+        utmCampaign: asString(v.utm_campaign),
+        utmContent: asString(v.utm_content),
+        utmTerm: asString(v.utm_term),
         createdTime:
           typeof createdTimeRaw === "number"
             ? new Date(createdTimeRaw * 1000).toISOString()
@@ -374,6 +388,8 @@ export function mapMetaLeadToFacebookFields(
 ): FacebookLeadFields {
   const { mapped, custom, fullName } = readFieldData(graphLead);
   const nameParts = fullName ? splitFullName(fullName) : {};
+  const utm = (key: "utm_source" | "utm_medium" | "utm_campaign" | "utm_content" | "utm_term", envelopeValue?: string) =>
+    asString(graphLead[key]) ?? custom?.[key] ?? envelopeValue;
 
   return {
     leadgenId: asString(graphLead.id) ?? envelope.leadgenId,
@@ -382,11 +398,17 @@ export function mapMetaLeadToFacebookFields(
     formName: asString(graphLead.form_name),
     adId: asString(graphLead.ad_id) ?? envelope.adId,
     adName: asString(graphLead.ad_name),
-    adgroupId: envelope.adgroupId,
-    adsetId: asString(graphLead.adset_id),
+    adgroupId: asString(graphLead.adgroup_id) ?? envelope.adgroupId,
+    adsetId: asString(graphLead.adset_id) ?? envelope.adgroupId,
     adsetName: asString(graphLead.adset_name),
-    campaignId: asString(graphLead.campaign_id),
+    campaignId: asString(graphLead.campaign_id) ?? envelope.campaignId,
     campaignName: asString(graphLead.campaign_name),
+    adAccountId: asString(graphLead.ad_account_id) ?? envelope.adAccountId,
+    utmSource: utm("utm_source", envelope.utmSource),
+    utmMedium: utm("utm_medium", envelope.utmMedium),
+    utmCampaign: utm("utm_campaign", envelope.utmCampaign),
+    utmContent: utm("utm_content", envelope.utmContent),
+    utmTerm: utm("utm_term", envelope.utmTerm),
     platform: asString(graphLead.platform),
     createdTime: asString(graphLead.created_time) ?? envelope.createdTime,
     firstName: mapped.firstName ?? nameParts.firstName,

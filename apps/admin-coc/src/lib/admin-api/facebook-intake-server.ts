@@ -7,6 +7,10 @@ import type {
   FacebookFormAssociationItem,
   ReevaluateFacebookCaptureResult,
 } from "../facebook-intake/types";
+import {
+  sanitizeMetaCaptureHealth,
+  type MetaCaptureHealthView,
+} from "../facebook-intake/meta-capture-health";
 
 type AssociationListResponse = {
   ok: true;
@@ -97,4 +101,15 @@ export async function postFacebookCaptureReevaluation(body: {
     thisRequestDeliveryAttempted: false,
     historicalDeliveryOutcome: res.data.delivery.historicalOutcome,
   };
+}
+
+export async function loadMetaCaptureHealth(): Promise<{
+  health: MetaCaptureHealthView | null;
+  error: string | null;
+}> {
+  const res = await adminFetchJson<Record<string, unknown>>("/admin/v1/meta-capture/health");
+  if (!res.ok) return { health: null, error: formatAdminApiError(res) };
+  const health = sanitizeMetaCaptureHealth(res.data);
+  if (!health) return { health: null, error: "Meta capture health response was not readable." };
+  return { health, error: null };
 }

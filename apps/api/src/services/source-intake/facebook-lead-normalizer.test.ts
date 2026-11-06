@@ -220,3 +220,27 @@ test("mapMetaLeadToFacebookFields flattens field_data + splits full name", () =>
   assert.equal(fields.custom?.veteran_status, "Disabled Veteran");
   assert.equal(resolveFacebookRouteKey(fields), "form_9");
 });
+
+test("mapMetaLeadToFacebookFields keeps ad account, adgroup, and UTM without dropping answers", () => {
+  const fields = mapMetaLeadToFacebookFields(
+    {
+      id: "lg_556",
+      form_id: "form_9",
+      ad_account_id: "99887766",
+      campaign_id: CAMPAIGN_ID,
+      field_data: [
+        { name: "utm_source", values: ["facebook"] },
+        { name: "utm_campaign", values: ["spring"] },
+        { name: "are_you_a_veteran", values: ["Yes"] },
+      ],
+    },
+    { leadgenId: "lg_556", pageId: "page_77", formId: "form_9", adgroupId: "adgroup_4" }
+  );
+  assert.equal(fields.adAccountId, "99887766");
+  assert.equal(fields.adsetId, "adgroup_4");
+  assert.equal(fields.adgroupId, "adgroup_4");
+  assert.equal(fields.utmSource, "facebook");
+  assert.equal(fields.utmCampaign, "spring");
+  assert.equal(fields.custom?.are_you_a_veteran, "Yes");
+  assert.equal(fields.custom?.utm_source, "facebook");
+});

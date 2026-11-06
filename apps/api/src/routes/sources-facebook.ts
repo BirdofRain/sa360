@@ -40,6 +40,7 @@ import {
   enqueueMetaLeadgenFetch,
   type EnqueueMetaLeadgenFetchResult,
 } from "../services/source-intake/meta-leadgen-fetch-queue.service.js";
+import { resolveMetaCapturePageToken } from "../services/source-intake/meta-page-token.service.js";
 import {
   mergeMetaLeadgenFetchMeta,
   processMetaLeadgenFetch,
@@ -74,6 +75,11 @@ export type SourcesFacebookRoutesOptions = {
     sourceLeadEventId: string;
     fixture?: boolean;
   }) => Promise<EnqueueMetaLeadgenFetchResult>;
+  /**
+   * Page token decision used before a live Graph job is queued. Default is the
+   * stored-grant resolver. A refusal keeps the raw event and does not enqueue.
+   */
+  resolvePageTokenImpl?: typeof resolveMetaCapturePageToken;
   processMetaLeadgenFetchImpl?: typeof processMetaLeadgenFetch;
   /** Lock-safe metaLeadgenFetch merge (queued / enqueue_failed). Default: repository-backed. */
   mergeMetaLeadgenFetchMetaImpl?: typeof mergeMetaLeadgenFetchMeta;
@@ -239,6 +245,7 @@ async function handleLeadCreated(
       | "enqueueMetaLeadgenFetchImpl"
       | "mergeMetaLeadgenFetchMetaImpl"
       | "recordMetaNotificationRedeliveryImpl"
+      | "resolvePageTokenImpl"
     >,
   route: string
 ) {
@@ -252,6 +259,7 @@ async function handleLeadCreated(
   const mergeMetaImpl = opts.mergeMetaLeadgenFetchMetaImpl ?? mergeMetaLeadgenFetchMeta;
   const recordRedeliveryImpl =
     opts.recordMetaNotificationRedeliveryImpl ?? recordMetaNotificationRedelivery;
+  const resolvePageToken = opts.resolvePageTokenImpl ?? resolveMetaCapturePageToken;
   const logHandle = await start({
     requestId,
     rawBody: request.body,
@@ -396,6 +404,63 @@ async function handleLeadCreated(
         sourceEventId: persisted.eventId,
         replayed: persisted.replayed || Boolean(existing),
         queued: false,
+      });
+      continue;
+    }
+
+    let pageToken: Awaited<ReturnType<typeof resolveMetaCapturePageToken>>;
+    try {
+      pageToken = await resolvePageToken(envelope.pageId, config);
+    } catch (err) {
+      infrastructureFailure = "enqueue";
+      logger.error("facebook_intake.page_token_lookup_failed", {
+        requestId,
+        leadgenId: envelope.leadgenId,
+        sourceLeadEventId: persisted.eventId,
+        errorName: err instanceof Error ? err.name : "Error",
+      });
+      results.push({
+        leadgenId: envelope.leadgenId,
+        sourceEventId: persisted.eventId,
+        error: "page_token_lookup_failed",
+        queued: false,
+      });
+      continue;
+    }
+    if (!pageToken.ok) {
+      await mergeMetaImpl(
+        envelope.leadgenId,
+        persisted.eventId,
+        {
+          state: "failed",
+          graphOutcome: "token_unavailable",
+          graphStatus: 0,
+          tokenBlockReason: pageToken.reason,
+          ...(pageToken.credentialId ? { credentialId: pageToken.credentialId } : {}),
+          liveDelivery: false,
+          capiDispatched: false,
+        },
+        { errorSummary: pageToken.diagnostic }
+      ).catch((err: unknown) => {
+        logger.warn("facebook_intake.page_token_metadata_update_failed", {
+          leadgenId: envelope.leadgenId,
+          sourceLeadEventId: persisted.eventId,
+          errorName: err instanceof Error ? err.name : "Error",
+        });
+      });
+      logger.warn("facebook_intake.page_not_queued", {
+        leadgenId: envelope.leadgenId,
+        sourceLeadEventId: persisted.eventId,
+        pageId: envelope.pageId ?? null,
+        reason: pageToken.reason,
+        credentialId: pageToken.credentialId ?? null,
+      });
+      results.push({
+        leadgenId: envelope.leadgenId,
+        sourceEventId: persisted.eventId,
+        queued: false,
+        tokenBlockReason: pageToken.reason,
+        replayed: persisted.replayed || Boolean(existing),
       });
       continue;
     }
@@ -815,6 +880,7 @@ export async function sourcesFacebookRoutes(
     enqueueMetaLeadgenFetchImpl: opts.enqueueMetaLeadgenFetchImpl,
     mergeMetaLeadgenFetchMetaImpl: opts.mergeMetaLeadgenFetchMetaImpl,
     recordMetaNotificationRedeliveryImpl: opts.recordMetaNotificationRedeliveryImpl,
+    resolvePageTokenImpl: opts.resolvePageTokenImpl,
   };
 
   for (const route of [FACEBOOK_LEAD_CREATED_ROUTE, META_LEADGEN_ROUTE]) {

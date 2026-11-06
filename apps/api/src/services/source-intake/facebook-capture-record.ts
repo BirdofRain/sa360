@@ -11,6 +11,7 @@ import {
 } from "./facebook-lead-normalizer.js";
 import type { ZapierFacebookCaptureFields } from "./zapier-facebook-capture-payload.js";
 import { withIntakeConsumerAge } from "../consumer-age/consumer-age-intake.js";
+import { buildResolveSourceExtension } from "./resolve-source-extension.js";
 
 /**
  * Shared capture-only record builders for Facebook Lead Ads.
@@ -35,6 +36,13 @@ export type FacebookCaptureProvenance = "zapier" | "meta";
 export type FacebookCaptureFields = ZapierFacebookCaptureFields & {
   platform?: string | null;
   customFields?: Record<string, string> | null;
+  adgroupId?: string | null;
+  adAccountId?: string | null;
+  utmSource?: string | null;
+  utmMedium?: string | null;
+  utmCampaign?: string | null;
+  utmContent?: string | null;
+  utmTerm?: string | null;
 };
 
 export const FACEBOOK_CAPTURE_SCHEMA_VERSION = "sa360.facebook_capture.v1";
@@ -90,6 +98,13 @@ export function captureFieldsFromFacebookLeadFields(fields: FacebookLeadFields):
     adsetName: trimOrNull(fields.adsetName),
     adId: trimOrNull(fields.adId),
     adName: trimOrNull(fields.adName),
+    adgroupId: trimOrNull(fields.adgroupId),
+    adAccountId: trimOrNull(fields.adAccountId),
+    utmSource: trimOrNull(fields.utmSource),
+    utmMedium: trimOrNull(fields.utmMedium),
+    utmCampaign: trimOrNull(fields.utmCampaign),
+    utmContent: trimOrNull(fields.utmContent),
+    utmTerm: trimOrNull(fields.utmTerm),
     firstName: trimOrNull(fields.firstName),
     lastName: trimOrNull(fields.lastName),
     email: trimOrNull(fields.email),
@@ -144,6 +159,13 @@ export function buildFacebookCaptureNormalizedPayload(input: {
         ["adset_name", fields.adsetName],
         ["ad_id", fields.adId],
         ["ad_name", fields.adName],
+        ["adgroup_id", fields.adgroupId],
+        ["ad_account_id", fields.adAccountId],
+        ["utm_source", fields.utmSource],
+        ["utm_medium", fields.utmMedium],
+        ["utm_campaign", fields.utmCampaign],
+        ["utm_content", fields.utmContent],
+        ["utm_term", fields.utmTerm],
         ["platform", fields.platform],
       ]),
       ...(fields.submittedAt ? { submitted_at: fields.submittedAt } : {}),
@@ -197,5 +219,9 @@ export function buildFacebookCaptureEnrichment(input: {
       historicalOutcome: "not_recorded",
     },
     associationAudit: (input.audit ?? []) as Prisma.InputJsonValue,
+    resolveSource: buildResolveSourceExtension({
+      fields: input.fields,
+      association: input.association,
+    }) as unknown as Prisma.InputJsonObject,
   };
 }

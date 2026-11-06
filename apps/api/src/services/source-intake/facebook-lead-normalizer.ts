@@ -19,6 +19,12 @@ export type FacebookLeadFields = {
   adsetName?: string;
   campaignId?: string;
   campaignName?: string;
+  adAccountId?: string;
+  utmSource?: string;
+  utmMedium?: string;
+  utmCampaign?: string;
+  utmContent?: string;
+  utmTerm?: string;
   platform?: string;
   createdTime?: string;
   firstName?: string;
@@ -98,6 +104,12 @@ export function coerceFacebookLeadFields(body: unknown): FacebookLeadFields | nu
     adsetName: readString(rec, "adsetName", "adset_name"),
     campaignId: readString(rec, "campaignId", "campaign_id"),
     campaignName: readString(rec, "campaignName", "campaign_name"),
+    adAccountId: readString(rec, "adAccountId", "ad_account_id"),
+    utmSource: readString(rec, "utmSource", "utm_source"),
+    utmMedium: readString(rec, "utmMedium", "utm_medium"),
+    utmCampaign: readString(rec, "utmCampaign", "utm_campaign"),
+    utmContent: readString(rec, "utmContent", "utm_content"),
+    utmTerm: readString(rec, "utmTerm", "utm_term"),
     platform: readString(rec, "platform"),
     createdTime: readString(rec, "createdTime", "created_time"),
     firstName: readString(rec, "firstName", "first_name"),

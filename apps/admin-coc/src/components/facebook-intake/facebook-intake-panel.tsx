@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import type { MetaCaptureHealthView } from "@/lib/facebook-intake/meta-capture-health";
 import type {
   AssociateFacebookFormResult,
   FacebookFormAssociationItem,
@@ -19,9 +20,13 @@ export function FacebookIntakePanel({
   loadError,
   associateAction,
   reevaluateAction,
+  captureHealth = null,
+  captureHealthError = null,
 }: {
   associations: FacebookFormAssociationItem[];
   loadError: string | null;
+  captureHealth?: MetaCaptureHealthView | null;
+  captureHealthError?: string | null;
   associateAction: (input: {
     pageId: string;
     formId: string;
@@ -110,6 +115,8 @@ export function FacebookIntakePanel({
           {loadError}
         </WarningBanner>
       ) : null}
+
+      <MetaCaptureHealthSection health={captureHealth} error={captureHealthError} />
 
       <form onSubmit={submitAssociation} className="space-y-4 rounded-xl border p-4">
         <div>
@@ -240,5 +247,86 @@ export function FacebookIntakePanel({
         </Button>
       </form>
     </div>
+  );
+}
+
+function flagLabel(on: boolean): string {
+  return on ? "on" : "off";
+}
+
+function MetaCaptureHealthSection({
+  health,
+  error,
+}: {
+  health: MetaCaptureHealthView | null;
+  error: string | null;
+}) {
+  return (
+    <section className="space-y-3 rounded-xl border p-4">
+      <div>
+        <h2 className="font-medium">Meta multi-page capture health</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Page grants default to off. Enabling a Page does not turn on routing, GHL, Sheets, CAPI,
+          or inventory. Candidate forms are evidence, not client ownership. A Page and Form do not
+          by themselves prove one client when several campaigns share that form. Unmatched leads
+          stay in this admin review and are not available for resale.
+        </p>
+      </div>
+      {error ? (
+        <WarningBanner tone="warn" title="Capture health unavailable">
+          {error}
+        </WarningBanner>
+      ) : null}
+      {health ? (
+        <>
+          <dl className="grid gap-2 text-sm sm:grid-cols-2">
+            <div>Intake: {flagLabel(health.flags.intakeEnabled)}</div>
+            <div>Graph fetch: {flagLabel(health.flags.graphFetchEnabled)}</div>
+            <div>Routing: {flagLabel(health.flags.routingEnabled)}</div>
+            <div>Association writes: {flagLabel(health.flags.captureAssociationEnabled)}</div>
+            <div>Unbound env token: {flagLabel(health.flags.unboundPageTokenEnabled)}</div>
+            <div>Live discovery: {flagLabel(health.flags.inventoryDiscoveryEnabled)}</div>
+            <div>Token encryption: {flagLabel(health.flags.encryptionConfigured)}</div>
+            <div>Env token present: {flagLabel(health.flags.envTokenConfigured)}</div>
+            <div>Env token Page: {health.flags.envTokenPageId ?? "not bound"}</div>
+            <div>Admin review unmatched: {health.review.adminReviewUnmatched}</div>
+            <div>Association disabled: {health.review.associationDisabled}</div>
+            <div>Capture not allowlisted: {health.review.captureNotAllowlisted}</div>
+            <div>Candidate forms: {health.review.candidateForms}</div>
+          </dl>
+          {health.pages.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No encrypted Page credentials are stored.</p>
+          ) : (
+            <div className="overflow-x-auto rounded-xl border">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/40 text-left">
+                  <tr>
+                    <th className="px-3 py-2 font-medium">Page</th>
+                    <th className="px-3 py-2 font-medium">Capture</th>
+                    <th className="px-3 py-2 font-medium">Status</th>
+                    <th className="px-3 py-2 font-medium">Fingerprint</th>
+                    <th className="px-3 py-2 font-medium">Scopes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {health.pages.map((page) => (
+                    <tr key={`${page.credentialId}-${page.pageId}`} className="border-t">
+                      <td className="px-3 py-2 font-mono text-xs">
+                        {page.pageId}
+                        {page.pageName ? ` ${page.pageName}` : ""}
+                      </td>
+                      <td className="px-3 py-2">{page.captureEnabled ? "enabled" : "off"}</td>
+                      <td className="px-3 py-2">{page.credentialStatus}</td>
+                      <td className="px-3 py-2 font-mono text-xs">{page.tokenFingerprint}</td>
+                      <td className="px-3 py-2">{page.scopes.length > 0 ? page.scopes.join(", ") : "not checked"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      ) : null}
+    </section>
   );
 }

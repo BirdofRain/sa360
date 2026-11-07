@@ -6,9 +6,22 @@ recognizes matching incoming LeadCapture events on both lanes
 (`leadcapture_io_legacy`, `leadcapture_io_nextgen`) and can resolve
 `destinationClientAccountId` when no exact `CampaignRoutingRule` exists.
 
-Nothing here enables live delivery. Routing still produces a dry-run decision,
-and a destination resolved from an association carries no `matchedRuleId`, so
-shadow fulfillment and GHL/Sheets/webhook delivery stay unreachable.
+An association match does not create a campaign rule and carries no
+`matchedRuleId`. The routing decision remains a dry-run decision. GHL shadow
+plans and direct GHL delivery stay unreachable on this authority:
+`buildShadowDeliveryPlanSteps` blocks a matched decision that has no rule, and
+LeadCapture intake does not generate that plan.
+
+Company Sheets campaign delivery does accept this authority. When intake
+persists `routing_matched`, `recordCompanySheetsCampaignIntent` inserts one
+`CompanySheetsDispatchIntent` for the resolved client without reading a rule.
+The insert runs only when `SA360_COMPANY_GOOGLE_SHEETS_DISPATCH_ENABLED` is
+exactly `true` on the API process, the client campaign switch and cutoff are
+set, and the lead's resolution time is at or after that cutoff. A bound
+campaign tab whose stored header matches the schema becomes `pending`. Any
+other tab state stays `awaiting_setup`. Turning the flag on does not scan
+older leads. API execution is a separate flag and is what allows the drain to
+append. Worker dispatch only calls that drain.
 
 ## Identity signals
 

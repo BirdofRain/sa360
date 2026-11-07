@@ -147,6 +147,32 @@ describe("delivery success notification claim", { concurrency: false }, () => {
     assert.equal(inserted.length, 1);
   });
 
+  test("repeated concurrent channel writes never drop the other receipt id", async () => {
+    const clientAccountId = await createClient("evidence-race");
+    for (let i = 0; i < 12; i++) {
+      const sourceLeadEventId = `lead_evidence_${i}`;
+      await Promise.all([
+        recordDeliverySuccessNotification(dbA, {
+          clientAccountId,
+          sourceLeadEventId,
+          sheetsJobId: `job_${i}`,
+        }),
+        recordDeliverySuccessNotification(dbB, {
+          clientAccountId,
+          sourceLeadEventId,
+          ghlLiveRunId: `run_${i}`,
+        }),
+      ]);
+      const rows = await dbA.deliverySuccessNotification.findMany({
+        where: { clientAccountId, sourceLeadEventId },
+      });
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0]?.sheetsJobId, `job_${i}`);
+      assert.equal(rows[0]?.ghlLiveRunId, `run_${i}`);
+      assert.equal(rows[0]?.status, DELIVERY_SUCCESS_NOTIFICATION_STATUS.pending);
+    }
+  });
+
   test("a second channel does not reopen a sent notification", async () => {
     const clientAccountId = await createClient("sent-evidence");
     const first = await recordDeliverySuccessNotification(dbA, {

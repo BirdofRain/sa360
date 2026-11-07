@@ -1067,6 +1067,8 @@ model ClientAccount {
   customWebhookDestination ClientCustomWebhookDestination?
   /// Per-client notification on/off choice. Defaults disabled and cascades without sending.
   deliveryNotificationPreference ClientDeliveryNotificationPreference?
+  /// Accepted recipient and on/off writes. Cascade with the client. These rows do not send.
+  deliveryNotificationConfigRequests ClientDeliveryNotificationConfigRequest[]
   /// One send record per source lead. Restrict so account deletion cannot erase send history.
   deliverySuccessNotifications DeliverySuccessNotification[]
 
@@ -4127,10 +4129,29 @@ model ClientDeliveryNotificationPreference {
   /// Receipts at or before this instant are not notified. Null while never enabled.
   enabledAt                 DateTime?
   disabledAt                DateTime?
-  /// Optimistic token for the later on/off write. This migration does not mount that route.
+  /// Optimistic token. A client with no row is revision 0. The config routes advance it.
   revision                  Int                               @default(1)
   createdAt                 DateTime                          @default(now())
   updatedAt                 DateTime                          @updatedAt
+}
+
+/// One accepted Admin C.O.C. write of a notification recipient or on/off choice.
+/// requestId is the idempotency key. A repeat of the same id and payload returns
+/// the stored result. A different payload for that id conflicts. Deleting the
+/// client cascades these rows and does not send. This is not a notification receipt.
+model ClientDeliveryNotificationConfigRequest {
+  id              String        @id @default(cuid())
+  requestId       String        @unique
+  clientAccountId String
+  clientAccount   ClientAccount @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Cascade)
+  /// recipient | preference
+  action          String
+  payloadHash     String
+  /// Stored response for an exact replay. The recipient snapshot includes the mailbox.
+  resultJson      Json
+  createdAt       DateTime      @default(now())
+
+  @@index([clientAccountId, createdAt])
 }
 
 /// One client email per source lead, even when GHL and Sheets both qualify.

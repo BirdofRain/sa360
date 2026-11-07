@@ -14,6 +14,7 @@ import { debugLogtailRoutes } from "./routes/debug-logtail.js";
 import { adminRoutes } from "./routes/admin.js";
 import { adminKanbanRoutes } from "./routes/admin-kanban.js";
 import { agentWorkspaceRoutes } from "./routes/agent-workspace.js";
+import { adminDeliveryNotificationConfigRoutes } from "./routes/admin-delivery-notification-config.js";
 import { automationDashboardRoutes } from "./routes/automation-dashboard.js";
 import { actionDashboardRoutes } from "./routes/action-dashboard.js";
 import { clientPortalRoutes } from "./routes/client-portal.js";
@@ -193,6 +194,8 @@ export async function buildApp() {
     loadWorld: (clientAccountId, sourceLeadEventId) => loadCapturedTestWorld(clientAccountId, sourceLeadEventId),
     saveTestIdentity: (input) => saveVerifiedTestIdentity(input),
   });
+  // Recipient and on/off writes. The Team Workspace read stays registered above.
+  await app.register(adminDeliveryNotificationConfigRoutes, { prefix: "/admin/v1" });
   await app.register(agentWorkspaceRoutes, { prefix: "/agent-workspace/v1" });
   await app.register(automationDashboardRoutes, {
     prefix: "/admin/v1/automation-dashboard",

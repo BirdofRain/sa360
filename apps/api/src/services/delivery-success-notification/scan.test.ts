@@ -1007,4 +1007,253 @@ describe("canonical delivery notification scan", { concurrency: false }, () => {
       0
     );
   });
+
+  test("disabling and re-enabling during a scan does not email the older lead", async () => {
+    const clientAccountId = await createClient("reenable");
+    await enablePreference(clientAccountId);
+    const sheets = await armSheets(clientAccountId);
+    await addSheetsJob({
+      clientAccountId,
+      connectionId: sheets.connection.id,
+      destinationId: sheets.destination.id,
+      spreadsheetId: sheets.destination.spreadsheetId,
+      sourceLeadEventId: "lead_reenable",
+    });
+    const calls: SentMail[] = [];
+    const result = await scanCanonicalDeliveryNotifications({
+      db: dbA,
+      env: notifyEnv(),
+      now: SCAN_NOW,
+      clientAccountId,
+      send: recordingMailer(calls),
+      beforeSend: async () => {
+        const disabled = await setDeliveryNotificationEnabled(dbA, { clientAccountId, enabled: false });
+        assert.equal(disabled.ok, true);
+        const enabled = await setDeliveryNotificationEnabled(dbA, { clientAccountId, enabled: true });
+        assert.equal(enabled.ok, true);
+        if (enabled.ok) assert.ok(enabled.preference.enabledAt);
+        if (enabled.ok && enabled.preference.enabledAt) {
+          assert.ok(enabled.preference.enabledAt.getTime() > FINISHED.getTime());
+        }
+      },
+    });
+    assert.equal(result.sent, 0);
+    assert.equal(calls.length, 0);
+    const row = await dbA.deliverySuccessNotification.findUniqueOrThrow({
+      where: { idempotencyKey: `client_lead:${clientAccountId}:lead_reenable` },
+    });
+    assert.equal(row.status, DELIVERY_SUCCESS_NOTIFICATION_STATUS.skipped);
+    assert.equal(row.skipReason, "enabled_at_advanced");
+    assert.equal(row.sentAt, null);
+    const again = await scanCanonicalDeliveryNotifications({
+      db: dbA,
+      env: notifyEnv(),
+      now: SCAN_NOW,
+      clientAccountId,
+      send: recordingMailer(calls),
+    });
+    assert.equal(again.sent, 0);
+    assert.equal(calls.length, 0);
+    const stored = await dbA.deliverySuccessNotification.findUniqueOrThrow({
+      where: { idempotencyKey: `client_lead:${clientAccountId}:lead_reenable` },
+    });
+    assert.equal(stored.status, DELIVERY_SUCCESS_NOTIFICATION_STATUS.skipped);
+  });
+
+  test("a recipient change during a scan does not email the new address", async () => {
+    const clientAccountId = await createClient("recipient");
+    await enablePreference(clientAccountId);
+    const sheets = await armSheets(clientAccountId);
+    await addSheetsJob({
+      clientAccountId,
+      connectionId: sheets.connection.id,
+      destinationId: sheets.destination.id,
+      spreadsheetId: sheets.destination.spreadsheetId,
+      sourceLeadEventId: "lead_recipient",
+    });
+    const replacement = "later-owner@example.com";
+    const calls: SentMail[] = [];
+    await scanCanonicalDeliveryNotifications({
+      db: dbA,
+      env: notifyEnv(),
+      now: SCAN_NOW,
+      clientAccountId,
+      send: recordingMailer(calls),
+      beforeSend: async () => {
+        await dbA.clientDeliveryNotificationPreference.update({
+          where: { clientAccountId },
+          data: {
+            recipientEmail: replacement,
+            recipientEmailVerifiedAt: new Date("2026-11-06T20:00:00.000Z"),
+          },
+        });
+      },
+    });
+    assert.equal(calls.length, 0);
+    assert.equal(
+      calls.some((call) => call.to === replacement || call.to === STAFF_LIST),
+      false
+    );
+    const row = await dbA.deliverySuccessNotification.findUniqueOrThrow({
+      where: { idempotencyKey: `client_lead:${clientAccountId}:lead_recipient` },
+    });
+    assert.equal(row.status, DELIVERY_SUCCESS_NOTIFICATION_STATUS.skipped);
+    assert.equal(row.skipReason, "recipient_changed");
+    assert.equal(row.sentAt, null);
+    await scanCanonicalDeliveryNotifications({
+      db: dbA,
+      env: notifyEnv(),
+      now: SCAN_NOW,
+      clientAccountId,
+      send: recordingMailer(calls),
+    });
+    assert.equal(calls.length, 0);
+  });
+
+  test("arming a destination before send leaves the notification unsent", async () => {
+    const clientAccountId = await createClient("arm-later");
+    await enablePreference(clientAccountId);
+    const sheets = await armSheets(clientAccountId);
+    const job = await addSheetsJob({
+      clientAccountId,
+      connectionId: sheets.connection.id,
+      destinationId: sheets.destination.id,
+      spreadsheetId: sheets.destination.spreadsheetId,
+      sourceLeadEventId: "lead_arm_later",
+    });
+    const calls: SentMail[] = [];
+    const send = recordingMailer(calls);
+    await scanCanonicalDeliveryNotifications({
+      db: dbA,
+      env: notifyEnv(),
+      now: SCAN_NOW,
+      clientAccountId,
+      send,
+      beforeSend: async () => {
+        await armGhl(clientAccountId);
+      },
+    });
+    assert.equal(calls.length, 0);
+    const pending = await dbA.deliverySuccessNotification.findUniqueOrThrow({
+      where: { idempotencyKey: `client_lead:${clientAccountId}:lead_arm_later` },
+    });
+    assert.equal(pending.status, DELIVERY_SUCCESS_NOTIFICATION_STATUS.pending);
+    assert.equal(pending.sheetsJobId, job.id);
+    assert.equal(pending.ghlLiveRunId, null);
+    const locationId = `loc_${clientAccountId}`;
+    const run = await addGhlRun({
+      clientAccountId,
+      locationId,
+      sourceLeadEventId: "lead_arm_later",
+      steps: ghlSteps({ leadId: "lead_arm_later" }),
+    });
+    await scanCanonicalDeliveryNotifications({
+      db: dbA,
+      env: notifyEnv(),
+      now: SCAN_NOW,
+      clientAccountId,
+      send,
+    });
+    assert.equal(calls.length, 1);
+    assertClientMail(calls[0]!, clientAccountId, "lead_arm_later");
+    const sent = await dbA.deliverySuccessNotification.findUniqueOrThrow({
+      where: { idempotencyKey: `client_lead:${clientAccountId}:lead_arm_later` },
+    });
+    assert.equal(sent.status, DELIVERY_SUCCESS_NOTIFICATION_STATUS.sent);
+    assert.equal(sent.sheetsJobId, job.id);
+    assert.equal(sent.ghlLiveRunId, run.id);
+    await scanCanonicalDeliveryNotifications({
+      db: dbA,
+      env: notifyEnv(),
+      now: SCAN_NOW,
+      clientAccountId,
+      send,
+    });
+    assert.equal(calls.length, 1);
+  });
+
+  test("bounded pages resume, retry, and still include an older lead", async () => {
+    const clientAccountId = await createClient("pages");
+    await enablePreference(clientAccountId);
+    const sheets = await armSheets(clientAccountId);
+    const leads = [
+      { id: "lead_old", createdAt: new Date("2020-01-01T00:00:00.000Z") },
+      { id: "lead_mid", createdAt: new Date("2024-06-01T00:00:00.000Z") },
+      { id: "lead_new", createdAt: new Date("2026-11-01T00:00:00.000Z") },
+    ];
+    for (const lead of leads) {
+      const job = await addSheetsJob({
+        clientAccountId,
+        connectionId: sheets.connection.id,
+        destinationId: sheets.destination.id,
+        spreadsheetId: sheets.destination.spreadsheetId,
+        sourceLeadEventId: lead.id,
+      });
+      await dbA.companySheetsDeliveryJob.update({
+        where: { id: job.id },
+        data: { createdAt: lead.createdAt },
+      });
+    }
+    const calls: SentMail[] = [];
+    const send = recordingMailer(calls);
+    const first = await scanCanonicalDeliveryNotifications({
+      db: dbA,
+      env: notifyEnv(),
+      now: SCAN_NOW,
+      clientAccountId,
+      pageSize: 1,
+      maxPages: 1,
+      send,
+    });
+    assert.equal(first.pages, 1);
+    assert.equal(first.done, false);
+    assert.ok(first.cursor);
+    assert.equal(first.sent, 1);
+    assert.equal(calls[0]?.idempotencyKey, `client_lead:${clientAccountId}:lead_old`);
+
+    const replay = await scanCanonicalDeliveryNotifications({
+      db: dbA,
+      env: notifyEnv(),
+      now: SCAN_NOW,
+      clientAccountId,
+      pageSize: 1,
+      maxPages: 1,
+      send,
+    });
+    assert.equal(replay.sent, 0);
+    assert.equal(replay.alreadySent, 1);
+    assert.equal(replay.cursor, first.cursor);
+    assert.equal(calls.length, 1);
+
+    const rest = await scanCanonicalDeliveryNotifications({
+      db: dbA,
+      env: notifyEnv(),
+      now: SCAN_NOW,
+      clientAccountId,
+      pageSize: 1,
+      cursor: first.cursor,
+      send,
+    });
+    assert.equal(rest.done, true);
+    assert.equal(rest.cursor, null);
+    const keys = calls.map((call) => call.idempotencyKey);
+    assert.deepEqual(keys, [
+      `client_lead:${clientAccountId}:lead_old`,
+      `client_lead:${clientAccountId}:lead_mid`,
+      `client_lead:${clientAccountId}:lead_new`,
+    ]);
+
+    await scanCanonicalDeliveryNotifications({
+      db: dbA,
+      env: notifyEnv(),
+      now: SCAN_NOW,
+      clientAccountId,
+      pageSize: 1,
+      send,
+    });
+    assert.equal(calls.length, 3);
+    const rows = await dbA.deliverySuccessNotification.findMany({ where: { clientAccountId } });
+    assert.equal(rows.length, 3);
+    assert.equal(rows.every((row) => row.status === DELIVERY_SUCCESS_NOTIFICATION_STATUS.sent), true);
+  });
 });

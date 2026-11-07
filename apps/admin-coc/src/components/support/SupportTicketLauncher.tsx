@@ -1,7 +1,7 @@
 "use client";
 
 import { isSupportTicketsEnabled } from "@/lib/support-tickets/config";
-import type { SupportTicketContextOverride } from "@/lib/support-tickets/types";
+import type { SupportTicketCategory, SupportTicketContextOverride } from "@/lib/support-tickets/types";
 
 import { SupportTicketButton } from "./SupportTicketButton";
 
@@ -14,9 +14,11 @@ export function SupportTicketLauncher() {
 export function SupportTicketInlineButton({
   contextOverride,
   label = "Report issue",
+  initialCategory,
 }: {
   contextOverride?: SupportTicketContextOverride;
   label?: string;
+  initialCategory?: SupportTicketCategory;
 }) {
   if (!isSupportTicketsEnabled()) return null;
   return (
@@ -25,6 +27,7 @@ export function SupportTicketInlineButton({
       contextOverride={contextOverride}
       className="h-8"
       label={label}
+      initialCategory={initialCategory}
     />
   );
 }

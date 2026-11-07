@@ -7,8 +7,11 @@ import { fileURLToPath } from "node:url";
 import Fastify, { type FastifyInstance } from "fastify";
 
 import { prisma } from "../lib/db.js";
+import { isTeamWorkspaceApiEnabled as teamWorkspaceFlag } from "../lib/team-workspace-env.js";
+import { isTeamWorkspaceApiEnabled as teamWorkspaceReadFlag } from "../services/team-workspace/team-workspace-read.js";
 import { isSourceLeadEligibleForClientNotification } from "../services/delivery-success-notification/notification-claim.js";
 import { adminDeliveryNotificationConfigRoutes } from "./admin-delivery-notification-config.js";
+import { adminTeamWorkspaceRoutes } from "./admin-team-workspace.js";
 
 const ADMIN_KEY = "notification-config-test-key";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
@@ -29,6 +32,7 @@ before(async () => {
   delete process.env.SA360_ADMIN_KEY;
   process.env.SA360_TEAM_WORKSPACE_ENABLED = "true";
   app = Fastify({ logger: false });
+  await app.register(adminTeamWorkspaceRoutes, { prefix: "/admin/v1" });
   await app.register(adminDeliveryNotificationConfigRoutes, { prefix: "/admin/v1" });
 });
 
@@ -66,6 +70,10 @@ function recipientUrl(clientAccountId: string): string {
 
 function preferenceUrl(clientAccountId: string): string {
   return `/admin/v1/team-workspace/clients/${clientAccountId}/delivery-notification`;
+}
+
+function readUrl(clientAccountId: string): string {
+  return `/admin/v1/team-workspace/clients/${clientAccountId}`;
 }
 
 async function createClient(label: string): Promise<{ clientAccountId: string; portalLoginEmail: string }> {
@@ -656,6 +664,99 @@ test("enable, disable, and re-enable move the eligibility clock and keep histori
   assert.equal(account.portalLoginEmail, portalLoginEmail);
 });
 
+test("the team workspace read follows recipient and enable writes without returning the mailbox", async () => {
+  const { clientAccountId } = await createClient("read");
+  const email = "read-owner@example.com";
+  const nextEmail = "next-read@example.com";
+
+  const initial = await app.inject({ method: "GET", url: readUrl(clientAccountId), headers: adminHeaders() });
+  assert.equal(initial.statusCode, 200);
+  assert.deepEqual(initial.json().clientNotification, {
+    enabled: false,
+    canEnable: false,
+    blockedReason: "recipient_not_verified",
+    recipientVerified: false,
+  });
+
+  const saved = await app.inject({
+    method: "PUT",
+    url: recipientUrl(clientAccountId),
+    headers: adminHeaders(),
+    payload: { requestId: crypto.randomUUID(), expectedRevision: 0, recipientEmail: "  READ-OWNER@example.com " },
+  });
+  assert.equal(saved.statusCode, 200);
+  const verified = await app.inject({ method: "GET", url: readUrl(clientAccountId), headers: adminHeaders() });
+  assert.deepEqual(verified.json().clientNotification, {
+    enabled: false,
+    canEnable: true,
+    blockedReason: null,
+    recipientVerified: true,
+  });
+  assert.equal(verified.body.includes(email), false);
+
+  const enabled = await app.inject({
+    method: "PUT",
+    url: preferenceUrl(clientAccountId),
+    headers: adminHeaders(),
+    payload: { requestId: crypto.randomUUID(), expectedRevision: 1, enabled: true },
+  });
+  assert.equal(enabled.statusCode, 200);
+  const on = await app.inject({ method: "GET", url: readUrl(clientAccountId), headers: adminHeaders() });
+  assert.equal(on.json().clientNotification.enabled, true);
+  assert.equal(on.json().clientNotification.canEnable, true);
+  assert.equal(on.json().clientNotification.recipientVerified, true);
+  assert.equal(on.json().clientNotification.blockedReason, null);
+  assert.equal(on.body.includes(email), false);
+
+  await sleep(30);
+  const disabled = await app.inject({
+    method: "PUT",
+    url: preferenceUrl(clientAccountId),
+    headers: adminHeaders(),
+    payload: { requestId: crypto.randomUUID(), expectedRevision: 2, enabled: false },
+  });
+  assert.equal(disabled.statusCode, 200);
+  const off = await app.inject({ method: "GET", url: readUrl(clientAccountId), headers: adminHeaders() });
+  assert.deepEqual(off.json().clientNotification, {
+    enabled: false,
+    canEnable: true,
+    blockedReason: null,
+    recipientVerified: true,
+  });
+
+  const changed = await app.inject({
+    method: "PUT",
+    url: recipientUrl(clientAccountId),
+    headers: adminHeaders(),
+    payload: { requestId: crypto.randomUUID(), expectedRevision: 3, recipientEmail: nextEmail },
+  });
+  assert.equal(changed.statusCode, 200);
+  assert.equal(changed.json().enabled, false);
+  const afterChange = await app.inject({ method: "GET", url: readUrl(clientAccountId), headers: adminHeaders() });
+  assert.deepEqual(afterChange.json().clientNotification, {
+    enabled: false,
+    canEnable: true,
+    blockedReason: null,
+    recipientVerified: true,
+  });
+  assert.equal(afterChange.body.includes(nextEmail), false);
+
+  await sleep(30);
+  const reenabled = await app.inject({
+    method: "PUT",
+    url: preferenceUrl(clientAccountId),
+    headers: adminHeaders(),
+    payload: { requestId: crypto.randomUUID(), expectedRevision: 4, enabled: true },
+  });
+  assert.equal(reenabled.statusCode, 200);
+  assert.ok(new Date(reenabled.json().enabledAt).getTime() > new Date(enabled.json().enabledAt).getTime());
+  const again = await app.inject({ method: "GET", url: readUrl(clientAccountId), headers: adminHeaders() });
+  assert.equal(again.json().clientNotification.enabled, true);
+  assert.equal(again.json().clientNotification.canEnable, true);
+  assert.equal(again.body.includes(email), false);
+  assert.equal(again.body.includes(nextEmail), false);
+});
+
 test("configuration stays off the observer allowlist and does not own a sender", () => {
   const observer = readFileSync(
     path.join(repoRoot, "apps/admin-coc/src/lib/admin-coc-observer-access.ts"),
@@ -666,6 +767,8 @@ test("configuration stays off the observer allowlist and does not own a sender",
 
   const appSource = readFileSync(path.join(repoRoot, "apps/api/src/app.ts"), "utf8");
   assert.match(appSource, /adminDeliveryNotificationConfigRoutes/);
+  assert.match(appSource, /adminTeamWorkspaceRoutes/);
+  assert.equal(teamWorkspaceFlag, teamWorkspaceReadFlag);
 
   const routeSource = readFileSync(
     path.join(repoRoot, "apps/api/src/routes/admin-delivery-notification-config.ts"),

@@ -194,8 +194,7 @@ export async function buildApp() {
     loadWorld: (clientAccountId, sourceLeadEventId) => loadCapturedTestWorld(clientAccountId, sourceLeadEventId),
     saveTestIdentity: (input) => saveVerifiedTestIdentity(input),
   });
-  // Notification recipient and on/off writes. PR #292 registers the Team Workspace
-  // read next to the onboarding read routes. Keep both registrations on rebase.
+  // Recipient and on/off writes. The Team Workspace read stays registered above.
   await app.register(adminDeliveryNotificationConfigRoutes, { prefix: "/admin/v1" });
   await app.register(agentWorkspaceRoutes, { prefix: "/agent-workspace/v1" });
   await app.register(automationDashboardRoutes, {

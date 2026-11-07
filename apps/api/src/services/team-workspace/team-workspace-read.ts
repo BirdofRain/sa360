@@ -10,6 +10,8 @@ import type { PrismaClient } from "@prisma/client";
 
 import { clientOnboardingSetupDataSchema } from "../../schemas/client-onboarding-setup.schema.js";
 
+export { isTeamWorkspaceApiEnabled } from "../../lib/team-workspace-env.js";
+
 export const TEAM_WORKSPACE_CONTRACT_VERSION = "team_workspace_delivery_v1" as const;
 
 /** Same shape as the onboarding client id: one segment, no dots or slashes. */
@@ -82,11 +84,6 @@ type WebhookTargetRow = {
   enabled: boolean;
   configMetadataJson: unknown;
 };
-
-/** Exact `true` after trim. `TRUE`, `1`, `yes`, and `on` stay off. */
-export function isTeamWorkspaceApiEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.SA360_TEAM_WORKSPACE_ENABLED?.trim() === "true";
-}
 
 /**
  * No saved preference. The process kill switch is not consulted and is not returned.

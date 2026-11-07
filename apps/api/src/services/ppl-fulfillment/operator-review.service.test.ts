@@ -1066,4 +1066,187 @@ describe("operator review workflow", () => {
       rejected.every((row) => !acceptedOnly.exportableAllocationIds.includes(row.allocationId))
     );
   });
+
+  it("runs the first-controlled 3-purchased +1 buffer order without billing, delivery, or duplicates", async () => {
+    process.env.SA360_PPL_OPERATOR_REVIEW_ENABLED = "true";
+    const released: string[] = [];
+    const reserveCalls: Array<{ idempotencyKey: string; capacityMode?: string }> = [];
+    const db = reviewDb({ purchasedQuantity: 3 });
+    const opened = await openOperatorReviewBatch(
+      { orderId: "ord_1", bufferQuantity: 1, requestId: "rev-first-3plus1" },
+      db,
+      {
+        reserveUnbilledCandidate: async ({ idempotencyKey, capacityMode }) => {
+          reserveCalls.push({ idempotencyKey, capacityMode });
+          return {
+            ok: true,
+            allocationId: "alloc_buf_1",
+            inventoryItemId: "inv_buf_1",
+          };
+        },
+      }
+    );
+    assert.equal(opened.ok, true);
+    if (!opened.ok) return;
+    assert.equal(opened.item.purchasedQuantity, 3);
+    assert.equal(opened.item.bufferQuantity, 1);
+    assert.equal(opened.item.items.length, 4);
+    assert.equal(opened.item.billedQuantity, null);
+    assert.equal(opened.item.billingStatus, OPERATOR_REVIEW_BILLING_STATUS);
+    assert.deepEqual(reserveCalls, [{ idempotencyKey: "rev-first-3plus1:buffer:0", capacityMode: "unbilled_review" }]);
+
+    const primaries = opened.item.items.filter((row) => row.role === "primary");
+    const buffer = opened.item.items.find((row) => row.role === "buffer");
+    assert.equal(primaries.length, 3);
+    assert.ok(buffer);
+
+    const rejected = await decideOperatorReviewItem(
+      {
+        itemId: primaries[2]!.id,
+        action: "reject",
+        rejectionReason: "phone_quality",
+      },
+      db,
+      {
+        releaseAllocation: async ({ allocationId }) => {
+          released.push(allocationId);
+          return { ok: true };
+        },
+      }
+    );
+    assert.equal(rejected.ok, true);
+    if (!rejected.ok) return;
+    assert.equal(rejected.item.status, "rejected");
+    assert.equal(rejected.item.rejectionReason, "phone_quality");
+
+    for (const item of primaries.slice(0, 2)) {
+      const accepted = await decideOperatorReviewItem({ itemId: item.id, action: "accept" }, db);
+      assert.equal(accepted.ok, true);
+    }
+
+    const unusedBuffer = await decideOperatorReviewItem(
+      { itemId: buffer!.id, action: "unused" },
+      db,
+      {
+        releaseAllocation: async ({ allocationId }) => {
+          released.push(allocationId);
+          return { ok: true };
+        },
+      }
+    );
+    assert.equal(unusedBuffer.ok, true);
+
+    const filled = await fillOperatorReviewShortfall(
+      { batchId: opened.item.id, requestId: "sup-first-3plus1" },
+      db,
+      {
+        reserveUnbilledCandidate: async ({ idempotencyKey, capacityMode }) => {
+          reserveCalls.push({ idempotencyKey, capacityMode });
+          return {
+            ok: true,
+            allocationId: "alloc_sup_1",
+            inventoryItemId: "inv_sup_1",
+          };
+        },
+      }
+    );
+    assert.equal(filled.ok, true);
+    if (!filled.ok) return;
+    assert.equal(filled.supplemental.selectedQuantity, 1);
+    assert.equal(filled.supplemental.billingStatus, "not_billed");
+    assert.deepEqual(filled.supplemental.allocationIds, ["alloc_sup_1"]);
+
+    const replayFill = await fillOperatorReviewShortfall(
+      { batchId: opened.item.id, requestId: "sup-first-3plus1" },
+      db
+    );
+    assert.equal(replayFill.ok, true);
+    if (!replayFill.ok) return;
+    assert.equal(replayFill.idempotentReplay, true);
+    assert.equal(replayFill.supplemental.id, filled.supplemental.id);
+
+    const supplemental = filled.item.items.find((row) => row.role === "supplemental");
+    assert.ok(supplemental);
+    const acceptedSupplemental = await decideOperatorReviewItem(
+      { itemId: supplemental!.id, action: "accept" },
+      db
+    );
+    assert.equal(acceptedSupplemental.ok, true);
+
+    const replayReject = await decideOperatorReviewItem(
+      {
+        itemId: primaries[2]!.id,
+        action: "reject",
+        rejectionReason: "name_quality",
+      },
+      db
+    );
+    assert.equal(replayReject.ok, true);
+    if (!replayReject.ok) return;
+    assert.equal(replayReject.item.status, "rejected");
+    assert.equal(replayReject.item.rejectionReason, "phone_quality");
+
+    const closed = await closeOperatorReviewBatch(
+      {
+        batchId: opened.item.id,
+        confirmationPhrase: OPERATOR_REVIEW_CLOSE_PHRASE,
+      },
+      db
+    );
+    assert.equal(closed.ok, true);
+    if (!closed.ok) return;
+    assert.equal(closed.item.status, "closed");
+    assert.equal(closed.item.purchasedQuantity, 3);
+    assert.equal(closed.item.acceptedCount, 3);
+    assert.equal(closed.item.rejectedCount, 1);
+    assert.equal(closed.item.unusedBufferCount, 1);
+    assert.equal(closed.item.shortfallCount, 0);
+    assert.equal(closed.item.billedQuantity, null);
+    assert.match(closed.item.rejectionReport.billingNote, /never auto-billed/);
+    assert.equal(closed.item.rejectionReport.rejectionReasons.phone_quality, 1);
+    assert.deepEqual(released, [primaries[2]!.allocationId, buffer!.allocationId]);
+    assert.equal((db as unknown as { deliveredWrites: unknown[] }).deliveredWrites.length, 0);
+
+    const acceptedIds = closed.item.items
+      .filter((row) => row.status === "accepted")
+      .map((row) => row.allocationId);
+    assert.equal(new Set(acceptedIds).size, 3);
+    const exportRejected = await assertOperatorReviewAllowsExport(
+      "ord_1",
+      [...acceptedIds, primaries[2]!.allocationId],
+      db
+    );
+    assert.equal(exportRejected.ok, false);
+    if (!exportRejected.ok) assert.equal(exportRejected.code, "operator_review_rejected_allocation");
+    const acceptedOnly = await assertOperatorReviewAllowsExport("ord_1", acceptedIds, db);
+    assert.equal(acceptedOnly.ok, true);
+    if (!acceptedOnly.ok) return;
+    assert.equal(acceptedOnly.exportableAllocationIds.length, 3);
+    assert.ok(acceptedOnly.exportableAllocationIds.includes("alloc_sup_1"));
+    assert.equal(acceptedOnly.exportableAllocationIds.includes(primaries[2]!.allocationId), false);
+
+    const downloaded = await downloadOperatorSupplementalExport(
+      { supplementalId: filled.supplemental.id },
+      db
+    );
+    assert.equal(downloaded.ok, true);
+    if (!downloaded.ok) return;
+    assert.equal(downloaded.rowCount, 1);
+    assert.deepEqual(downloaded.allocationIds, ["alloc_sup_1"]);
+    assert.match(downloaded.csv, new RegExp(phoneForAllocationId("alloc_sup_1").replace("+", "\\+")));
+    assert.equal(downloaded.csv.includes(String(primaries[2]!.allocationId)), false);
+    const replayDownload = await downloadOperatorSupplementalExport(
+      { supplementalId: filled.supplemental.id },
+      db
+    );
+    assert.equal(replayDownload.ok, true);
+    if (!replayDownload.ok) return;
+    assert.equal(replayDownload.contentSha256, downloaded.contentSha256);
+
+    const reconciled = reconcileOperatorReviewQuantities(closed.item);
+    assert.equal(reconciled.ok, true);
+    assert.equal(reconciled.purchasedQuantity, 3);
+    assert.equal(reconciled.acceptedCount, 3);
+    assert.equal(reconciled.shortfallCount, 0);
+  });
 });

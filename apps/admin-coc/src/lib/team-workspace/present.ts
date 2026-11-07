@@ -197,25 +197,55 @@ function deliveryDestination(workspace: WorkspaceAvailability): TeamWorkspaceSte
 }
 
 /**
- * The per-client preference is off until a verified recipient exists.
- * This step does not read the process kill switch, and it does not save a choice.
+ * The per-client choice. A missing or unverified recipient stays off.
+ * A saved on or off value is shown and is not edited here.
  */
 function notifications(workspace: WorkspaceAvailability): TeamWorkspaceStep {
-  const loaded = workspace.availability === "ready";
+  if (workspace.availability !== "ready") {
+    return step(
+      "delivery_notifications",
+      "unavailable",
+      "Notify this client when a lead is successfully delivered is off.",
+      [
+        "The preference could not be read. It stays off on this page.",
+        "This page does not collect an email address and does not send email.",
+      ]
+    );
+  }
+  const preference = workspace.body.clientNotification;
+  if (preference.enabled) {
+    return step(
+      "delivery_notifications",
+      "pending",
+      "Notify this client when a lead is successfully delivered is on. This page does not change it.",
+      [
+        "A verified recipient is saved in Admin C.O.C.",
+        "This page does not collect an email address and does not send email.",
+        "Notification rows are not listed here. An empty list is not a failed delivery.",
+      ]
+    );
+  }
+  if (preference.canEnable && preference.recipientVerified) {
+    return step(
+      "delivery_notifications",
+      "pending",
+      "Notify this client when a lead is successfully delivered is off.",
+      [
+        "A verified recipient is saved in Admin C.O.C. This page does not change the choice.",
+        "This page does not collect an email address and does not send email.",
+        "Notification rows are not listed here. An empty list is not a failed delivery.",
+      ]
+    );
+  }
   return step(
     "delivery_notifications",
     "unavailable",
     "Notify this client when a lead is successfully delivered is off.",
-    loaded
-      ? [
-          "A verified recipient has to be saved in Admin C.O.C. before this can be turned on.",
-          "This page does not collect an email address and does not send email.",
-          "Notification rows are not listed here. An empty list is not a failed delivery.",
-        ]
-      : [
-          "The preference could not be read. It stays off on this page.",
-          "This page does not collect an email address and does not send email.",
-        ]
+    [
+      "A verified recipient has to be saved in Admin C.O.C. before this can be turned on.",
+      "This page does not collect an email address and does not send email.",
+      "Notification rows are not listed here. An empty list is not a failed delivery.",
+    ]
   );
 }
 
@@ -316,6 +346,8 @@ export function presentTeamWorkspace(input: AssembleInput, identity: { name: str
     recordedCount: steps.filter((item) => item.status === "complete").length,
     steps,
     receipts: receiptsFrom(input.workspace.availability === "ready" ? input.workspace.body : null),
+    notificationChoiceOn:
+      input.workspace.availability === "ready" && input.workspace.body.clientNotification.enabled === true,
   };
 }
 

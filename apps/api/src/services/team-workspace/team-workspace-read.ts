@@ -58,14 +58,14 @@ export type TeamWorkspaceRead = {
   recentCanonicalDeliveries: [];
   /**
    * Per-client preference. This is not the process kill switch
-   * `SA360_DELIVERY_SUCCESS_NOTIFY_ENABLED`. Until the preference table
-   * exists, the read returns the disabled object and does not query one.
+   * `SA360_DELIVERY_SUCCESS_NOTIFY_ENABLED`. The mailbox is not returned.
+   * `enabled` is true only when the saved row is on and the recipient is verified.
    */
   clientNotification: {
-    enabled: false;
-    canEnable: false;
-    blockedReason: "recipient_not_verified";
-    recipientVerified: false;
+    enabled: boolean;
+    canEnable: boolean;
+    blockedReason: "recipient_not_verified" | null;
+    recipientVerified: boolean;
   };
   notifications: {
     items: [];
@@ -89,8 +89,7 @@ export function isTeamWorkspaceApiEnabled(env: NodeJS.ProcessEnv = process.env):
 }
 
 /**
- * Disabled until `ClientDeliveryNotificationPreference` is on master.
- * The process kill switch is not consulted and is not returned.
+ * No saved preference. The process kill switch is not consulted and is not returned.
  */
 const CLIENT_NOTIFICATION_UNAVAILABLE = {
   enabled: false,
@@ -98,6 +97,37 @@ const CLIENT_NOTIFICATION_UNAVAILABLE = {
   blockedReason: "recipient_not_verified",
   recipientVerified: false,
 } as const;
+
+type PreferenceRow = {
+  enabled: boolean;
+  channel: string;
+  recipientEmail: string | null;
+  recipientEmailVerifiedAt: Date | null;
+};
+
+/**
+ * Project the saved preference without the mailbox. Enabled stays false unless
+ * the row is the email channel with a verified address. An invalid enabled
+ * flag is not reported as on.
+ */
+export function projectClientNotification(
+  row: PreferenceRow | null | undefined
+): TeamWorkspaceRead["clientNotification"] {
+  if (!row) return CLIENT_NOTIFICATION_UNAVAILABLE;
+  const address = typeof row.recipientEmail === "string" ? row.recipientEmail.trim() : "";
+  const verifiedAt = row.recipientEmailVerifiedAt;
+  const recipientVerified =
+    row.channel === "email" &&
+    address.length > 0 &&
+    verifiedAt instanceof Date &&
+    !Number.isNaN(verifiedAt.getTime());
+  return {
+    enabled: row.enabled === true && recipientVerified,
+    canEnable: recipientVerified,
+    blockedReason: recipientVerified ? null : "recipient_not_verified",
+    recipientVerified,
+  };
+}
 
 function isDestinationChoice(value: unknown): value is DestinationChoice {
   return typeof value === "string" && (DESTINATION_CHOICES as readonly string[]).includes(value);
@@ -200,6 +230,14 @@ export async function readTeamWorkspaceClient(
           configMetadataJson: true,
         },
       },
+      deliveryNotificationPreference: {
+        select: {
+          enabled: true,
+          channel: true,
+          recipientEmail: true,
+          recipientEmailVerifiedAt: true,
+        },
+      },
     },
   });
 
@@ -242,7 +280,7 @@ export async function readTeamWorkspaceClient(
       customWebhook: webhookSummary(client.deliveryTargets),
     },
     recentCanonicalDeliveries: [],
-    clientNotification: CLIENT_NOTIFICATION_UNAVAILABLE,
+    clientNotification: projectClientNotification(client.deliveryNotificationPreference),
     notifications: {
       items: [],
     },

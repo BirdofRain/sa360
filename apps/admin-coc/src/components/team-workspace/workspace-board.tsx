@@ -95,7 +95,9 @@ export function TeamWorkspaceBoard({
                     <li key={`${step.id}-${detailIndex}`}>{detail}</li>
                   ))}
                 </ul>
-                {step.id === "delivery_notifications" ? <NotificationChoice /> : null}
+                {step.id === "delivery_notifications" ? (
+                  <NotificationChoice on={view.notificationChoiceOn} />
+                ) : null}
                 <div className="mt-3">
                   <SupportTicketInlineButton
                     label="Report issue"
@@ -134,7 +136,7 @@ function ReportIssue({
   );
 }
 
-function NotificationChoice() {
+function NotificationChoice({ on }: { on: boolean }) {
   return (
     <fieldset disabled className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
       <legend className="px-1 text-xs font-medium text-slate-600">Client notification</legend>
@@ -142,13 +144,16 @@ function NotificationChoice() {
         <input
           type="checkbox"
           disabled
-          defaultChecked={false}
+          checked={on}
+          readOnly
           aria-label="Notify this client when a lead is successfully delivered"
         />
         <span>Notify this client when a lead is successfully delivered</span>
       </label>
       <p className="mt-2 text-xs text-slate-600">
-        This choice is off. A verified recipient in Admin C.O.C. is required before it can be turned on.
+        {on
+          ? "This choice is on. This page does not change it."
+          : "This choice is off. This page does not change it."}
       </p>
     </fieldset>
   );

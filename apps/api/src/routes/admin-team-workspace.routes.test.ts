@@ -364,6 +364,61 @@ test("the process notify flag is not a client preference, and POST is not a rout
   await app.close();
 });
 
+test("a verified preference is projected without the mailbox", async () => {
+  const recipient = "client.inbox@example.test";
+  const { app } = await buildApp({
+    client: {
+      ...clientRow(),
+      deliveryNotificationPreference: {
+        enabled: true,
+        channel: "email",
+        recipientEmail: recipient,
+        recipientEmailVerifiedAt: new Date("2026-11-06T18:00:00.000Z"),
+      },
+    },
+  });
+  const response = await app.inject({
+    method: "GET",
+    url: `/admin/v1/team-workspace/clients/${CLIENT}`,
+    headers: { "x-sa360-admin-key": ADMIN_KEY },
+  });
+  const body = response.json();
+  assert.deepEqual(body.clientNotification, {
+    enabled: true,
+    canEnable: true,
+    blockedReason: null,
+    recipientVerified: true,
+  });
+  assert.equal(response.body.includes(recipient), false);
+  assert.equal(response.body.includes("recipientEmail"), false);
+  await app.close();
+
+  const unverified = await buildApp({
+    client: {
+      ...clientRow(),
+      deliveryNotificationPreference: {
+        enabled: true,
+        channel: "email",
+        recipientEmail: recipient,
+        recipientEmailVerifiedAt: null,
+      },
+    },
+  });
+  const hidden = await unverified.app.inject({
+    method: "GET",
+    url: `/admin/v1/team-workspace/clients/${CLIENT}`,
+    headers: { "x-sa360-admin-key": ADMIN_KEY },
+  });
+  assert.deepEqual(hidden.json().clientNotification, {
+    enabled: false,
+    canEnable: false,
+    blockedReason: "recipient_not_verified",
+    recipientVerified: false,
+  });
+  assert.equal(hidden.body.includes(recipient), false);
+  await unverified.app.close();
+});
+
 test("app.ts mounts only the read route", () => {
   const source = readFileSync(new URL("../app.ts", import.meta.url), "utf8");
   const mentions = source.match(/adminTeamWorkspaceRoutes/g) ?? [];

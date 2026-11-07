@@ -295,6 +295,54 @@ test("client and campaign projections omit urls, emails, and destination ids", (
   );
 });
 
+test("a verified preference is shown without becoming activation", () => {
+  const savedOn = assembleTeamWorkspaceDetail(
+    input({
+      workspace: {
+        availability: "ready",
+        body: workspace({
+          clientNotification: {
+            enabled: true,
+            canEnable: true,
+            blockedReason: null,
+            recipientVerified: true,
+          },
+        }),
+      },
+    })
+  );
+  assert.equal(savedOn.kind, "ready");
+  if (savedOn.kind !== "ready") return;
+  const onStep = savedOn.view.steps.find((step) => step.id === "delivery_notifications");
+  assert.equal(onStep?.status, "pending");
+  assert.match(onStep?.summary ?? "", /is on/);
+  assert.equal(savedOn.view.notificationChoiceOn, true);
+  assert.equal(savedOn.view.steps.find((step) => step.id === "completion")?.status === "complete", false);
+
+  const savedOff = assembleTeamWorkspaceDetail(
+    input({
+      workspace: {
+        availability: "ready",
+        body: workspace({
+          clientNotification: {
+            enabled: false,
+            canEnable: true,
+            blockedReason: null,
+            recipientVerified: true,
+          },
+        }),
+      },
+    })
+  );
+  assert.equal(savedOff.kind, "ready");
+  if (savedOff.kind !== "ready") return;
+  assert.equal(savedOff.view.notificationChoiceOn, false);
+  assert.equal(
+    savedOff.view.steps.find((step) => step.id === "delivery_notifications")?.status,
+    "pending"
+  );
+});
+
 test("presentTeamWorkspace never marks notification or completion complete", () => {
   const view = presentTeamWorkspace(input(), { name: "Alex Gross", status: "active" });
   for (const id of ["delivery_notifications", "setup_verification", "completion"] as const) {

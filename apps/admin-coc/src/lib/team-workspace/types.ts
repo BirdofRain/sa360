@@ -96,6 +96,8 @@ export type TeamWorkspaceClientView = {
   recordedCount: number;
   steps: TeamWorkspaceStep[];
   receipts: TeamWorkspaceReceipts;
+  /** Saved per-client choice. The control stays disabled because this page does not write it. */
+  notificationChoiceOn: boolean;
 };
 
 export type TeamWorkspaceIndexModel =

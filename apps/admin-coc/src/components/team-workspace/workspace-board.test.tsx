@@ -52,6 +52,7 @@ function view(): TeamWorkspaceClientView {
     showRetry: true,
     retryHref: "/team-workspace/alex_gross",
     recordedCount: 1,
+    notificationChoiceOn: false,
     receipts: {
       sourceLeadEventId: null,
       sheetsJobId: null,

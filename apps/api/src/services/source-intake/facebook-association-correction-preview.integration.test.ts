@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 
-import type { PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 
 import { prisma } from "../../lib/db.js";
 import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
 import { facebookFormProviderFunnelId } from "./facebook-form-association.js";
 import { buildFacebookEventUuid, buildFacebookLeadUid } from "./facebook-lead-normalizer.js";
 import {
+  PREVIEW_STATEMENT_TIMEOUT_MS,
+  PREVIEW_TRANSACTION_TIMEOUT_MS,
   loadFacebookAssociationCorrectionPreview,
   withReadOnlyRepeatableRead,
 } from "./facebook-association-correction-preview.service.js";
@@ -294,4 +296,199 @@ describe("Facebook association correction preview", { skip: !runIntegration }, (
     const stored = await db.sourceLeadEvent.findUniqueOrThrow({ where: { id: row.id } });
     assert.equal(stored.errorSummary, null);
   });
+
+  it("completes a read-only preview that runs longer than five seconds without changing eligibility", { timeout: 20_000 }, async () => {
+    const stamp = uniqueStamp();
+    const pageId = facebookId("96", stamp);
+    const formId = facebookId("86", stamp);
+    const origin = await client(stamp);
+    const sourceFunnel = await funnel({ clientAccountId: origin, pageId, formId });
+    const row = await event({ pageId, formId });
+    const before = await counts();
+    const now = new Date("2026-11-09T16:00:00.000Z");
+    const query = {
+      sourceFunnelId: sourceFunnel.id,
+      pageId,
+      formId,
+      originClientAccountId: origin,
+      confirmedAt: CONFIRMED_AT,
+      limit: 25,
+      offset: 0,
+      decision: "all" as const,
+      includeAllowList: true,
+    };
+    const fast = await loadFacebookAssociationCorrectionPreview(query, db, now);
+    const started = Date.now();
+    const slow = await loadFacebookAssociationCorrectionPreview(query, withLifecyclePause(db, { seconds: 6 }), now);
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed >= 6_000, `elapsed ${elapsed}`);
+    assert.ok(elapsed < PREVIEW_TRANSACTION_TIMEOUT_MS, `elapsed ${elapsed}`);
+    assert.equal(slow.events.items[0]?.decision, "eligible");
+    assert.equal(slow.events.items[0]?.decision, fast.events.items[0]?.decision);
+    assert.equal(slow.preview.digest, fast.preview.digest);
+    assert.deepEqual(slow.allowList, fast.allowList);
+    assert.deepEqual(slow.allowList, [row.id]);
+    assert.equal(slow.writesPerformed, false);
+    assert.equal(slow.correctionEnabled, false);
+    assert.equal(slow.verification.complete, true);
+    const stored = await db.sourceLeadEvent.findUniqueOrThrow({ where: { id: row.id } });
+    assert.equal(stored.updatedAt.toISOString(), row.updatedAt.toISOString());
+    assert.equal(stored.clientAccountIdResolved, null);
+    assert.deepEqual(await counts(), before);
+  });
+
+  it("fails closed when the preview transaction exceeds fifteen seconds", { timeout: 30_000 }, async () => {
+    const stamp = uniqueStamp();
+    const pageId = facebookId("97", stamp);
+    const formId = facebookId("87", stamp);
+    const origin = await client(stamp);
+    const sourceFunnel = await funnel({ clientAccountId: origin, pageId, formId });
+    const row = await event({ pageId, formId });
+    const before = await counts();
+    let returned: unknown = "not-returned";
+    const started = Date.now();
+    await assert.rejects(
+      async () => {
+        returned = await loadFacebookAssociationCorrectionPreview(
+          {
+            sourceFunnelId: sourceFunnel.id,
+            pageId,
+            formId,
+            originClientAccountId: origin,
+            confirmedAt: CONFIRMED_AT,
+            limit: 25,
+            offset: 0,
+            decision: "all",
+            includeAllowList: true,
+          },
+          withLifecyclePause(db, { seconds: 8, everyCall: true })
+        );
+      },
+      (error: unknown) =>
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2028" &&
+        error.message.includes("15000 ms")
+    );
+    assert.ok(Date.now() - started >= PREVIEW_TRANSACTION_TIMEOUT_MS - 1_000);
+    assert.equal(returned, "not-returned");
+    const stored = await db.sourceLeadEvent.findUniqueOrThrow({ where: { id: row.id } });
+    assert.equal(stored.updatedAt.toISOString(), row.updatedAt.toISOString());
+    assert.equal(stored.clientAccountIdResolved, null);
+    assert.equal(stored.errorSummary, null);
+    assert.deepEqual(await counts(), before);
+  });
+
+  it("cancels one statement before the transaction budget and leaves the database unchanged", { timeout: 20_000 }, async () => {
+    const stamp = uniqueStamp();
+    const pageId = facebookId("98", stamp);
+    const formId = facebookId("88", stamp);
+    const row = await event({ pageId, formId });
+    const beforeTimeout = await statementTimeout(db);
+    const before = await counts();
+    const started = Date.now();
+    await assert.rejects(
+      () => withReadOnlyRepeatableRead(db, (tx) => tx.$queryRaw`SELECT pg_sleep(13)::text`),
+      (error: unknown) => /statement timeout|57014/i.test(error instanceof Error ? error.message : String(error))
+    );
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed >= PREVIEW_STATEMENT_TIMEOUT_MS - 1_000, `elapsed ${elapsed}`);
+    assert.ok(elapsed < PREVIEW_TRANSACTION_TIMEOUT_MS, `elapsed ${elapsed}`);
+    assert.equal(await statementTimeout(db), beforeTimeout);
+    const stored = await db.sourceLeadEvent.findUniqueOrThrow({ where: { id: row.id } });
+    assert.equal(stored.updatedAt.toISOString(), row.updatedAt.toISOString());
+    assert.deepEqual(await counts(), before);
+  });
+
+  it("returns no preview when relation evidence fails", async () => {
+    const stamp = uniqueStamp();
+    const pageId = facebookId("99", stamp);
+    const formId = facebookId("89", stamp);
+    const origin = await client(stamp);
+    const sourceFunnel = await funnel({ clientAccountId: origin, pageId, formId });
+    const row = await event({ pageId, formId });
+    const before = await counts();
+    let returned: unknown = "not-returned";
+    await assert.rejects(async () => {
+      returned = await loadFacebookAssociationCorrectionPreview(
+        {
+          sourceFunnelId: sourceFunnel.id,
+          pageId,
+          formId,
+          originClientAccountId: origin,
+          confirmedAt: CONFIRMED_AT,
+          limit: 25,
+          offset: 0,
+          decision: "all",
+          includeAllowList: true,
+        },
+        withLifecyclePause(db, { seconds: 0, fail: "relation_evidence_incomplete" })
+      );
+    }, /relation_evidence_incomplete/);
+    assert.equal(returned, "not-returned");
+    const stored = await db.sourceLeadEvent.findUniqueOrThrow({ where: { id: row.id } });
+    assert.equal(stored.clientAccountIdResolved, null);
+    assert.equal(stored.updatedAt.toISOString(), row.updatedAt.toISOString());
+    assert.deepEqual(await counts(), before);
+    const retry = await preview({ funnelId: sourceFunnel.id, pageId, formId, origin });
+    assert.equal(retry.events.items.find((entry) => entry.sourceEventId === row.id)?.decision, "eligible");
+    assert.deepEqual(retry.allowList, [row.id]);
+  });
+
+  async function counts() {
+    return {
+      events: await db.sourceLeadEvent.count(),
+      funnels: await db.sourceFunnel.count(),
+      outbox: await db.fulfillmentOutbox.count(),
+    };
+  }
 });
+
+async function statementTimeout(db: PrismaClient): Promise<string> {
+  const rows = await db.$queryRaw<Array<{ statement_timeout: string }>>`SHOW statement_timeout`;
+  return rows[0]?.statement_timeout ?? "";
+}
+
+function withLifecyclePause(
+  db: PrismaClient,
+  options: { seconds: number; everyCall?: boolean; fail?: string }
+): PrismaClient {
+  return new Proxy(db, {
+    get(target, prop, receiver) {
+      if (prop !== "$transaction") {
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+      const transaction = target.$transaction.bind(target) as (
+        callback: (tx: Prisma.TransactionClient) => Promise<unknown>,
+        transactionOptions?: { isolationLevel?: Prisma.TransactionIsolationLevel; maxWait?: number; timeout?: number }
+      ) => Promise<unknown>;
+      return (
+        callback: (tx: Prisma.TransactionClient) => Promise<unknown>,
+        transactionOptions?: { isolationLevel?: Prisma.TransactionIsolationLevel; maxWait?: number; timeout?: number }
+      ) =>
+        transaction(async (tx) => {
+          let paused = false;
+          const findMany = tx.lifecycleEvent.findMany.bind(tx.lifecycleEvent);
+          const wrapped = new Proxy(tx, {
+            get(txTarget, txProp, txReceiver) {
+              if (txProp !== "lifecycleEvent") {
+                const value = Reflect.get(txTarget, txProp, txReceiver);
+                return typeof value === "function" ? value.bind(txTarget) : value;
+              }
+              return {
+                findMany: async (args: Parameters<typeof findMany>[0]) => {
+                  if (options.fail) throw new Error(options.fail);
+                  if (options.everyCall || !paused) {
+                    paused = true;
+                    if (options.seconds > 0) await tx.$queryRaw`SELECT pg_sleep(${options.seconds})::text`;
+                  }
+                  return findMany(args);
+                },
+              };
+            },
+          });
+          return callback(wrapped as Prisma.TransactionClient);
+        }, transactionOptions);
+    },
+  }) as PrismaClient;
+}

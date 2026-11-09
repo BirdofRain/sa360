@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+import { Prisma, type PrismaClient } from "@prisma/client";
+
 import {
   ALLOW_LIST_MAX,
   assembleCorrectionPreview,
@@ -13,6 +15,12 @@ import {
   type CohortEvaluation,
   type CorrectionCandidate,
 } from "./facebook-association-correction-preview.js";
+import {
+  PREVIEW_STATEMENT_TIMEOUT_MS,
+  PREVIEW_TRANSACTION_MAX_WAIT_MS,
+  PREVIEW_TRANSACTION_TIMEOUT_MS,
+  loadFacebookAssociationCorrectionPreview,
+} from "./facebook-association-correction-preview.service.js";
 
 const CONFIRMED_AT = new Date("2026-10-27T14:25:02.000Z");
 const PAGE = "222591640945329";
@@ -280,6 +288,18 @@ test("an allow-list over the bound is omitted and a partial scan cannot mark eve
   assert.equal(incomplete.preview.eligibleCount, 0);
   assert.deepEqual(incomplete.allowList, []);
   assert.deepEqual(incomplete.events.items, []);
+  assert.equal(
+    incomplete.preview.digest,
+    correctionPreviewDigest({
+      sourceFunnelId: "funnel_1",
+      originClientAccountId: "jr_laird",
+      pageId: PAGE,
+      formId: FORM,
+      confirmedAt: CONFIRMED_AT.toISOString(),
+      eligible: [],
+    })
+  );
+  assert.equal(JSON.stringify(incomplete).includes("event_000"), false);
 });
 
 test("the digest covers the eligible snapshot and ignores page position", () => {
@@ -340,7 +360,7 @@ test("the preview payload rejects sensitive keys", () => {
   assert.equal(JSON.stringify(preview).includes("\"rawPayloadJson\""), false);
 });
 
-test("the preview service does not import a writer or a delivery client", () => {
+test("the preview service stays read-only and raises only its own transaction budget", () => {
   const source = readFileSync(
     new URL("./facebook-association-correction-preview.service.ts", import.meta.url),
     "utf8"
@@ -349,5 +369,45 @@ test("the preview service does not import a writer or a delivery client", () => 
   assert.equal(source.includes("company-sheets"), false);
   assert.equal(source.includes("ghl-live"), false);
   assert.equal(source.includes("graph.facebook.com"), false);
-  assert.match(source, /SET TRANSACTION READ ONLY/);
+  const readOnly = source.indexOf("SET TRANSACTION READ ONLY");
+  const statementTimeout = source.indexOf("set_config('statement_timeout'");
+  assert.ok(readOnly > -1);
+  assert.ok(statementTimeout > readOnly);
+  assert.match(source, /timeout:\s*PREVIEW_TRANSACTION_TIMEOUT_MS/);
+  assert.equal(PREVIEW_TRANSACTION_TIMEOUT_MS, 15_000);
+  assert.equal(PREVIEW_TRANSACTION_MAX_WAIT_MS, 2_000);
+  assert.equal(PREVIEW_STATEMENT_TIMEOUT_MS, 12_000);
+  assert.ok(PREVIEW_STATEMENT_TIMEOUT_MS < PREVIEW_TRANSACTION_TIMEOUT_MS);
+});
+
+test("a closed preview transaction returns no allow-list", async () => {
+  const db = {
+    async $transaction() {
+      throw new Prisma.PrismaClientKnownRequestError(
+        "Transaction already closed: The timeout for this transaction was 15000 ms, however 15010 ms passed since the start of the transaction.",
+        { code: "P2028", clientVersion: "test" }
+      );
+    },
+  } as unknown as PrismaClient;
+  let returned: unknown = "not-returned";
+  await assert.rejects(
+    async () => {
+      returned = await loadFacebookAssociationCorrectionPreview(
+        {
+          sourceFunnelId: "funnel_1",
+          pageId: PAGE,
+          formId: FORM,
+          originClientAccountId: "jr_laird",
+          confirmedAt: CONFIRMED_AT,
+          limit: 25,
+          offset: 0,
+          decision: "all",
+          includeAllowList: true,
+        },
+        db
+      );
+    },
+    (error: unknown) => error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2028"
+  );
+  assert.equal(returned, "not-returned");
 });

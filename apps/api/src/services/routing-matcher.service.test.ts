@@ -155,6 +155,24 @@ test("utm_campaign fallback works", () => {
   assert.equal(result.confidence, "medium");
 });
 
+test("an active rule still matches when delivery is off", () => {
+  const rules = [
+    rule({
+      id: "r_shadow",
+      matchType: "campaign_id",
+      clientAccountId: "client_a",
+      campaignId: "camp_100",
+      active: true,
+      deliveryEnabled: false,
+    }),
+  ];
+  const result = matchCampaignRoutingRule(rules, baseInput, NOW);
+  assert.equal(result.matched, true);
+  assert.equal(result.matchedRuleId, "r_shadow");
+  assert.equal(result.destinationClientAccountId, "client_a");
+  assert.equal(rules[0]?.deliveryEnabled, false);
+});
+
 test("inactive rules are ignored", () => {
   const rules = [
     rule({

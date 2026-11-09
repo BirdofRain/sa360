@@ -340,6 +340,7 @@ test("a verified preference is shown without becoming activation", () => {
   const onStep = savedOn.view.steps.find((step) => step.id === "delivery_notifications");
   assert.equal(onStep?.status, "pending");
   assert.match(onStep?.summary ?? "", /is on/);
+  assert.match(onStep?.details.join(" ") ?? "", /does not activate production delivery notifications/);
   assert.equal(savedOn.view.notification.enabled, true);
   assert.equal(savedOn.view.notification.revision, 2);
   assert.equal(savedOn.view.notification.readable, true);

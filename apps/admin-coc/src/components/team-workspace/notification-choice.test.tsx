@@ -113,8 +113,11 @@ test("a verified recipient can be turned on only after the save is confirmed", a
   assert.equal(screen.getByRole("status").textContent?.includes("Saved"), false);
 
   release({ ok: true, preference: preference(true, 3), replayed: false, refreshed: true });
-  const saved = await screen.findByText(/Saved\. This client will be notified/);
-  assert.match(saved.textContent ?? "", /successfully delivered/);
+  const saved = await screen.findByText(/This client's notification preference is on/);
+  assert.match(saved.textContent ?? "", /Saved\./);
+  assert.match(saved.textContent ?? "", /Production delivery notifications stay unchanged/);
+  assert.match(saved.textContent ?? "", /does not send email/);
+  assert.equal(saved.textContent?.includes("will be notified"), false);
   assert.equal((screen.getByRole("checkbox", { name: "Notify this client when a lead is successfully delivered" }) as HTMLInputElement).checked, true);
   assert.equal(refreshCalls.length, 1);
 });
@@ -197,8 +200,71 @@ test("turning the saved choice off waits for confirmation", async () => {
   const choice = screen.getByRole("checkbox", { name: "Notify this client when a lead is successfully delivered" });
   assert.equal((choice as HTMLInputElement).checked, true);
   fireEvent.click(choice);
-  const saved = await screen.findByText(/will not be notified/);
-  assert.match(saved.textContent ?? "", /Saved/);
+  const saved = await screen.findByText(/This client's notification preference is off/);
+  assert.match(saved.textContent ?? "", /Saved\./);
+  assert.match(saved.textContent ?? "", /Production delivery notifications stay unchanged/);
+  assert.equal(saved.textContent?.includes("will not be notified"), false);
   assert.deepEqual(calls, [false]);
   assert.equal((screen.getByRole("checkbox", { name: "Notify this client when a lead is successfully delivered" }) as HTMLInputElement).checked, false);
+});
+
+test("a rejected save stays recoverable and retries the same request", async () => {
+  const calls: string[] = [];
+  let attempt = 0;
+  const actions: NotificationChoiceActions = {
+    save: async (input) => {
+      calls.push(input.requestId);
+      attempt += 1;
+      if (attempt === 1) throw new Error("socket hang up secret-token");
+      return { ok: true, preference: preference(true, 3), replayed: true, refreshed: true };
+    },
+    reload: async () => {
+      throw new Error("reload should wait");
+    },
+  };
+  render(<DeliveryNotificationChoice clientAccountId="alex_gross" preference={ready} actions={actions} />);
+  const choice = screen.getByRole("checkbox", { name: "Notify this client when a lead is successfully delivered" });
+  fireEvent.click(choice);
+  const status = await screen.findByRole("status");
+  assert.equal(status.getAttribute("data-state"), "error");
+  assert.match(status.textContent ?? "", /did not finish/);
+  assert.equal(status.textContent?.includes("secret-token"), false);
+  assert.equal(status.textContent?.includes("Saving"), false);
+  assert.equal((choice as HTMLInputElement).checked, false);
+  assert.equal((choice as HTMLInputElement).disabled, false);
+  fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
+  const saved = await screen.findByText(/preference is on/);
+  assert.match(saved.textContent ?? "", /does not send email/);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0], calls[1]);
+});
+
+test("a rejected reload leaves the loading state and can be tried again", async () => {
+  let reloads = 0;
+  const actions: NotificationChoiceActions = {
+    save: async () => {
+      throw new Error("save transport failed");
+    },
+    reload: async () => {
+      reloads += 1;
+      if (reloads === 1) throw new Error("read timeout internal-detail");
+      return { ok: true, preference: preference(false, 4) };
+    },
+  };
+  render(<DeliveryNotificationChoice clientAccountId="alex_gross" preference={ready} actions={actions} />);
+  fireEvent.click(screen.getByRole("checkbox", { name: "Notify this client when a lead is successfully delivered" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Reload saved choice" }));
+  await waitFor(() => {
+    assert.equal(reloads, 1);
+    assert.equal(screen.getByRole("status").getAttribute("data-state"), "error");
+  });
+  const failed = screen.getByRole("status");
+  assert.equal(failed.getAttribute("data-state"), "error");
+  assert.match(failed.textContent ?? "", /did not finish/);
+  assert.equal(failed.textContent?.includes("internal-detail"), false);
+  assert.equal(failed.textContent?.includes("Loading"), false);
+  fireEvent.click(screen.getByRole("button", { name: "Reload saved choice" }));
+  const shown = await screen.findByText("Showing the saved choice.");
+  assert.equal(shown.getAttribute("data-state"), "idle");
+  assert.equal(reloads, 2);
 });

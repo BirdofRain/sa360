@@ -244,6 +244,7 @@ function notifications(workspace: WorkspaceAvailability): TeamWorkspaceStep {
       [
         "A verified recipient is saved in Admin C.O.C.",
         "This page does not show that address and does not send email.",
+        "This is the saved client preference. It does not activate production delivery notifications.",
         "Turning this on or off does not arm delivery.",
       ]
     );
@@ -256,6 +257,7 @@ function notifications(workspace: WorkspaceAvailability): TeamWorkspaceStep {
       [
         "A verified recipient is saved in Admin C.O.C.",
         "This page does not show that address and does not send email.",
+        "This is the saved client preference. It does not activate production delivery notifications.",
         "Turning this on or off does not arm delivery.",
       ]
     );

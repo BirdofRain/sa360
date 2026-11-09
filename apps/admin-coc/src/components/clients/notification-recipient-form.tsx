@@ -50,16 +50,18 @@ function successMessage(
   refreshed: boolean
 ): string {
   const changed = previous.recipientEmail !== next.recipientEmail;
-  const saved = changed
-    ? "Saved. The notification preference is off until it is turned on again in Team Workspace."
-    : next.enabled
-      ? "Saved. The recipient is verified and the notification preference is still on."
-      : "Saved. The recipient is verified. The notification preference stays off until it is turned on in Team Workspace.";
+  const preference = next.enabled
+    ? "this client's notification preference is still on."
+    : changed
+      ? "the notification preference is off until it is turned on again in Team Workspace."
+      : "the notification preference stays off until it is turned on in Team Workspace.";
+  const saved = `Saved. The recipient is verified and ${preference}`;
+  const scope = " Production delivery notifications stay unchanged, and this page does not send email.";
   const replay = replayed ? " This matched a save that was already stored." : "";
   const follow = refreshed
     ? ""
     : " The follow-up read did not load. The address shown is the one the save confirmed.";
-  return `${saved}${replay}${follow}`;
+  return `${saved}${scope}${replay}${follow}`;
 }
 
 export function NotificationRecipientForm({
@@ -139,6 +141,10 @@ export function NotificationRecipientForm({
       setPhase("error");
       setErrorCode(result.error);
       setMessage(notificationErrorMessage(result.error));
+    } catch {
+      setPhase("error");
+      setErrorCode("request_failed");
+      setMessage(notificationErrorMessage("request_failed"));
     } finally {
       pendingRef.current = false;
     }
@@ -164,6 +170,10 @@ export function NotificationRecipientForm({
       setErrorCode(null);
       setMessage("Showing the saved recipient.");
       router.refresh();
+    } catch {
+      setPhase("error");
+      setErrorCode("request_failed");
+      setMessage(notificationErrorMessage("request_failed"));
     } finally {
       pendingRef.current = false;
     }
@@ -242,7 +252,7 @@ export function NotificationRecipientForm({
               Retry save
             </Button>
           ) : null}
-          {phase === "error" && errorCode && !retryable ? (
+          {phase === "error" && errorCode ? (
             <Button
               type="button"
               variant="outline"

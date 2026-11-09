@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import module from "node:module";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import React from "react";
 
 const moduleLoader = module as unknown as {
@@ -140,7 +140,8 @@ test("a confirmed save shows the verified address and a stale save does not", as
   const view = render(<NotificationRecipientForm clientAccountId="alex_gross" recipient={empty} actions={actions} />);
   fireEvent.change(screen.getByLabelText("Email address"), { target: { value: "Owner@Example.com" } });
   fireEvent.click(screen.getByRole("button", { name: "Save recipient" }));
-  assert.match((await screen.findByRole("status")).textContent ?? "", /Saved\. The notification preference is off until it is turned on again/);
+  assert.match((await screen.findByRole("status")).textContent ?? "", /the notification preference is off until it is turned on again/);
+  assert.match((await screen.findByRole("status")).textContent ?? "", /Production delivery notifications stay unchanged/);
   assert.equal(screen.getAllByText("owner@example.com").length >= 1, true);
   assert.equal((screen.getByLabelText("Email address") as HTMLInputElement).value, "owner@example.com");
 
@@ -164,6 +165,69 @@ test("a confirmed save shows the verified address and a stale save does not", as
   assert.equal(calls.length, 2);
   assert.equal(calls[0]?.requestId, calls[1]?.requestId);
   assert.equal(calls[0]?.expectedRevision, 0);
+});
+
+test("a rejected recipient save stays recoverable and keeps the request id", async () => {
+  const calls: string[] = [];
+  let attempt = 0;
+  const actions: RecipientFormActions = {
+    save: async (input) => {
+      calls.push(input.requestId);
+      attempt += 1;
+      if (attempt === 1) throw new Error("gateway secret-token");
+      return { ok: true, recipient: saved("owner@example.com", 1, true), replayed: true, refreshed: true };
+    },
+    reload: async () => {
+      throw new Error("reload should wait");
+    },
+  };
+  render(<NotificationRecipientForm clientAccountId="alex_gross" recipient={empty} actions={actions} />);
+  fireEvent.change(screen.getByLabelText("Email address"), { target: { value: "Owner@Example.com" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save recipient" }));
+  const status = await screen.findByRole("status");
+  assert.equal(status.getAttribute("data-state"), "error");
+  assert.match(status.textContent ?? "", /did not finish/);
+  assert.equal(status.textContent?.includes("secret-token"), false);
+  assert.equal(status.textContent?.includes("Saving"), false);
+  assert.equal(screen.getByText("None saved").textContent, "None saved");
+  fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
+  const savedText = await screen.findByText(/preference is still on/);
+  assert.match(savedText.textContent ?? "", /Production delivery notifications stay unchanged/);
+  assert.match(savedText.textContent ?? "", /does not send email/);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0], calls[1]);
+});
+
+test("a rejected recipient reload leaves the loading state and can be tried again", async () => {
+  let reloads = 0;
+  const actions: RecipientFormActions = {
+    save: async () => {
+      throw new Error("save transport failed");
+    },
+    reload: async () => {
+      reloads += 1;
+      if (reloads === 1) throw new Error("read timeout internal-detail");
+      return { ok: true, recipient: saved("owner@example.com", 2) };
+    },
+  };
+  render(<NotificationRecipientForm clientAccountId="alex_gross" recipient={empty} actions={actions} />);
+  fireEvent.change(screen.getByLabelText("Email address"), { target: { value: "owner@example.com" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save recipient" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Reload saved recipient" }));
+  await waitFor(() => {
+    assert.equal(reloads, 1);
+    assert.equal(screen.getByRole("status").getAttribute("data-state"), "error");
+  });
+  const failed = screen.getByRole("status");
+  assert.equal(failed.getAttribute("data-state"), "error");
+  assert.match(failed.textContent ?? "", /did not finish/);
+  assert.equal(failed.textContent?.includes("internal-detail"), false);
+  assert.equal(failed.textContent?.includes("Loading"), false);
+  fireEvent.click(screen.getByRole("button", { name: "Reload saved recipient" }));
+  const shown = await screen.findByText("Showing the saved recipient.");
+  assert.equal(shown.getAttribute("data-state"), "idle");
+  assert.equal(screen.getAllByText("owner@example.com").length >= 1, true);
+  assert.equal(reloads, 2);
 });
 
 test("recipient setup stays off the team workspace and the observer allowlist", () => {

@@ -34,13 +34,14 @@ function toChoice(snapshot: PreferenceSnapshot): TeamWorkspaceNotificationChoice
 
 function successMessage(enabled: boolean, replayed: boolean, refreshed: boolean): string {
   const saved = enabled
-    ? "Saved. This client will be notified when a lead is successfully delivered."
-    : "Saved. This client will not be notified.";
+    ? "Saved. This client's notification preference is on."
+    : "Saved. This client's notification preference is off.";
+  const scope = " Production delivery notifications stay unchanged, and this page does not send email.";
   const replay = replayed ? " This matched a save that was already stored." : "";
   const follow = refreshed
     ? ""
     : " The follow-up read did not load. The choice shown is the one the save confirmed.";
-  return `${saved}${replay}${follow}`;
+  return `${saved}${scope}${replay}${follow}`;
 }
 
 export function DeliveryNotificationChoice({
@@ -116,6 +117,10 @@ export function DeliveryNotificationChoice({
       setPhase("error");
       setErrorCode(result.error);
       setMessage(notificationErrorMessage(result.error));
+    } catch {
+      setPhase("error");
+      setErrorCode("request_failed");
+      setMessage(notificationErrorMessage("request_failed"));
     } finally {
       pendingRef.current = false;
     }
@@ -141,6 +146,10 @@ export function DeliveryNotificationChoice({
       setErrorCode(null);
       setMessage("Showing the saved choice.");
       router.refresh();
+    } catch {
+      setPhase("error");
+      setErrorCode("request_failed");
+      setMessage(notificationErrorMessage("request_failed"));
     } finally {
       pendingRef.current = false;
     }
@@ -149,7 +158,7 @@ export function DeliveryNotificationChoice({
   const help = !confirmed.readable
     ? "The preference could not be read. It stays off until the read succeeds."
     : confirmed.canEnable
-      ? "This changes only this client's notification preference. It does not arm delivery or change the recipient."
+      ? "This changes only this client's notification preference. Production delivery notifications stay unchanged. It does not send email or change the recipient."
       : "A verified recipient has to be configured in Admin C.O.C. before this can be turned on.";
 
   return (
@@ -192,7 +201,7 @@ export function DeliveryNotificationChoice({
             Retry save
           </button>
         ) : null}
-        {phase === "error" && errorCode && !isRetryableNotificationError(errorCode) ? (
+        {phase === "error" && errorCode ? (
           <button
             type="button"
             className="w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-800 sm:w-auto"

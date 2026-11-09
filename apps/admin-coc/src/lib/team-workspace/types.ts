@@ -1,4 +1,5 @@
 import type { TeamWorkspaceStepId } from "./contract";
+import type { GuidedOnboardingModel } from "./onboarding-guide";
 
 export type TeamWorkspaceStepStatus = "complete" | "blocked" | "unavailable" | "pending";
 
@@ -122,7 +123,7 @@ export type TeamWorkspaceDetailModel =
   | { kind: "not_found" }
   | { kind: "forbidden" }
   | { kind: "error"; message: string }
-  | { kind: "ready"; view: TeamWorkspaceClientView; clients: ClientOption[] };
+  | { kind: "ready"; view: TeamWorkspaceClientView; clients: ClientOption[]; guide?: GuidedOnboardingModel };
 
 export type WorkspaceAvailability =
   | { availability: "ready"; body: TeamWorkspaceRead }

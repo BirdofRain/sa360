@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import Link from "next/link";
 
 import { WarningBanner } from "@/components/dashboard/warning-banner";
@@ -11,16 +12,17 @@ import { DeliveryNotificationChoice, type NotificationChoiceActions } from "./no
 import { StatusPill } from "./status-pill";
 import { TeamWorkspaceIntro } from "./workspace-states";
 
-export function TeamWorkspaceHome({ clients }: { clients: ClientOption[] }) {
+export function TeamWorkspaceHome({ clients, start }: { clients: ClientOption[]; start?: ReactNode }) {
   return (
     <div className="space-y-6">
       <TeamWorkspaceIntro />
       <div className="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
         <ClientPicker clients={clients} />
+        <div className="space-y-4">
         <section className="rounded-xl border border-slate-200 bg-white p-5">
           <h2 className="text-base font-semibold text-slate-950">Choose a client</h2>
           <p className="mt-2 text-sm text-slate-600">
-            Open a client to see the saved setup. The list is a read. This page does not create a client.
+            Pick a client to open guided setup, or create one. A new client starts in onboarding and does not turn on delivery.
           </p>
           <p className="mt-4">
             <Link href="/clients" className="text-sm font-medium text-sky-800 underline">
@@ -31,6 +33,8 @@ export function TeamWorkspaceHome({ clients }: { clients: ClientOption[] }) {
             <ReportIssue />
           </div>
         </section>
+        {start}
+        </div>
       </div>
     </div>
   );
@@ -40,14 +44,16 @@ export function TeamWorkspaceBoard({
   view,
   clients,
   notificationActions,
+  showIntro = true,
 }: {
   view: TeamWorkspaceClientView;
   clients: ClientOption[];
   notificationActions: NotificationChoiceActions;
+  showIntro?: boolean;
 }) {
   return (
     <div className="space-y-6">
-      <TeamWorkspaceIntro />
+      {showIntro ? <TeamWorkspaceIntro /> : null}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-xl font-semibold text-slate-950">{view.clientDisplayName}</h2>

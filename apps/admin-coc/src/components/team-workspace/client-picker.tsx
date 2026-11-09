@@ -33,7 +33,9 @@ export function ClientPicker({
         placeholder="Name or id"
         className="mt-2 h-10 w-full rounded-md border border-slate-200 px-3 text-sm text-slate-900"
       />
-      {filtered.length === 0 ? (
+      {clients.length === 0 ? (
+        <p className="mt-3 text-sm text-slate-600">No clients yet. Create one in guided setup.</p>
+      ) : filtered.length === 0 ? (
         <p className="mt-3 text-sm text-slate-600">No client matches.</p>
       ) : (
         <ul className="mt-3 space-y-1">

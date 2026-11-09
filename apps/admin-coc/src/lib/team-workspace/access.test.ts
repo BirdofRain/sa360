@@ -97,7 +97,10 @@ test("workspace files do not collect a recipient, send mail, or arm delivery", (
     new URL("../../app/(dashboard)/team-workspace/page.tsx", import.meta.url),
     new URL("../../app/(dashboard)/team-workspace/[clientAccountId]/page.tsx", import.meta.url),
     new URL("../../components/team-workspace/notification-choice.tsx", import.meta.url),
+    new URL("../../components/team-workspace/guided-onboarding.tsx", import.meta.url),
     new URL("../../app/actions/delivery-notification-preference.ts", import.meta.url),
+    new URL("../../app/actions/team-workspace-onboarding.ts", import.meta.url),
+    new URL("./onboarding-guide.ts", import.meta.url),
   ];
   const source = files.map((file) => readFileSync(file, "utf8")).join("\n");
   assert.equal(source.includes("/team\""), false);

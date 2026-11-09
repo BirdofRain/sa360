@@ -1,6 +1,7 @@
 import { AdminCocForbiddenError } from "@/lib/admin-coc-session-guard";
 import { loadTeamWorkspaceIndex } from "@/lib/team-workspace/load";
 
+import { GuidedOnboarding } from "@/components/team-workspace/guided-onboarding";
 import { TeamWorkspaceHome } from "@/components/team-workspace/workspace-board";
 import { TeamWorkspaceDisabled, TeamWorkspaceIntro, TeamWorkspaceMessage } from "@/components/team-workspace/workspace-states";
 
@@ -19,19 +20,12 @@ export default async function TeamWorkspacePage() {
         </div>
       );
     }
-    if (model.clients.length === 0) {
-      return (
-        <div className="space-y-6">
-          <TeamWorkspaceIntro />
-          <TeamWorkspaceMessage
-            title="No clients yet"
-            body="There is no client to open. This page does not create one."
-            retryHref="/team-workspace"
-          />
-        </div>
-      );
-    }
-    return <TeamWorkspaceHome clients={model.clients} />;
+    return (
+      <TeamWorkspaceHome
+        clients={model.clients}
+        start={<GuidedOnboarding model={null} step="client" clients={model.clients} />}
+      />
+    );
   } catch (error) {
     if (error instanceof AdminCocForbiddenError) {
       return (

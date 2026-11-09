@@ -743,6 +743,13 @@ export const CONFIRMED_CATALOG_DOB_FORMS: readonly {
     alias: "date",
   },
   {
+    id: "leadcapture_io_nextgen_vet_sam_test",
+    parentUrlKey: "go.lifeinsuranceforvets.com/learn-sam-test",
+    sourceFunnelId: "cmvpb65gf004hi70u6hphb3zu",
+    providerFunnelId: "5b6959bf-5e41-4508-a802-500f0cc9279b",
+    alias: "date",
+  },
+  {
     id: "leadcapture_io_nextgen_sehi_chandler_conrad",
     parentUrlKey: "go.selfemployedhi.com/chandler-bigagency",
     sourceFunnelId: "cmuc2z56g085bm00vcn3eki25",

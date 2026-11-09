@@ -4,7 +4,9 @@ import {
 } from "@/app/actions/delivery-notification-preference";
 import { AdminCocForbiddenError } from "@/lib/admin-coc-session-guard";
 import { loadTeamWorkspaceClient } from "@/lib/team-workspace/load";
+import { parseGuideStep } from "@/lib/team-workspace/onboarding-guide";
 
+import { GuidedOnboarding } from "@/components/team-workspace/guided-onboarding";
 import { TeamWorkspaceBoard } from "@/components/team-workspace/workspace-board";
 import { TeamWorkspaceDisabled, TeamWorkspaceIntro, TeamWorkspaceMessage } from "@/components/team-workspace/workspace-states";
 
@@ -13,10 +15,16 @@ export const metadata = { title: "Team Workspace" };
 
 export default async function TeamWorkspaceClientPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ clientAccountId: string }>;
+  searchParams: Promise<{ guide?: string | string[]; created?: string | string[] }>;
 }) {
   const { clientAccountId } = await params;
+  const { guide, created } = await searchParams;
+  const requested = Array.isArray(guide) ? guide[0] : guide;
+  const createdFlag = Array.isArray(created) ? created[0] : created;
+  const step = parseGuideStep(requested) ?? "information";
   try {
     const model = await loadTeamWorkspaceClient(clientAccountId);
     if (model.kind === "disabled") return <TeamWorkspaceDisabled />;
@@ -56,14 +64,23 @@ export default async function TeamWorkspaceClientPage({
       );
     }
     return (
-      <TeamWorkspaceBoard
-        view={model.view}
-        clients={model.clients}
-        notificationActions={{
-          save: saveDeliveryNotificationPreferenceAction,
-          reload: reloadDeliveryNotificationPreferenceAction,
-        }}
-      />
+      <div className="space-y-8">
+        {model.guide ? (
+          <>
+            <TeamWorkspaceIntro />
+            <GuidedOnboarding model={model.guide} step={step} clients={model.clients} notice={createdFlag === "1" ? "created" : null} />
+          </>
+        ) : null}
+        <TeamWorkspaceBoard
+          showIntro={!model.guide}
+          view={model.view}
+          clients={model.clients}
+          notificationActions={{
+            save: saveDeliveryNotificationPreferenceAction,
+            reload: reloadDeliveryNotificationPreferenceAction,
+          }}
+        />
+      </div>
     );
   } catch (error) {
     if (error instanceof AdminCocForbiddenError) {

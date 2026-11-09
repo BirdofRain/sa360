@@ -5,7 +5,7 @@ export function TeamWorkspaceIntro() {
     <header className="space-y-2">
       <h1 className="text-2xl font-semibold tracking-tight text-slate-950">Team Workspace</h1>
       <p className="max-w-2xl text-sm text-slate-600">
-        Admin preview for one client. This page can turn delivery notification on or off. It does not save setup, send email, or activate delivery.
+        Admin preview for one client. Guided setup can save a client and a setup request. Delivery notification can be turned on or off below. This page does not send email or activate delivery.
       </p>
       <p className="text-sm text-slate-600">Named team access is not turned on. An admin session is required.</p>
     </header>

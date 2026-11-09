@@ -1,11 +1,14 @@
 import "server-only";
 
 import { fetchOnboardingSummary } from "@/lib/admin-api/client-onboarding-v2";
-import { adminFetchJson, fetchAdminClientDetail, fetchAdminClients, isAdminApiConfigured } from "@/lib/admin-api/server";
+import { fetchAdminClientSourceFunnels } from "@/lib/admin-api/source-funnels-server";
+import { adminFetchJson, fetchAdminClientDetail, fetchAdminClientSetup, fetchAdminClients, isAdminApiConfigured } from "@/lib/admin-api/server";
 import { requireAdminCocAdminSession } from "@/lib/admin-coc-session-guard";
+import { isNativeClientSetupEnabled } from "@/lib/clients/native-client-setup-env";
 
 import { isTeamWorkspaceEnabled } from "./config";
 import { normalizeTeamWorkspaceClientId } from "./contract";
+import { guidedOnboardingFromReads } from "./onboarding-guide";
 import { assembleTeamWorkspaceDetail, projectClientOptions, projectRoutingRules } from "./present";
 import { parseTeamWorkspaceResponse, readAdminErrorCode } from "./parse";
 import type {
@@ -38,20 +41,41 @@ export async function loadTeamWorkspaceClient(rawId: string): Promise<TeamWorksp
     return { kind: "error", message: "The admin API is not configured for this app." };
   }
 
-  const [workspaceResult, detail, onboarding, list] = await Promise.all([
+  const setupEnabled = isNativeClientSetupEnabled();
+  const [workspaceResult, detail, onboarding, list, setupResult, sourceResult] = await Promise.all([
     adminFetchJson<unknown>(`/admin/v1/team-workspace/clients/${encodeURIComponent(clientAccountId)}`),
     fetchAdminClientDetail(clientAccountId),
     fetchOnboardingSummary(clientAccountId),
     fetchAdminClients(),
+    setupEnabled ? fetchAdminClientSetup(clientAccountId) : Promise.resolve(null),
+    fetchAdminClientSourceFunnels(clientAccountId),
   ]);
 
-  return assembleTeamWorkspaceDetail({
+  const workspace = narrowWorkspace(clientAccountId, workspaceResult);
+  const onboardingSlice = narrowOnboarding(onboarding);
+  const assembled = assembleTeamWorkspaceDetail({
     clientAccountId,
     clients: list.data ? projectClientOptions(list.data.items) : [],
-    workspace: narrowWorkspace(clientAccountId, workspaceResult),
+    workspace,
     account: narrowAccount(detail.data?.item),
-    onboarding: narrowOnboarding(onboarding),
+    onboarding: onboardingSlice,
   });
+  if (assembled.kind !== "ready") return assembled;
+  return {
+    ...assembled,
+    guide: guidedOnboardingFromReads({
+      clientAccountId,
+      setupEnabled,
+      account: detail.data?.item ?? null,
+      setupItem: setupResult?.data?.item ?? null,
+      setupError: setupResult && !setupResult.data ? setupResult.error : null,
+      sourceBody: sourceResult.data,
+      sourceError: sourceResult.error,
+      destinations: workspace.availability === "ready" ? workspace.body.destinations : null,
+      recordedSetup: workspace.availability === "ready" ? workspace.body.setupRequest : null,
+      verification: onboardingSlice,
+    }),
+  };
 }
 
 function narrowWorkspace(

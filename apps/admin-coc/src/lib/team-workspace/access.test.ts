@@ -57,14 +57,22 @@ test("the workspace flag is exact true", () => {
 test("admin can open the workspace and every other session is denied", () => {
   assert.equal(gate("admin").kind, "allow");
   assert.equal(gate("admin", "/team-workspace/alex_gross").kind, "allow");
+  assert.equal(gate("admin", "/clients/alex_gross/notification-recipient").kind, "allow");
   assert.equal(gate("observer").kind, "forbidden");
   assert.equal(gate("observer", "/team-workspace/alex_gross").kind, "forbidden");
+  assert.equal(gate("observer", "/clients/alex_gross/notification-recipient").kind, "forbidden");
   assert.equal(gate("anonymous").kind, "redirect");
   assert.equal(gate("portal").kind, "redirect");
+  assert.equal(gate("portal", "/clients/alex_gross/notification-recipient").kind, "redirect");
   assert.equal(gate("reviewer").kind, "forbidden");
+  assert.equal(gate("reviewer", "/clients/alex_gross/notification-recipient").kind, "forbidden");
   assert.equal(isObserverDocumentPath("/team-workspace"), false);
   assert.equal(isObserverDocumentPath("/team-workspace/alex_gross"), false);
   assert.equal(isObserverAdminApiGetAllowed("/admin/v1/team-workspace/clients/alex_gross"), false);
+  assert.equal(
+    isObserverAdminApiGetAllowed("/admin/v1/clients/alex_gross/delivery-notification-recipient"),
+    false
+  );
   assert.equal((OBSERVER_DOCUMENT_PATHS as readonly string[]).includes("/team-workspace"), false);
   assert.equal((OBSERVER_DOCUMENT_PATHS as readonly string[]).includes("/team"), false);
 });
@@ -77,9 +85,10 @@ test("the nav item is flag gated and stays off the observer list", () => {
   assert.equal(deriveObserverNavigation(shown).some((item) => item.href === "/team-workspace"), false);
   assert.equal(resolvePageMeta("/team-workspace").title, "Team Workspace");
   assert.equal(resolvePageMeta("/team-workspace/alex_gross").title, "Team Workspace");
+  assert.equal(resolvePageMeta("/clients/alex_gross/notification-recipient").title, "Notification recipient");
 });
 
-test("workspace files do not add writes, roles, or a second ticket route", () => {
+test("workspace files do not collect a recipient, send mail, or arm delivery", () => {
   const files = [
     new URL("./load.ts", import.meta.url),
     new URL("./present.ts", import.meta.url),
@@ -87,6 +96,8 @@ test("workspace files do not add writes, roles, or a second ticket route", () =>
     new URL("../../components/team-workspace/workspace-board.tsx", import.meta.url),
     new URL("../../app/(dashboard)/team-workspace/page.tsx", import.meta.url),
     new URL("../../app/(dashboard)/team-workspace/[clientAccountId]/page.tsx", import.meta.url),
+    new URL("../../components/team-workspace/notification-choice.tsx", import.meta.url),
+    new URL("../../app/actions/delivery-notification-preference.ts", import.meta.url),
   ];
   const source = files.map((file) => readFileSync(file, "utf8")).join("\n");
   assert.equal(source.includes("/team\""), false);

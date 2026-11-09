@@ -1,3 +1,7 @@
+import {
+  reloadDeliveryNotificationPreferenceAction,
+  saveDeliveryNotificationPreferenceAction,
+} from "@/app/actions/delivery-notification-preference";
 import { AdminCocForbiddenError } from "@/lib/admin-coc-session-guard";
 import { loadTeamWorkspaceClient } from "@/lib/team-workspace/load";
 
@@ -51,7 +55,16 @@ export default async function TeamWorkspaceClientPage({
         </div>
       );
     }
-    return <TeamWorkspaceBoard view={model.view} clients={model.clients} />;
+    return (
+      <TeamWorkspaceBoard
+        view={model.view}
+        clients={model.clients}
+        notificationActions={{
+          save: saveDeliveryNotificationPreferenceAction,
+          reload: reloadDeliveryNotificationPreferenceAction,
+        }}
+      />
+    );
   } catch (error) {
     if (error instanceof AdminCocForbiddenError) {
       return (

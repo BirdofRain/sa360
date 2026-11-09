@@ -6,6 +6,7 @@ import type {
   RoutingRuleSummary,
   TeamWorkspaceClientView,
   TeamWorkspaceDetailModel,
+  TeamWorkspaceNotificationChoice,
   TeamWorkspaceRead,
   TeamWorkspaceReceipts,
   TeamWorkspaceStep,
@@ -196,9 +197,31 @@ function deliveryDestination(workspace: WorkspaceAvailability): TeamWorkspaceSte
   );
 }
 
+const NOTIFICATION_UNREADABLE: TeamWorkspaceNotificationChoice = {
+  enabled: false,
+  canEnable: false,
+  blockedReason: "recipient_not_verified",
+  recipientVerified: false,
+  revision: 0,
+  readable: false,
+};
+
+function notificationChoice(workspace: WorkspaceAvailability): TeamWorkspaceNotificationChoice {
+  if (workspace.availability !== "ready") return NOTIFICATION_UNREADABLE;
+  const preference = workspace.body.clientNotification;
+  return {
+    enabled: preference.enabled,
+    canEnable: preference.canEnable,
+    blockedReason: preference.blockedReason,
+    recipientVerified: preference.recipientVerified,
+    revision: preference.revision,
+    readable: true,
+  };
+}
+
 /**
  * The per-client choice. A missing or unverified recipient stays off.
- * A saved on or off value is shown and is not edited here.
+ * The control can save on or off only. It does not carry the mailbox.
  */
 function notifications(workspace: WorkspaceAvailability): TeamWorkspaceStep {
   if (workspace.availability !== "ready") {
@@ -217,11 +240,11 @@ function notifications(workspace: WorkspaceAvailability): TeamWorkspaceStep {
     return step(
       "delivery_notifications",
       "pending",
-      "Notify this client when a lead is successfully delivered is on. This page does not change it.",
+      "Notify this client when a lead is successfully delivered is on.",
       [
         "A verified recipient is saved in Admin C.O.C.",
-        "This page does not collect an email address and does not send email.",
-        "Notification rows are not listed here. An empty list is not a failed delivery.",
+        "This page does not show that address and does not send email.",
+        "Turning this on or off does not arm delivery.",
       ]
     );
   }
@@ -231,9 +254,9 @@ function notifications(workspace: WorkspaceAvailability): TeamWorkspaceStep {
       "pending",
       "Notify this client when a lead is successfully delivered is off.",
       [
-        "A verified recipient is saved in Admin C.O.C. This page does not change the choice.",
-        "This page does not collect an email address and does not send email.",
-        "Notification rows are not listed here. An empty list is not a failed delivery.",
+        "A verified recipient is saved in Admin C.O.C.",
+        "This page does not show that address and does not send email.",
+        "Turning this on or off does not arm delivery.",
       ]
     );
   }
@@ -242,9 +265,9 @@ function notifications(workspace: WorkspaceAvailability): TeamWorkspaceStep {
     "unavailable",
     "Notify this client when a lead is successfully delivered is off.",
     [
-      "A verified recipient has to be saved in Admin C.O.C. before this can be turned on.",
+      "A verified recipient has to be configured in Admin C.O.C. before this can be turned on.",
       "This page does not collect an email address and does not send email.",
-      "Notification rows are not listed here. An empty list is not a failed delivery.",
+      "Turning this on or off does not arm delivery.",
     ]
   );
 }
@@ -346,8 +369,7 @@ export function presentTeamWorkspace(input: AssembleInput, identity: { name: str
     recordedCount: steps.filter((item) => item.status === "complete").length,
     steps,
     receipts: receiptsFrom(input.workspace.availability === "ready" ? input.workspace.body : null),
-    notificationChoiceOn:
-      input.workspace.availability === "ready" && input.workspace.body.clientNotification.enabled === true,
+    notification: notificationChoice(input.workspace),
   };
 }
 

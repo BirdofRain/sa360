@@ -105,6 +105,12 @@ export default async function ClientDetailPage({
           >
             Company Google Sheets →
           </Link>
+          <Link
+            href={`/clients/${encodeURIComponent(id)}/notification-recipient`}
+            className="text-sky-700 hover:underline"
+          >
+            Delivery notification recipient →
+          </Link>
           <ClientDetailSetupLink clientAccountId={id} />
         </div>
       </div>

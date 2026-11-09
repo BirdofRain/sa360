@@ -107,6 +107,7 @@ export function parseTeamWorkspaceResponse(data: unknown): TeamWorkspaceRead | n
   const preferenceEnabled = flag(preference.enabled);
   const canEnable = flag(preference.canEnable);
   const recipientVerified = flag(preference.recipientVerified);
+  const preferenceRevision = preference.revision;
   const blockedReason =
     preference.blockedReason === null
       ? null
@@ -125,6 +126,9 @@ export function parseTeamWorkspaceResponse(data: unknown): TeamWorkspaceRead | n
     preferenceEnabled === null ||
     canEnable === null ||
     recipientVerified === null ||
+    typeof preferenceRevision !== "number" ||
+    !Number.isSafeInteger(preferenceRevision) ||
+    preferenceRevision < 0 ||
     blockedReason === undefined ||
     !Array.isArray(notifications.items) ||
     !Array.isArray(body.recentCanonicalDeliveries)
@@ -133,6 +137,7 @@ export function parseTeamWorkspaceResponse(data: unknown): TeamWorkspaceRead | n
   }
   if (preferenceEnabled && (!canEnable || !recipientVerified || blockedReason !== null)) return null;
   if (canEnable && !recipientVerified) return null;
+  if ((preferenceEnabled || canEnable || recipientVerified) && preferenceRevision < 1) return null;
 
   const deliveryMode = ghl.deliveryMode === null ? null : text(ghl.deliveryMode, 40);
   if (ghl.deliveryMode !== null && (deliveryMode === null || !SAFE_MODE.test(deliveryMode))) return null;
@@ -178,6 +183,7 @@ export function parseTeamWorkspaceResponse(data: unknown): TeamWorkspaceRead | n
       canEnable,
       blockedReason,
       recipientVerified,
+      revision: preferenceRevision,
     },
     notifications: { items: [] },
   };

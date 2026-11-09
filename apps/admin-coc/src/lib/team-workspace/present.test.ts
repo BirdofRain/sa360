@@ -43,6 +43,7 @@ function workspace(overrides: Partial<TeamWorkspaceRead> = {}): TeamWorkspaceRea
       canEnable: false,
       blockedReason: "recipient_not_verified",
       recipientVerified: false,
+      revision: 0,
     },
     notifications: { items: [] },
     ...overrides,
@@ -270,6 +271,28 @@ test("the parser drops secrets, full webhook URLs, and a false operational flag"
     notifications: { enabled: true, items: [] },
   });
   assert.equal(missingPreference, null);
+
+  const missingRevision = parseTeamWorkspaceResponse({
+    ...workspace(),
+    clientNotification: {
+      enabled: false,
+      canEnable: false,
+      blockedReason: "recipient_not_verified",
+      recipientVerified: false,
+    },
+  });
+  assert.equal(missingRevision, null);
+
+  const leakedMailbox = parseTeamWorkspaceResponse({
+    ...workspace(),
+    clientNotification: {
+      ...workspace().clientNotification,
+      recipientEmail: "owner@example.test",
+    },
+  });
+  assert.ok(leakedMailbox);
+  assert.equal(JSON.stringify(leakedMailbox).includes("owner@example.test"), false);
+  assert.equal(JSON.stringify(leakedMailbox).includes("recipientEmail"), false);
   assert.equal(readAdminErrorCode(404, JSON.stringify({ error: "team_workspace_disabled" })), "team_workspace_disabled");
   assert.equal(readAdminErrorCode(500, "<html>token</html>"), "request_failed");
 });
@@ -306,6 +329,7 @@ test("a verified preference is shown without becoming activation", () => {
             canEnable: true,
             blockedReason: null,
             recipientVerified: true,
+            revision: 2,
           },
         }),
       },
@@ -316,7 +340,10 @@ test("a verified preference is shown without becoming activation", () => {
   const onStep = savedOn.view.steps.find((step) => step.id === "delivery_notifications");
   assert.equal(onStep?.status, "pending");
   assert.match(onStep?.summary ?? "", /is on/);
-  assert.equal(savedOn.view.notificationChoiceOn, true);
+  assert.equal(savedOn.view.notification.enabled, true);
+  assert.equal(savedOn.view.notification.revision, 2);
+  assert.equal(savedOn.view.notification.readable, true);
+  assert.equal(JSON.stringify(savedOn.view).includes("@"), false);
   assert.equal(savedOn.view.steps.find((step) => step.id === "completion")?.status === "complete", false);
 
   const savedOff = assembleTeamWorkspaceDetail(
@@ -329,6 +356,7 @@ test("a verified preference is shown without becoming activation", () => {
             canEnable: true,
             blockedReason: null,
             recipientVerified: true,
+            revision: 3,
           },
         }),
       },
@@ -336,7 +364,9 @@ test("a verified preference is shown without becoming activation", () => {
   );
   assert.equal(savedOff.kind, "ready");
   if (savedOff.kind !== "ready") return;
-  assert.equal(savedOff.view.notificationChoiceOn, false);
+  assert.equal(savedOff.view.notification.enabled, false);
+  assert.equal(savedOff.view.notification.canEnable, true);
+  assert.equal(savedOff.view.notification.revision, 3);
   assert.equal(
     savedOff.view.steps.find((step) => step.id === "delivery_notifications")?.status,
     "pending"

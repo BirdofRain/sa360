@@ -7,6 +7,7 @@ import { buildTeamWorkspaceTicketContext } from "@/lib/team-workspace/ticket-con
 import type { ClientOption, TeamWorkspaceClientView } from "@/lib/team-workspace/types";
 
 import { ClientPicker } from "./client-picker";
+import { DeliveryNotificationChoice, type NotificationChoiceActions } from "./notification-choice";
 import { StatusPill } from "./status-pill";
 import { TeamWorkspaceIntro } from "./workspace-states";
 
@@ -38,9 +39,11 @@ export function TeamWorkspaceHome({ clients }: { clients: ClientOption[] }) {
 export function TeamWorkspaceBoard({
   view,
   clients,
+  notificationActions,
 }: {
   view: TeamWorkspaceClientView;
   clients: ClientOption[];
+  notificationActions: NotificationChoiceActions;
 }) {
   return (
     <div className="space-y-6">
@@ -96,7 +99,11 @@ export function TeamWorkspaceBoard({
                   ))}
                 </ul>
                 {step.id === "delivery_notifications" ? (
-                  <NotificationChoice on={view.notificationChoiceOn} />
+                  <DeliveryNotificationChoice
+                    clientAccountId={view.clientAccountId}
+                    preference={view.notification}
+                    actions={notificationActions}
+                  />
                 ) : null}
                 <div className="mt-3">
                   <SupportTicketInlineButton
@@ -136,25 +143,3 @@ function ReportIssue({
   );
 }
 
-function NotificationChoice({ on }: { on: boolean }) {
-  return (
-    <fieldset disabled className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
-      <legend className="px-1 text-xs font-medium text-slate-600">Client notification</legend>
-      <label className="flex items-start gap-2 text-sm text-slate-800">
-        <input
-          type="checkbox"
-          disabled
-          checked={on}
-          readOnly
-          aria-label="Notify this client when a lead is successfully delivered"
-        />
-        <span>Notify this client when a lead is successfully delivered</span>
-      </label>
-      <p className="mt-2 text-xs text-slate-600">
-        {on
-          ? "This choice is on. This page does not change it."
-          : "This choice is off. This page does not change it."}
-      </p>
-    </fieldset>
-  );
-}

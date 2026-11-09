@@ -120,7 +120,7 @@ const routes: { prefix: string; meta: PageMeta }[] = [
     prefix: "/team-workspace",
     meta: {
       title: "Team Workspace",
-      description: "Read-only client setup, delivery choices, and support context.",
+      description: "Client setup, delivery choices, notification preference, and support context.",
     },
   },
   {
@@ -255,6 +255,12 @@ function matchesPagePrefix(pathname: string, prefix: string): boolean {
 }
 
 export function resolvePageMeta(pathname: string): PageMeta {
+  if (/^\/clients\/[A-Za-z0-9][A-Za-z0-9_-]{0,127}\/notification-recipient$/.test(pathname)) {
+    return {
+      title: "Notification recipient",
+      description: "Admin C.O.C. recipient for this client's successful-delivery email.",
+    };
+  }
   for (const r of routes) {
     if (matchesPagePrefix(pathname, r.prefix)) {
       return r.meta;

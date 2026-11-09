@@ -70,6 +70,16 @@ type CandidateRow = {
   association_audit: unknown;
 };
 
+/**
+ * Prisma's interactive-transaction default is 5 seconds. This preview runs about
+ * 30 sequential reads, so that default can expire on `lifecycleEvent.findMany`.
+ * These limits apply only to this call. `maxWait` stays at the 2 second default.
+ * The statement limit is local to the transaction and stays under the interactive timeout.
+ */
+export const PREVIEW_TRANSACTION_TIMEOUT_MS = 15_000;
+export const PREVIEW_TRANSACTION_MAX_WAIT_MS = 2_000;
+export const PREVIEW_STATEMENT_TIMEOUT_MS = 12_000;
+
 export async function withReadOnlyRepeatableRead<T>(
   db: PrismaClient,
   run: (tx: Prisma.TransactionClient) => Promise<T>
@@ -77,9 +87,14 @@ export async function withReadOnlyRepeatableRead<T>(
   return db.$transaction(
     async (tx) => {
       await tx.$executeRaw`SET TRANSACTION READ ONLY`;
+      await tx.$queryRaw`SELECT set_config('statement_timeout', ${String(PREVIEW_STATEMENT_TIMEOUT_MS)}, true)`;
       return run(tx);
     },
-    { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead }
+    {
+      isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead,
+      maxWait: PREVIEW_TRANSACTION_MAX_WAIT_MS,
+      timeout: PREVIEW_TRANSACTION_TIMEOUT_MS,
+    }
   );
 }
 

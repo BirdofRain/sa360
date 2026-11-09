@@ -10,11 +10,11 @@ Production request `req-33` on 2026-11-09 at 10:54:35 AM ET (`15:54:35.834Z`) wa
 
 The expired statement was `lifecycleEvent.findMany()` inside `loadRelationEvidence`. The interactive transaction uses Prisma's default 5000 ms timeout. The same Page and Form later returned HTTP 200 for offset 200, including a limit of 100, with the same digest. The log shows no `too many clients`, no statement timeout from Postgres, and no restart of the API instance. The failure is explained. It is not reproducible on a single request of this cohort. It appears when the sequential read exceeds five seconds.
 
-The read-only transaction runs about 30 statements: the candidate query, 21 event-id lookups, the external-receipt lookup, routing, delivery-plan, duplicate-risk, and lifecycle lookups, Meta dispatch and failed-dispatch lookups, a second lifecycle lookup, and the duplicate-identity count. `LifecycleEvent.leadUid` has no index. `MetaDispatchAttempt.eventUuid` has no index. Those scans sit inside the five-second budget. The transaction is `READ ONLY`, and the following database check showed no funnel, event, audit, or downstream change.
+The read-only transaction runs about 30 statements: the candidate query, 21 event-id lookups, the external-receipt lookup, routing, delivery-plan, duplicate-risk, and lifecycle lookups, Meta dispatch and failed-dispatch lookups, a second lifecycle lookup, and the duplicate-identity count. `LifecycleEvent.leadUid` has no index. `MetaDispatchAttempt.eventUuid` has no index. Those scans sat inside the five-second budget. The transaction is `READ ONLY`, and the following database check showed no funnel, event, audit, or downstream change.
 
 This is a reliability failure, not a data-integrity failure. The request aborted before a response and wrote nothing.
 
-Recommended remediation, not included here: pass `timeout: 15_000` on this read-only transaction only. Do not add a flag or a migration for that change. A later, separately authorized migration can index `LifecycleEvent.leadUid` and `MetaDispatchAttempt.eventUuid` if the read still approaches the new budget. Do not raise the timeout and then run the preview in a tight loop.
+The preview transaction now sets `timeout: 15_000` and keeps `maxWait` at Prisma's 2 second default. Its first statement is still `SET TRANSACTION READ ONLY`. The next statement sets a transaction-local `statement_timeout` of 12 seconds, which is below the interactive budget and does not change the database default. A timeout, a query error, or incomplete relation evidence still throws, so the route returns no preview and no allow-list. A later, separately authorized migration can index `LifecycleEvent.leadUid` and `MetaDispatchAttempt.eventUuid` if one scan approaches the 12 second statement bound. Do not raise the timeout again and then run the preview in a tight loop.
 
 ## Snapshot contract
 
@@ -58,8 +58,7 @@ The only future writes are the resolved client, the association object, one appe
 
 ## Blockers before a single-event writer
 
-- The preview transaction timeout is still the Prisma default of five seconds.
+- The preview transaction budget is 15 seconds, with a 12 second local statement timeout. Indexing `LifecycleEvent.leadUid` and `MetaDispatchAttempt.eventUuid` still needs its own migration.
 - No snapshot secret is provisioned, and this branch must not provision one.
 - There is still no person-level actor. A writer must not promote `x-sa360-operator` into authentication.
 - The lock, recheck, and idempotent write above are not implemented.
-- Indexing `LifecycleEvent.leadUid` needs its own migration approval.

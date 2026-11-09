@@ -676,6 +676,7 @@ test("the team workspace read follows recipient and enable writes without return
     canEnable: false,
     blockedReason: "recipient_not_verified",
     recipientVerified: false,
+    revision: 0,
   });
 
   const saved = await app.inject({
@@ -691,6 +692,7 @@ test("the team workspace read follows recipient and enable writes without return
     canEnable: true,
     blockedReason: null,
     recipientVerified: true,
+    revision: 1,
   });
   assert.equal(verified.body.includes(email), false);
 
@@ -722,6 +724,7 @@ test("the team workspace read follows recipient and enable writes without return
     canEnable: true,
     blockedReason: null,
     recipientVerified: true,
+    revision: 3,
   });
 
   const changed = await app.inject({
@@ -738,6 +741,7 @@ test("the team workspace read follows recipient and enable writes without return
     canEnable: true,
     blockedReason: null,
     recipientVerified: true,
+    revision: 4,
   });
   assert.equal(afterChange.body.includes(nextEmail), false);
 
@@ -755,6 +759,78 @@ test("the team workspace read follows recipient and enable writes without return
   assert.equal(again.json().clientNotification.canEnable, true);
   assert.equal(again.body.includes(email), false);
   assert.equal(again.body.includes(nextEmail), false);
+});
+
+test("the recipient read shows the saved mailbox to an admin and does not write", async () => {
+  const { clientAccountId, portalLoginEmail } = await createClient("readrec");
+  const before = await prisma.clientDeliveryNotificationPreference.count({ where: { clientAccountId } });
+  assert.equal(before, 0);
+
+  const empty = await app.inject({ method: "GET", url: recipientUrl(clientAccountId), headers: adminHeaders() });
+  assert.equal(empty.statusCode, 200);
+  assert.deepEqual(empty.json(), {
+    ok: true,
+    clientAccountId,
+    recipientEmail: null,
+    recipientVerified: false,
+    recipientEmailVerifiedAt: null,
+    enabled: false,
+    enabledAt: null,
+    disabledAt: null,
+    revision: 0,
+    channel: "email",
+  });
+  assert.equal(empty.body.includes(portalLoginEmail), false);
+  assert.equal(empty.body.includes("portalLoginEmail"), false);
+  assert.equal(await prisma.clientDeliveryNotificationPreference.count({ where: { clientAccountId } }), 0);
+
+  const missingKey = await app.inject({ method: "GET", url: recipientUrl(clientAccountId) });
+  assert.equal(missingKey.statusCode, 401);
+  const foreign = await app.inject({
+    method: "GET",
+    url: recipientUrl(clientAccountId),
+    headers: adminHeaders({ "x-sa360-client-portal-key": "foreign-credential" }),
+  });
+  assert.equal(foreign.statusCode, 403);
+  assert.equal(foreign.json().error, "forbidden");
+
+  const unknown = await app.inject({
+    method: "GET",
+    url: recipientUrl("missingclient"),
+    headers: adminHeaders(),
+  });
+  assert.equal(unknown.statusCode, 404);
+  assert.equal(unknown.json().error, "client_not_found");
+
+  const previous = process.env.SA360_TEAM_WORKSPACE_ENABLED;
+  delete process.env.SA360_TEAM_WORKSPACE_ENABLED;
+  const gated = await app.inject({ method: "GET", url: recipientUrl(clientAccountId), headers: adminHeaders() });
+  process.env.SA360_TEAM_WORKSPACE_ENABLED = previous;
+  assert.equal(gated.statusCode, 404);
+  assert.equal(gated.json().error, "team_workspace_disabled");
+
+  const saved = await app.inject({
+    method: "PUT",
+    url: recipientUrl(clientAccountId),
+    headers: adminHeaders(),
+    payload: { requestId: crypto.randomUUID(), expectedRevision: 0, recipientEmail: "  Read-Owner@Example.com " },
+  });
+  assert.equal(saved.statusCode, 200);
+  const loaded = await app.inject({ method: "GET", url: recipientUrl(clientAccountId), headers: adminHeaders() });
+  assert.equal(loaded.statusCode, 200);
+  assert.equal(loaded.json().recipientEmail, "read-owner@example.com");
+  assert.equal(loaded.json().recipientVerified, true);
+  assert.equal(loaded.json().enabled, false);
+  assert.equal(loaded.json().revision, 1);
+  assert.equal(loaded.json().recipientEmailVerifiedAt, saved.json().recipientEmailVerifiedAt);
+  assert.equal(loaded.body.includes(portalLoginEmail), false);
+
+  const workspace = await app.inject({ method: "GET", url: readUrl(clientAccountId), headers: adminHeaders() });
+  assert.equal(workspace.statusCode, 200);
+  assert.equal(workspace.json().clientNotification.revision, 1);
+  assert.equal(workspace.json().clientNotification.recipientVerified, true);
+  assert.equal(workspace.body.includes("read-owner@example.com"), false);
+  assert.equal(workspace.body.includes(portalLoginEmail), false);
 });
 
 test("configuration stays off the observer allowlist and does not own a sender", () => {

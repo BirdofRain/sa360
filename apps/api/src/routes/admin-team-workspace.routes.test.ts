@@ -286,6 +286,7 @@ test("a known client returns the read contract without secrets or canonical clai
     canEnable: false,
     blockedReason: "recipient_not_verified",
     recipientVerified: false,
+    revision: 0,
   });
   assert.deepEqual(body.notifications, { items: [] });
   assert.equal(Object.hasOwn(body.notifications, "enabled"), false);
@@ -346,6 +347,7 @@ test("the process notify flag is not a client preference, and POST is not a rout
     canEnable: false,
     blockedReason: "recipient_not_verified",
     recipientVerified: false,
+    revision: 0,
   });
   assert.deepEqual(body.notifications, { items: [] });
   assert.equal(JSON.stringify(body).includes("SA360_DELIVERY_SUCCESS_NOTIFY_ENABLED"), false);
@@ -374,6 +376,7 @@ test("a verified preference is projected without the mailbox", async () => {
         channel: "email",
         recipientEmail: recipient,
         recipientEmailVerifiedAt: new Date("2026-11-06T18:00:00.000Z"),
+        revision: 5,
       },
     },
   });
@@ -388,6 +391,7 @@ test("a verified preference is projected without the mailbox", async () => {
     canEnable: true,
     blockedReason: null,
     recipientVerified: true,
+    revision: 5,
   });
   assert.equal(response.body.includes(recipient), false);
   assert.equal(response.body.includes("recipientEmail"), false);
@@ -401,6 +405,7 @@ test("a verified preference is projected without the mailbox", async () => {
         channel: "email",
         recipientEmail: recipient,
         recipientEmailVerifiedAt: null,
+        revision: 2,
       },
     },
   });
@@ -414,6 +419,7 @@ test("a verified preference is projected without the mailbox", async () => {
     canEnable: false,
     blockedReason: "recipient_not_verified",
     recipientVerified: false,
+    revision: 2,
   });
   assert.equal(hidden.body.includes(recipient), false);
   await unverified.app.close();

@@ -64,6 +64,19 @@ type PreferenceFields = {
   channel: "email";
 };
 
+export type DeliveryNotificationRecipientRead = {
+  ok: true;
+  clientAccountId: string;
+  recipientEmail: string | null;
+  recipientVerified: boolean;
+  recipientEmailVerifiedAt: string | null;
+  enabled: boolean;
+  enabledAt: string | null;
+  disabledAt: string | null;
+  revision: number;
+  channel: "email";
+};
+
 export type DeliveryNotificationRecipientConfigResult =
   | ({ ok: true; replayed: boolean } & RecipientFields)
   | DeliveryNotificationConfigFailure;
@@ -76,6 +89,66 @@ type StoredRecipient = { kind: "recipient" } & RecipientFields;
 type StoredPreference = { kind: "preference" } & PreferenceFields;
 type StoredRejection = { kind: "rejected"; error: "recipient_not_verified" };
 type StoredResult = StoredRecipient | StoredPreference | StoredRejection;
+
+/**
+ * Read the saved recipient for Admin C.O.C. A missing row is revision 0 and
+ * an empty mailbox. This does not insert a row, send mail, or copy a sign-in address.
+ */
+export async function readDeliveryNotificationRecipient(
+  db: PrismaClient,
+  clientAccountId: string
+): Promise<DeliveryNotificationRecipientRead | DeliveryNotificationConfigFailure> {
+  const id = clientAccountId.trim();
+  if (!id) return failure(404, "client_not_found");
+  const client = await db.clientAccount.findUnique({
+    where: { clientAccountId: id },
+    select: {
+      clientAccountId: true,
+      deliveryNotificationPreference: {
+        select: {
+          enabled: true,
+          channel: true,
+          recipientEmail: true,
+          recipientEmailVerifiedAt: true,
+          enabledAt: true,
+          disabledAt: true,
+          revision: true,
+        },
+      },
+    },
+  });
+  if (!client) return failure(404, "client_not_found");
+  const row = client.deliveryNotificationPreference;
+  if (!row) {
+    return {
+      ok: true,
+      clientAccountId: client.clientAccountId,
+      recipientEmail: null,
+      recipientVerified: false,
+      recipientEmailVerifiedAt: null,
+      enabled: false,
+      enabledAt: null,
+      disabledAt: null,
+      revision: 0,
+      channel: "email",
+    };
+  }
+  const recipientVerified = Boolean(
+    row.recipientEmail && row.recipientEmailVerifiedAt && row.channel === "email"
+  );
+  return {
+    ok: true,
+    clientAccountId: client.clientAccountId,
+    recipientEmail: row.recipientEmail,
+    recipientVerified,
+    recipientEmailVerifiedAt: row.recipientEmailVerifiedAt ? row.recipientEmailVerifiedAt.toISOString() : null,
+    enabled: row.enabled === true && recipientVerified,
+    enabledAt: iso(row.enabledAt),
+    disabledAt: iso(row.disabledAt),
+    revision: row.revision,
+    channel: "email",
+  };
+}
 
 /**
  * Record one admin-verified mailbox. The verification timestamp is the

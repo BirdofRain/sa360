@@ -13,6 +13,7 @@ import {
 } from "../../lib/company-google-sheets-env.js";
 import { projectCampaignDobAge } from "../consumer-age/campaign-dob-age.js";
 import { companySheetsCampaignRowValues } from "../company-sheets-delivery/company-sheets-campaign-row.js";
+import { explainDraftProjection, type ColumnAssignment } from "../company-sheets-delivery/company-sheets-custom-row.js";
 import {
   buildSourceAttributeStampPayload,
   buildSourceAttributeStampPlan,
@@ -806,6 +807,21 @@ function projectDob(normalized: ReturnType<typeof normalizeLeadCaptureIoWebhookT
   return { projected, v3Row, stamp };
 }
 
+function samDobColumn(): ColumnAssignment[] {
+  return [
+    {
+      sheetHeader: "DOB",
+      columnIndex: 0,
+      formula: false,
+      target: { kind: "v3_column", header: "DOB", sourceField: "date_of_birth" },
+      transform: "date_america_new_york",
+      decision: "mapped",
+      explicit: true,
+      code: null,
+    },
+  ];
+}
+
 test("Julia's verified provider funnel id agrees with the page and does not select another form", () => {
   const agreeing = normalizeLeadCaptureIoWebhookToLifecyclePayload(
     juliaPayload({ date: "03/13/1955", funnel_id: CONFIRMED_JULIA_DODGE_PROVIDER_FUNNEL_ID.toUpperCase() }),
@@ -1447,15 +1463,56 @@ test("catalog DOB steps map only on the confirmed page and webhook key", () => {
   assert.equal(detailsOf(madisonGo).date_of_birth, "1979-04-12");
   assert.equal(intakeOf(madisonGo).scopedFieldBindingId, undefined);
 
-  const samTest = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+  const samForm = CONFIRMED_CATALOG_DOB_FORMS.find((form) => form.id === "leadcapture_io_nextgen_vet_sam_test");
+  assert.ok(samForm);
+  assert.equal(samForm.alias, "date");
+  assert.equal(normalizeSourceFieldKey("DATE"), "date");
+  const samCased = normalizeLeadCaptureIoWebhookToLifecyclePayload(
     juliaPayload({
-      parent_url: "https://go.lifeinsuranceforvets.com/learn-sam-test",
+      parent_url: `https://${samForm.parentUrlKey}`,
       submitted_at: submittedAt,
-      date: "03/13/1955",
+      DATE: "03/13/1955",
+      funnel_id: samForm.providerFunnelId,
     }),
-    { receivedAt: submittedAt }
+    { receivedAt: submittedAt, sourceFunnelId: samForm.sourceFunnelId }
   );
-  assert.equal(detailsOf(samTest).date_of_birth, undefined);
+  assert.equal(detailsOf(samCased).date_of_birth, "1955-03-13");
+  assert.equal(detailsOf(samCased).consumer_age, "71");
+  assert.equal(detailsOf(samCased).consumer_age_provenance, "derived_from_date_of_birth");
+  assert.equal(intakeOf(samCased).scopedFieldBindingId, samForm.id);
+
+  const storedSnapshot = {
+    lead_details: { beneficiary: "redacted", coverage_amount: "10000" },
+    routing: { source_intake: { parent_url_key: samForm.parentUrlKey } },
+  };
+  const blankPreview = explainDraftProjection(samDobColumn(), {
+    stableRowId: "draft-preview:stored-sam",
+    clientAccountId: "client_synthetic",
+    sourceLeadEventId: "evt_stored_sam",
+    receivedAt: submittedAt,
+    sourceLeadId: "11111111-2222-4333-8444-555555555555",
+    normalizedPayload: storedSnapshot,
+  });
+  assert.ok(blankPreview);
+  assert.equal(blankPreview.sheet.values[0], "");
+  assert.equal(blankPreview.sheet.dobAge.dateOfBirth, "");
+  assert.equal(blankPreview.sheet.dobAge.age, "");
+
+  const filledPreview = explainDraftProjection(samDobColumn(), {
+    stableRowId: "draft-preview:new-sam",
+    clientAccountId: "client_synthetic",
+    sourceLeadEventId: "evt_new_sam",
+    receivedAt: submittedAt,
+    sourceLeadId: "11111111-2222-4333-8444-555555555555",
+    normalizedPayload: samCased,
+  });
+  assert.ok(filledPreview);
+  assert.equal(filledPreview.sheet.values[0], "03/13/1955");
+  assert.equal(filledPreview.sheet.dobAge.dateOfBirth, "1955-03-13");
+  assert.equal(filledPreview.sheet.dobAge.derivedAge, "71");
+  assert.equal(filledPreview.sheet.dobAge.ageProvenance, "derived_from_date_of_birth");
+  assert.equal(filledPreview.sheet.dobAge.conflict, false);
+  assert.equal(filledPreview.cells[0]?.reason, null);
 
   const jamesAgePage = normalizeLeadCaptureIoWebhookToLifecyclePayload(
     juliaPayload({

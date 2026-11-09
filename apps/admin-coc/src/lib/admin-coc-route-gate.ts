@@ -86,6 +86,19 @@ export function isAdminCocOAuthCallbackPath(pathname: string): boolean {
   );
 }
 
+const STAFF_GOOGLE_AUTH_PATHS = new Set([
+  "/staff",
+  "/staff/google/start",
+  "/staff/google/callback",
+  "/staff/google/logout",
+]);
+
+/** Exact staff sign-in paths. A prefix would let /staff/../login through. */
+export function isStaffGoogleAuthPath(pathname: string): boolean {
+  const canonical = canonicalSecurityPath(pathname);
+  return canonical !== null && STAFF_GOOGLE_AUTH_PATHS.has(canonical);
+}
+
 export function isAdminCocLoginPath(pathname: string): boolean {
   return pathname === "/login" || pathname.startsWith("/login/");
 }
@@ -191,6 +204,7 @@ function resolveAdminPasswordGate(input: AdminCocRouteGateInput): AdminCocRouteG
   if (isMetaReviewerAuthPath(pathname)) return allow();
   if (isAdminCocHealthPath(pathname)) return allow();
   if (isAdminCocOAuthCallbackPath(pathname)) return allow();
+  if (isStaffGoogleAuthPath(pathname)) return allow();
 
   if (!input.adminPasswordConfigured) return allow(attachAgentWorkspaceCsp);
 

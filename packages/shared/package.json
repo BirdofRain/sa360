@@ -20,10 +20,25 @@
       "types": "./dist/staff-assertion.d.ts",
       "import": "./dist/staff-assertion.js",
       "default": "./dist/staff-assertion.js"
+    },
+    "./staff-google-session": {
+      "types": "./dist/staff-google-session.d.ts",
+      "import": "./dist/staff-google-session.js",
+      "default": "./dist/staff-google-session.js"
+    },
+    "./staff-google-state": {
+      "types": "./dist/staff-google-state.d.ts",
+      "import": "./dist/staff-google-state.js",
+      "default": "./dist/staff-google-state.js"
+    },
+    "./staff-google-oidc": {
+      "types": "./dist/staff-google-oidc.d.ts",
+      "import": "./dist/staff-google-oidc.js",
+      "default": "./dist/staff-google-oidc.js"
     }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node --import tsx/esm --test src/commerce-niches.test.ts src/availability-interest.test.ts src/portal-customer-age.test.ts src/company-sheets-drain-budget.test.ts src/company-sheets-column-template.test.ts src/staff-assertion.test.ts"
+    "test": "node --import tsx/esm --test src/commerce-niches.test.ts src/availability-interest.test.ts src/portal-customer-age.test.ts src/company-sheets-drain-budget.test.ts src/company-sheets-column-template.test.ts src/staff-assertion.test.ts src/staff-google-session.test.ts src/staff-google-state.test.ts src/staff-google-oidc.test.ts"
   }
 }

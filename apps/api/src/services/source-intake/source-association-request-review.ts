@@ -54,7 +54,11 @@ export type SourceCampaignRequestReview = {
   campaignStatus: CampaignRegistryStatus;
   /** True only when a loaded funnel is already confirmed to this client. */
   sourceAssociated: boolean;
-  /** True only when a matching campaign rule has delivery enabled. Routing can still be live when this is false. */
+  /**
+   * True only when a live matching campaign rule owned by this client has `deliveryEnabled`.
+   * A rule owned by another client does not set it. The value is that stored switch.
+   * It is not a receipt that GoHighLevel or Company Sheets delivered a lead.
+   */
   deliveryActivated: boolean;
   matchedSourceFunnelIds: string[];
   matchedRuleIds: string[];
@@ -178,16 +182,21 @@ export function reviewSavedSourceCampaignRequest(input: SourceCampaignRequestRev
 
   if (campaignStatus === "no_matching_rule") blockers.push("No routing rule uses this campaign id. Creating one would insert a live CampaignRoutingRule, which defaults to active.");
   if (campaignStatus === "inactive_rule_only") blockers.push("An inactive routing rule is still a CampaignRoutingRule. This review does not create or activate one. Delivery off is not the same as routing off.");
+  const ownLiveRules = matchedRules.filter((rule) => ruleIsLive(rule, now) && text(rule.clientAccountId) === clientAccountId);
+  const otherLiveRules = matchedRules.filter((rule) => ruleIsLive(rule, now) && text(rule.clientAccountId) !== clientAccountId);
   if (campaignStatus === "live_routing_rule") {
-    const otherOwner = matchedRules.some((rule) => ruleIsLive(rule, now) && text(rule.clientAccountId) !== clientAccountId);
-    blockers.push(
-      otherOwner
-        ? "This campaign id already matches a live routing rule for another client. Existing rules are left unchanged."
-        : "This campaign id already matches a live routing rule. An active rule is routing even when delivery is off. Existing rules are left unchanged."
-    );
+    if (otherLiveRules.length > 0) {
+      blockers.push("This campaign id already matches a live routing rule for another client. That rule's delivery switch is not proof of a GoHighLevel or Company Sheets delivery for this client. Existing rules are left unchanged.");
+    }
+    if (ownLiveRules.length > 0) {
+      blockers.push("This campaign id already matches a live routing rule for this client. An active rule is routing even when delivery is off. Existing rules are left unchanged.");
+    }
   }
 
-  const deliveryActivated = matchedRules.some((rule) => ruleIsLive(rule, now) && rule.deliveryEnabled);
+  const deliveryActivated = ownLiveRules.some((rule) => rule.deliveryEnabled);
+  if (deliveryActivated) {
+    blockers.push("This client's matching routing rule has delivery enabled. That switch is not a receipt of a GoHighLevel or Company Sheets delivery.");
+  }
   if (sourceStatus === "confirmed_for_client" && !deliveryActivated) {
     blockers.push("Source associated and delivery activated are different. This confirmed source does not turn delivery on.");
   }

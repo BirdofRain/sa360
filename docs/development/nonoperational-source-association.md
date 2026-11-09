@@ -34,7 +34,7 @@ A confirmed association is therefore not a nonoperational setup request.
 
 ## What this phase adds
 
-`reviewSavedSourceCampaignRequest` compares a saved request with source and rule rows the caller already loaded. It returns whether the source is incomplete, missing, only suggested, confirmed for this client, confirmed for someone else, or ambiguous. It returns whether the campaign id is missing, unused, present only on an inactive rule, or already a live rule. It separates `sourceAssociated` from `deliveryActivated`.
+`reviewSavedSourceCampaignRequest` compares a saved request with source and rule rows the caller already loaded. It returns whether the source is incomplete, missing, only suggested, confirmed for this client, confirmed for someone else, or ambiguous. It returns whether the campaign id is missing, unused, present only on an inactive rule, or already a live rule. It separates `sourceAssociated` from `deliveryActivated`. `deliveryActivated` is true only when a live matching rule owned by the requesting client has `deliveryEnabled`. Another client's rule does not set it, and the switch is not a receipt that GoHighLevel or Company Sheets delivered a lead.
 
 `canApply`, `associationWrite`, and `routingRuleWrite` are false. A stale revision, a rejected request, or a repeated request id is not applied. The function does not import Prisma or the confirm/create services.
 

@@ -139,6 +139,7 @@ test("an active rule with delivery off stays live routing, and an inactive rule 
 
   const armed = review({ rules: [rule({ id: "rule_armed", deliveryEnabled: true })] });
   assert.equal(armed.deliveryActivated, true);
+  assert.match(armed.blockers.join(" "), /not a receipt of a GoHighLevel or Company Sheets delivery/);
 
   const inactive = review({ rules: [rule({ id: "rule_off", active: false, deliveryEnabled: true })] });
   assert.equal(inactive.campaignStatus, "inactive_rule_only");
@@ -150,6 +151,35 @@ test("an active rule with delivery off stays live routing, and an inactive rule 
   });
   assert.equal(expired.campaignStatus, "inactive_rule_only");
   assert.equal(expired.deliveryActivated, false);
+});
+
+test("Client A's request does not inherit Client B's delivery-enabled campaign rule", () => {
+  const result = review({
+    clientAccountId: "client_a",
+    funnels: [funnel({ id: "sf_a", associationStatus: "confirmed", originClientAccountId: "client_a" })],
+    rules: [rule({ id: "rule_b", clientAccountId: "client_b", campaignId: "camp_1", active: true, deliveryEnabled: true })],
+  });
+  assert.equal(result.sourceStatus, "confirmed_for_client");
+  assert.equal(result.sourceAssociated, true);
+  assert.equal(result.campaignStatus, "live_routing_rule");
+  assert.equal(result.deliveryActivated, false);
+  assert.equal(result.matchedRuleIds.includes("rule_b"), true);
+  assert.match(result.blockers.join(" "), /live routing rule for another client/);
+  assert.match(result.blockers.join(" "), /not proof of a GoHighLevel or Company Sheets delivery for this client/);
+  assert.match(result.blockers.join(" "), /Source associated and delivery activated are different/);
+  assert.equal(result.associationWrite, false);
+  assert.equal(result.routingRuleWrite, false);
+
+  const sharedCampaign = review({
+    rules: [
+      rule({ id: "rule_a", clientAccountId: "client_a", deliveryEnabled: false }),
+      rule({ id: "rule_b", clientAccountId: "client_b", deliveryEnabled: true }),
+    ],
+  });
+  assert.equal(sharedCampaign.deliveryActivated, false);
+  assert.equal(sharedCampaign.campaignStatus, "live_routing_rule");
+  assert.match(sharedCampaign.blockers.join(" "), /live routing rule for another client/);
+  assert.match(sharedCampaign.blockers.join(" "), /live routing rule for this client/);
 });
 
 test("a stale snapshot, a rejected request, and a duplicate request id are not applied", () => {

@@ -87,6 +87,7 @@ export function GuidedOnboarding({
   const [clientAccountId, setClientAccountId] = useState("");
   const [idEdited, setIdEdited] = useState(false);
   const attempt = useRef<ClientSetupSaveAttempt | null>(null);
+  const inflight = useRef(false);
   const progress = guideProgress(model);
   const busy = phase === "saving";
 
@@ -123,7 +124,32 @@ export function GuidedOnboarding({
     window.history.replaceState(null, "", `/team-workspace/${model.clientAccountId}?guide=${next}`);
   }
 
-  async function saveSetup(success: string): Promise<boolean> {
+  function claim(): boolean {
+    if (inflight.current) return false;
+    inflight.current = true;
+    return true;
+  }
+
+  function unexpectedFailure(kind: "create" | "update" | "setup"): GuideSaveRecovery {
+    if (kind === "create") {
+      return {
+        message: "Creating the client did not finish. Try the same client id again, or reload the list if that client is already there. Delivery was not turned on.",
+        action: "retry",
+      };
+    }
+    if (kind === "update") {
+      return {
+        message: "Saving client information did not finish. Try again. Delivery was not turned on.",
+        action: "retry",
+      };
+    }
+    return {
+      message: "The setup save did not finish. Try this save again. Delivery was not turned on.",
+      action: "retry",
+    };
+  }
+
+  async function saveSetupInner(success: string): Promise<boolean> {
     if (!model || !model.setupWritable) {
       setFailure({
         message: model?.setupUnavailableReason ?? "Saving a setup request is unavailable.",
@@ -143,13 +169,29 @@ export function GuidedOnboarding({
     attempt.current = nextAttempt;
     setPhase("saving");
     setStatusMessage("Saving the setup request. Delivery stays off.");
-    const result = await actions.saveSetup({
-      clientAccountId: model.clientAccountId,
-      data,
-      requestId: nextAttempt.requestId,
-      expectedRevision: revision,
-    });
-    return applySetupResult(result, success);
+    try {
+      const result = await actions.saveSetup({
+        clientAccountId: model.clientAccountId,
+        data,
+        requestId: nextAttempt.requestId,
+        expectedRevision: revision,
+      });
+      return applySetupResult(result, success);
+    } catch {
+      setFailure(unexpectedFailure("setup"));
+      setPhase("error");
+      setStatusMessage(null);
+      return false;
+    }
+  }
+
+  async function saveSetup(success: string): Promise<boolean> {
+    if (!claim()) return false;
+    try {
+      return await saveSetupInner(success);
+    } finally {
+      inflight.current = false;
+    }
   }
 
   function applySetupResult(result: GuidedSetupSaveResult, success: string): boolean {
@@ -175,40 +217,56 @@ export function GuidedOnboarding({
   }
 
   async function saveInformation() {
-    if (!model) return;
-    const errors = validateDraft(draft, "account");
-    if (errors.length > 0) {
-      setFieldErrors(errors);
-      return;
-    }
-    setPhase("saving");
-    setStatusMessage("Saving client information. Delivery stays off.");
-    const account = await actions.updateClient({
-      clientAccountId: model.clientAccountId,
-      clientDisplayName: draft.clientDisplayName.trim(),
-      status: draft.accountStatus,
-      primaryNicheKeys: draft.primaryNicheKeys,
-      primaryProductTypes: draft.primaryProductTypes,
-    });
-    if (!account.ok) {
-      setFailure(guideSaveRecovery(account.code, account.error));
-      setPhase("error");
-      setStatusMessage(null);
-      return;
-    }
-    if (!model.setupWritable) {
-      setPhase("saved");
-      setStatusMessage("Client information was saved. The setup request was not changed, and delivery was not turned on.");
-      router.refresh();
-      return;
-    }
-    const saved = await saveSetup("Client information and the setup request were saved. Delivery was not turned on.");
-    if (!saved) {
-      setStatusMessage("The client account was saved. The setup request was not. Delivery was not turned on.");
+    if (!model || !claim()) return;
+    try {
+      const errors = validateDraft(draft, "account");
+      if (errors.length > 0) {
+        setFieldErrors(errors);
+        return;
+      }
+      setPhase("saving");
+      setStatusMessage("Saving client information. Delivery stays off.");
+      let account: GuidedClientMutationResult;
+      try {
+        account = await actions.updateClient({
+          clientAccountId: model.clientAccountId,
+          clientDisplayName: draft.clientDisplayName.trim(),
+          status: draft.accountStatus,
+          primaryNicheKeys: draft.primaryNicheKeys,
+          primaryProductTypes: draft.primaryProductTypes,
+        });
+      } catch {
+        setFailure(unexpectedFailure("update"));
+        setPhase("error");
+        setStatusMessage(null);
+        return;
+      }
+      if (!account.ok) {
+        setFailure(guideSaveRecovery(account.code, account.error));
+        setPhase("error");
+        setStatusMessage(null);
+        return;
+      }
+      if (!model.setupWritable) {
+        setPhase("saved");
+        setStatusMessage("Client information was saved. The setup request was not changed, and delivery was not turned on.");
+        router.refresh();
+        return;
+      }
+      const saved = await saveSetupInner("Client information and the setup request were saved. Delivery was not turned on.");
+      if (!saved) {
+        setStatusMessage("The client account was saved. The setup request was not. Delivery was not turned on.");
+      }
+    } finally {
+      inflight.current = false;
     }
   }
 
   function saveCurrent() {
+    if (!model || current === "client") {
+      void createClient();
+      return;
+    }
     if (current === "information" || current === "summary") {
       void saveInformation();
       return;
@@ -217,26 +275,42 @@ export function GuidedOnboarding({
   }
 
   async function createClient() {
-    const errors = validateNewClient({ clientAccountId, clientDisplayName: draft.clientDisplayName });
-    if (errors.length > 0) {
-      setFieldErrors(errors);
-      return;
+    if (!claim()) return;
+    try {
+      const errors = validateNewClient({ clientAccountId, clientDisplayName: draft.clientDisplayName });
+      if (errors.length > 0) {
+        setFieldErrors(errors);
+        return;
+      }
+      setPhase("saving");
+      setStatusMessage("Creating the client. Delivery stays off.");
+      let result: GuidedClientMutationResult;
+      try {
+        result = await actions.createClient({
+          clientAccountId: clientAccountId.trim(),
+          clientDisplayName: draft.clientDisplayName.trim(),
+          primaryNicheKeys: draft.primaryNicheKeys,
+          primaryProductTypes: draft.primaryProductTypes,
+        });
+      } catch {
+        setFailure(unexpectedFailure("create"));
+        setPhase("error");
+        setStatusMessage(null);
+        return;
+      }
+      if (!result.ok) {
+        setFailure(guideSaveRecovery(result.code, result.error));
+        setPhase("error");
+        setStatusMessage(null);
+        return;
+      }
+      setFailure(null);
+      setPhase("saved");
+      setStatusMessage("Client saved. Delivery is not on. Continue with client information.");
+      router.push(`/team-workspace/${result.clientAccountId}?guide=information&created=1`);
+    } finally {
+      inflight.current = false;
     }
-    setPhase("saving");
-    setStatusMessage("Creating the client. Delivery stays off.");
-    const result: GuidedClientMutationResult = await actions.createClient({
-      clientAccountId: clientAccountId.trim(),
-      clientDisplayName: draft.clientDisplayName.trim(),
-      primaryNicheKeys: draft.primaryNicheKeys,
-      primaryProductTypes: draft.primaryProductTypes,
-    });
-    if (!result.ok) {
-      setFailure(guideSaveRecovery(result.code, result.error));
-      setPhase("error");
-      setStatusMessage(null);
-      return;
-    }
-    router.push(`/team-workspace/${result.clientAccountId}?guide=information&created=1`);
   }
 
   function reload() {

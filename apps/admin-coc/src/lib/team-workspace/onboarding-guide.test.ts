@@ -220,6 +220,10 @@ test("stale revisions reload, and a conflicting save id starts over", () => {
   assert.equal(conflict.action, "new_request");
   const retry = guideSaveRecovery(null, "The admin API could not be reached.");
   assert.equal(retry.action, "retry");
+  const uncertain = guideSaveRecovery("UNCERTAIN", "The setup save did not finish.");
+  assert.equal(uncertain.action, "retry");
+  const taken = guideSaveRecovery("CONFLICT", "That client account ID is already in use. Choose a different ID.");
+  assert.equal(taken.action, "none");
 });
 
 test("a disagreed setup revision is blocked and portal email is not copied into the guide", () => {

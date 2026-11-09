@@ -11,6 +11,11 @@ type UpdateInput = { clientAccountId: string; clientDisplayName: string; status:
 
 const saves: SaveInput[] = [];
 const updates: UpdateInput[] = [];
+const creates: string[] = [];
+let saveGate: Promise<void> | null = null;
+let saveRejects = false;
+let updateRejects = false;
+let createRejects = false;
 let saveResult: { ok: true; revision: number; replayed: boolean; status: "draft"; data: Record<string, unknown>; missingRequiredFields: string[]; repairRequired: boolean } | { ok: false; code: string | null; error: string } = {
   ok: true,
   revision: 3,
@@ -33,13 +38,20 @@ moduleLoader._load = function (request: string, parent: NodeModule, isMain: bool
   }
   if (request === "@/app/actions/team-workspace-onboarding") {
     return {
-      createGuidedClientAction: async () => ({ ok: true, clientAccountId: "new_client", clientDisplayName: "New Client" }),
+      createGuidedClientAction: async (input: { clientAccountId: string }) => {
+        creates.push(input.clientAccountId);
+        if (createRejects) throw new Error("create rejected");
+        return { ok: true, clientAccountId: "new_client", clientDisplayName: "New Client" };
+      },
       updateGuidedClientAction: async (input: UpdateInput) => {
         updates.push(input);
+        if (updateRejects) throw new Error("update rejected");
         return { ok: true, clientAccountId: input.clientAccountId, clientDisplayName: input.clientDisplayName };
       },
       saveGuidedSetupAction: async (input: SaveInput) => {
         saves.push(input);
+        if (saveGate) await saveGate;
+        if (saveRejects) throw new Error("setup rejected");
         return saveResult.ok ? { ...saveResult, data: input.data, revision: input.expectedRevision + 1 } : saveResult;
       },
     };
@@ -57,7 +69,12 @@ test.afterEach(() => {
   cleanup();
   saves.length = 0;
   updates.length = 0;
+  creates.length = 0;
   refreshCalls.length = 0;
+  saveGate = null;
+  saveRejects = false;
+  updateRejects = false;
+  createRejects = false;
   saveResult = {
     ok: true,
     revision: 3,
@@ -189,6 +206,68 @@ test("a newly created client shows that delivery is still off", () => {
   const status = screen.getByRole("status").textContent ?? "";
   assert.equal(status.includes("Client saved"), true);
   assert.equal(status.includes("Delivery is not on"), true);
+});
+
+test("a rejected setup save clears the saving state and retries the same request", async () => {
+  saveRejects = true;
+  render(<GuidedOnboarding model={guide()} step="sources" clients={[]} />);
+  fireEvent.click(screen.getByRole("button", { name: "Save source request" }));
+  const retry = await screen.findByRole("button", { name: "Try this save again" });
+  assert.equal(screen.getByRole("alert").textContent?.includes("The setup save did not finish"), true);
+  assert.equal(screen.getByRole("button", { name: "Save source request" }).hasAttribute("disabled"), false);
+  assert.equal(screen.queryByText("Saving the setup request. Delivery stays off."), null);
+  fireEvent.click(retry);
+  await screen.findByRole("button", { name: "Try this save again" });
+  assert.equal(saves.length, 2);
+  assert.equal(saves[0]?.requestId, saves[1]?.requestId);
+});
+
+test("a second click does not send a second setup save", async () => {
+  let release: () => void = () => undefined;
+  saveGate = new Promise((resolve) => {
+    release = resolve;
+  });
+  render(<GuidedOnboarding model={guide()} step="sources" clients={[]} />);
+  const button = screen.getByRole("button", { name: "Save source request" });
+  fireEvent.click(button);
+  fireEvent.click(button);
+  assert.equal(saves.length, 1);
+  release();
+  await screen.findByText(/source and campaign request was saved/i);
+  assert.equal(saves.length, 1);
+});
+
+test("a rejected client update can be tried again without a setup save", async () => {
+  updateRejects = true;
+  render(<GuidedOnboarding model={guide()} step="information" clients={[]} />);
+  fireEvent.click(screen.getByRole("button", { name: "Save client information" }));
+  const retry = await screen.findByRole("button", { name: "Try this save again" });
+  assert.equal(screen.getByRole("alert").textContent?.includes("Saving client information did not finish"), true);
+  assert.equal(saves.length, 0);
+  assert.equal(updates.length, 1);
+  updateRejects = false;
+  fireEvent.click(retry);
+  await screen.findByText(/Client information and the setup request were saved/i);
+  assert.equal(updates.length, 2);
+  assert.equal(saves.length, 1);
+});
+
+test("a rejected create keeps the same client id and does not send a second create until retry", async () => {
+  createRejects = true;
+  render(<GuidedOnboarding model={null} step="client" clients={[]} />);
+  fireEvent.change(screen.getByLabelText("Client name"), { target: { value: "Cedar Ridge" } });
+  const button = screen.getByRole("button", { name: "Create client" });
+  fireEvent.click(button);
+  fireEvent.click(button);
+  const retry = await screen.findByRole("button", { name: "Try this save again" });
+  assert.equal(creates.length, 1);
+  assert.equal(creates[0], "cedar_ridge");
+  assert.equal(screen.getByRole("alert").textContent?.includes("Creating the client did not finish"), true);
+  assert.equal((screen.getByLabelText("Client id") as HTMLInputElement).value, "cedar_ridge");
+  createRejects = false;
+  fireEvent.click(retry);
+  await screen.findByText(/Client saved. Delivery is not on/);
+  assert.deepEqual(creates, ["cedar_ridge", "cedar_ridge"]);
 });
 
 test("partial setup keeps the notification words distinct on the summary", () => {

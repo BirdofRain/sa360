@@ -909,10 +909,16 @@ export function guideSaveRecovery(code: string | null, error: string): GuideSave
       action: "new_request",
     };
   }
-  if (resolved === "SETUP_REPAIR_REQUIRED" || resolved === "FEATURE_DISABLED" || resolved === "OPERATIONAL_EFFECT") {
+  if (resolved === "SETUP_REPAIR_REQUIRED" || resolved === "FEATURE_DISABLED" || resolved === "OPERATIONAL_EFFECT" || resolved === "CONFLICT") {
     return { message, action: "none" };
   }
   if (resolved === "NOT_FOUND") return { message: "This client was not found. Return to the client list and choose the current account.", action: "reload" };
+  if (resolved === "UNCERTAIN") {
+    return {
+      message: message || "The request did not finish. Try the same save again. Delivery was not turned on.",
+      action: "retry",
+    };
+  }
   if (resolved === "VALIDATION") return { message, action: "retry" };
   return { message: message || "The save did not finish. Try again.", action: "retry" };
 }

@@ -4182,3 +4182,95 @@ model DeliverySuccessNotification {
   @@unique([clientAccountId, sourceLeadEventId], map: "DeliverySuccessNotification_client_lead_key")
   @@index([status, claimedAt])
 }
+
+/// Google is the only staff identity provider.
+/// This is not the Drive or Sheets OAuth connection on GoogleAccountConnection
+/// or CompanyGoogleConnection.
+enum StaffIdentityProvider {
+  google
+}
+
+/// disabled is the safe default. active requires disabledAt to be null.
+/// Disabling withdraws future correction authority and keeps the id.
+enum StaffPrincipalStatus {
+  disabled
+  active
+}
+
+/// The only recognized staff permission. Absence of a granted row is denial.
+enum StaffPermissionKey {
+  facebook_association_correction
+}
+
+/// Explicit grant state. revoked is not authorization.
+/// A later grant is a new row. A revoked row cannot return to granted.
+enum StaffPermissionStatus {
+  granted
+  revoked
+}
+
+/// Provisioned SA360 staff identity.
+/// Not an Admin C.O.C. session, Team Workspace membership, portal account,
+/// observer, Meta reviewer, or Agent Workspace credential.
+///
+/// email is a normalized mailbox label. It is not proof of authentication.
+/// The permanent binding is provider + providerSubject (Google's `sub`) after
+/// a future verified login sets providerSubject. Null providerSubject means the
+/// principal is provisioned and not yet bound. PostgreSQL treats those nulls as
+/// distinct on StaffPrincipal_provider_subject_key.
+///
+/// status defaults to disabled and disabledAt defaults to now(), so a generic
+/// insert is not an active staff identity. Activation must set status to active
+/// and disabledAt to null in the same write. There is no password column and no
+/// OAuth token column. Creating a row does not grant a permission.
+///
+/// SQL triggers reject id changes, changes to a binding once providerSubject is
+/// set, DELETE, and TRUNCATE. Do not drop those triggers from a later diff.
+model StaffPrincipal {
+  id              String                @id @default(cuid())
+  /// Lowercase trimmed mailbox. Unique. Not an authentication proof.
+  email           String                @unique
+  /// IdP claim recorded later. true does not grant access or create a permission.
+  emailVerified   Boolean               @default(false)
+  displayName     String?
+  provider        StaffIdentityProvider @default(google)
+  /// Google `sub`, or null until a verified login binds it. Immutable once set.
+  providerSubject String?
+  status          StaffPrincipalStatus  @default(disabled)
+  /// Required while disabled. Must be null while active.
+  disabledAt      DateTime?             @default(now())
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  permissions     StaffPermission[]
+
+  @@unique([provider, providerSubject], map: "StaffPrincipal_provider_subject_key")
+  @@index([status])
+}
+
+/// One explicit permission grant for one staff principal.
+/// Deny by default: no row, a revoked row, or a disabled principal does not authorize.
+/// There is no role column. Admin, workspace, portal, and operator credentials do not
+/// create a row.
+///
+/// Effective uniqueness is the SQL partial unique index
+/// StaffPermission_one_effective_grant_key on (staffPrincipalId, permission)
+/// WHERE status = 'granted'. Prisma 6 cannot express that filter as @@unique.
+/// Do not add @@unique([staffPrincipalId, permission]): revoked history must remain.
+/// If prisma migrate diff proposes DROP INDEX for that name, reject the drop.
+///
+/// The foreign key is ON DELETE RESTRICT and ON UPDATE RESTRICT. Delete triggers
+/// keep the principal id and the grant row for later audit. Revocation sets status
+/// to revoked and revokedAt. A replacement grant is a new row.
+model StaffPermission {
+  id               String                @id @default(cuid())
+  staffPrincipalId String
+  staffPrincipal   StaffPrincipal        @relation(fields: [staffPrincipalId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  permission       StaffPermissionKey
+  status           StaffPermissionStatus
+  grantedAt        DateTime              @default(now())
+  revokedAt        DateTime?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+
+  @@index([staffPrincipalId, permission])
+}

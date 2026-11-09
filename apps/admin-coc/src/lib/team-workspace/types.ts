@@ -53,6 +53,7 @@ export type TeamWorkspaceRead = {
     canEnable: boolean;
     blockedReason: "recipient_not_verified" | null;
     recipientVerified: boolean;
+    revision: number;
   };
   notifications: {
     items: [];
@@ -96,8 +97,18 @@ export type TeamWorkspaceClientView = {
   recordedCount: number;
   steps: TeamWorkspaceStep[];
   receipts: TeamWorkspaceReceipts;
-  /** Saved per-client choice. The control stays disabled because this page does not write it. */
-  notificationChoiceOn: boolean;
+  /** Saved on/off choice. The mailbox is not part of this view. */
+  notification: TeamWorkspaceNotificationChoice;
+};
+
+export type TeamWorkspaceNotificationChoice = {
+  enabled: boolean;
+  canEnable: boolean;
+  blockedReason: "recipient_not_verified" | null;
+  recipientVerified: boolean;
+  revision: number;
+  /** False when the Team Workspace read did not return a preference. */
+  readable: boolean;
 };
 
 export type TeamWorkspaceIndexModel =

@@ -1,6 +1,7 @@
 /**
  * Admin C.O.C. notification configuration.
  *
+ * GET /admin/v1/clients/:clientAccountId/delivery-notification-recipient
  * PUT /admin/v1/clients/:clientAccountId/delivery-notification-recipient
  * PUT /admin/v1/team-workspace/clients/:clientAccountId/delivery-notification
  *
@@ -30,6 +31,7 @@ import { prisma } from "../lib/db.js";
 import {
   configureDeliveryNotificationPreference,
   configureDeliveryNotificationRecipient,
+  readDeliveryNotificationRecipient,
   type DeliveryNotificationConfigFailure,
 } from "../services/delivery-success-notification/delivery-notification-config.js";
 
@@ -62,6 +64,15 @@ export const adminDeliveryNotificationConfigRoutes: FastifyPluginAsync<
 > = async (app, opts) => {
   const db = opts.db ?? prisma;
   const env = opts.env ?? process.env;
+
+  app.get("/clients/:clientAccountId/delivery-notification-recipient", async (request, reply) => {
+    if (!(await authorize(request, reply, env))) return;
+    const clientAccountId = pathClient(request);
+    if (!clientAccountId) return reply.status(404).send({ ok: false, error: "client_not_found" });
+    const read = await readDeliveryNotificationRecipient(db, clientAccountId);
+    if (!read.ok) return sendFailure(reply, read);
+    return reply.send(read);
+  });
 
   app.put("/clients/:clientAccountId/delivery-notification-recipient", async (request, reply) => {
     if (!(await authorize(request, reply, env))) return;

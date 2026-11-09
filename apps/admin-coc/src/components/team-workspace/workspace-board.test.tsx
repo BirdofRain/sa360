@@ -20,6 +20,7 @@ moduleLoader._load = function (request: string, parent: NodeModule, isMain: bool
 };
 
 import type { TeamWorkspaceClientView } from "@/lib/team-workspace/types";
+import type { NotificationChoiceActions } from "./notification-choice";
 
 let TeamWorkspaceBoard: typeof import("./workspace-board.tsx").TeamWorkspaceBoard;
 let TeamWorkspaceHome: typeof import("./workspace-board.tsx").TeamWorkspaceHome;
@@ -38,6 +39,15 @@ test.afterEach(() => {
   else process.env.NEXT_PUBLIC_SA360_SUPPORT_TICKETS_ENABLED = previousSupport;
 });
 
+const idleActions: NotificationChoiceActions = {
+  save: async () => {
+    throw new Error("save should not run");
+  },
+  reload: async () => {
+    throw new Error("reload should not run");
+  },
+};
+
 function view(): TeamWorkspaceClientView {
   return {
     clientAccountId: "alex_gross",
@@ -52,7 +62,14 @@ function view(): TeamWorkspaceClientView {
     showRetry: true,
     retryHref: "/team-workspace/alex_gross",
     recordedCount: 1,
-    notificationChoiceOn: false,
+    notification: {
+      enabled: false,
+      canEnable: false,
+      blockedReason: "recipient_not_verified",
+      recipientVerified: false,
+      revision: 0,
+      readable: true,
+    },
     receipts: {
       sourceLeadEventId: null,
       sheetsJobId: null,
@@ -115,6 +132,7 @@ test("the board shows truthful step states, a disabled notification choice, and 
         { clientAccountId: "alex_gross", clientDisplayName: "Alex Gross", status: "onboarding" },
         { clientAccountId: "aaron_lee", clientDisplayName: "Aaron Lee", status: "active" },
       ]}
+      notificationActions={idleActions}
     />
   );
 
@@ -136,7 +154,13 @@ test("the board shows truthful step states, a disabled notification choice, and 
 
 test("report issue is available on the page and on each step", () => {
   process.env.NEXT_PUBLIC_SA360_SUPPORT_TICKETS_ENABLED = "true";
-  render(<TeamWorkspaceBoard view={view()} clients={[{ clientAccountId: "alex_gross", clientDisplayName: "Alex Gross", status: "onboarding" }]} />);
+  render(
+    <TeamWorkspaceBoard
+      view={view()}
+      clients={[{ clientAccountId: "alex_gross", clientDisplayName: "Alex Gross", status: "onboarding" }]}
+      notificationActions={idleActions}
+    />
+  );
   const buttons = screen.getAllByRole("button", { name: "Report issue" });
   assert.equal(buttons.length, 7);
   fireEvent.click(buttons[0]!);

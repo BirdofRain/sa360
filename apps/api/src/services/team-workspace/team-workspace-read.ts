@@ -62,12 +62,14 @@ export type TeamWorkspaceRead = {
    * Per-client preference. This is not the process kill switch
    * `SA360_DELIVERY_SUCCESS_NOTIFY_ENABLED`. The mailbox is not returned.
    * `enabled` is true only when the saved row is on and the recipient is verified.
+   * `revision` is the optimistic token for the on/off write. No row is 0.
    */
   clientNotification: {
     enabled: boolean;
     canEnable: boolean;
     blockedReason: "recipient_not_verified" | null;
     recipientVerified: boolean;
+    revision: number;
   };
   notifications: {
     items: [];
@@ -93,6 +95,7 @@ const CLIENT_NOTIFICATION_UNAVAILABLE = {
   canEnable: false,
   blockedReason: "recipient_not_verified",
   recipientVerified: false,
+  revision: 0,
 } as const;
 
 type PreferenceRow = {
@@ -100,6 +103,7 @@ type PreferenceRow = {
   channel: string;
   recipientEmail: string | null;
   recipientEmailVerifiedAt: Date | null;
+  revision?: number;
 };
 
 /**
@@ -118,11 +122,16 @@ export function projectClientNotification(
     address.length > 0 &&
     verifiedAt instanceof Date &&
     !Number.isNaN(verifiedAt.getTime());
+  const revision =
+    typeof row.revision === "number" && Number.isSafeInteger(row.revision) && row.revision >= 0
+      ? row.revision
+      : 0;
   return {
     enabled: row.enabled === true && recipientVerified,
     canEnable: recipientVerified,
     blockedReason: recipientVerified ? null : "recipient_not_verified",
     recipientVerified,
+    revision,
   };
 }
 
@@ -233,6 +242,7 @@ export async function readTeamWorkspaceClient(
           channel: true,
           recipientEmail: true,
           recipientEmailVerifiedAt: true,
+          revision: true,
         },
       },
     },

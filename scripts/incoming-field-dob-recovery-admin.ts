@@ -5,7 +5,15 @@
  *
  * GET /admin/v1/source-leads only. There is no apply mode. --apply, --confirm,
  * --write, --backfill, and --replay are refused before any request. The
- * localhost Prisma command is unchanged and still refuses remote databases.
+ * default assessment is the fixed historical window ending at
+ * 2026-11-03T15:36:00.000Z. --released-intake is a separate read beginning
+ * 2026-11-03T17:42:00.000Z (November 3, 2026 12:42 PM America/New_York). It does
+ * not change that historical window. storedCanonical is the saved lead.
+ * proposedRecovery is recomputed and is not production verification.
+ * formIdentity.providerFunnelId is the external funnel UUID, not SourceFunnel.id.
+ * Confirmed provider lead ids are matched only from raw lead_id on details
+ * this command already fetched. They are not requested as event ids.
+ * The localhost Prisma command is unchanged and still refuses remote databases.
  *
  * Requires SA360_PROD_API_URL (or --base-url) and ADMIN_API_KEY or
  * SA360_ADMIN_KEY. The key is sent as x-sa360-admin-key and is never printed.
@@ -113,11 +121,22 @@ async function main(): Promise<void> {
   if (!key) refuse("admin_key_required");
 
   const recovery = await import("../apps/api/src/services/source-intake/incoming-field-dob-recovery.ts");
-  const receivedFrom = args["received-from"]?.trim() || recovery.INCOMING_DOB_RECOVERY_WINDOW_START;
-  const from = new Date(receivedFrom);
+  const releasedIntake = args["released-intake"] === "true";
+  const resolved = recovery.resolveIncomingDobRecoveryAdminWindow({
+    releasedIntake,
+    receivedFrom: args["received-from"],
+    receivedTo: args["received-to"],
+    now: releasedIntake && !args["received-to"]?.trim() ? new Date() : undefined,
+  });
+  const from = new Date(resolved.receivedFrom);
   if (Number.isNaN(from.getTime())) refuse("invalid_received_from", "received-from");
-  const receivedToText = args["received-to"]?.trim() || "";
-  const to = receivedToText ? new Date(receivedToText) : new Date();
+  const expectIds = process.argv.slice(2).flatMap((token, index, argv) => {
+    if (token !== "--expect-id") return [];
+    const next = argv[index + 1];
+    return next && !next.startsWith("--") ? [next.trim()] : [];
+  }).filter(Boolean);
+
+  const to = new Date(resolved.receivedTo);
   if (Number.isNaN(to.getTime())) refuse("invalid_received_to", "received-to");
   if (to.getTime() < from.getTime()) refuse("received_to_before_from", "received-to");
 
@@ -169,9 +188,13 @@ async function main(): Promise<void> {
     },
   });
 
+  const inspectionIds = recovery.incomingDobRecoveryAdminInspectionIds({
+    releasedIntake,
+    extraIds: expectIds,
+  });
   const detailIds = [...scan.ids];
-  if (!detailIds.includes(recovery.KNOWN_DOB_RECOVERY_EVENT_ID)) {
-    detailIds.push(recovery.KNOWN_DOB_RECOVERY_EVENT_ID);
+  for (const id of inspectionIds) {
+    if (!detailIds.includes(id)) detailIds.push(id);
   }
 
   const rows: Array<ReturnType<typeof recovery.adminSourceLeadDetailToRecoverySnapshot>> = [];
@@ -196,8 +219,11 @@ async function main(): Promise<void> {
     receivedTo: to.toISOString(),
     truncated: !scan.complete,
   });
-  const knownRow = rows.find((row) => row.id === recovery.KNOWN_DOB_RECOVERY_EVENT_ID) ?? null;
-  const expectation = knownRow ? recovery.describeIncomingDobRecoveryExpectation(knownRow) : null;
+  const foundIds = new Set(rows.map((row) => row.id));
+  const inspections = inspectionIds
+    .map((id) => rows.find((row) => row.id === id) ?? null)
+    .filter((row): row is NonNullable<typeof row> => row != null)
+    .map((row) => recovery.describeIncomingDobRecoveryInspection(row));
 
   console.log(
     JSON.stringify({
@@ -205,9 +231,11 @@ async function main(): Promise<void> {
       host: base.hostname,
       writes: false,
       method: "GET",
+      assessment: resolved.assessment,
       window: {
         receivedFrom: from.toISOString(),
         receivedTo: to.toISOString(),
+        receivedToSource: resolved.receivedToSource,
         timezone: "America/New_York",
       },
       pagination: {
@@ -221,8 +249,18 @@ async function main(): Promise<void> {
       deliveryEvidence:
         "deliveredAt, status, and deliveryResultJson.externalCallExecuted. Sheets jobs and lead allocations are not on this API, so those two flags are unresolved and are not production zeros.",
       knownEventHttpStatus: knownStatus,
-      knownEventExpectation: expectation,
+      inspectionIds,
+      missingInspectionIds: inspectionIds.filter((id) => !foundIds.has(id)),
+      sourceLeadLookups: recovery.matchConfirmedSourceLeadEvents(rows, {
+        paginationComplete: scan.complete,
+      }),
+      inspections,
       report,
+      manifest: recovery.buildIncomingDobCorrectionManifest({
+        rows,
+        receivedFrom: from.toISOString(),
+        receivedTo: to.toISOString(),
+      }),
     })
   );
 }

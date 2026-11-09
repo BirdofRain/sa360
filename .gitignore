@@ -23,3 +23,6 @@ ghl-demo-config*.json
 # LeadCapture trust pilot local diagnostics (never commit)
 .lc-trust-*
 scripts/.lc-trust-*
+
+# Operator DOB correction audits contain canonical birthdays.
+*.dob-correction-audit.jsonl

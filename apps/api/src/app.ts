@@ -25,6 +25,7 @@ import { adminDeliveryReadinessRoutes } from "./routes/admin-delivery-readiness.
 import { adminClientsRoutes } from "./routes/admin-clients.js";
 import { adminSourceFunnelRoutes } from "./routes/admin-source-funnels.js";
 import { adminFacebookCaptureRoutes } from "./routes/admin-facebook-capture.js";
+import { adminFacebookAssociationCorrectionPreviewRoutes } from "./routes/admin-facebook-association-correction-preview.js";
 import { adminFacebookSourceResolutionRoutes } from "./routes/admin-facebook-source-resolution.js";
 import { adminClientChannelProfileRoutes } from "./routes/admin-client-channel-profile.js";
 import { adminGhlAdapterRoutes } from "./routes/admin-ghl-adapter.js";
@@ -133,6 +134,7 @@ export async function buildApp() {
   await app.register(adminSourceFunnelRoutes, { prefix: "/admin/v1" });
   await app.register(adminFacebookCaptureRoutes, { prefix: "/admin/v1" });
   await app.register(adminFacebookSourceResolutionRoutes, { prefix: "/admin/v1" });
+  await app.register(adminFacebookAssociationCorrectionPreviewRoutes, { prefix: "/admin/v1" });
   await app.register(adminClientChannelProfileRoutes, { prefix: "/admin/v1" });
   await app.register(adminGhlAdapterRoutes, { prefix: "/admin/v1" });
   await app.register(adminGhlLiveDeliveryRoutes, { prefix: "/admin/v1" });

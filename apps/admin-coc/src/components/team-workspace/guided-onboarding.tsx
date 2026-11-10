@@ -11,6 +11,7 @@ import {
   type GuidedClientMutationResult,
   type GuidedSetupSaveResult,
 } from "@/app/actions/team-workspace-onboarding";
+import { SourceCampaignReviewPanel } from "@/components/team-workspace/source-campaign-review-panel";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
@@ -710,6 +711,12 @@ function SourcesStep({
       }}
     >
       <p className="text-sm text-slate-600">Choose a source or campaign to copy onto the setup request. Nothing here creates a routing rule or links a source.</p>
+      <SourceCampaignReviewPanel
+        clientAccountId={model.clientAccountId}
+        review={model.sourceCampaignReview}
+        draftFunnelId={draft.providerFunnelId}
+        draftCampaignId={draft.providerCampaignId}
+      />
       <SourceList
         model={model}
         draft={draft}
@@ -797,7 +804,7 @@ function SourceList({
           {model.campaigns.rules.map((rule) => (
             <li key={`${rule.label}-${rule.campaignId ?? "name"}`} className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
               <span className="text-sm text-slate-700">
-                {rule.label} · {rule.deliveryEnabled ? "Active delivery" : "Configured, delivery off"}
+                {rule.label} · {rule.deliveryEnabled ? "Delivery enabled" : "Routing configured, delivery off"}
               </span>
               <Button type="button" variant="outline" disabled={locked} onClick={() => onDraft(applyListedCampaign(draft, rule))}>
                 Record on the request

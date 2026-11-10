@@ -11,6 +11,7 @@ import { normalizeTeamWorkspaceClientId } from "./contract";
 import { guidedOnboardingFromReads } from "./onboarding-guide";
 import { assembleTeamWorkspaceDetail, projectClientOptions, projectRoutingRules } from "./present";
 import { parseTeamWorkspaceResponse, readAdminErrorCode } from "./parse";
+import { parseSourceCampaignReview, unavailableSourceCampaignReview, type SourceCampaignReviewView } from "./source-campaign-review";
 import type {
   AccountSlice,
   OnboardingSlice,
@@ -61,21 +62,61 @@ export async function loadTeamWorkspaceClient(rawId: string): Promise<TeamWorksp
     onboarding: onboardingSlice,
   });
   if (assembled.kind !== "ready") return assembled;
+  const sourceCampaignReview = await loadSourceCampaignReview(clientAccountId, setupEnabled, setupResult);
   return {
     ...assembled,
-    guide: guidedOnboardingFromReads({
-      clientAccountId,
-      setupEnabled,
-      account: detail.data?.item ?? null,
-      setupItem: setupResult?.data?.item ?? null,
-      setupError: setupResult && !setupResult.data ? setupResult.error : null,
-      sourceBody: sourceResult.data,
-      sourceError: sourceResult.error,
-      destinations: workspace.availability === "ready" ? workspace.body.destinations : null,
-      recordedSetup: workspace.availability === "ready" ? workspace.body.setupRequest : null,
-      verification: onboardingSlice,
-    }),
+    guide: {
+      ...guidedOnboardingFromReads({
+        clientAccountId,
+        setupEnabled,
+        account: detail.data?.item ?? null,
+        setupItem: setupResult?.data?.item ?? null,
+        setupError: setupResult && !setupResult.data ? setupResult.error : null,
+        sourceBody: sourceResult.data,
+        sourceError: sourceResult.error,
+        destinations: workspace.availability === "ready" ? workspace.body.destinations : null,
+        recordedSetup: workspace.availability === "ready" ? workspace.body.setupRequest : null,
+        verification: onboardingSlice,
+      }),
+      sourceCampaignReview,
+    },
   };
+}
+
+const SETUP_STATUSES = new Set(["draft", "submitted", "needs_information", "setup_reviewed"]);
+
+function setupRevisionForReview(
+  setupEnabled: boolean,
+  setupResult: Awaited<ReturnType<typeof fetchAdminClientSetup>> | null
+): { kind: "disabled" } | { kind: "revision"; revision: number } | { kind: "untrusted" } {
+  if (!setupEnabled) return { kind: "disabled" };
+  const item = setupResult?.data?.item;
+  if (!setupResult || setupResult.error || !item || item.repairRequired === true) return { kind: "untrusted" };
+  if (typeof item.revision !== "number" || !Number.isSafeInteger(item.revision) || item.revision < 0) return { kind: "untrusted" };
+  if (!SETUP_STATUSES.has(item.status)) return { kind: "untrusted" };
+  return { kind: "revision", revision: item.revision };
+}
+
+async function loadSourceCampaignReview(
+  clientAccountId: string,
+  setupEnabled: boolean,
+  setupResult: Awaited<ReturnType<typeof fetchAdminClientSetup>> | null
+): Promise<SourceCampaignReviewView> {
+  const decision = setupRevisionForReview(setupEnabled, setupResult);
+  if (decision.kind === "untrusted") {
+    return unavailableSourceCampaignReview("The saved setup request could not be read. Nothing was verified.");
+  }
+  const path = `/admin/v1/team-workspace/clients/${encodeURIComponent(clientAccountId)}/source-campaign-review`;
+  const url = decision.kind === "revision" ? `${path}?expectedRevision=${decision.revision}` : path;
+  const result = await adminFetchJson<unknown>(url);
+  const parsed = narrowReview(result);
+  if (decision.kind === "disabled" && parsed.availability === "ready") {
+    return unavailableSourceCampaignReview("The setup request could not be checked because native client setup is turned off. Nothing was verified.");
+  }
+  if (decision.kind === "revision" && parsed.revision !== decision.revision) {
+    return unavailableSourceCampaignReview("The saved request changed. Reload before relying on this check. Nothing was verified.");
+  }
+  return parsed;
 }
 
 function narrowWorkspace(
@@ -94,6 +135,16 @@ function narrowWorkspace(
     return { availability: "error", code: "malformed_response" };
   }
   return { availability: "ready", body };
+}
+
+function narrowReview(result: Awaited<ReturnType<typeof adminFetchJson<unknown>>>): SourceCampaignReviewView {
+  if (!result.ok) {
+    return unavailableSourceCampaignReview("The source and campaign check could not be loaded. Nothing was verified.");
+  }
+  return (
+    parseSourceCampaignReview(result.data) ??
+    unavailableSourceCampaignReview("The source and campaign check could not be read. Nothing was verified.")
+  );
 }
 
 function narrowAccount(item: {

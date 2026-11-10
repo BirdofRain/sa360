@@ -1,6 +1,7 @@
 import type { ClientSetupData } from "@/lib/clients/types";
 
 import { isSafeTeamWorkspaceId } from "./contract";
+import type { SourceCampaignReviewView } from "./source-campaign-review";
 
 /**
  * Guided setup talks only to the existing client account and setup-request
@@ -97,6 +98,11 @@ export type GuidedOnboardingModel = {
     companySheets: { configured: boolean; campaignDispatchEnabled: boolean; agedDispatchEnabled: boolean };
   } | null;
   verification: { availability: "ready"; blockers: string[] } | { availability: "unavailable" | "error" };
+  /**
+   * Authoritative read of the saved request against source and campaign records.
+   * Missing means the check was not loaded. It is not a verification.
+   */
+  sourceCampaignReview?: SourceCampaignReviewView | null;
   /** A setup request is never an operational switch. */
   operational: false;
 };

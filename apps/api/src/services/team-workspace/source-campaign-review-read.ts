@@ -126,6 +126,28 @@ function ownership(rules: KnownCampaignRule[], clientAccountId: string, now: Dat
   return "none";
 }
 
+function staleRevision(revision: number | null): SourceCampaignReviewBody {
+  return closed({
+    availability: "ready",
+    disposition: "stale",
+    revision,
+    attention: ["The saved request changed. Reload before relying on this check. Nothing was verified."],
+  });
+}
+
+async function readSetupRevision(db: PrismaClient, clientAccountId: string): Promise<number | null | "unavailable"> {
+  try {
+    const again = await db.clientAccount.findUnique({
+      where: { clientAccountId },
+      select: { onboardingSetup: { select: { revision: true } } },
+    });
+    if (!again?.onboardingSetup || !Number.isInteger(again.onboardingSetup.revision)) return null;
+    return again.onboardingSetup.revision;
+  } catch {
+    return "unavailable";
+  }
+}
+
 function attentionFor(input: {
   sourceStatus: SourceRegistryStatus;
   campaignStatus: CampaignRegistryStatus;
@@ -209,20 +231,7 @@ export async function readSourceCampaignReview(
     };
   }
   if (options.expectedRevision !== undefined && options.expectedRevision !== revision) {
-    return {
-      ok: true,
-      body: closed({
-        availability: "ready",
-        disposition: "stale",
-        revision,
-        requested: {
-          trafficSourceName: identity.identity.trafficSourceName,
-          providerFunnelId: identity.identity.providerFunnelId,
-          providerCampaignId: identity.identity.providerCampaignId,
-        },
-        attention: ["The saved request changed. Reload before relying on this check. Nothing was verified."],
-      }),
-    };
+    return { ok: true, body: staleRevision(revision) };
   }
 
   const now = options.now ?? new Date();
@@ -295,6 +304,22 @@ export async function readSourceCampaignReview(
         attention: ["Too many matching records were found to verify ownership. Nothing was verified."],
       }),
     };
+  }
+
+  const stillCurrent = await readSetupRevision(db, clientAccountId);
+  if (stillCurrent === "unavailable") {
+    return {
+      ok: true,
+      body: closed({
+        availability: "unavailable",
+        disposition: "unavailable",
+        revision,
+        attention: ["The source and campaign records could not be loaded. Nothing was verified."],
+      }),
+    };
+  }
+  if (stillCurrent !== revision) {
+    return { ok: true, body: staleRevision(stillCurrent ?? revision) };
   }
 
   const review = reviewSavedSourceCampaignRequest({

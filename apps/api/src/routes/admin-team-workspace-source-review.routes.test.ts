@@ -69,9 +69,13 @@ function createDb(options: {
   funnels?: FunnelRow[];
   rules?: RuleRow[];
   failReads?: boolean;
+  /** Revision returned by the setup read that follows the registry queries. */
+  revisionAfterRead?: number | null;
+  failRevisionRecheck?: boolean;
 } = {}) {
   const calls: Call[] = [];
   const whereSeen: unknown[] = [];
+  let setupReads = 0;
   const fail = (op: string) => async () => {
     calls.push(op);
     throw new Error(`unexpected ${op}`);
@@ -81,9 +85,13 @@ function createDb(options: {
       findUnique: async (args: { where: { clientAccountId: string } }) => {
         calls.push("client.findUnique");
         if (!options.client || args.where.clientAccountId !== CLIENT) return null;
+        setupReads += 1;
+        if (setupReads > 1 && options.failRevisionRecheck) throw new Error("revision recheck failed");
+        const revision = setupReads > 1 && options.revisionAfterRead !== undefined ? options.revisionAfterRead : options.client.revision;
+        if (revision === null) return { clientAccountId: CLIENT, onboardingSetup: null };
         return {
           clientAccountId: CLIENT,
-          onboardingSetup: options.client,
+          onboardingSetup: { ...options.client, revision },
         };
       },
       update: fail("client.update"),
@@ -152,6 +160,7 @@ async function getReview(options: Parameters<typeof createDb>[0], url = `/admin/
 function bodyOf(response: { json: () => unknown }) {
   return response.json() as {
     availability: string;
+    revision: number | null;
     requestDisposition: string;
     sourceStatus: string | null;
     campaignStatus: string | null;
@@ -269,8 +278,54 @@ test("a stale expected revision does not verify and does not read registries", a
   assert.equal(body.sourceStatus, null);
   assert.equal(body.liveRouting, false);
   assert.match(body.attention.join(" "), /Nothing was verified/);
+  assert.equal(body.requested.providerFunnelId, null);
+  assert.equal(body.requested.providerCampaignId, null);
   assert.equal(calls.includes("sourceFunnel.findMany"), false);
   assert.equal(calls.includes("campaignRoutingRule.findMany"), false);
+});
+
+test("a setup revision that changes during the registry read is not verified", async () => {
+  const { response, calls } = await getReview(
+    { client: saved, funnels: [funnel()], rules: [rule({ deliveryEnabled: true })], revisionAfterRead: 9 },
+    `/admin/v1/team-workspace/clients/${CLIENT}/source-campaign-review?expectedRevision=4`
+  );
+  const body = bodyOf(response);
+  assert.equal(body.requestDisposition, "stale");
+  assert.equal(body.sourceStatus, null);
+  assert.equal(body.campaignStatus, null);
+  assert.equal(body.sourceAssociated, false);
+  assert.equal(body.deliveryActivated, false);
+  assert.equal(body.liveRouting, false);
+  assert.equal(body.requested.providerFunnelId, null);
+  assert.match(body.attention.join(" "), /Nothing was verified/);
+  assert.equal(response.body.includes("confirmed_for_client"), false);
+  assert.equal(calls.includes("sourceFunnel.findMany"), true);
+  assert.equal(calls.filter((call) => call === "client.findUnique").length, 2);
+});
+
+test("a matching setup revision still returns the registry check", async () => {
+  const { response, calls } = await getReview(
+    { client: saved, funnels: [funnel({ originClientAccountId: OTHER })], rules: [rule({ clientAccountId: OTHER, deliveryEnabled: true })] },
+    `/admin/v1/team-workspace/clients/${CLIENT}/source-campaign-review?expectedRevision=4`
+  );
+  const body = bodyOf(response);
+  assert.equal(body.requestDisposition, "saved_request");
+  assert.equal(body.revision, 4);
+  assert.equal(body.sourceStatus, "confirmed_for_other_client");
+  assert.equal(body.sourceAssociated, false);
+  assert.equal(body.campaignOwnership, "another_client");
+  assert.equal(body.deliveryActivated, false);
+  assert.equal(body.liveRouting, true);
+  assert.equal(calls.filter((call) => call === "client.findUnique").length, 2);
+});
+
+test("a failed revision recheck does not report the registry result", async () => {
+  const { response } = await getReview({ client: saved, funnels: [funnel()], rules: [rule()], failRevisionRecheck: true });
+  const body = bodyOf(response);
+  assert.equal(body.availability, "unavailable");
+  assert.equal(body.sourceAssociated, false);
+  assert.equal(body.sourceStatus, null);
+  assert.equal(body.deliveryActivated, false);
 });
 
 test("an unreadable setup document is not reported as unregistered", async () => {

@@ -43,14 +43,13 @@ export async function loadTeamWorkspaceClient(rawId: string): Promise<TeamWorksp
   }
 
   const setupEnabled = isNativeClientSetupEnabled();
-  const [workspaceResult, detail, onboarding, list, setupResult, sourceResult, reviewResult] = await Promise.all([
+  const [workspaceResult, detail, onboarding, list, setupResult, sourceResult] = await Promise.all([
     adminFetchJson<unknown>(`/admin/v1/team-workspace/clients/${encodeURIComponent(clientAccountId)}`),
     fetchAdminClientDetail(clientAccountId),
     fetchOnboardingSummary(clientAccountId),
     fetchAdminClients(),
     setupEnabled ? fetchAdminClientSetup(clientAccountId) : Promise.resolve(null),
     fetchAdminClientSourceFunnels(clientAccountId),
-    adminFetchJson<unknown>(`/admin/v1/team-workspace/clients/${encodeURIComponent(clientAccountId)}/source-campaign-review`),
   ]);
 
   const workspace = narrowWorkspace(clientAccountId, workspaceResult);
@@ -63,6 +62,7 @@ export async function loadTeamWorkspaceClient(rawId: string): Promise<TeamWorksp
     onboarding: onboardingSlice,
   });
   if (assembled.kind !== "ready") return assembled;
+  const sourceCampaignReview = await loadSourceCampaignReview(clientAccountId, setupEnabled, setupResult);
   return {
     ...assembled,
     guide: {
@@ -78,9 +78,45 @@ export async function loadTeamWorkspaceClient(rawId: string): Promise<TeamWorksp
         recordedSetup: workspace.availability === "ready" ? workspace.body.setupRequest : null,
         verification: onboardingSlice,
       }),
-      sourceCampaignReview: narrowReview(reviewResult),
+      sourceCampaignReview,
     },
   };
+}
+
+const SETUP_STATUSES = new Set(["draft", "submitted", "needs_information", "setup_reviewed"]);
+
+function setupRevisionForReview(
+  setupEnabled: boolean,
+  setupResult: Awaited<ReturnType<typeof fetchAdminClientSetup>> | null
+): { kind: "disabled" } | { kind: "revision"; revision: number } | { kind: "untrusted" } {
+  if (!setupEnabled) return { kind: "disabled" };
+  const item = setupResult?.data?.item;
+  if (!setupResult || setupResult.error || !item || item.repairRequired === true) return { kind: "untrusted" };
+  if (typeof item.revision !== "number" || !Number.isSafeInteger(item.revision) || item.revision < 0) return { kind: "untrusted" };
+  if (!SETUP_STATUSES.has(item.status)) return { kind: "untrusted" };
+  return { kind: "revision", revision: item.revision };
+}
+
+async function loadSourceCampaignReview(
+  clientAccountId: string,
+  setupEnabled: boolean,
+  setupResult: Awaited<ReturnType<typeof fetchAdminClientSetup>> | null
+): Promise<SourceCampaignReviewView> {
+  const decision = setupRevisionForReview(setupEnabled, setupResult);
+  if (decision.kind === "untrusted") {
+    return unavailableSourceCampaignReview("The saved setup request could not be read. Nothing was verified.");
+  }
+  const path = `/admin/v1/team-workspace/clients/${encodeURIComponent(clientAccountId)}/source-campaign-review`;
+  const url = decision.kind === "revision" ? `${path}?expectedRevision=${decision.revision}` : path;
+  const result = await adminFetchJson<unknown>(url);
+  const parsed = narrowReview(result);
+  if (decision.kind === "disabled" && parsed.availability === "ready") {
+    return unavailableSourceCampaignReview("The setup request could not be checked because native client setup is turned off. Nothing was verified.");
+  }
+  if (decision.kind === "revision" && parsed.revision !== decision.revision) {
+    return unavailableSourceCampaignReview("The saved request changed. Reload before relying on this check. Nothing was verified.");
+  }
+  return parsed;
 }
 
 function narrowWorkspace(

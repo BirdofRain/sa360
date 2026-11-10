@@ -1075,6 +1075,9 @@ model ClientAccount {
   /// Intended GoHighLevel location, workflow, and field ids. Restrict so account deletion cannot erase them.
   /// Not a ClientGhlDestination and not read by delivery.
   ghlDestinationConfigurationRequests GhlDestinationConfigurationRequest[]
+  /// Intended Company Sheets spreadsheet and worksheet. Restrict so account deletion cannot erase them.
+  /// Not a CompanySheetsDestination and not read by delivery, dispatch, or routing.
+  companySheetsDestinationConfigurationRequests CompanySheetsDestinationConfigurationRequest[]
   /// One send record per source lead. Restrict so account deletion cannot erase send history.
   deliverySuccessNotifications DeliverySuccessNotification[]
 
@@ -4259,6 +4262,58 @@ model GhlDestinationConfigurationRequest {
 
   @@unique([clientAccountId, revision])
   @@index([clientAccountId, createdAt], map: "GhlDestinationConfigRequest_client_created_idx")
+}
+
+/// Intended Company Sheets spreadsheet id and worksheet id.
+/// This is not CompanySheetsDestination. Delivery, dispatch, routing, column
+/// maps, and fulfillment do not read it. SQL checks and the snapshot trigger
+/// reject identifier edits and an insert that is already superseded. The
+/// one-stored-row index is SQL-only. Prisma 6 cannot model that filter.
+/// Do not drop the index in a later diff.
+enum CompanySheetsDestinationConfigurationRequestStatus {
+  stored
+  superseded
+}
+
+model CompanySheetsDestinationConfigurationRequest {
+  id                        String                                                @id @default(cuid())
+  /// Idempotency key. The same id and payload returns the stored result.
+  requestId                 String                                                @unique
+  clientAccountId           String
+  clientAccount             ClientAccount                                         @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Restrict, onUpdate: Restrict)
+  /// Client id at insert. A later rename does not rewrite it.
+  historicalClientAccountId String
+  /// Request-chain token the caller loaded. 0 when the client had no row yet.
+  expectedRevision          Int
+  /// Monotonic per client. The highest value is the next expectedRevision.
+  revision                  Int
+  /// CompanySheetsDestination.destinationRevision the caller loaded. Null when no destination row existed.
+  expectedDestinationRevision Int?
+  spreadsheetId             String
+  worksheetId               Int
+  /// Copied from spreadsheet metadata. A caller-supplied title is never stored.
+  spreadsheetTitle          String
+  /// Copied from the GRID worksheet. A caller-supplied title is never stored.
+  worksheetTitle            String
+  /// company_created | drive_owner_verified | approved_shared_drive. Server-derived only.
+  controlBasis              String
+  /// CompanyGoogleConnection.id observed at the control check. Not a live grant.
+  companyConnectionId       String
+  /// When Drive metadata and worksheet metadata were read. A later operational apply must check again.
+  controlCheckedAt          DateTime
+  status                    CompanySheetsDestinationConfigurationRequestStatus
+  payloadHash               String
+  /// Immutable result of the save command.
+  recordResultJson          Json
+  /// ADMIN. This table does not record a staff role or a new sign-in path.
+  actor                     String
+  supersededByRequestId     String?
+  supersededAt              DateTime?
+  createdAt                 DateTime                                              @default(now())
+  updatedAt                 DateTime                                              @updatedAt
+
+  @@unique([clientAccountId, revision], map: "CompanySheetsDestConfigRequest_client_revision_key")
+  @@index([clientAccountId, createdAt], map: "CompanySheetsDestConfigRequest_client_created_idx")
 }
 
 /// One client email per source lead, even when GHL and Sheets both qualify.

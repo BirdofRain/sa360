@@ -1,0 +1,245 @@
+-- Request-only Company Sheets spreadsheet and worksheet identity.
+--
+-- Empty table only. No CompanySheetsDestination row is inserted or updated.
+-- No CompanySheetsTabContract, column map, or CompanySheetsDeliveryJob is written.
+-- No Google Drive file or folder is created.
+-- Delivery, dispatch, routing, and fulfillment queries do not read this table.
+-- campaignDispatchEnabled, agedDispatchEnabled, enabled, deliveryExecution,
+-- and canaryApproved are not columns on this table and are not changed.
+--
+-- This script owns its transaction. BEGIN is the first statement and COMMIT is
+-- the last. prisma migrate deploy (Prisma 6.19, sa360-migrate) sends the file
+-- through simple_query and does not wrap it. SET LOCAL lock_timeout applies
+-- only inside this transaction.
+--
+-- The foreign key takes a short lock on ClientAccount while it validates.
+-- The new table is empty, so validation does not rewrite client rows.
+-- If the lock is not available within 3 seconds the transaction rolls back
+-- and leaves no table.
+--
+-- Merging this file into master makes sa360-migrate apply it on the next API
+-- predeploy. This change does not set a feature flag and does not arm delivery.
+-- Independent predeploy review is required before that rollout.
+--
+-- One stored configuration per client is the partial unique index
+-- CompanySheetsDestConfigRequest_one_stored_key.
+-- Prisma 6 cannot model that filter. Do not drop the index in a later diff.
+-- The foreign key name is the 63-character name Prisma emits for this model.
+--
+-- Rollback of a failed run is this transaction. A committed table is removed
+-- only by a later reviewed migration. This file does not drop anything.
+
+BEGIN;
+
+SET LOCAL lock_timeout = '3s';
+
+CREATE TYPE "CompanySheetsDestinationConfigurationRequestStatus" AS ENUM (
+  'stored',
+  'superseded'
+);
+
+CREATE TABLE "CompanySheetsDestinationConfigurationRequest" (
+    "id" TEXT NOT NULL,
+    "requestId" TEXT NOT NULL,
+    "clientAccountId" TEXT NOT NULL,
+    "historicalClientAccountId" TEXT NOT NULL,
+    "expectedRevision" INTEGER NOT NULL,
+    "revision" INTEGER NOT NULL,
+    "expectedDestinationRevision" INTEGER,
+    "spreadsheetId" TEXT NOT NULL,
+    "worksheetId" INTEGER NOT NULL,
+    "spreadsheetTitle" TEXT NOT NULL,
+    "worksheetTitle" TEXT NOT NULL,
+    "controlBasis" TEXT NOT NULL,
+    "companyConnectionId" TEXT NOT NULL,
+    "controlCheckedAt" TIMESTAMP(3) NOT NULL,
+    "status" "CompanySheetsDestinationConfigurationRequestStatus" NOT NULL,
+    "payloadHash" TEXT NOT NULL,
+    "recordResultJson" JSONB NOT NULL,
+    "actor" TEXT NOT NULL,
+    "supersededByRequestId" TEXT,
+    "supersededAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "CompanySheetsDestinationConfigurationRequest_pkey" PRIMARY KEY ("id")
+);
+
+CREATE UNIQUE INDEX "CompanySheetsDestinationConfigurationRequest_requestId_key"
+  ON "CompanySheetsDestinationConfigurationRequest"("requestId");
+
+CREATE UNIQUE INDEX "CompanySheetsDestConfigRequest_client_revision_key"
+  ON "CompanySheetsDestinationConfigurationRequest"("clientAccountId", "revision");
+
+CREATE INDEX "CompanySheetsDestConfigRequest_client_created_idx"
+  ON "CompanySheetsDestinationConfigurationRequest"("clientAccountId", "createdAt");
+
+-- One stored configuration. Superseded rows stay as history.
+CREATE UNIQUE INDEX "CompanySheetsDestConfigRequest_one_stored_key"
+  ON "CompanySheetsDestinationConfigurationRequest"("clientAccountId")
+  WHERE "status" = 'stored';
+
+ALTER TABLE "CompanySheetsDestinationConfigurationRequest"
+  ADD CONSTRAINT "CompanySheetsDestinationConfigurationRequest_clientAccount_fkey"
+  FOREIGN KEY ("clientAccountId") REFERENCES "ClientAccount"("clientAccountId")
+  ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+ALTER TABLE "CompanySheetsDestinationConfigurationRequest"
+  ADD CONSTRAINT "CompanySheetsDestConfigRequest_revision_chk"
+  CHECK (
+    "revision" >= 1
+    AND "expectedRevision" >= 0
+    AND "revision" = "expectedRevision" + 1
+    AND (
+      "expectedDestinationRevision" IS NULL
+      OR "expectedDestinationRevision" >= 1
+    )
+  );
+
+ALTER TABLE "CompanySheetsDestinationConfigurationRequest"
+  ADD CONSTRAINT "CompanySheetsDestConfigRequest_actor_chk"
+  CHECK ("actor" = 'ADMIN');
+
+ALTER TABLE "CompanySheetsDestinationConfigurationRequest"
+  ADD CONSTRAINT "CompanySheetsDestConfigRequest_request_id_chk"
+  CHECK (
+    char_length("requestId") = 36
+    AND (
+      "supersededByRequestId" IS NULL
+      OR (
+        char_length("supersededByRequestId") = 36
+        AND "supersededByRequestId" <> "requestId"
+      )
+    )
+  );
+
+ALTER TABLE "CompanySheetsDestinationConfigurationRequest"
+  ADD CONSTRAINT "CompanySheetsDestConfigRequest_hash_chk"
+  CHECK ("payloadHash" ~ '^[0-9a-f]{64}$');
+
+ALTER TABLE "CompanySheetsDestinationConfigurationRequest"
+  ADD CONSTRAINT "CompanySheetsDestConfigRequest_identity_chk"
+  CHECK (
+    char_length("historicalClientAccountId") BETWEEN 1 AND 128
+    AND "spreadsheetId" ~ '^[a-zA-Z0-9_-]{10,80}$'
+    AND "worksheetId" >= 0
+    AND char_length(btrim("spreadsheetTitle")) BETWEEN 1 AND 200
+    AND "spreadsheetTitle" = btrim("spreadsheetTitle")
+    AND char_length(btrim("worksheetTitle")) BETWEEN 1 AND 200
+    AND "worksheetTitle" = btrim("worksheetTitle")
+    AND "controlBasis" IN ('company_created', 'drive_owner_verified', 'approved_shared_drive')
+    AND char_length("companyConnectionId") BETWEEN 1 AND 64
+  );
+
+ALTER TABLE "CompanySheetsDestinationConfigurationRequest"
+  ADD CONSTRAINT "CompanySheetsDestConfigRequest_result_object_chk"
+  CHECK (jsonb_typeof("recordResultJson") = 'object');
+
+ALTER TABLE "CompanySheetsDestinationConfigurationRequest"
+  ADD CONSTRAINT "CompanySheetsDestConfigRequest_status_shape_chk"
+  CHECK (
+    (
+      "status" = 'stored'
+      AND "supersededAt" IS NULL
+      AND "supersededByRequestId" IS NULL
+    )
+    OR (
+      "status" = 'superseded'
+      AND "supersededAt" IS NOT NULL
+      AND "supersededByRequestId" IS NOT NULL
+    )
+  );
+
+COMMENT ON TABLE "CompanySheetsDestinationConfigurationRequest" IS
+  'Intended Company Sheets spreadsheet and worksheet only. Not a CompanySheetsDestination and not read by delivery, dispatch, routing, or fulfillment.';
+
+CREATE FUNCTION company_sheets_destination_configuration_request_guard()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, public
+AS $fn$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW."historicalClientAccountId" IS DISTINCT FROM NEW."clientAccountId" THEN
+      RAISE EXCEPTION 'historical client id must match the client at insert'
+        USING ERRCODE = 'restrict_violation';
+    END IF;
+    IF NEW."status" <> 'stored' THEN
+      RAISE EXCEPTION 'a configuration request cannot be inserted as superseded'
+        USING ERRCODE = 'restrict_violation';
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  IF NEW."id" IS DISTINCT FROM OLD."id"
+     OR NEW."requestId" IS DISTINCT FROM OLD."requestId"
+     OR NEW."clientAccountId" IS DISTINCT FROM OLD."clientAccountId"
+     OR NEW."historicalClientAccountId" IS DISTINCT FROM OLD."historicalClientAccountId"
+     OR NEW."expectedRevision" IS DISTINCT FROM OLD."expectedRevision"
+     OR NEW."revision" IS DISTINCT FROM OLD."revision"
+     OR NEW."expectedDestinationRevision" IS DISTINCT FROM OLD."expectedDestinationRevision"
+     OR NEW."spreadsheetId" IS DISTINCT FROM OLD."spreadsheetId"
+     OR NEW."worksheetId" IS DISTINCT FROM OLD."worksheetId"
+     OR NEW."spreadsheetTitle" IS DISTINCT FROM OLD."spreadsheetTitle"
+     OR NEW."worksheetTitle" IS DISTINCT FROM OLD."worksheetTitle"
+     OR NEW."controlBasis" IS DISTINCT FROM OLD."controlBasis"
+     OR NEW."companyConnectionId" IS DISTINCT FROM OLD."companyConnectionId"
+     OR NEW."controlCheckedAt" IS DISTINCT FROM OLD."controlCheckedAt"
+     OR NEW."payloadHash" IS DISTINCT FROM OLD."payloadHash"
+     OR NEW."recordResultJson" IS DISTINCT FROM OLD."recordResultJson"
+     OR NEW."actor" IS DISTINCT FROM OLD."actor"
+     OR NEW."createdAt" IS DISTINCT FROM OLD."createdAt"
+  THEN
+    RAISE EXCEPTION 'CompanySheetsDestinationConfigurationRequest snapshot is immutable'
+      USING ERRCODE = 'restrict_violation';
+  END IF;
+
+  IF OLD."status" = 'stored' AND NEW."status" = 'superseded' THEN
+    IF NEW."supersededAt" IS NULL OR NEW."supersededByRequestId" IS NULL THEN
+      RAISE EXCEPTION 'supersession must record its replacement'
+        USING ERRCODE = 'restrict_violation';
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  RAISE EXCEPTION 'CompanySheetsDestinationConfigurationRequest status cannot change that way'
+    USING ERRCODE = 'restrict_violation';
+END;
+$fn$;
+
+CREATE TRIGGER "CompanySheetsDestConfigRequest_snapshot_guard"
+BEFORE INSERT OR UPDATE ON "CompanySheetsDestinationConfigurationRequest"
+FOR EACH ROW
+EXECUTE FUNCTION company_sheets_destination_configuration_request_guard();
+
+-- Runtime grant for the new table only. DELETE is withheld so the app role
+-- cannot erase the audit. There is no ALTER DEFAULT PRIVILEGES.
+-- The migrate login remains the table owner. This block does not SET ROLE,
+-- create a role, issue a password, or change default privileges.
+-- Loopback databases can migrate before sa360_app exists. This block then
+-- grants nothing. A non-loopback session without sa360_app fails and rolls back.
+
+DO $grant$
+DECLARE
+  server_addr inet := inet_server_addr();
+  local_database boolean := server_addr IS NULL
+    OR server_addr <<= inet '127.0.0.0/8'
+    OR server_addr = inet '::1';
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'sa360_app') THEN
+    GRANT SELECT, INSERT, UPDATE ON TABLE
+      public."CompanySheetsDestinationConfigurationRequest"
+    TO sa360_app;
+    RETURN;
+  END IF;
+
+  IF local_database THEN
+    RAISE NOTICE 'company sheets configuration request grants skipped: sa360_app is absent on loopback';
+    RETURN;
+  END IF;
+
+  RAISE EXCEPTION 'company sheets configuration request grants refused: sa360_app is absent';
+END
+$grant$;
+
+COMMIT;

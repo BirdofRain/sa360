@@ -1069,6 +1069,9 @@ model ClientAccount {
   deliveryNotificationPreference ClientDeliveryNotificationPreference?
   /// Accepted recipient and on/off writes. Cascade with the client. These rows do not send.
   deliveryNotificationConfigRequests ClientDeliveryNotificationConfigRequest[]
+  /// Proposed source and campaign associations. Restrict so account deletion cannot erase them.
+  /// Not a source confirmation and not a routing rule.
+  sourceCampaignAssociationRequests SourceCampaignAssociationRequest[]
   /// One send record per source lead. Restrict so account deletion cannot erase send history.
   deliverySuccessNotifications DeliverySuccessNotification[]
 
@@ -4151,6 +4154,62 @@ model ClientDeliveryNotificationConfigRequest {
   resultJson      Json
   createdAt       DateTime      @default(now())
 
+  @@index([clientAccountId, createdAt])
+}
+
+/// Proposed client-source and campaign association.
+/// Status is only requested, rejected, or superseded. There is no approved status.
+/// This is not a SourceFunnel, not a CampaignRoutingRule, and not a delivery arm.
+/// Routing, inventory origin, and delivery queries must not read this table.
+///
+/// One open proposal per client is the partial unique index
+/// SourceCampaignAssociationRequest_one_requested_key
+/// on (clientAccountId) WHERE status = 'requested'.
+/// Prisma 6 cannot model that filter. Do not drop the index in a later diff.
+///
+/// SQL checks and the snapshot trigger reject identifier edits, a return to
+/// requested, and an insert that is already superseded. Do not drop those.
+enum SourceCampaignAssociationRequestStatus {
+  requested
+  rejected
+  superseded
+}
+
+model SourceCampaignAssociationRequest {
+  id                        String                                  @id @default(cuid())
+  /// Idempotency key for the record command. A repeat returns the stored result.
+  requestId                 String                                  @unique
+  clientAccountId           String
+  clientAccount             ClientAccount                           @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Restrict, onUpdate: Restrict)
+  /// Client id at insert. A later rename does not rewrite it.
+  historicalClientAccountId String
+  /// Request-chain token the caller loaded. 0 when the client had no row yet.
+  expectedRevision          Int
+  /// Monotonic per client. The highest value is the next expectedRevision.
+  revision                  Int
+  /// ClientOnboardingSetup.revision observed under the row lock.
+  setupRevision             Int
+  providerFunnelId          String?
+  parentUrlKey              String?
+  providerCampaignId        String
+  status                    SourceCampaignAssociationRequestStatus
+  payloadHash               String
+  /// Immutable result of the record command.
+  recordResultJson          Json
+  /// ADMIN. This table does not record a staff role or a new sign-in path.
+  actor                     String
+  dispositionReason         String?
+  /// Idempotency key for a later operator rejection. Null until that command.
+  rejectionRequestId        String?                                 @unique
+  rejectionPayloadHash      String?
+  rejectionResultJson       Json?
+  supersededByRequestId     String?
+  rejectedAt                DateTime?
+  supersededAt              DateTime?
+  createdAt                 DateTime                                @default(now())
+  updatedAt                 DateTime                                @updatedAt
+
+  @@unique([clientAccountId, revision])
   @@index([clientAccountId, createdAt])
 }
 

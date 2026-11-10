@@ -11,6 +11,7 @@ import {
   type GuidedClientMutationResult,
   type GuidedSetupSaveResult,
 } from "@/app/actions/team-workspace-onboarding";
+import { SourceCampaignRequestPanel } from "@/components/team-workspace/source-campaign-request-panel";
 import { SourceCampaignReviewPanel } from "@/components/team-workspace/source-campaign-review-panel";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -702,6 +703,7 @@ function SourcesStep({
 }) {
   const locked = busy || !model.setupWritable;
   return (
+    <div className="grid gap-4">
     <form
       className="grid gap-4"
       noValidate
@@ -761,6 +763,15 @@ function SourcesStep({
         </Button>
       </div>
     </form>
+    <SourceCampaignRequestPanel
+      clientAccountId={model.clientAccountId}
+      setup={model.setup && !model.setup.repairRequired ? model.setup : null}
+      draft={draft}
+      review={model.sourceCampaignReview}
+      request={model.sourceCampaignRequest}
+      busy={busy}
+    />
+    </div>
   );
 }
 

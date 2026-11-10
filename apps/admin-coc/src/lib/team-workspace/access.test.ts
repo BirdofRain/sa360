@@ -70,6 +70,7 @@ test("admin can open the workspace and every other session is denied", () => {
   assert.equal(isObserverDocumentPath("/team-workspace/alex_gross"), false);
   assert.equal(isObserverAdminApiGetAllowed("/admin/v1/team-workspace/clients/alex_gross"), false);
   assert.equal(isObserverAdminApiGetAllowed("/admin/v1/team-workspace/clients/alex_gross/source-campaign-review"), false);
+  assert.equal(isObserverAdminApiGetAllowed("/admin/v1/clients/alex_gross/source-campaign-requests"), false);
   assert.equal(
     isObserverAdminApiGetAllowed("/admin/v1/clients/alex_gross/delivery-notification-recipient"),
     false
@@ -104,6 +105,10 @@ test("workspace files do not collect a recipient, send mail, or arm delivery", (
     new URL("./onboarding-guide.ts", import.meta.url),
     new URL("./source-campaign-review.ts", import.meta.url),
     new URL("../../components/team-workspace/source-campaign-review-panel.tsx", import.meta.url),
+    new URL("./source-campaign-request.ts", import.meta.url),
+    new URL("./source-campaign-request-env.ts", import.meta.url),
+    new URL("../../components/team-workspace/source-campaign-request-panel.tsx", import.meta.url),
+    new URL("../../app/actions/source-campaign-request.ts", import.meta.url),
   ];
   const source = files.map((file) => readFileSync(file, "utf8")).join("\n");
   assert.equal(source.includes("/team\""), false);

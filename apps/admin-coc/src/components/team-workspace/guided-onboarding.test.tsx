@@ -36,6 +36,38 @@ moduleLoader._load = function (request: string, parent: NodeModule, isMain: bool
   if (request === "next/navigation") {
     return { useRouter: () => ({ push: () => undefined, replace: () => undefined, refresh: () => refreshCalls.push("refresh") }) };
   }
+  if (request === "@/app/actions/source-campaign-request") {
+    return {
+      submitSourceCampaignRequestAction: async () => ({
+        ok: false,
+        uncertain: false,
+        stored: false,
+        retainRequestId: false,
+        code: "FEATURE_DISABLED",
+        message: "Formal source and campaign requests are turned off.",
+        status: null,
+        revision: null,
+        requestId: null,
+        replayed: false,
+        supersededRequestId: null,
+        sent: null,
+      }),
+      rejectSourceCampaignRequestAction: async () => ({
+        ok: false,
+        uncertain: false,
+        stored: false,
+        retainRequestId: false,
+        code: "FEATURE_DISABLED",
+        message: "Formal source and campaign requests are turned off.",
+        status: null,
+        revision: null,
+        requestId: null,
+        replayed: false,
+        supersededRequestId: null,
+        sent: null,
+      }),
+    };
+  }
   if (request === "@/app/actions/team-workspace-onboarding") {
     return {
       createGuidedClientAction: async (input: { clientAccountId: string }) => {

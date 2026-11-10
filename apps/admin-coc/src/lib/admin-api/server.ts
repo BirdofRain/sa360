@@ -1227,6 +1227,15 @@ export async function fetchAdminClientSetup(
   return { data: res.data, error: null };
 }
 
+export async function postAdminSourceCampaignRequest(clientAccountId: string, body: Record<string, unknown>) {
+  const id = clientAccountId.trim();
+  return adminRequestJson<unknown>(
+    "POST",
+    `/admin/v1/clients/${encodeURIComponent(id)}/source-campaign-requests`,
+    body
+  );
+}
+
 export async function patchAdminClientSetup(
   clientAccountId: string,
   body: Record<string, unknown>

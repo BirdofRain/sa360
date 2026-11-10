@@ -120,26 +120,65 @@ the form succeed.
 
 ## Phase 4 — Rollback
 
-Use this order. Do not clear `providerSubject`, delete a principal, delete a
-grant, or delete an enrollment event.
+`POST /internal/staff/enrollment/disable` is available only while
+`SA360_STAFF_ENROLLMENT_ENABLED` is the exact string `true` and the issuer
+secret, client id, and service secret are present. After enrollment is turned
+off, that route returns 404. Disable sets `status` to `disabled` and
+`disabledAt`. It does not clear `providerSubject`.
 
-1. Set `SA360_STAFF_ENROLLMENT_ENABLED` and `SA360_STAFF_GOOGLE_SIGNIN_ENABLED`
-   to any value other than `true`, or unset them, on both apps. Enrollment
-   and login routes return 404. Shared-password Admin C.O.C. login is
-   unchanged.
-2. New Google sessions cannot be registered while the login flag is off.
-3. Existing staff cookies fail closed: the resolve, register, read, and
-   revoke routes are 404 when login is not configured. A copied cookie is
-   not an admin session.
-4. If a principal is compromised, call the disable route while the issuer
-   secret is still available, or disable that row before removing the issuer
-   secret. Disable sets `status` to `disabled` and `disabledAt`. It does not
-   clear the subject.
-5. Leave `StaffEnrollmentGrant` and `StaffEnrollmentEvent` in place. They are
-   the audit record.
-6. Remove the staff client secret and session secret only after the flags are
-   off and any required disable has been recorded. Removing secrets does not
-   delete the identity rows.
+`POST /internal/staff/session/revoke` is available only while login readiness
+is on. Turning `SA360_STAFF_GOOGLE_SIGNIN_ENABLED` off does not delete Redis
+keys under `sa360:staff-session:`. Those registrations remain until they
+expire. The maximum session lifetime is 8 hours. A copied staff cookie is not
+an admin session. Shared-password Admin C.O.C. login stays available
+throughout.
 
-Shared-password login, the admin session cookie, Team Workspace, and Source
-Resolution stay on their existing controls throughout.
+Do not clear `providerSubject`. Do not delete a principal, a
+`StaffEnrollmentGrant`, or a `StaffEnrollmentEvent`.
+
+### Preferred order
+
+Use this order when the issuer route is healthy and enrollment is still
+enabled.
+
+1. Disable the compromised principal through
+   `POST /internal/staff/enrollment/disable` before enrollment is turned off.
+2. While login is still enabled, revoke each presented staff session through
+   logout or `POST /internal/staff/session/revoke`. There is no bulk-revoke
+   route. A session that is not presented remains registered in Redis.
+3. Then set `SA360_STAFF_ENROLLMENT_ENABLED` and
+   `SA360_STAFF_GOOGLE_SIGNIN_ENABLED` to any value other than `true`, or
+   unset them, on both apps. Enrollment and login routes return 404. New
+   Google sessions cannot be registered.
+4. Leave the grant and enrollment event rows in place.
+
+### Flags off before the principal is disabled
+
+If immediate containment requires both flags off first, new enrollment and
+login requests return 404, and the issuer disable route is then unavailable.
+Redis session registrations are still present.
+
+Do not turn either feature back on until a separately approved recovery
+procedure chooses one of these containment steps:
+
+- Enable enrollment only long enough to disable the principal, confirm
+  `disabledAt` is set, then turn enrollment off again. Do not enable login
+  during that window.
+- Enable login only long enough to revoke the known presented sessions, then
+  turn login off again. Do not leave it on.
+- Rotate `SA360_STAFF_SESSION_SECRET` on both apps before login is enabled
+  again. Old cookies fail signature verification. Rotation does not delete
+  Redis rows, subject bindings, or audit rows. The replacement must differ
+  from the service secret, the issuer secret, the assertion secret, and the
+  admin secrets.
+- Wait through the maximum session lifetime of 8 hours so the cookie expiry
+  and the Redis registration TTL have both elapsed.
+
+Re-enabling login with the same session secret, an active principal, and an
+unrevoked Redis registration restores that previously valid session. Do not
+do that. A principal that has already been disabled cannot use a restored
+cookie. Any other still-active principal with an unrevoked registration can.
+
+Removing the staff client secret or session secret does not delete identity
+rows. Remove those secrets only after the flags are off and the chosen
+containment step is recorded.

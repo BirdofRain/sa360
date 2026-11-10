@@ -12,6 +12,8 @@ export const STAFF_GOOGLE_STATE_PREFIX = "sg1";
 export const STAFF_GOOGLE_STATE_COOKIE = "sa360_staff_google_state";
 export const STAFF_GOOGLE_STATE_TTL_SECONDS = 10 * 60;
 export const STAFF_GOOGLE_STATE_MAX_TOKEN_LENGTH = 2048;
+export const STAFF_GOOGLE_STATE_REPLAY_PREFIX = "sa360:staff-google-oauth-state:";
+export const STAFF_GOOGLE_STATE_REPLAY_TTL_SECONDS = STAFF_GOOGLE_STATE_TTL_SECONDS;
 
 const OPAQUE_PATTERN = /^[A-Za-z0-9_-]{43,128}$/;
 const CLAIM_KEYS = ["exp", "iat", "nonce", "redirectUri", "state", "typ", "v", "verifier"] as const;
@@ -37,12 +39,6 @@ export type StaffGoogleStateFailure =
   | "reused_state"
   | "redirect";
 
-const consumed = new Map<string, number>();
-
-export function resetStaffGoogleStateConsumptionForTests(): void {
-  consumed.clear();
-}
-
 export function createStaffGoogleState(input: {
   redirectUri: string;
   nowSec?: number;
@@ -67,7 +63,7 @@ export function createStaffGoogleState(input: {
   return { token: `${signed}.${signBytes(signed, secret)}`, claims: { ...claims } };
 }
 
-export function consumeStaffGoogleState(input: {
+export function verifyStaffGoogleState(input: {
   token: string | undefined;
   queryState: string | undefined;
   redirectUri: string;
@@ -81,14 +77,17 @@ export function consumeStaffGoogleState(input: {
   if (!claims) return { ok: false, code: claims === null ? "malformed" : "invalid_signature" };
   const nowSec = input.nowSec ?? Math.floor(Date.now() / 1000);
   if (claims.exp <= nowSec) return { ok: false, code: "expired" };
-  const key = createHash("sha256").update(claims.state, "utf8").digest("base64url");
-  pruneConsumed(nowSec);
-  const seenUntil = consumed.get(key);
-  if (seenUntil !== undefined && seenUntil > nowSec) return { ok: false, code: "reused_state" };
-  consumed.set(key, claims.exp);
   if (!input.queryState || !fixedEqual(input.queryState, claims.state)) return { ok: false, code: "csrf" };
   if (input.redirectUri !== claims.redirectUri) return { ok: false, code: "redirect" };
   return { ok: true, claims };
+}
+
+export function staffGoogleStateReplayId(state: string): string {
+  return createHash("sha256").update(state, "utf8").digest("hex");
+}
+
+export function staffGoogleStateReplayKey(state: string): string {
+  return `${STAFF_GOOGLE_STATE_REPLAY_PREFIX}${staffGoogleStateReplayId(state)}`;
 }
 
 function readToken(token: string, secret: string): StaffGoogleStateClaims | null | false {
@@ -165,11 +164,4 @@ function fixedEqual(provided: string, expected: string): boolean {
 
 function isTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 4_000_000_000;
-}
-
-function pruneConsumed(nowSec: number): void {
-  if (consumed.size < 500) return;
-  for (const [key, exp] of consumed) {
-    if (exp <= nowSec) consumed.delete(key);
-  }
 }

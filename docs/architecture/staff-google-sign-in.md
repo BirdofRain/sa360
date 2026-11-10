@@ -91,6 +91,7 @@ still do not serve them.
 - `GET /staff`
 - `POST /internal/staff/google/resolve`
 - `POST /internal/staff/session`
+- `POST /internal/staff/google/state/consume`
 
 The shared-password login at `/login` is unchanged.
 
@@ -152,21 +153,44 @@ The API does not need the Google client secret. The resolve call uses the
 existing internal API origin, sends the service credential, and does not send
 the admin API key.
 
+## Cross-instance state consumption
+
+The signed state cookie is the registration. It is HMAC-signed with the staff
+session secret, lasts ten minutes, and binds the state, nonce, PKCE verifier,
+and redirect URI. Admin C.O.C. checks the signature, query state, expiry, and
+redirect URI before it asks the API to consume anything. A malformed or
+mismatched callback never reaches Redis. Creating the cookie at the start of
+sign-in does not write to Redis: a forged cookie cannot pass the signature
+check, so the first valid callback can claim the state atomically.
+
+The API claim is one `SET key 1 NX EX 600` command. The key is
+`sa360:staff-google-oauth-state:` plus the SHA-256 hex of the state value.
+`NX` does not replace an existing marker. The first claim wins, and every
+later claim during the ten-minute window is rejected. The marker value is
+`1`. The authorization code, ID token, PKCE verifier, staff session, and
+secrets are not written to Redis. Admin C.O.C. does not receive Redis
+credentials. The claim times out after 1.5 seconds and is not retried.
+
+`POST /internal/staff/google/state/consume` uses the same readiness gate and
+`x-sa360-staff-google-service` credential as the other internal staff routes.
+It returns 404 while staff Google sign-in is not fully configured, 401 for a
+missing or wrong service credential or a repeated claim, and 503 when Redis
+is unavailable or the claim times out. The callback then stops. It does not
+exchange the Google code or mint a staff session. A supplied staff principal
+id is not authentication. There is no process-local fallback.
+
 ## Remaining activation blockers
 
-1. OAuth state is consumed from a process-local map. That map is not shared
-   across instances, so a callback can miss a state created on another
-   process. A later change needs a shared one-time store.
-2. Logout clears the browser cookie. It does not invalidate a copied staff
+1. Logout clears the browser cookie. It does not invalidate a copied staff
    session, which remains acceptable until its eight-hour expiry or until the
    principal is disabled. There is no session-epoch column.
-3. First Google subject binding stays disabled. An unbound principal is
+2. First Google subject binding stays disabled. An unbound principal is
    denied, and email is not the binding. A later enrollment change must write
    `providerSubject` once, only while it is null, after an out-of-band check.
-4. Production Google OAuth client, redirect URI, feature flag, client secret,
+3. Production Google OAuth client, redirect URI, feature flag, client secret,
    session secret, and service secret stay unset until a later staged
    activation.
-5. Three Admin C.O.C. tests fail on the current baseline and on the commits
+4. Three Admin C.O.C. tests fail on the current baseline and on the commits
    before this boundary. They are outside staff authentication:
    `portal-order-request-form.test.tsx` never finds "Mapped source bands.";
    `admin-coc-privileged-handlers.test.ts` does not match
@@ -176,7 +200,7 @@ the admin API key.
 
 ## Recommendation
 
-GO to merge this disabled service boundary. NO-GO to provision the service
+GO to merge this disabled replay protection. NO-GO to provision the service
 secret, turn the flag on, create staff rows, bind a Google subject, grant a
 permission, configure production Google OAuth, or execute an association
 correction.

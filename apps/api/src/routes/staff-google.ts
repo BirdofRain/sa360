@@ -12,6 +12,7 @@ import { findStaffPrincipalByGoogleSubject, findStaffPrincipalById } from "../li
 import { authorizeStaffSessionPrincipal, resolveProvisionedStaffPrincipal } from "../lib/staff-google-identity.js";
 import { verifyStaffGoogleIdToken } from "../lib/staff-google-oidc.js";
 import type { ProvisionedStaffPrincipal } from "../lib/staff-google-identity.js";
+import { claimStaffGoogleStateReplay, type StaffGoogleStateClaim } from "../lib/staff-google-state-replay.js";
 
 const PRINCIPAL_ID_PATTERN = /^c[a-z0-9]{24}$/;
 
@@ -19,6 +20,7 @@ export type StaffGoogleRouteDeps = {
   findByGoogleSubject?: (sub: string) => Promise<ProvisionedStaffPrincipal | null>;
   findById?: (id: string) => Promise<ProvisionedStaffPrincipal | null>;
   verifyIdToken?: typeof verifyStaffGoogleIdToken;
+  claimReplay?: (replayId: string) => Promise<StaffGoogleStateClaim>;
   env?: NodeJS.ProcessEnv;
 };
 
@@ -26,6 +28,7 @@ export async function staffGoogleRoutes(app: FastifyInstance, opts: StaffGoogleR
   const findByGoogleSubject = opts.findByGoogleSubject ?? findStaffPrincipalByGoogleSubject;
   const findById = opts.findById ?? findStaffPrincipalById;
   const verifyIdToken = opts.verifyIdToken ?? verifyStaffGoogleIdToken;
+  const claimReplay = opts.claimReplay ?? claimStaffGoogleStateReplay;
   const env = opts.env ?? process.env;
 
   app.post("/internal/staff/google/resolve", async (request, reply) => {
@@ -74,6 +77,19 @@ export async function staffGoogleRoutes(app: FastifyInstance, opts: StaffGoogleR
     if (!authorized.ok) return reply.code(401).send({ ok: false });
     return { ok: true, staffPrincipalId: authorized.staffPrincipalId };
   });
+
+  app.post("/internal/staff/google/state/consume", async (request, reply) => {
+    if (!staffGoogleApiReady(env)) return reply.code(404).send({ ok: false });
+    if (!serviceHeaderAccepted(env, headerValue(request.headers[STAFF_GOOGLE_SERVICE_HEADER]))) {
+      return reply.code(401).send({ ok: false });
+    }
+    const replayId = readReplayId(request.body);
+    if (!replayId) return reply.code(401).send({ ok: false });
+    const claimed = await claimReplay(replayId);
+    if (claimed === "claimed") return { ok: true };
+    if (claimed === "reused") return reply.code(401).send({ ok: false });
+    return reply.code(503).send({ ok: false });
+  });
 }
 
 function staffGoogleApiReady(env: NodeJS.ProcessEnv): { clientId: string } | null {
@@ -91,6 +107,12 @@ function serviceHeaderAccepted(env: NodeJS.ProcessEnv, presented: string): boole
 function headerValue(value: string | string[] | undefined): string {
   const raw = Array.isArray(value) ? value[0] : value;
   return typeof raw === "string" ? raw : "";
+}
+
+function readReplayId(body: unknown): string | null {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+  const replayId = (body as Record<string, unknown>).replayId;
+  return typeof replayId === "string" && /^[a-f0-9]{64}$/.test(replayId) ? replayId : null;
 }
 
 function sessionSecretReady(env: NodeJS.ProcessEnv): boolean {

@@ -17,8 +17,9 @@ import {
 import {
   STAFF_GOOGLE_STATE_COOKIE,
   STAFF_GOOGLE_STATE_TTL_SECONDS,
-  consumeStaffGoogleState,
   createStaffGoogleState,
+  staffGoogleStateReplayId,
+  verifyStaffGoogleState,
 } from "@sa360/shared/staff-google-state";
 import { readStaffGoogleServiceSecret, STAFF_GOOGLE_SERVICE_HEADER } from "@sa360/shared/staff-google-service";
 
@@ -95,27 +96,38 @@ export async function completeStaffGoogleCallback(input: {
   fetchImpl?: FetchLike;
   exchange?: typeof exchangeStaffGoogleCode;
   resolve?: (value: { idToken: string; nonce: string }) => Promise<StaffGoogleResolution>;
+  claimState?: (replayId: string) => Promise<{ ok: true } | { ok: false; code: "reused_state" | "state_unavailable" }>;
 }): Promise<StaffCallbackOutcome> {
   const config = readStaffGoogleBrowserConfig(input.env);
   const secret = sessionSecret(input.env);
   const service = readStaffGoogleServiceSecret(input.env);
   const origin = readStaffApiOrigin(input.env.SA360_API_INTERNAL_URL ?? input.env.NEXT_PUBLIC_SA360_API_BASE_URL);
-  if (!config || !secret || !service || (!input.resolve && !origin)) return { kind: "unavailable" };
-  const consumed = consumeStaffGoogleState({
+  if (!config || !secret || !service || (!input.claimState && !origin) || (!input.resolve && !origin)) {
+    return { kind: "unavailable" };
+  }
+  const verified = verifyStaffGoogleState({
     token: input.stateCookie,
     queryState: input.queryState,
     redirectUri: config.redirectUri,
     nowSec: input.nowSec,
     secret,
   });
-  if (!consumed.ok) return { kind: "denied", reason: consumed.code };
+  if (!verified.ok) return { kind: "denied", reason: verified.code };
   if (!input.code) return { kind: "denied", reason: "exchange_failed" };
+  const claim = input.claimState ?? ((replayId) => claimStateWithApi(origin as string, replayId, input.env, input.fetchImpl));
+  let claimed: { ok: true } | { ok: false; code: "reused_state" | "state_unavailable" };
+  try {
+    claimed = await claim(staffGoogleStateReplayId(verified.claims.state));
+  } catch {
+    return { kind: "denied", reason: "state_unavailable" };
+  }
+  if (!claimed.ok) return { kind: "denied", reason: claimed.code };
   const exchange = input.exchange ?? exchangeStaffGoogleCode;
   let exchanged: { ok: true; idToken: string } | { ok: false; code: "exchange_failed" };
   try {
     exchanged = await exchange({
       code: input.code,
-      verifier: consumed.claims.verifier,
+      verifier: verified.claims.verifier,
       config,
       fetchImpl: input.fetchImpl,
     });
@@ -126,7 +138,7 @@ export async function completeStaffGoogleCallback(input: {
   const resolve = input.resolve ?? ((value) => resolveWithApi(origin as string, value, input.env, input.fetchImpl));
   let resolved: StaffGoogleResolution;
   try {
-    resolved = await resolve({ idToken: exchanged.idToken, nonce: consumed.claims.nonce });
+    resolved = await resolve({ idToken: exchanged.idToken, nonce: verified.claims.nonce });
   } catch {
     return { kind: "denied", reason: "resolve_failed" };
   }
@@ -141,6 +153,26 @@ export async function completeStaffGoogleCallback(input: {
     secret,
   });
   return { kind: "signed_in", sessionToken: session.token, staffPrincipalId: resolved.staffPrincipalId };
+}
+
+async function claimStateWithApi(
+  origin: string,
+  replayId: string,
+  env: NodeJS.ProcessEnv,
+  fetchImpl: FetchLike | undefined
+): Promise<{ ok: true } | { ok: false; code: "reused_state" | "state_unavailable" }> {
+  const serviceHeaders = serviceCredentialHeaders(env);
+  if (!serviceHeaders) return { ok: false, code: "state_unavailable" };
+  const response = await (fetchImpl ?? fetch)(`${origin}/internal/staff/google/state/consume`, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json", ...serviceHeaders },
+    body: JSON.stringify({ replayId }),
+    redirect: "error",
+    signal: AbortSignal.timeout(1_500),
+  });
+  if (response.status === 200) return { ok: true };
+  if (response.status === 503) return { ok: false, code: "state_unavailable" };
+  return { ok: false, code: "reused_state" };
 }
 
 async function resolveWithApi(

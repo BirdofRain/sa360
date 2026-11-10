@@ -2,9 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  consumeStaffGoogleState,
+  STAFF_GOOGLE_STATE_REPLAY_PREFIX,
+  STAFF_GOOGLE_STATE_REPLAY_TTL_SECONDS,
+  STAFF_GOOGLE_STATE_TTL_SECONDS,
   createStaffGoogleState,
-  resetStaffGoogleStateConsumptionForTests,
+  staffGoogleStateReplayId,
+  staffGoogleStateReplayKey,
+  verifyStaffGoogleState,
 } from "./staff-google-state.js";
 
 const SECRET = "staff-session-secret-at-least-32-characters";
@@ -12,15 +16,14 @@ const REDIRECT = "https://admin.example/staff/google/callback";
 const OTHER = "https://other.example/staff/google/callback";
 const NOW = 1_800_000_000;
 
-test("oauth state is single use and rejects a missing, mismatched, expired, or redirected cookie", () => {
-  resetStaffGoogleStateConsumptionForTests();
+test("oauth state verification rejects a missing, mismatched, expired, redirected, or altered cookie", () => {
   const created = createStaffGoogleState({ redirectUri: REDIRECT, nowSec: NOW, secret: SECRET });
   assert.deepEqual(
-    consumeStaffGoogleState({ token: undefined, queryState: created.claims.state, redirectUri: REDIRECT, nowSec: NOW, secret: SECRET }),
+    verifyStaffGoogleState({ token: undefined, queryState: created.claims.state, redirectUri: REDIRECT, nowSec: NOW, secret: SECRET }),
     { ok: false, code: "missing_state" }
   );
-  assert.deepEqual(
-    consumeStaffGoogleState({
+  assert.equal(
+    verifyStaffGoogleState({
       token: created.token,
       queryState: "not-the-state-value-in-the-signed-cookie-at-all",
       redirectUri: REDIRECT,
@@ -29,48 +32,63 @@ test("oauth state is single use and rejects a missing, mismatched, expired, or r
     }).code,
     "csrf"
   );
-  resetStaffGoogleStateConsumptionForTests();
-  const again = createStaffGoogleState({ redirectUri: REDIRECT, nowSec: NOW, secret: SECRET });
-  const first = consumeStaffGoogleState({
-    token: again.token,
-    queryState: again.claims.state,
+  const again = verifyStaffGoogleState({
+    token: created.token,
+    queryState: created.claims.state,
     redirectUri: REDIRECT,
     nowSec: NOW,
     secret: SECRET,
   });
-  assert.equal(first.ok, true);
-  assert.deepEqual(
-    consumeStaffGoogleState({
-      token: again.token,
-      queryState: again.claims.state,
+  assert.equal(again.ok, true);
+  assert.equal(
+    verifyStaffGoogleState({
+      token: created.token,
+      queryState: created.claims.state,
       redirectUri: REDIRECT,
       nowSec: NOW,
       secret: SECRET,
-    }),
-    { ok: false, code: "reused_state" }
+    }).ok,
+    true
   );
-  resetStaffGoogleStateConsumptionForTests();
-  const expired = createStaffGoogleState({ redirectUri: REDIRECT, nowSec: NOW, secret: SECRET });
-  assert.deepEqual(
-    consumeStaffGoogleState({
-      token: expired.token,
-      queryState: expired.claims.state,
-      redirectUri: REDIRECT,
-      nowSec: expired.claims.exp,
-      secret: SECRET,
-    }),
-    { ok: false, code: "expired" }
-  );
-  resetStaffGoogleStateConsumptionForTests();
-  const redirected = createStaffGoogleState({ redirectUri: REDIRECT, nowSec: NOW, secret: SECRET });
   assert.equal(
-    consumeStaffGoogleState({
-      token: redirected.token,
-      queryState: redirected.claims.state,
+    verifyStaffGoogleState({
+      token: created.token,
+      queryState: created.claims.state,
+      redirectUri: REDIRECT,
+      nowSec: created.claims.exp,
+      secret: SECRET,
+    }).code,
+    "expired"
+  );
+  assert.equal(
+    verifyStaffGoogleState({
+      token: created.token,
+      queryState: created.claims.state,
       redirectUri: OTHER,
       nowSec: NOW,
       secret: SECRET,
     }).code,
     "redirect"
   );
+  const broken = `${created.token.slice(0, -4)}aaaa`;
+  assert.equal(
+    verifyStaffGoogleState({
+      token: broken,
+      queryState: created.claims.state,
+      redirectUri: REDIRECT,
+      nowSec: NOW,
+      secret: SECRET,
+    }).code,
+    "invalid_signature"
+  );
+});
+
+test("the replay identifier hides the state and uses a bounded ttl", () => {
+  const created = createStaffGoogleState({ redirectUri: REDIRECT, nowSec: NOW, secret: SECRET });
+  const replayId = staffGoogleStateReplayId(created.claims.state);
+  assert.equal(replayId.length, 64);
+  assert.equal(replayId.includes(created.claims.state), false);
+  assert.equal(staffGoogleStateReplayKey(created.claims.state), `${STAFF_GOOGLE_STATE_REPLAY_PREFIX}${replayId}`);
+  assert.equal(staffGoogleStateReplayKey(created.claims.state).includes(created.claims.verifier), false);
+  assert.equal(STAFF_GOOGLE_STATE_REPLAY_TTL_SECONDS, STAFF_GOOGLE_STATE_TTL_SECONDS);
 });

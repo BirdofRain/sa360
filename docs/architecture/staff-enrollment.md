@@ -156,3 +156,7 @@ a new invitation. The old subject remains on the disabled row.
 Shared-password login, Team Workspace authorization, Source Resolution, and
 the login session registry are unchanged. Enrollment does not add an
 association-correction execution route.
+
+The later production activation and rollback order is
+`docs/operations/staff-first-login-activation.md`. That document does not
+authorize the activation by itself.

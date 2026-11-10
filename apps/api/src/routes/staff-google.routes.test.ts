@@ -13,6 +13,7 @@ import { staffGoogleRoutes } from "./staff-google.js";
 
 const CLIENT_ID = "staff-test-client.apps.googleusercontent.com";
 const SECRET = "staff-session-secret-at-least-32-characters";
+const SERVICE = "staff-google-service-secret-32-characters";
 const PRINCIPAL = "c123456789012345678901234";
 const SUB = "102938475610293847561";
 const NONCE = "n".repeat(43);
@@ -36,8 +37,13 @@ function enabled(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
     SA360_STAFF_GOOGLE_SIGNIN_ENABLED: "true",
     SA360_STAFF_GOOGLE_CLIENT_ID: CLIENT_ID,
     SA360_STAFF_SESSION_SECRET: SECRET,
+    SA360_STAFF_GOOGLE_SERVICE_SECRET: SERVICE,
     ...extra,
   };
+}
+
+function serviceHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  return { "x-sa360-staff-google-service": SERVICE, ...extra };
 }
 
 function bound(overrides: Partial<ProvisionedStaffPrincipal> = {}): ProvisionedStaffPrincipal {
@@ -78,8 +84,10 @@ async function appFor(principal: ProvisionedStaffPrincipal | null, env: NodeJS.P
       if (principal?.id !== id) return null;
       return principal;
     },
-    verifyIdToken: (input: Parameters<typeof verifyStaffGoogleIdToken>[0]) =>
-      verifyStaffGoogleIdToken({ ...input, getKey, nowSec: NOW }),
+    verifyIdToken: (input: Parameters<typeof verifyStaffGoogleIdToken>[0]) => {
+      calls.push("verify");
+      return verifyStaffGoogleIdToken({ ...input, getKey, nowSec: NOW });
+    },
   });
   return { app, calls };
 }
@@ -96,16 +104,18 @@ test("resolve denies unknown, disabled, unbound, and unverified identities witho
   const unknown = await missing.app.inject({
     method: "POST",
     url: "/internal/staff/google/resolve",
+    headers: serviceHeaders(),
     payload: { idToken: await idToken(), nonce: NONCE },
   });
   assert.equal(unknown.statusCode, 401);
   assert.deepEqual(unknown.json(), { ok: false });
-  assert.deepEqual(missing.calls, [`subject:${SUB}`]);
+  assert.deepEqual(missing.calls, ["verify", `subject:${SUB}`]);
 
   const disabled = await appFor(bound({ status: "disabled", disabledAt: new Date("2026-01-01T00:00:00Z") }), enabled());
   const disabledResponse = await disabled.app.inject({
     method: "POST",
     url: "/internal/staff/google/resolve",
+    headers: serviceHeaders(),
     payload: { idToken: await idToken(), nonce: NONCE },
   });
   assert.equal(disabledResponse.statusCode, 401);
@@ -114,19 +124,21 @@ test("resolve denies unknown, disabled, unbound, and unverified identities witho
   const unboundResponse = await unbound.app.inject({
     method: "POST",
     url: "/internal/staff/google/resolve",
+    headers: serviceHeaders(),
     payload: { idToken: await idToken(), nonce: NONCE },
   });
   assert.equal(unboundResponse.statusCode, 401);
-  assert.deepEqual(unbound.calls, [`subject:${SUB}`]);
+  assert.deepEqual(unbound.calls, ["verify", `subject:${SUB}`]);
 
   const unverified = await appFor(bound(), enabled());
   const unverifiedResponse = await unverified.app.inject({
     method: "POST",
     url: "/internal/staff/google/resolve",
+    headers: serviceHeaders(),
     payload: { idToken: await idToken({ email_verified: false }), nonce: NONCE },
   });
   assert.equal(unverifiedResponse.statusCode, 401);
-  assert.deepEqual(unverified.calls, []);
+  assert.deepEqual(unverified.calls, ["verify"]);
 });
 
 test("an admin api key is not a staff identity", async () => {
@@ -147,6 +159,7 @@ test("a verified bound identity resolves and a staff session stays live only whi
   const resolved = await app.inject({
     method: "POST",
     url: "/internal/staff/google/resolve",
+    headers: serviceHeaders(),
     payload: { idToken: await idToken(), nonce: NONCE },
   });
   assert.equal(resolved.statusCode, 200);
@@ -158,7 +171,7 @@ test("a verified bound identity resolves and a staff session stays live only whi
   const live = await app.inject({
     method: "POST",
     url: "/internal/staff/session",
-    headers: { "x-sa360-staff-session": session.token },
+    headers: serviceHeaders({ "x-sa360-staff-session": session.token }),
   });
   assert.equal(live.statusCode, 200);
   assert.deepEqual(live.json(), { ok: true, staffPrincipalId: PRINCIPAL });
@@ -172,14 +185,17 @@ test("a verified bound identity resolves and a staff session stays live only whi
   const expired = await app.inject({
     method: "POST",
     url: "/internal/staff/session",
-    headers: { "x-sa360-staff-session": stale.token },
+    headers: serviceHeaders({ "x-sa360-staff-session": stale.token }),
   });
   assert.equal(expired.statusCode, 401);
 
   const adminCookie = await app.inject({
     method: "POST",
     url: "/internal/staff/session",
-    headers: { "x-sa360-staff-session": "ac1.eyJ0eXAiOiJhZG1pbl9jb2MifQ.signature", "x-sa360-admin-key": "shared-admin-key" },
+    headers: serviceHeaders({
+      "x-sa360-staff-session": "ac1.eyJ0eXAiOiJhZG1pbl9jb2MifQ.signature",
+      "x-sa360-admin-key": "shared-admin-key",
+    }),
   });
   assert.equal(adminCookie.statusCode, 401);
 });
@@ -189,6 +205,7 @@ test("the feature flag and missing secrets fail closed", async () => {
   const hidden = await off.app.inject({
     method: "POST",
     url: "/internal/staff/google/resolve",
+    headers: { "x-sa360-staff-google-service": SERVICE },
     payload: { idToken: await idToken(), nonce: NONCE },
   });
   assert.equal(hidden.statusCode, 404);
@@ -220,7 +237,7 @@ test("a live session whose stored subject differs is denied", async () => {
   const response = await app.inject({
     method: "POST",
     url: "/internal/staff/session",
-    headers: { "x-sa360-staff-session": session.token },
+    headers: serviceHeaders({ "x-sa360-staff-session": session.token }),
   });
   assert.equal(response.statusCode, 401);
   assert.deepEqual(response.json(), { ok: false });
@@ -237,8 +254,66 @@ test("a disabled principal fails the live session check", async () => {
   const response = await app.inject({
     method: "POST",
     url: "/internal/staff/session",
-    headers: { "x-sa360-staff-session": session.token },
+    headers: serviceHeaders({ "x-sa360-staff-session": session.token }),
   });
   assert.equal(response.statusCode, 401);
   assert.deepEqual(response.json(), { ok: false });
+});
+
+test("service authentication is required and does not identify a person", async () => {
+  const { app, calls } = await appFor(bound(), enabled());
+  const token = await idToken();
+  const missing = await app.inject({
+    method: "POST",
+    url: "/internal/staff/google/resolve",
+    headers: {
+      "x-sa360-admin-key": "shared-admin-key",
+      "x-sa360-client-portal-key": "portal-secret",
+      "x-sa360-workspace-key": "workspace-secret",
+      "x-sa360-operator": "operator-label",
+    },
+    payload: { idToken: token, nonce: NONCE },
+  });
+  assert.equal(missing.statusCode, 401);
+  const invalid = await app.inject({
+    method: "POST",
+    url: "/internal/staff/google/resolve",
+    headers: { "x-sa360-staff-google-service": "wrong-staff-service-secret-32-characters" },
+    payload: { idToken: token, nonce: NONCE },
+  });
+  assert.equal(invalid.statusCode, 401);
+  const person = await app.inject({
+    method: "POST",
+    url: "/internal/staff/google/resolve",
+    headers: serviceHeaders(),
+    payload: { sub: SUB, email: "person@example.com" },
+  });
+  assert.equal(person.statusCode, 401);
+  const sessionWithoutService = await app.inject({
+    method: "POST",
+    url: "/internal/staff/session",
+    headers: { "x-sa360-client-portal-key": "portal-secret", "x-sa360-workspace-key": "workspace-secret" },
+  });
+  assert.equal(sessionWithoutService.statusCode, 401);
+  assert.deepEqual(calls, []);
+  assert.equal(JSON.stringify(person.json()).includes(SERVICE), false);
+
+  const forged = await app.inject({
+    method: "POST",
+    url: "/internal/staff/google/resolve",
+    headers: serviceHeaders(),
+    payload: { idToken: "forged.identity.token", nonce: NONCE },
+  });
+  assert.equal(forged.statusCode, 401);
+  assert.deepEqual(calls, ["verify"]);
+
+  const copied = await appFor(bound(), enabled({ ADMIN_API_KEY: SERVICE }));
+  const collapsed = await copied.app.inject({
+    method: "POST",
+    url: "/internal/staff/google/resolve",
+    headers: serviceHeaders(),
+    payload: { idToken: token, nonce: NONCE },
+  });
+  assert.equal(collapsed.statusCode, 404);
+  assert.deepEqual(copied.calls, []);
 });

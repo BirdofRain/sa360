@@ -20,6 +20,7 @@ import {
   consumeStaffGoogleState,
   createStaffGoogleState,
 } from "@sa360/shared/staff-google-state";
+import { readStaffGoogleServiceSecret, STAFF_GOOGLE_SERVICE_HEADER } from "@sa360/shared/staff-google-service";
 
 const PRINCIPAL_ID_PATTERN = /^c[a-z0-9]{24}$/;
 const GOOGLE_SUB_PATTERN = /^[A-Za-z0-9_-]{10,255}$/;
@@ -59,7 +60,7 @@ export function startStaffGoogleSignIn(input: {
     } {
   const config = readStaffGoogleBrowserConfig(input.env);
   const secret = sessionSecret(input.env);
-  if (!config || !secret) return { kind: "unavailable" };
+  if (!config || !secret || !readStaffGoogleServiceSecret(input.env)) return { kind: "unavailable" };
   const created = createStaffGoogleState({ redirectUri: config.redirectUri, nowSec: input.nowSec, secret });
   const location = staffGoogleAuthorizeUrl({
     clientId: config.clientId,
@@ -97,8 +98,9 @@ export async function completeStaffGoogleCallback(input: {
 }): Promise<StaffCallbackOutcome> {
   const config = readStaffGoogleBrowserConfig(input.env);
   const secret = sessionSecret(input.env);
+  const service = readStaffGoogleServiceSecret(input.env);
   const origin = readStaffApiOrigin(input.env.SA360_API_INTERNAL_URL ?? input.env.NEXT_PUBLIC_SA360_API_BASE_URL);
-  if (!config || !secret || (!input.resolve && !origin)) return { kind: "unavailable" };
+  if (!config || !secret || !service || (!input.resolve && !origin)) return { kind: "unavailable" };
   const consumed = consumeStaffGoogleState({
     token: input.stateCookie,
     queryState: input.queryState,
@@ -121,7 +123,7 @@ export async function completeStaffGoogleCallback(input: {
     return { kind: "denied", reason: "exchange_failed" };
   }
   if (!exchanged.ok) return { kind: "denied", reason: "exchange_failed" };
-  const resolve = input.resolve ?? ((value) => resolveWithApi(origin as string, value, input.fetchImpl));
+  const resolve = input.resolve ?? ((value) => resolveWithApi(origin as string, value, input.env, input.fetchImpl));
   let resolved: StaffGoogleResolution;
   try {
     resolved = await resolve({ idToken: exchanged.idToken, nonce: consumed.claims.nonce });
@@ -144,11 +146,14 @@ export async function completeStaffGoogleCallback(input: {
 async function resolveWithApi(
   origin: string,
   value: { idToken: string; nonce: string },
+  env: NodeJS.ProcessEnv,
   fetchImpl: FetchLike | undefined
 ): Promise<StaffGoogleResolution> {
+  const serviceHeaders = serviceCredentialHeaders(env);
+  if (!serviceHeaders) return { ok: false };
   const response = await (fetchImpl ?? fetch)(`${origin}/internal/staff/google/resolve`, {
     method: "POST",
-    headers: { "content-type": "application/json", accept: "application/json" },
+    headers: { "content-type": "application/json", accept: "application/json", ...serviceHeaders },
     body: JSON.stringify({ idToken: value.idToken, nonce: value.nonce }),
     redirect: "error",
     signal: AbortSignal.timeout(10_000),
@@ -188,10 +193,11 @@ export async function readLiveStaffSession(input: {
 
 async function confirmWithApi(env: NodeJS.ProcessEnv, token: string, fetchImpl: FetchLike | undefined): Promise<boolean> {
   const origin = readStaffApiOrigin(env.SA360_API_INTERNAL_URL ?? env.NEXT_PUBLIC_SA360_API_BASE_URL);
-  if (!origin) return false;
+  const serviceHeaders = serviceCredentialHeaders(env);
+  if (!origin || !serviceHeaders) return false;
   const response = await (fetchImpl ?? fetch)(`${origin}/internal/staff/session`, {
     method: "POST",
-    headers: { accept: "application/json", [STAFF_SESSION_HEADER]: token },
+    headers: { accept: "application/json", [STAFF_SESSION_HEADER]: token, ...serviceHeaders },
     redirect: "error",
     signal: AbortSignal.timeout(10_000),
   });
@@ -229,5 +235,11 @@ export function staffLogoutClearCookie(env: NodeJS.ProcessEnv) {
 }
 
 export function staffGoogleConfigReady(env: NodeJS.ProcessEnv): boolean {
-  return readStaffGoogleBrowserConfig(env) !== null && sessionSecret(env) !== null;
+  return readStaffGoogleBrowserConfig(env) !== null && sessionSecret(env) !== null && readStaffGoogleServiceSecret(env) !== null;
+}
+
+function serviceCredentialHeaders(env: NodeJS.ProcessEnv): Record<string, string> | null {
+  const secret = readStaffGoogleServiceSecret(env);
+  if (!secret) return null;
+  return { [STAFF_GOOGLE_SERVICE_HEADER]: secret };
 }

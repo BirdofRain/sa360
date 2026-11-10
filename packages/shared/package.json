@@ -35,10 +35,15 @@
       "types": "./dist/staff-google-oidc.d.ts",
       "import": "./dist/staff-google-oidc.js",
       "default": "./dist/staff-google-oidc.js"
+    },
+    "./staff-google-service": {
+      "types": "./dist/staff-google-service.d.ts",
+      "import": "./dist/staff-google-service.js",
+      "default": "./dist/staff-google-service.js"
     }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node --import tsx/esm --test src/commerce-niches.test.ts src/availability-interest.test.ts src/portal-customer-age.test.ts src/company-sheets-drain-budget.test.ts src/company-sheets-column-template.test.ts src/staff-assertion.test.ts src/staff-google-session.test.ts src/staff-google-state.test.ts src/staff-google-oidc.test.ts"
+    "test": "node --import tsx/esm --test src/commerce-niches.test.ts src/availability-interest.test.ts src/portal-customer-age.test.ts src/company-sheets-drain-budget.test.ts src/company-sheets-column-template.test.ts src/staff-assertion.test.ts src/staff-google-session.test.ts src/staff-google-state.test.ts src/staff-google-oidc.test.ts src/staff-google-service.test.ts"
   }
 }

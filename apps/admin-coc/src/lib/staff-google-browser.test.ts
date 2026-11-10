@@ -9,6 +9,7 @@ import {
 import { ADMIN_COC_ROLE_ADMIN } from "./admin-coc-observer-access.ts";
 import {
   completeStaffGoogleCallback,
+  readLiveStaffSession,
   staffLogoutClearCookie,
   startStaffGoogleSignIn,
 } from "./staff-google-browser.ts";
@@ -27,6 +28,7 @@ const ENV: NodeJS.ProcessEnv = {
   SA360_STAFF_GOOGLE_CLIENT_SECRET: "staff-test-client-secret",
   SA360_STAFF_GOOGLE_REDIRECT_URI: REDIRECT,
   SA360_STAFF_SESSION_SECRET: SECRET,
+  SA360_STAFF_GOOGLE_SERVICE_SECRET: "staff-google-service-secret-32-characters",
 };
 
 test("google staff sign-in stays unavailable until the flag and secrets exist", async () => {
@@ -37,6 +39,7 @@ test("google staff sign-in stays unavailable until the flag and secrets exist", 
   };
   assert.equal(startStaffGoogleSignIn({ env: {}, nowSec: NOW }).kind, "unavailable");
   assert.equal(startStaffGoogleSignIn({ env: { ...ENV, SA360_STAFF_GOOGLE_CLIENT_SECRET: "" }, nowSec: NOW }).kind, "unavailable");
+  assert.equal(startStaffGoogleSignIn({ env: { ...ENV, SA360_STAFF_GOOGLE_SERVICE_SECRET: "" }, nowSec: NOW }).kind, "unavailable");
   const callback = await completeStaffGoogleCallback({
     env: {},
     code: "authorization-code",
@@ -123,6 +126,62 @@ test("a mismatched state is denied before token exchange", async () => {
   assert.equal(outcome.kind, "denied");
   if (outcome.kind === "denied") assert.equal(outcome.reason, "csrf");
   assert.equal(called, false);
+});
+
+test("the server client sends the staff service credential and no shared admin key", async () => {
+  const started = startStaffGoogleSignIn({ env: ENV, nowSec: NOW });
+  if (started.kind !== "redirect") throw new Error("expected redirect");
+  const state = new URL(started.location).searchParams.get("state") ?? undefined;
+  let resolveHeaders: Record<string, string> | undefined;
+  const outcome = await completeStaffGoogleCallback({
+    env: { ...ENV, SA360_API_INTERNAL_URL: "https://api.example.test" },
+    code: "authorization-code",
+    queryState: state,
+    stateCookie: started.stateCookie.value,
+    nowSec: NOW,
+    exchange: async () => ({ ok: true, idToken: "synthetic-id-token" }),
+    fetchImpl: async (url, init) => {
+      resolveHeaders = Object.fromEntries(new Headers(init?.headers).entries());
+      assert.equal(String(url), "https://api.example.test/internal/staff/google/resolve");
+      return new Response(JSON.stringify({ ok: true, staffPrincipalId: PRINCIPAL, googleSub: SUB }), { status: 200 });
+    },
+  });
+  assert.equal(outcome.kind, "signed_in");
+  assert.equal(resolveHeaders?.["x-sa360-staff-google-service"], ENV.SA360_STAFF_GOOGLE_SERVICE_SECRET);
+  assert.equal(resolveHeaders?.["x-sa360-admin-key"], undefined);
+
+  let sessionFetched = false;
+  const withoutService = await completeStaffGoogleCallback({
+    env: { ...ENV, SA360_STAFF_GOOGLE_SERVICE_SECRET: "", SA360_API_INTERNAL_URL: "https://api.example.test" },
+    code: "authorization-code",
+    queryState: state,
+    stateCookie: started.stateCookie.value,
+    nowSec: NOW,
+    fetchImpl: async () => {
+      sessionFetched = true;
+      return new Response("{}", { status: 200 });
+    },
+  });
+  assert.deepEqual(withoutService, { kind: "unavailable" });
+  assert.equal(sessionFetched, false);
+
+  const staff = signStaffSession({ staffPrincipalId: PRINCIPAL, googleSub: SUB, nowSec: NOW, secret: SECRET });
+  let sessionHeaders: Record<string, string> | undefined;
+  const live = await readLiveStaffSession({
+    env: { ...ENV, SA360_API_INTERNAL_URL: "https://api.example.test" },
+    sessionCookie: staff.token,
+    nowSec: NOW,
+    fetchImpl: async (_url, init) => {
+      sessionHeaders = Object.fromEntries(new Headers(init?.headers).entries());
+      return new Response(JSON.stringify({ ok: true, staffPrincipalId: PRINCIPAL }), { status: 200 });
+    },
+  });
+  assert.equal(live.kind, "signed_in");
+  assert.equal(sessionHeaders?.["x-sa360-staff-google-service"], ENV.SA360_STAFF_GOOGLE_SERVICE_SECRET);
+  assert.equal(sessionHeaders?.["x-sa360-admin-key"], undefined);
+  const client = readFileSync(new URL("./staff-google-browser.ts", import.meta.url), "utf8");
+  assert.equal(client.includes("x-sa360-admin-key"), false);
+  assert.equal(client.includes("NEXT_PUBLIC_SA360_STAFF"), false);
 });
 
 test("a shared-password session cannot impersonate staff and logout clears only the staff cookie", () => {

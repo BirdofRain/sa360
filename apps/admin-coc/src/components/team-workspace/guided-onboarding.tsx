@@ -11,6 +11,7 @@ import {
   type GuidedClientMutationResult,
   type GuidedSetupSaveResult,
 } from "@/app/actions/team-workspace-onboarding";
+import { GhlDestinationGuide } from "@/components/team-workspace/ghl-destination-guide";
 import { SourceCampaignRequestPanel } from "@/components/team-workspace/source-campaign-request-panel";
 import { SourceCampaignReviewPanel } from "@/components/team-workspace/source-campaign-review-panel";
 import { Button } from "@/components/ui/button";
@@ -851,6 +852,7 @@ function DestinationStep({
     { value: "unset", label: "Not chosen yet" },
   ];
   return (
+    <div className="grid gap-6">
     <form
       className="grid gap-4"
       noValidate
@@ -882,6 +884,8 @@ function DestinationStep({
         </Button>
       </div>
     </form>
+    <GhlDestinationGuide clientAccountId={model.clientAccountId} />
+    </div>
   );
 }
 
@@ -891,11 +895,11 @@ function DestinationReadout({ model }: { model: GuidedOnboardingModel }) {
   const sheets = model.destinations.companySheets;
   return (
     <ul className="space-y-1 text-sm text-slate-700">
-      <li>GoHighLevel row: {ghl.configured ? "Configured" : "Not configured"}. Live delivery: {ghl.deliveryEnabled ? "Active" : "Off"}.</li>
+      <li>GoHighLevel row: {ghl.configured ? "Configured" : "Not configured"}. Delivery flag: {ghl.deliveryEnabled ? "on" : "off"}. The guide below separates configured, verified, and active.</li>
       <li>
         Company Sheets row: {sheets.configured ? "Configured" : "Not configured"}. Dispatch: {sheets.campaignDispatchEnabled || sheets.agedDispatchEnabled ? "Active" : "Off"}.
       </li>
-      <li>This page cannot edit those rows.</li>
+      <li>Company Sheets is not edited here.</li>
     </ul>
   );
 }

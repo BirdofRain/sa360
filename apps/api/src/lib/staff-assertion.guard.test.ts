@@ -59,7 +59,10 @@ test("staff assertion signing is not provisioned or registered", () => {
   }
 
   const app = readFileSync(join(repoRoot, "apps/api/src/app.ts"), "utf8");
-  assert.equal(app.includes("staff"), false);
+  assert.equal(app.includes("staff-assertion"), false);
+  assert.equal(app.includes("x-sa360-staff-assertion"), false);
+  assert.equal(app.includes(secretName), false);
+  assert.match(app, /staffGoogleRoutes/);
   const barrel = readFileSync(join(repoRoot, "packages/shared/src/index.ts"), "utf8");
   assert.equal(barrel.includes("staff-assertion"), false);
 });

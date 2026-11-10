@@ -381,3 +381,17 @@ test("public /login does not grant privileged operator access (Server Action POS
     { kind: "unauthorized" }
   );
 });
+
+test("staff sign-in paths stay exact and do not grant operator access", () => {
+  assertAllow(decision(UNAUTH_ADMIN, "/staff"));
+  assertAllow(decision(UNAUTH_ADMIN, "/staff/google/start"));
+  assertAllow(decision(UNAUTH_ADMIN, "/staff/google/callback"));
+  assertAllow(decision(UNAUTH_ADMIN, "/staff/google/logout"));
+  assertAllow(decision(UNAUTH_ADMIN, "/login"));
+  assertRedirect(decision(UNAUTH_ADMIN, "/team-workspace"), "/login", "/team-workspace");
+  assertAllow(decision(AUTH_ADMIN, "/team-workspace"));
+  assertRedirect(decision(UNAUTH_ADMIN, "/staff/google/start/extra"), "/login", "/staff/google/start/extra");
+  assertRedirect(decision(UNAUTH_ADMIN, "/staff/../login"), "/login", "/staff/../login");
+  assert.deepEqual(decision(MARKETING, "/staff"), { kind: "not-found" });
+  assert.deepEqual(decision(MARKETING, "/staff/google/callback"), { kind: "not-found" });
+});

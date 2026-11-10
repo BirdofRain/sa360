@@ -93,6 +93,33 @@ test("unlink keeps the folder discoverable and a fresh claim blocks a second cre
   assert.equal(unknown.action, "unknown");
 });
 
+test("inspect offers folders and does not create or link them", () => {
+  const inputs = [
+    { recorded: recorded("active"), nameMatches: [{ folderId: "other", title: "Acme Insurance" }] },
+    { recorded: null, nameMatches: [] },
+    { recorded: recorded("creating", null), nameMatches: [], claimHeldByOther: true },
+    { recorded: recorded("unknown", null), nameMatches: [] },
+  ];
+  for (const input of inputs) {
+    const decision = decideClientFolderAction({
+      intent: "inspect",
+      claimHeldByOther: false,
+      recordedFolderValid: null,
+      ...input,
+    });
+    assert.equal(decision.action, "offer");
+  }
+  const truncated = decideClientFolderAction({
+    intent: "inspect",
+    recorded: recorded("active"),
+    nameMatches: [{ folderId: "other", title: "Acme Insurance" }],
+    claimHeldByOther: false,
+    recordedFolderValid: true,
+    nameListTruncated: true,
+  });
+  assert.equal(truncated.action, "reject");
+});
+
 test("a verified folder can be linked and an unknown folder cannot", () => {
   const linked = decideClientFolderAction({
     intent: "link",

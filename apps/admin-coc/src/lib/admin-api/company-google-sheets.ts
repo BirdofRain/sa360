@@ -249,6 +249,27 @@ export function fetchCompanySheetsDestination(clientAccountId: string) {
   );
 }
 
+export type CompanySheetsStoredTabContract = {
+  role: "campaign" | "aged" | "canary";
+  setupState: string;
+  setupReason: string | null;
+  worksheetId: number | null;
+  worksheetTitle: string | null;
+  schemaVersion: string | null;
+  boundAt: string | null;
+  inspectedAt: string | null;
+};
+
+/** Stored tab contracts only. This does not inspect or create a worksheet. */
+export function fetchCompanySheetsTabContracts(clientAccountId: string) {
+  return adminRequestJson<{
+    ok: true;
+    destination?: null;
+    destinationRevision?: number;
+    contracts: CompanySheetsStoredTabContract[];
+  }>("GET", clientPath(clientAccountId, "tabs"));
+}
+
 export function resolveCompanySpreadsheet(clientAccountId: string, spreadsheet: string) {
   return adminRequestJson<{ ok: true; spreadsheet: CompanySheetsResolvedSpreadsheet }>(
     "POST",

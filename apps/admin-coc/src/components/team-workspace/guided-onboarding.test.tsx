@@ -76,6 +76,42 @@ moduleLoader._load = function (request: string, parent: NodeModule, isMain: bool
       }),
     };
   }
+  if (request === "@/app/actions/team-workspace-company-sheets") {
+    return {
+      loadTeamWorkspaceCompanySheetsAction: async () => ({
+        ok: false,
+        code: "FEATURE_DISABLED",
+        message: "Team Workspace is turned off. Company Sheets was not read, and delivery was not turned on.",
+        uncertain: false,
+        snapshot: null,
+        nextPageToken: null,
+      }),
+      inspectTeamWorkspaceCompanySheetsStorageAction: async () => ({
+        ok: false,
+        code: "FEATURE_DISABLED",
+        message: "Team Workspace is turned off.",
+        uncertain: false,
+        snapshot: null,
+        nextPageToken: null,
+      }),
+      readTeamWorkspaceCompanySheetsWorksheetsAction: async () => ({
+        ok: false,
+        code: "FEATURE_DISABLED",
+        message: "Team Workspace is turned off.",
+        uncertain: false,
+        read: null,
+      }),
+      pageTeamWorkspaceCompanySheetsSpreadsheetsAction: async () => ({
+        ok: false,
+        code: "FEATURE_DISABLED",
+        message: "Team Workspace is turned off.",
+        uncertain: false,
+        spreadsheets: [],
+        skipped: 0,
+        nextPageToken: null,
+      }),
+    };
+  }
   if (request === "@/app/actions/source-campaign-request") {
     return {
       submitSourceCampaignRequestAction: async () => ({

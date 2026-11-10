@@ -186,6 +186,48 @@ test("replacing an open proposal requires the checkbox, and rejection uses a new
   assert.equal(submits.length, 0);
 });
 
+test("an older open proposal is rejected or replaced with the newer chain revision", async () => {
+  const request: SourceCampaignRequestView = {
+    availability: "ready",
+    revision: 2,
+    openRequest: {
+      requestId: "44444444-4444-4444-8444-444444444444",
+      status: "requested",
+      revision: 1,
+      setupRevision: 2,
+      providerFunnelId: "funnel-1",
+      parentUrlKey: "go.example.com/vet",
+      providerCampaignId: "camp-1",
+      requestedAssociation: true,
+      createdAt: "2026-11-10T16:00:00.000Z",
+    },
+  };
+  render(<Panel clientAccountId="alex_gross" setup={savedSetup()} draft={matchingDraft()} review={readyReview()} request={request} />);
+  assert.match(screen.getByText("Request-chain revision").parentElement?.textContent ?? "", /2/);
+  assert.match(screen.getByText("Proposal revision").parentElement?.textContent ?? "", /1/);
+  assert.match(screen.getByText("Proposal setup revision").parentElement?.textContent ?? "", /2/);
+  assert.equal(screen.getByText("funnel-1").textContent, "funnel-1");
+  assert.match(document.body.textContent ?? "", /Nov 10, 2026/);
+  assert.equal(screen.getByRole("button", { name: "Submit proposal" }).hasAttribute("disabled"), true);
+  assert.equal(screen.queryByRole("button", { name: /apply|approve|activate|confirm association/i }), null);
+
+  fireEvent.click(screen.getByRole("checkbox", { name: /Replace the open proposal/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Submit proposal" }));
+  await screen.findByText(/previous open proposal was replaced/);
+  assert.equal(submits[0]?.expectedRevision, 2);
+  assert.equal(submits[0]?.setupRevision, 2);
+  assert.equal(submits[0]?.replaceOpenProposal, true);
+
+  cleanup();
+  submits.length = 0;
+  render(<Panel clientAccountId="alex_gross" setup={savedSetup()} draft={matchingDraft()} review={readyReview()} request={request} />);
+  fireEvent.click(screen.getByRole("button", { name: "Reject open proposal" }));
+  await screen.findByText(/rejected by this operator/);
+  assert.equal(rejects[0]?.expectedRevision, 2);
+  assert.equal(rejects[0]?.setupRevision, 2);
+  assert.notEqual(rejects[0]?.requestId, request.openRequest?.requestId);
+});
+
 test("an ownership conflict stays distinct from operator rejection", async () => {
   submitImpl = async () => ({
     ok: false,

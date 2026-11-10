@@ -131,7 +131,7 @@ export function parseSourceCampaignRequestHead(value: unknown): SourceCampaignRe
     open.requestedAssociation !== true ||
     openRevision === null ||
     setupRevision === null ||
-    openRevision !== revision ||
+    openRevision > revision ||
     providerFunnelId === undefined ||
     parentUrlKey === undefined ||
     !providerCampaignId ||

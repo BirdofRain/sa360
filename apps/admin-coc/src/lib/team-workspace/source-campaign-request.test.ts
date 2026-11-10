@@ -136,6 +136,7 @@ test("the head read keeps the open proposal and drops an operational payload", (
   assert.equal(parsed?.availability, "ready");
   if (parsed?.availability === "ready") {
     assert.equal(parsed.revision, 4);
+    assert.equal(parsed.openRequest?.revision, 4);
     assert.equal(parsed.openRequest?.status, "requested");
     assert.equal(parsed.openRequest?.setupRevision, 2);
   }
@@ -144,6 +145,57 @@ test("the head read keeps the open proposal and drops an operational payload", (
     null
   );
   assert.equal(parseSourceCampaignRequestHead({ ok: true, clientAccountId: "alex_gross", revision: 4, openRequest: { ...open, status: "approved" }, ...boundary() }), null);
+  assert.equal(parseSourceCampaignRequestHead({ ok: true, clientAccountId: "alex_gross", revision: 4, openRequest: { ...open, providerCampaignId: "  " }, ...boundary() }), null);
+});
+
+test("an older open proposal stays readable after a newer ownership rejection", () => {
+  const open = {
+    requestId: REQUEST_ID,
+    status: "requested",
+    revision: 1,
+    setupRevision: 2,
+    providerFunnelId: "funnel-1",
+    parentUrlKey: null,
+    providerCampaignId: "camp-1",
+    requestedAssociation: true,
+    createdAt: "2026-11-10T16:00:00.000Z",
+  };
+  const parsed = parseSourceCampaignRequestHead({
+    ok: true,
+    clientAccountId: "alex_gross",
+    revision: 2,
+    openRequest: open,
+    ...boundary(),
+  });
+  assert.equal(parsed?.availability, "ready");
+  if (parsed?.availability !== "ready" || !parsed.openRequest) return;
+  assert.equal(parsed.revision, 2);
+  assert.equal(parsed.openRequest.revision, 1);
+  assert.equal(parsed.openRequest.setupRevision, 2);
+  assert.equal(parsed.openRequest.providerFunnelId, "funnel-1");
+  assert.equal(parsed.openRequest.providerCampaignId, "camp-1");
+  assert.equal(parsed.openRequest.createdAt, "2026-11-10T16:00:00.000Z");
+  const steps = presentSourceCampaignRequestProgress({
+    setupReadable: true,
+    setupRevision: 2,
+    draftMatchesSaved: true,
+    echo: echoSavedSourceCampaignIdentity({ providerFunnelId: "funnel-1", providerCampaignId: "camp-1" }),
+    review: review(2),
+    request: parsed,
+  });
+  assert.equal(steps.find((step) => step.id === "request_submitted")?.state, "complete");
+  assert.match(steps.find((step) => step.id === "request_submitted")?.detail ?? "", /revision 1/);
+  assert.equal(steps.find((step) => step.id === "awaiting_review")?.state, "current");
+  assert.equal(
+    parseSourceCampaignRequestHead({
+      ok: true,
+      clientAccountId: "alex_gross",
+      revision: 2,
+      openRequest: { ...open, revision: 3 },
+      ...boundary(),
+    }),
+    null
+  );
 });
 
 test("a stored rejection is separate from an unstored conflict", () => {

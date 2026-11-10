@@ -206,6 +206,10 @@ export function SourceCampaignRequestPanel({
         {open ? (
           <>
             <div>
+              <dt className="font-medium text-slate-800">Proposal revision</dt>
+              <dd className="text-slate-700">{open.revision}</dd>
+            </div>
+            <div>
               <dt className="font-medium text-slate-800">Proposal status</dt>
               <dd className="text-slate-700">requested</dd>
             </div>

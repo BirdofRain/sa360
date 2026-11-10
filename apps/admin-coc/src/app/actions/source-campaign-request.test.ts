@@ -183,6 +183,91 @@ test("a stale chain posts the original body for replay and a lost response stays
   }
 });
 
+test("a newer rejected attempt leaves the older open proposal writable at the head revision", async () => {
+  const previous = snapshotEnv();
+  enableFlags();
+  const open = {
+    requestId: "44444444-4444-4444-8444-444444444444",
+    status: "requested",
+    revision: 1,
+    setupRevision: 2,
+    providerFunnelId: "funnel-1",
+    parentUrlKey: null,
+    providerCampaignId: "camp-1",
+    requestedAssociation: true,
+    createdAt: "2026-11-10T16:00:00.000Z",
+  };
+  try {
+    const blocked = await withAdmin(
+      async (actions) => actions.submitSourceCampaignRequestAction(submitInput({ expectedRevision: 2, replaceOpenProposal: false })),
+      { setup: setupItem({ providerFunnelId: "funnel-1", providerCampaignId: "camp-1" }), head: headBody(2, open) }
+    );
+    assert.equal(blocked.result.code, "SUPERSEDE_CONFIRMATION");
+    assert.equal(blocked.calls.some((call) => call.method === "POST"), false);
+
+    const replaced = await withAdmin(
+      async (actions) => actions.submitSourceCampaignRequestAction(submitInput({ expectedRevision: 2, replaceOpenProposal: true })),
+      {
+        setup: setupItem({ providerFunnelId: "funnel-1", providerCampaignId: "camp-1" }),
+        head: headBody(2, open),
+        post: (body) => successBody(body),
+      }
+    );
+    const requestBody = JSON.parse(replaced.calls.find((call) => call.method === "POST")?.body ?? "{}") as {
+      expectedRevision?: number;
+      intent?: string;
+      providerFunnelId?: string;
+    };
+    assert.equal(replaced.result.ok, true);
+    assert.equal(requestBody.expectedRevision, 2);
+    assert.equal(requestBody.intent, "request");
+    assert.equal(requestBody.providerFunnelId, "funnel-1");
+    assert.equal(replaced.calls.some((call) => call.url.includes("source-funnels") || call.url.includes("routing/rules")), false);
+
+    const rejected = await withAdmin(async (actions) => actions.rejectSourceCampaignRequestAction(rejectInput()), {
+      post: () => ({
+        ok: true,
+        replayed: false,
+        status: "rejected",
+        requestId: REJECT_ID,
+        associationRequestId: open.requestId,
+        clientAccountId: "alex_gross",
+        revision: 3,
+        setupRevision: 2,
+        providerFunnelId: "funnel-1",
+        parentUrlKey: null,
+        providerCampaignId: "camp-1",
+        requestedAssociation: false,
+        dispositionReason: "operator_rejected",
+        supersededRequestId: null,
+        associationApplied: false,
+        routingRuleApplied: false,
+        deliveryArmed: false,
+        confirmedOperationalAssociation: false,
+      }),
+    });
+    const rejectBody = JSON.parse(rejected.calls.find((call) => call.method === "POST")?.body ?? "{}") as {
+      expectedRevision?: number;
+      intent?: string;
+      providerFunnelId?: string;
+    };
+    assert.equal(rejected.result.ok, true);
+    assert.equal(rejectBody.expectedRevision, 2);
+    assert.equal(rejectBody.intent, "reject");
+    assert.equal(rejectBody.providerFunnelId, undefined);
+    assert.equal(rejected.calls.some((call) => call.url.includes("source-funnels") || call.url.includes("routing/rules")), false);
+
+    const impossible = await withAdmin(async (actions) => actions.submitSourceCampaignRequestAction(submitInput({ expectedRevision: 2 })), {
+      setup: setupItem({ providerFunnelId: "funnel-1", providerCampaignId: "camp-1" }),
+      head: headBody(2, { ...open, revision: 3 }),
+    });
+    assert.equal(impossible.result.code, "UNREADABLE_RESULT");
+    assert.equal(impossible.calls.some((call) => call.method === "POST"), false);
+  } finally {
+    restoreEnv(previous);
+  }
+});
+
 test("an ownership conflict is a stored rejection and operator rejection is a different post", async () => {
   const previous = snapshotEnv();
   enableFlags();

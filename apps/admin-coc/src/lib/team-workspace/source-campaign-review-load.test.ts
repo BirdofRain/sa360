@@ -306,6 +306,43 @@ test("the request head is loaded with GET and kept as a proposal", async () => {
   assert.equal(head.openRequest?.setupRevision, 4);
 });
 
+test("an older open proposal remains loaded when a later rejection raised the chain", async () => {
+  const { detail } = await loadWith(
+    {
+      request: () => ({
+        ok: true,
+        clientAccountId: "alex_gross",
+        revision: 2,
+        openRequest: {
+          requestId: "11111111-1111-4111-8111-111111111111",
+          status: "requested",
+          revision: 1,
+          setupRevision: 4,
+          providerFunnelId: "funnel-north",
+          parentUrlKey: null,
+          providerCampaignId: "campaign-north",
+          requestedAssociation: true,
+          createdAt: "2026-11-10T16:04:00.000Z",
+        },
+        associationApplied: false,
+        routingRuleApplied: false,
+        deliveryArmed: false,
+        confirmedOperationalAssociation: false,
+      }),
+    },
+    { requestEnabled: true, workspaceReady: true }
+  );
+  assert.equal(detail.kind, "ready");
+  if (detail.kind !== "ready") return;
+  const head = detail.guide?.sourceCampaignRequest;
+  assert.equal(head?.availability, "ready");
+  if (head?.availability !== "ready") return;
+  assert.equal(head.revision, 2);
+  assert.equal(head.openRequest?.revision, 1);
+  assert.equal(head.openRequest?.setupRevision, 4);
+  assert.equal(head.openRequest?.providerCampaignId, "campaign-north");
+});
+
 test("the team workspace API flag blocks the request read", async () => {
   const { calls, detail } = await loadWith({ request: () => ({ ok: true }) }, { requestEnabled: true, workspaceReady: false });
   assert.equal(calls.some((url) => url.includes("/source-campaign-requests")), false);

@@ -1072,6 +1072,9 @@ model ClientAccount {
   /// Proposed source and campaign associations. Restrict so account deletion cannot erase them.
   /// Not a source confirmation and not a routing rule.
   sourceCampaignAssociationRequests SourceCampaignAssociationRequest[]
+  /// Intended GoHighLevel location, workflow, and field ids. Restrict so account deletion cannot erase them.
+  /// Not a ClientGhlDestination and not read by delivery.
+  ghlDestinationConfigurationRequests GhlDestinationConfigurationRequest[]
   /// One send record per source lead. Restrict so account deletion cannot erase send history.
   deliverySuccessNotifications DeliverySuccessNotification[]
 
@@ -4211,6 +4214,51 @@ model SourceCampaignAssociationRequest {
 
   @@unique([clientAccountId, revision])
   @@index([clientAccountId, createdAt])
+}
+
+/// Intended GoHighLevel location, workflow id, and exact field ids.
+/// This is not ClientGhlDestination. Delivery, enrollment, and routing do not
+/// read it. SQL checks and the snapshot trigger reject identifier edits and an
+/// insert that is already superseded. The one-open-row index is SQL-only.
+/// Prisma 6 cannot model that filter. Do not drop the index in a later diff.
+enum GhlDestinationConfigurationRequestStatus {
+  stored
+  superseded
+}
+
+model GhlDestinationConfigurationRequest {
+  id                           String                                     @id @default(cuid())
+  /// Idempotency key. The same id and payload returns the stored result.
+  requestId                    String                                     @unique
+  clientAccountId              String
+  clientAccount                ClientAccount                              @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Restrict, onUpdate: Restrict)
+  /// Client id at insert. A later rename does not rewrite it.
+  historicalClientAccountId    String
+  /// Request-chain token the caller loaded. 0 when the client had no row yet.
+  expectedRevision             Int
+  /// Monotonic per client. The highest value is the next expectedRevision.
+  revision                     Int
+  /// ClientGhlDestination.updatedAt the caller loaded. Null when no destination row existed.
+  expectedDestinationUpdatedAt DateTime?
+  locationId                   String
+  workflowId                   String
+  /// Explicit key and field-id pairs. A display name or field key is never stored here.
+  fieldMappingsJson            Json
+  snapshotId                   String
+  snapshotFetchedAt            DateTime
+  status                       GhlDestinationConfigurationRequestStatus
+  payloadHash                  String
+  /// Immutable result of the save command.
+  recordResultJson             Json
+  /// ADMIN. This table does not record a staff role or a new sign-in path.
+  actor                        String
+  supersededByRequestId        String?
+  supersededAt                 DateTime?
+  createdAt                    DateTime                                   @default(now())
+  updatedAt                    DateTime                                   @updatedAt
+
+  @@unique([clientAccountId, revision])
+  @@index([clientAccountId, createdAt], map: "GhlDestinationConfigRequest_client_created_idx")
 }
 
 /// One client email per source lead, even when GHL and Sheets both qualify.

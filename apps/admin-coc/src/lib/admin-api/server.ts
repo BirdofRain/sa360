@@ -1236,6 +1236,31 @@ export async function postAdminSourceCampaignRequest(clientAccountId: string, bo
   );
 }
 
+export async function fetchAdminGhlDestinationConfiguration(clientAccountId: string) {
+  const id = clientAccountId.trim();
+  if (!id) {
+    return { ok: false as const, status: 400, body: JSON.stringify({ ok: false, error: "client_not_found" }) };
+  }
+  return adminFetchJson<unknown>(
+    `/admin/v1/clients/${encodeURIComponent(id)}/ghl-destination-configuration`
+  );
+}
+
+export async function postAdminGhlDestinationConfiguration(
+  clientAccountId: string,
+  body: Record<string, unknown>
+) {
+  const id = clientAccountId.trim();
+  if (!id) {
+    return { ok: false as const, status: 400, body: JSON.stringify({ ok: false, error: "client_not_found" }) };
+  }
+  return adminRequestJson<unknown>(
+    "POST",
+    `/admin/v1/clients/${encodeURIComponent(id)}/ghl-destination-configuration`,
+    body
+  );
+}
+
 export async function patchAdminClientSetup(
   clientAccountId: string,
   body: Record<string, unknown>

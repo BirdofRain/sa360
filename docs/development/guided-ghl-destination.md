@@ -4,8 +4,9 @@ Team Workspace can review a client's saved GoHighLevel destination. It does not
 change that destination, and it does not authorize delivery.
 
 The production flags `NEXT_PUBLIC_SA360_TEAM_WORKSPACE_ENABLED`,
-`SA360_TEAM_WORKSPACE_ENABLED`, and `SA360_NATIVE_CLIENT_SETUP_ENABLED` stay
-default-off. This document does not turn them on.
+`SA360_TEAM_WORKSPACE_ENABLED`, `SA360_NATIVE_CLIENT_SETUP_ENABLED`, and
+`SA360_GHL_DESTINATION_CONFIG_REQUEST_ENABLED` stay default-off. This document
+does not turn them on.
 
 ## Existing services reused
 
@@ -118,5 +119,26 @@ destination exists. The same `requestId` and payload returns the stored
 result. A different payload with that id is rejected and does not consume a
 new revision. Validation failures are not stored.
 
-Team Workspace still does not call this route. The new flag stays off, and
-this store does not enable delivery.
+Team Workspace calls this route only after an admin session check, and only
+when the Team Workspace flags, native client setup, and
+`SA360_GHL_DESTINATION_CONFIG_REQUEST_ENABLED` are on. The configuration
+request flag accepts only the exact string `true`. The screen keeps three
+separate facts: the saved operational destination, the stored configuration
+request, and the operator's unsaved choices.
+
+The operator searches connected locations for that client and can select one
+without saving. The snapshot for that selection is a preview. It is not
+verification of the saved operational destination, and a snapshot from another
+location is not shown as this location's workflows or field ids. A workflow is
+submitted only by its id. A Webform name does not select one. Each mapping is
+an explicit custom-field id. A display name or field key is left unresolved.
+
+Saving posts one `requestId`, the request-chain `expectedRevision`, and
+`expectedDestinationUpdatedAt` from the last authoritative read. Replacing a
+stored request asks for confirmation first. An uncertain response retries the
+same id and the same payload. A confirmed save reloads the GET result. The
+screen does not call the operational destination save, location linking,
+activation, test delivery, workflow enrollment, routing changes, SourceFunnel
+confirmation, or Company Sheets writers.
+
+The new flag stays off, and this store does not enable delivery.

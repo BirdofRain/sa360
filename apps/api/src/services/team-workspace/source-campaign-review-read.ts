@@ -18,7 +18,7 @@ import {
 } from "../source-intake/source-association-request-review.js";
 import { TEAM_WORKSPACE_CLIENT_ID } from "./team-workspace-read.js";
 
-const MATCH_LIMIT = 20;
+export const SOURCE_CAMPAIGN_MATCH_LIMIT = 20;
 
 export type SourceCampaignReviewAvailability = "ready" | "unavailable" | "unreadable";
 
@@ -46,7 +46,7 @@ export type SourceCampaignReviewBody = {
   attention: string[];
 };
 
-type SetupIdentity = {
+export type SavedSetupSourceIdentity = {
   trafficSourceName: string | null;
   providerFunnelId: string | null;
   parentUrlKey: string | null;
@@ -89,7 +89,9 @@ function closed(input: {
   };
 }
 
-function readIdentity(value: unknown): { readable: true; identity: SetupIdentity } | { readable: false } {
+export function parseSavedSetupSourceIdentity(
+  value: unknown
+): { readable: true; identity: SavedSetupSourceIdentity } | { readable: false } {
   const parsed = clientOnboardingSetupDataSchema.safeParse(value);
   if (!parsed.success) return { readable: false };
   const data = parsed.data;
@@ -218,7 +220,7 @@ export async function readSourceCampaignReview(
       }),
     };
   }
-  const identity = readIdentity(setup.setupDataJson);
+  const identity = parseSavedSetupSourceIdentity(setup.setupDataJson);
   if (!identity.readable) {
     return {
       ok: true,
@@ -255,7 +257,7 @@ export async function readSourceCampaignReview(
           originClientAccountId: true,
           suggestedClientAccountId: true,
         },
-        take: MATCH_LIMIT + 1,
+        take: SOURCE_CAMPAIGN_MATCH_LIMIT + 1,
       });
     }
     if (identity.identity.providerCampaignId) {
@@ -270,7 +272,7 @@ export async function readSourceCampaignReview(
           effectiveStart: true,
           effectiveEnd: true,
         },
-        take: MATCH_LIMIT + 1,
+        take: SOURCE_CAMPAIGN_MATCH_LIMIT + 1,
       });
     }
   } catch {
@@ -289,7 +291,7 @@ export async function readSourceCampaignReview(
       }),
     };
   }
-  if (funnels.length > MATCH_LIMIT || rules.length > MATCH_LIMIT) {
+  if (funnels.length > SOURCE_CAMPAIGN_MATCH_LIMIT || rules.length > SOURCE_CAMPAIGN_MATCH_LIMIT) {
     return {
       ok: true,
       body: closed({

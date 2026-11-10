@@ -53,3 +53,11 @@ A later Auth/Account migration could add a request row that is not `SourceFunnel
 - no `associationStatus`, no `active`, no `deliveryEnabled`
 
 Applying that row would remain a separate, explicit confirm or rule write. This phase does not add the table. The saved setup draft remains the only request store.
+
+## Phase 2F request row
+
+`SourceCampaignAssociationRequest` stores a proposal. It is not a `SourceFunnel` and not a `CampaignRoutingRule`. Recording, rejecting, or superseding a row does not confirm origin, stamp inventory, create a routing rule, or arm delivery.
+
+The admin routes are `GET` and `POST /admin/v1/clients/:clientAccountId/source-campaign-requests`. They require the admin API key. `SA360_SOURCE_CAMPAIGN_REQUEST_ENABLED` must be the exact string `true`. The saved `ClientOnboardingSetup` document must parse, and its revision must match the call. A stale or unreadable setup is not stored.
+
+Merging the migration makes `sa360-migrate` apply it on the next API predeploy. That apply creates an empty table and a foreign key on `ClientAccount`. It does not turn the flag on. Do not merge until that migration is reviewed.

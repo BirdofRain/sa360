@@ -219,12 +219,14 @@ session-epoch column or a staff management screen.
 
 ## Remaining activation blockers
 
-1. First Google subject binding stays disabled. An unbound principal is
-   denied, and email is not the binding. A later enrollment change must write
-   `providerSubject` once, only while it is null, after an out-of-band check.
-2. Production Google OAuth client, redirect URI, feature flag, client secret,
-   session secret, and service secret stay unset until a later staged
-   activation.
+1. First Google subject binding stays disabled. Login still denies an unbound
+   principal. Email is not the binding. The separate enrollment foundation in
+   `docs/architecture/staff-enrollment.md` can write `providerSubject` once,
+   only while it is null, and only with a one-time invitation. That flag and
+   its issuer secret stay unset.
+2. Production Google OAuth client, login redirect, enrollment redirect,
+   login flag, enrollment flag, client secret, session secret, service secret,
+   and issuer secret stay unset until a later staged activation.
 3. Three Admin C.O.C. tests fail on the current baseline and on the commits
    before this boundary. They are outside staff authentication:
    `portal-order-request-form.test.tsx` never finds "Mapped source bands.";

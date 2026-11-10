@@ -40,10 +40,20 @@
       "types": "./dist/staff-google-service.d.ts",
       "import": "./dist/staff-google-service.js",
       "default": "./dist/staff-google-service.js"
+    },
+    "./staff-enrollment": {
+      "types": "./dist/staff-enrollment.d.ts",
+      "import": "./dist/staff-enrollment.js",
+      "default": "./dist/staff-enrollment.js"
+    },
+    "./staff-google-enrollment-state": {
+      "types": "./dist/staff-google-enrollment-state.d.ts",
+      "import": "./dist/staff-google-enrollment-state.js",
+      "default": "./dist/staff-google-enrollment-state.js"
     }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node --import tsx/esm --test src/commerce-niches.test.ts src/availability-interest.test.ts src/portal-customer-age.test.ts src/company-sheets-drain-budget.test.ts src/company-sheets-column-template.test.ts src/staff-assertion.test.ts src/staff-google-session.test.ts src/staff-google-state.test.ts src/staff-google-oidc.test.ts src/staff-google-service.test.ts"
+    "test": "node --import tsx/esm --test src/commerce-niches.test.ts src/availability-interest.test.ts src/portal-customer-age.test.ts src/company-sheets-drain-budget.test.ts src/company-sheets-column-template.test.ts src/staff-assertion.test.ts src/staff-google-session.test.ts src/staff-google-state.test.ts src/staff-google-oidc.test.ts src/staff-google-service.test.ts src/staff-enrollment.test.ts src/staff-google-enrollment-state.test.ts"
   }
 }

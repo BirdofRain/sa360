@@ -35,6 +35,13 @@ test("the staff service secret fails closed unless it is dedicated", () => {
     }),
     null
   );
+  assert.equal(
+    readStaffGoogleServiceSecret({
+      SA360_STAFF_GOOGLE_SERVICE_SECRET: SERVICE,
+      SA360_STAFF_ENROLLMENT_ISSUER_SECRET: SERVICE,
+    }),
+    null
+  );
   assert.equal(readStaffGoogleServiceSecret({ SA360_STAFF_GOOGLE_SERVICE_SECRET: SERVICE, ADMIN_API_KEY: OTHER }), SERVICE);
   assert.equal(staffGoogleServiceHeaderMatches(SERVICE, SERVICE), true);
   assert.equal(staffGoogleServiceHeaderMatches("shared-admin-key", SERVICE), false);

@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 
+import { staffEnrollmentEnabled } from "./staff-enrollment.js";
+
 /**
  * Dedicated Google staff OAuth client settings and the authorization-code
  * exchange. This module does not read the Drive or Sheets OAuth client and
@@ -10,6 +12,7 @@ export const STAFF_GOOGLE_SIGNIN_FLAG = "SA360_STAFF_GOOGLE_SIGNIN_ENABLED";
 export const STAFF_GOOGLE_CLIENT_ID_ENV = "SA360_STAFF_GOOGLE_CLIENT_ID";
 export const STAFF_GOOGLE_CLIENT_SECRET_ENV = "SA360_STAFF_GOOGLE_CLIENT_SECRET";
 export const STAFF_GOOGLE_REDIRECT_URI_ENV = "SA360_STAFF_GOOGLE_REDIRECT_URI";
+export const STAFF_GOOGLE_ENROLL_REDIRECT_URI_ENV = "SA360_STAFF_GOOGLE_ENROLL_REDIRECT_URI";
 
 export const GOOGLE_ISSUER = "https://accounts.google.com";
 export const GOOGLE_AUTHORIZATION_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -51,6 +54,19 @@ export function readStaffGoogleBrowserConfig(env: NodeJS.ProcessEnv = process.en
   return { clientId: audience.clientId, clientSecret, redirectUri };
 }
 
+export function readStaffGoogleClientId(env: NodeJS.ProcessEnv = process.env): string | null {
+  return readClientId(env[STAFF_GOOGLE_CLIENT_ID_ENV]);
+}
+
+export function readStaffGoogleEnrollmentBrowserConfig(env: NodeJS.ProcessEnv = process.env): StaffGoogleBrowserConfig | null {
+  if (!staffEnrollmentEnabled(env)) return null;
+  const clientId = readClientId(env[STAFF_GOOGLE_CLIENT_ID_ENV]);
+  const clientSecret = readClientSecret(env[STAFF_GOOGLE_CLIENT_SECRET_ENV]);
+  const redirectUri = parseStaffGoogleEnrollRedirectUri(env[STAFF_GOOGLE_ENROLL_REDIRECT_URI_ENV]);
+  if (!clientId || !clientSecret || !redirectUri) return null;
+  return { clientId, clientSecret, redirectUri };
+}
+
 export function parseStaffGoogleRedirectUri(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
@@ -63,6 +79,27 @@ export function parseStaffGoogleRedirectUri(value: unknown): string | null {
   }
   if (url.username || url.password || url.search || url.hash) return null;
   if (url.pathname !== "/staff/google/callback") return null;
+  const localhost = url.hostname === "localhost" || url.hostname === "127.0.0.1";
+  if (url.protocol === "http:") {
+    if (!localhost) return null;
+  } else if (url.protocol !== "https:") {
+    return null;
+  }
+  return url.origin + url.pathname === trimmed ? trimmed : null;
+}
+
+export function parseStaffGoogleEnrollRedirectUri(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (trimmed !== value || trimmed.length > 300) return null;
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  if (url.username || url.password || url.search || url.hash) return null;
+  if (url.pathname !== "/staff/google/enroll/callback") return null;
   const localhost = url.hostname === "localhost" || url.hostname === "127.0.0.1";
   if (url.protocol === "http:") {
     if (!localhost) return null;

@@ -91,6 +91,9 @@ const STAFF_GOOGLE_AUTH_PATHS = new Set([
   "/staff/google/start",
   "/staff/google/callback",
   "/staff/google/logout",
+  "/staff/google/enroll/start",
+  "/staff/google/enroll/callback",
+  "/staff/google/enroll/complete",
 ]);
 
 /** Exact staff sign-in paths. A prefix would let /staff/../login through. */

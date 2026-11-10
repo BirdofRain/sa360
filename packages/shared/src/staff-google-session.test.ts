@@ -3,8 +3,10 @@ import { createHmac } from "node:crypto";
 import test from "node:test";
 
 import {
+  STAFF_SESSION_REGISTRY_PREFIX,
   STAFF_SESSION_TTL_SECONDS,
   signStaffSession,
+  staffSessionRegistryKey,
   verifyStaffSession,
 } from "./staff-google-session.js";
 
@@ -82,4 +84,19 @@ test("a staff session rejects a role claim and a substituted principal", () => {
     ok: false,
     code: "invalid_signature",
   });
+});
+
+test("the session registry key hides the session id and the signing secret", () => {
+  const signed = signStaffSession({
+    staffPrincipalId: PRINCIPAL,
+    googleSub: GOOGLE_SUB,
+    nowSec: NOW,
+    sessionId: "session-id-0123456789abcd",
+    secret: SECRET,
+  });
+  const key = staffSessionRegistryKey(signed.claims.jti);
+  assert.equal(key.startsWith(STAFF_SESSION_REGISTRY_PREFIX), true);
+  assert.equal(key.includes(signed.claims.jti), false);
+  assert.equal(key.includes(signed.token), false);
+  assert.equal(key.includes(SECRET), false);
 });

@@ -10,6 +10,7 @@ import { ADMIN_COC_ROLE_ADMIN } from "./admin-coc-observer-access.ts";
 import {
   completeStaffGoogleCallback,
   readLiveStaffSession,
+  revokeStaffBrowserSession,
   staffGoogleConfigReady,
   staffLogoutClearCookie,
   startStaffGoogleSignIn,
@@ -88,6 +89,7 @@ test("the start redirect is the dedicated google endpoint and the callback binds
       return { ok: true, idToken: "header.payload.signature" };
     },
     claimState: async () => ({ ok: true }),
+    registerSession: async () => ({ ok: true }),
     resolve: async (value) => {
       assert.equal(value.nonce, location.searchParams.get("nonce"));
       return { ok: true, staffPrincipalId: PRINCIPAL, googleSub: SUB };
@@ -153,6 +155,60 @@ test("a mismatched state is denied before token exchange", async () => {
   assert.equal(claimed, false);
 });
 
+test("a failed session registration does not set a staff session", async () => {
+  const started = startStaffGoogleSignIn({ env: ENV, nowSec: NOW });
+  if (started.kind !== "redirect") throw new Error("expected redirect");
+  let attempts = 0;
+  const outcome = await completeStaffGoogleCallback({
+    env: ENV,
+    code: "authorization-code",
+    queryState: new URL(started.location).searchParams.get("state") ?? undefined,
+    stateCookie: started.stateCookie.value,
+    nowSec: NOW,
+    claimState: async () => ({ ok: true }),
+    exchange: async () => ({ ok: true, idToken: "synthetic-id-token" }),
+    resolve: async () => ({ ok: true, staffPrincipalId: PRINCIPAL, googleSub: SUB }),
+    registerSession: async () => {
+      attempts += 1;
+      throw new Error("redis timeout");
+    },
+  });
+  assert.deepEqual(outcome, { kind: "denied", reason: "session_unavailable" });
+  assert.equal(attempts, 1);
+  assert.equal("sessionToken" in outcome, false);
+});
+
+test("logout reports failure when the session registry is unavailable", async () => {
+  const staff = signStaffSession({
+    staffPrincipalId: PRINCIPAL,
+    googleSub: SUB,
+    nowSec: Math.floor(Date.now() / 1000),
+    secret: SECRET,
+  });
+  let attempts = 0;
+  const failed = await revokeStaffBrowserSession({
+    env: { ...ENV, SA360_API_INTERNAL_URL: "https://api.example.test" },
+    sessionCookie: staff.token,
+    fetchImpl: async () => {
+      attempts += 1;
+      return new Response(JSON.stringify({ ok: false }), { status: 503 });
+    },
+  });
+  assert.deepEqual(failed, { kind: "unavailable" });
+  assert.equal(attempts, 1);
+  const cleared = await revokeStaffBrowserSession({
+    env: { ...ENV, SA360_API_INTERNAL_URL: "https://api.example.test" },
+    sessionCookie: staff.token,
+    fetchImpl: async (_url, init) => {
+      const headers = Object.fromEntries(new Headers(init?.headers).entries());
+      assert.equal(headers["x-sa360-staff-session"], staff.token);
+      assert.equal(headers["x-sa360-admin-key"], undefined);
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    },
+  });
+  assert.deepEqual(cleared, { kind: "cleared" });
+});
+
 test("a failed state claim does not exchange a code or mint a session", async () => {
   const started = startStaffGoogleSignIn({ env: ENV, nowSec: NOW });
   if (started.kind !== "redirect") throw new Error("expected redirect");
@@ -199,6 +255,15 @@ test("the server client sends the staff service credential and no shared admin k
         assert.equal("verifier" in body, false);
         assert.equal("code" in body, false);
         assert.equal("staffPrincipalId" in body, false);
+        assert.equal(headers["x-sa360-staff-google-service"], ENV.SA360_STAFF_GOOGLE_SERVICE_SECRET);
+        assert.equal(headers["x-sa360-admin-key"], undefined);
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      if (target.endsWith("/internal/staff/session/register")) {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        assert.equal(typeof body.token, "string");
+        assert.equal("staffPrincipalId" in body, false);
+        assert.equal("googleSub" in body, false);
         assert.equal(headers["x-sa360-staff-google-service"], ENV.SA360_STAFF_GOOGLE_SERVICE_SECRET);
         assert.equal(headers["x-sa360-admin-key"], undefined);
         return new Response(JSON.stringify({ ok: true }), { status: 200 });
@@ -267,6 +332,7 @@ test("a shared-password session cannot impersonate staff and logout clears only 
   assert.equal(callback.includes("reason"), false);
   assert.equal(logout.includes("ADMIN_COC_SESSION_COOKIE"), false);
   assert.equal(logout.includes("staffLogoutClearCookie"), true);
+  assert.equal(logout.includes("Service Unavailable"), true);
   assert.equal(page.includes("notFound"), true);
   assert.equal(page.includes("facebook_association_correction"), false);
   assert.equal(page.includes("ADMIN_COC_SESSION_COOKIE"), false);

@@ -9,6 +9,7 @@ import { GOOGLE_ISSUER } from "@sa360/shared/staff-google-oidc";
 import { STAFF_SESSION_TTL_SECONDS, signStaffSession } from "@sa360/shared/staff-google-session";
 import type { ProvisionedStaffPrincipal } from "../lib/staff-google-identity.js";
 import { verifyStaffGoogleIdToken } from "../lib/staff-google-oidc.js";
+import { createMemoryStaffSessionRegistry } from "../lib/staff-session-registry.js";
 import { staffGoogleRoutes } from "./staff-google.js";
 
 const CLIENT_ID = "staff-test-client.apps.googleusercontent.com";
@@ -69,11 +70,16 @@ async function idToken(claims: Record<string, unknown> = {}) {
     .sign(privateKey);
 }
 
-async function appFor(principal: ProvisionedStaffPrincipal | null, env: NodeJS.ProcessEnv) {
+async function appFor(
+  principal: ProvisionedStaffPrincipal | null,
+  env: NodeJS.ProcessEnv,
+  sessionRegistry = createMemoryStaffSessionRegistry()
+) {
   const calls: string[] = [];
   const app = Fastify();
   await app.register(staffGoogleRoutes, {
     env,
+    sessionRegistry,
     findByGoogleSubject: async (sub: string) => {
       calls.push(`subject:${sub}`);
       if (principal?.providerSubject !== sub) return null;
@@ -168,6 +174,20 @@ test("a verified bound identity resolves and a staff session stays live only whi
 
   const issuedAt = Math.floor(Date.now() / 1000);
   const session = signStaffSession({ staffPrincipalId: PRINCIPAL, googleSub: SUB, nowSec: issuedAt, secret: SECRET });
+  const unregistered = await app.inject({
+    method: "POST",
+    url: "/internal/staff/session",
+    headers: serviceHeaders({ "x-sa360-staff-session": session.token }),
+  });
+  assert.equal(unregistered.statusCode, 401);
+  const registered = await app.inject({
+    method: "POST",
+    url: "/internal/staff/session/register",
+    headers: serviceHeaders(),
+    payload: { token: session.token, staffPrincipalId: "c000000000000000000000000" },
+  });
+  assert.equal(registered.statusCode, 200);
+  assert.deepEqual(registered.json(), { ok: true });
   const live = await app.inject({
     method: "POST",
     url: "/internal/staff/session",
@@ -218,6 +238,16 @@ test("both internal staff routes share one readiness gate", async () => {
       url: "/internal/staff/session",
       headers: { "x-sa360-staff-google-service": SERVICE, "x-sa360-staff-session": session },
       payload: undefined,
+    },
+    {
+      url: "/internal/staff/session/register",
+      headers: { "x-sa360-staff-google-service": SERVICE },
+      payload: { token: session },
+    },
+    {
+      url: "/internal/staff/session/revoke",
+      headers: { "x-sa360-staff-google-service": SERVICE, "x-sa360-staff-session": session },
+      payload: { staffPrincipalId: PRINCIPAL },
     },
   ] as const;
   const withoutFlag = enabled();
@@ -285,21 +315,31 @@ test("both internal staff routes share one readiness gate", async () => {
     payload: { idToken: token, nonce: NONCE },
   });
   assert.equal(resolved.statusCode, 200);
+  const registered = await ready.app.inject({
+    method: "POST",
+    url: "/internal/staff/session/register",
+    headers: serviceHeaders(),
+    payload: { token: session },
+  });
+  assert.equal(registered.statusCode, 200);
   const live = await ready.app.inject({
     method: "POST",
     url: "/internal/staff/session",
     headers: serviceHeaders({ "x-sa360-staff-session": session }),
   });
   assert.equal(live.statusCode, 200);
-  assert.deepEqual(ready.calls, ["verify", `subject:${SUB}`, `id:${PRINCIPAL}`]);
+  assert.deepEqual(ready.calls, ["verify", `subject:${SUB}`, `id:${PRINCIPAL}`, `id:${PRINCIPAL}`]);
   assert.equal(enabled().SA360_STAFF_GOOGLE_CLIENT_SECRET, undefined);
 });
 
 test("a live session whose stored subject differs is denied", async () => {
+  const principal = bound();
+  const registry = createMemoryStaffSessionRegistry();
   const app = Fastify();
   await app.register(staffGoogleRoutes, {
     env: enabled(),
-    findById: async (_id: string) => bound({ providerSubject: "99999999999999999999" }),
+    sessionRegistry: registry,
+    findById: async () => principal,
   });
   const session = signStaffSession({
     staffPrincipalId: PRINCIPAL,
@@ -307,6 +347,14 @@ test("a live session whose stored subject differs is denied", async () => {
     nowSec: Math.floor(Date.now() / 1000),
     secret: SECRET,
   });
+  const registered = await app.inject({
+    method: "POST",
+    url: "/internal/staff/session/register",
+    headers: serviceHeaders(),
+    payload: { token: session.token },
+  });
+  assert.equal(registered.statusCode, 200);
+  principal.providerSubject = "99999999999999999999";
   const response = await app.inject({
     method: "POST",
     url: "/internal/staff/session",
@@ -317,13 +365,23 @@ test("a live session whose stored subject differs is denied", async () => {
 });
 
 test("a disabled principal fails the live session check", async () => {
-  const { app } = await appFor(bound({ status: "disabled", disabledAt: new Date("2026-01-01T00:00:00Z") }), enabled());
+  const principal = bound();
+  const { app } = await appFor(principal, enabled());
   const session = signStaffSession({
     staffPrincipalId: PRINCIPAL,
     googleSub: SUB,
     nowSec: Math.floor(Date.now() / 1000),
     secret: SECRET,
   });
+  const registered = await app.inject({
+    method: "POST",
+    url: "/internal/staff/session/register",
+    headers: serviceHeaders(),
+    payload: { token: session.token },
+  });
+  assert.equal(registered.statusCode, 200);
+  principal.status = "disabled";
+  principal.disabledAt = new Date("2026-01-01T00:00:00Z");
   const response = await app.inject({
     method: "POST",
     url: "/internal/staff/session",
@@ -476,4 +534,65 @@ test("state consumption is authenticated, single use, and hidden while unconfigu
     payload: { replayId: "b".repeat(64) },
   });
   assert.equal(failed.statusCode, 503);
+});
+
+test("registered staff sessions are shared across instances and revocation sticks", async () => {
+  const registry = createMemoryStaffSessionRegistry();
+  const first = Fastify();
+  const second = Fastify();
+  const principal = bound();
+  await first.register(staffGoogleRoutes, { env: enabled(), sessionRegistry: registry, findById: async () => principal });
+  await second.register(staffGoogleRoutes, { env: enabled(), sessionRegistry: registry, findById: async () => principal });
+  const session = signStaffSession({
+    staffPrincipalId: PRINCIPAL,
+    googleSub: SUB,
+    nowSec: Math.floor(Date.now() / 1000),
+    secret: SECRET,
+  });
+  const registered = await first.inject({
+    method: "POST",
+    url: "/internal/staff/session/register",
+    headers: serviceHeaders(),
+    payload: { token: session.token },
+  });
+  assert.equal(registered.statusCode, 200);
+  const live = await second.inject({
+    method: "POST",
+    url: "/internal/staff/session",
+    headers: serviceHeaders({ "x-sa360-staff-session": session.token }),
+  });
+  assert.equal(live.statusCode, 200);
+  const revoked = await second.inject({
+    method: "POST",
+    url: "/internal/staff/session/revoke",
+    headers: serviceHeaders({ "x-sa360-staff-session": session.token }),
+    payload: { staffPrincipalId: "c000000000000000000000000" },
+  });
+  assert.equal(revoked.statusCode, 200);
+  const again = await first.inject({
+    method: "POST",
+    url: "/internal/staff/session/revoke",
+    headers: serviceHeaders({ "x-sa360-staff-session": session.token }),
+  });
+  assert.equal(again.statusCode, 200);
+  const copied = await first.inject({
+    method: "POST",
+    url: "/internal/staff/session",
+    headers: serviceHeaders({ "x-sa360-staff-session": session.token }),
+  });
+  assert.equal(copied.statusCode, 401);
+  const reregistered = await second.inject({
+    method: "POST",
+    url: "/internal/staff/session/register",
+    headers: serviceHeaders(),
+    payload: { token: session.token },
+  });
+  assert.equal(reregistered.statusCode, 401);
+  const identityOnly = await first.inject({
+    method: "POST",
+    url: "/internal/staff/session/register",
+    headers: serviceHeaders(),
+    payload: { staffPrincipalId: PRINCIPAL },
+  });
+  assert.equal(identityOnly.statusCode, 401);
 });

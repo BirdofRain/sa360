@@ -14,6 +14,7 @@ export const STAFF_SESSION_TTL_SECONDS = 8 * 60 * 60;
 export const STAFF_SESSION_SECRET_ENV = "SA360_STAFF_SESSION_SECRET";
 export const STAFF_SESSION_SECRET_MIN_LENGTH = 32;
 export const STAFF_SESSION_MAX_TOKEN_LENGTH = 2048;
+export const STAFF_SESSION_REGISTRY_PREFIX = "sa360:staff-session:";
 
 const PRINCIPAL_ID_PATTERN = /^c[a-z0-9]{24}$/;
 const GOOGLE_SUB_PATTERN = /^[A-Za-z0-9_-]{10,255}$/;
@@ -148,6 +149,10 @@ export function verifyStaffSession(
       jti: record.jti,
     },
   };
+}
+
+export function staffSessionRegistryKey(sessionId: string): string {
+  return `${STAFF_SESSION_REGISTRY_PREFIX}${createHash("sha256").update(sessionId, "utf8").digest("hex")}`;
 }
 
 export function staffSessionCookie(token: string, secure: boolean): {

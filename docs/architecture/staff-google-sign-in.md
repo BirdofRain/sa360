@@ -72,12 +72,15 @@ also signs the state cookie. It is not the admin session secret and not the
 assertion signing secret. Logout is `POST /staff/google/logout`. It checks the
 request origin and clears only the staff cookie.
 
-`POST /internal/staff/session` verifies the cookie and reads the principal
-again. A disabled, missing, unbound, or conflicting principal is denied. The
-header is `x-sa360-staff-session`. Clearing the cookie ends the browser
-session. A copied cookie remains valid until it expires or the principal is
-disabled. Immediate revocation for a principal that stays active would need a
-later session-epoch column. This change does not add that column.
+`POST /internal/staff/session` verifies the cookie, requires a matching
+active registry record, and reads the principal again. A disabled, missing,
+unbound, or conflicting principal is denied. The header is
+`x-sa360-staff-session`. Logout revokes that one session before it clears
+the staff cookie. A copied cookie for the revoked session is denied on every
+instance. Other sessions for the same active principal stay valid until they
+expire or the principal is disabled. Revoking every session without disabling
+the principal would need a later mechanism. This change does not add a
+session-epoch column.
 
 ## Routes
 
@@ -91,6 +94,8 @@ still do not serve them.
 - `GET /staff`
 - `POST /internal/staff/google/resolve`
 - `POST /internal/staff/session`
+- `POST /internal/staff/session/register`
+- `POST /internal/staff/session/revoke`
 - `POST /internal/staff/google/state/consume`
 
 The shared-password login at `/login` is unchanged.
@@ -179,18 +184,48 @@ is unavailable or the claim times out. The callback then stops. It does not
 exchange the Google code or mint a staff session. A supplied staff principal
 id is not authentication. There is no process-local fallback.
 
+## Staff session registry
+
+A valid staff-session signature is not enough. After Google identity
+verification resolves an active bound principal, Admin C.O.C. signs one new
+session and registers that exact token with
+`POST /internal/staff/session/register`. The browser cookie is set only after
+registration returns success. A failed or timed-out registration is not
+retried and does not create a cookie.
+
+The registry is an allowlist. The Redis key is `sa360:staff-session:` plus
+the SHA-256 hex of the session id. The value is `v1|active` or `v1|revoked`,
+followed by the principal id, Google sub, and expiry. It does not contain the
+raw session token or the signing secret. The TTL is the remaining session
+lifetime, capped at eight hours. Registration is one atomic `SET` that
+refuses an existing key, so a revoked id cannot become active again.
+
+Logout sends the presented session token to
+`POST /internal/staff/session/revoke`. The API verifies the signature and
+revokes that session id. It does not accept a caller-supplied principal id.
+Revocation rewrites the record to `revoked` without extending its TTL, or
+writes a revoked tombstone when the record is absent. A second logout of the
+same session is success. If Redis is unavailable, logout returns 503 and
+does not clear the cookie or claim that the server session was revoked.
+The shared-password admin cookie is not changed.
+
+Live checks require the signature, the expiry, an active registry record for
+the same principal, Google sub, and expiry, and the current active bound
+principal. A missing, revoked, or unavailable record denies the session.
+Disabling the principal denies every session at that check. Logging out one
+session does not revoke that principal's other sessions. Doing so without
+disabling the principal needs a future mechanism; this change does not add a
+session-epoch column or a staff management screen.
+
 ## Remaining activation blockers
 
-1. Logout clears the browser cookie. It does not invalidate a copied staff
-   session, which remains acceptable until its eight-hour expiry or until the
-   principal is disabled. There is no session-epoch column.
-2. First Google subject binding stays disabled. An unbound principal is
+1. First Google subject binding stays disabled. An unbound principal is
    denied, and email is not the binding. A later enrollment change must write
    `providerSubject` once, only while it is null, after an out-of-band check.
-3. Production Google OAuth client, redirect URI, feature flag, client secret,
+2. Production Google OAuth client, redirect URI, feature flag, client secret,
    session secret, and service secret stay unset until a later staged
    activation.
-4. Three Admin C.O.C. tests fail on the current baseline and on the commits
+3. Three Admin C.O.C. tests fail on the current baseline and on the commits
    before this boundary. They are outside staff authentication:
    `portal-order-request-form.test.tsx` never finds "Mapped source bands.";
    `admin-coc-privileged-handlers.test.ts` does not match
@@ -200,7 +235,7 @@ id is not authentication. There is no process-local fallback.
 
 ## Recommendation
 
-GO to merge this disabled replay protection. NO-GO to provision the service
+GO to merge this disabled session registry. NO-GO to provision the service
 secret, turn the flag on, create staff rows, bind a Google subject, grant a
 permission, configure production Google OAuth, or execute an association
 correction.

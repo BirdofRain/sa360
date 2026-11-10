@@ -97,6 +97,7 @@ export async function completeStaffGoogleCallback(input: {
   exchange?: typeof exchangeStaffGoogleCode;
   resolve?: (value: { idToken: string; nonce: string }) => Promise<StaffGoogleResolution>;
   claimState?: (replayId: string) => Promise<{ ok: true } | { ok: false; code: "reused_state" | "state_unavailable" }>;
+  registerSession?: (token: string) => Promise<{ ok: true } | { ok: false; code: "session_rejected" | "session_unavailable" }>;
 }): Promise<StaffCallbackOutcome> {
   const config = readStaffGoogleBrowserConfig(input.env);
   const secret = sessionSecret(input.env);
@@ -152,6 +153,15 @@ export async function completeStaffGoogleCallback(input: {
     nowSec: input.nowSec,
     secret,
   });
+  if (!input.registerSession && !origin) return { kind: "unavailable" };
+  const register = input.registerSession ?? ((token) => registerSessionWithApi(origin as string, token, input.env, input.fetchImpl));
+  let registered: { ok: true } | { ok: false; code: "session_rejected" | "session_unavailable" };
+  try {
+    registered = await register(session.token);
+  } catch {
+    return { kind: "denied", reason: "session_unavailable" };
+  }
+  if (!registered.ok) return { kind: "denied", reason: registered.code };
   return { kind: "signed_in", sessionToken: session.token, staffPrincipalId: resolved.staffPrincipalId };
 }
 
@@ -173,6 +183,26 @@ async function claimStateWithApi(
   if (response.status === 200) return { ok: true };
   if (response.status === 503) return { ok: false, code: "state_unavailable" };
   return { ok: false, code: "reused_state" };
+}
+
+async function registerSessionWithApi(
+  origin: string,
+  token: string,
+  env: NodeJS.ProcessEnv,
+  fetchImpl: FetchLike | undefined
+): Promise<{ ok: true } | { ok: false; code: "session_rejected" | "session_unavailable" }> {
+  const serviceHeaders = serviceCredentialHeaders(env);
+  if (!serviceHeaders) return { ok: false, code: "session_unavailable" };
+  const response = await (fetchImpl ?? fetch)(`${origin}/internal/staff/session/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json", ...serviceHeaders },
+    body: JSON.stringify({ token }),
+    redirect: "error",
+    signal: AbortSignal.timeout(1_500),
+  });
+  if (response.status === 200) return { ok: true };
+  if (response.status === 503) return { ok: false, code: "session_unavailable" };
+  return { ok: false, code: "session_rejected" };
 }
 
 async function resolveWithApi(
@@ -260,6 +290,32 @@ export function staffStateClearCookie(env: NodeJS.ProcessEnv) {
     path: "/staff/google",
     maxAge: 0,
   };
+}
+
+export async function revokeStaffBrowserSession(input: {
+  env: NodeJS.ProcessEnv;
+  sessionCookie: string | undefined;
+  fetchImpl?: FetchLike;
+}): Promise<{ kind: "cleared" } | { kind: "unavailable" }> {
+  const secret = sessionSecret(input.env);
+  if (!input.sessionCookie || !secret) return { kind: "cleared" };
+  const session = verifyStaffSession(input.sessionCookie, { secret });
+  if (!session.ok) return { kind: "cleared" };
+  const origin = readStaffApiOrigin(input.env.SA360_API_INTERNAL_URL ?? input.env.NEXT_PUBLIC_SA360_API_BASE_URL);
+  const serviceHeaders = serviceCredentialHeaders(input.env);
+  if (!origin || !serviceHeaders) return { kind: "unavailable" };
+  try {
+    const response = await (input.fetchImpl ?? fetch)(`${origin}/internal/staff/session/revoke`, {
+      method: "POST",
+      headers: { accept: "application/json", [STAFF_SESSION_HEADER]: input.sessionCookie, ...serviceHeaders },
+      redirect: "error",
+      signal: AbortSignal.timeout(1_500),
+    });
+    if (response.status !== 200) return { kind: "unavailable" };
+  } catch {
+    return { kind: "unavailable" };
+  }
+  return { kind: "cleared" };
 }
 
 export function staffLogoutClearCookie(env: NodeJS.ProcessEnv) {

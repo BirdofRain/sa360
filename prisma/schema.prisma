@@ -4258,7 +4258,7 @@ model GhlDestinationConfigurationRequest {
   updatedAt                    DateTime                                   @updatedAt
 
   @@unique([clientAccountId, revision])
-  @@index([clientAccountId, createdAt])
+  @@index([clientAccountId, createdAt], map: "GhlDestinationConfigRequest_client_created_idx")
 }
 
 /// One client email per source lead, even when GHL and Sheets both qualify.

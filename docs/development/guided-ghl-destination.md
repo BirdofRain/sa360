@@ -106,8 +106,9 @@ location. A workflow name, including a name containing Webform, is not
 selected. Each field id must equal a custom-field `id` in that same snapshot.
 A field key, display name, or discovered id is not substituted. The same field
 id on two keys is rejected. Desired coverage, branch of service, and primary
-reason stay distinct keys. A snapshot older than 24 hours is expired. A
-missing snapshot is rejected.
+reason stay distinct keys. A snapshot older than 24 hours is expired. A snapshot more than five minutes
+ahead of the API clock is rejected. Five minutes is the only permitted clock
+skew. An unparseable timestamp is rejected. A missing snapshot is rejected.
 
 The save locks the client and the destination row. After that lock it reads
 the destination again. A live destination aborts the transaction, including a

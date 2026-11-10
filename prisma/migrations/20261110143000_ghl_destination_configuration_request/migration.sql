@@ -68,7 +68,9 @@ CREATE UNIQUE INDEX "GhlDestinationConfigurationRequest_requestId_key"
 CREATE UNIQUE INDEX "GhlDestinationConfigurationRequest_clientAccountId_revision_key"
   ON "GhlDestinationConfigurationRequest"("clientAccountId", "revision");
 
-CREATE INDEX "GhlDestinationConfigurationRequest_clientAccountId_createdAt_idx"
+-- Explicit short name. Postgres truncates identifiers at 63 bytes, and Prisma
+-- truncates the default name differently. A later diff must not rename this index.
+CREATE INDEX "GhlDestinationConfigRequest_client_created_idx"
   ON "GhlDestinationConfigurationRequest"("clientAccountId", "createdAt");
 
 -- One stored configuration. Superseded rows stay as history.

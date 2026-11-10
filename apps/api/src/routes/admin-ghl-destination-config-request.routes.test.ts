@@ -8,7 +8,12 @@ import { fileURLToPath } from "node:url";
 import Fastify, { type FastifyInstance } from "fastify";
 
 import { prisma } from "../lib/db.js";
-import { recordGhlDestinationConfigRequest } from "../services/ghl-destination-config-request.js";
+import {
+  assessGhlDestinationSnapshotFreshness,
+  GHL_DESTINATION_CONFIG_SNAPSHOT_FUTURE_SKEW_MS,
+  GHL_DESTINATION_CONFIG_SNAPSHOT_MAX_AGE_MS,
+  recordGhlDestinationConfigRequest,
+} from "../services/ghl-destination-config-request.js";
 import { adminGhlDestinationConfigRequestRoutes } from "./admin-ghl-destination-config-request.js";
 
 const ADMIN_KEY = "ghl-destination-config-test-key";
@@ -25,6 +30,31 @@ const savedEnv = {
   alias: process.env.SA360_ADMIN_KEY,
   flag: process.env.SA360_GHL_DESTINATION_CONFIG_REQUEST_ENABLED,
 };
+
+test("snapshot freshness fails closed for stale, future, and malformed timestamps", () => {
+  const now = new Date("2026-11-10T12:00:00.000Z");
+  assert.equal(assessGhlDestinationSnapshotFreshness(new Date(now.getTime() - 60_000), now), "fresh");
+  assert.equal(
+    assessGhlDestinationSnapshotFreshness(new Date(now.getTime() - GHL_DESTINATION_CONFIG_SNAPSHOT_MAX_AGE_MS), now),
+    "fresh"
+  );
+  assert.equal(
+    assessGhlDestinationSnapshotFreshness(new Date(now.getTime() - GHL_DESTINATION_CONFIG_SNAPSHOT_MAX_AGE_MS - 1), now),
+    "expired"
+  );
+  assert.equal(
+    assessGhlDestinationSnapshotFreshness(new Date(now.getTime() + GHL_DESTINATION_CONFIG_SNAPSHOT_FUTURE_SKEW_MS), now),
+    "fresh"
+  );
+  assert.equal(
+    assessGhlDestinationSnapshotFreshness(new Date(now.getTime() + GHL_DESTINATION_CONFIG_SNAPSHOT_FUTURE_SKEW_MS + 1), now),
+    "future"
+  );
+  assert.equal(assessGhlDestinationSnapshotFreshness("2026-11-10T11:00:00.000Z", now), "fresh");
+  for (const malformed of [null, undefined, "", "   ", "not-a-date", "2026-13-40", new Date(Number.NaN), 1_700_000_000_000, { fetchedAt: now.toISOString() }]) {
+    assert.equal(assessGhlDestinationSnapshotFreshness(malformed, now), "malformed");
+  }
+});
 
 test("the configuration request does not touch operational writers or readers", () => {
   const service = readFileSync(
@@ -119,6 +149,28 @@ describe("GoHighLevel destination configuration requests", { concurrency: 1 }, (
     restoreEnv("ADMIN_API_KEY", savedEnv.admin);
     restoreEnv("SA360_ADMIN_KEY", savedEnv.alias);
     restoreEnv("SA360_GHL_DESTINATION_CONFIG_REQUEST_ENABLED", savedEnv.flag);
+  });
+
+  test("the partial unique index and snapshot trigger exist only in SQL", async () => {
+    const indexes = await prisma.$queryRaw<Array<{ indexdef: string }>>`
+      SELECT indexdef
+      FROM pg_indexes
+      WHERE schemaname = 'public'
+        AND indexname = 'GhlDestinationConfigurationRequest_one_stored_key'
+    `;
+    assert.equal(indexes.length, 1);
+    assert.match(indexes[0]?.indexdef ?? "", /UNIQUE/i);
+    assert.match(indexes[0]?.indexdef ?? "", /status.*=.*'stored'/);
+    const triggers = await prisma.$queryRaw<Array<{ tgname: string }>>`
+      SELECT tgname::text AS tgname
+      FROM pg_trigger
+      WHERE tgname = 'GhlDestinationConfigurationRequest_snapshot_guard'
+        AND NOT tgisinternal
+    `;
+    assert.equal(triggers.length, 1);
+    const schema = readFileSync(path.join(repoRoot, "prisma/schema.prisma"), "utf8");
+    assert.equal(schema.includes("GhlDestinationConfigurationRequest_one_stored_key"), false);
+    assert.equal(schema.includes("snapshot_guard"), false);
   });
 
   test("admin auth, portal and workspace credentials, and the exact-true flag refuse the route", async () => {
@@ -323,6 +375,19 @@ describe("GoHighLevel destination configuration requests", { concurrency: 1 }, (
     const expired = await post(expiredWorld);
     assert.equal(expired.statusCode, 409);
     assert.equal(expired.json().error, "snapshot_expired");
+
+    const futureWorld = await createWorld({ fetchedAt: new Date(Date.now() + 10 * 60 * 1000) });
+    const future = await post(futureWorld);
+    assert.equal(future.statusCode, 409);
+    assert.equal(future.json().error, "snapshot_future");
+    assert.equal(future.json().destinationUpdated, false);
+    assert.equal(await requestCount(futureWorld.clientAccountId), 0);
+
+    const skewed = await createWorld({ fetchedAt: new Date(Date.now() + 4 * 60 * 1000) });
+    const withinSkew = await post(skewed);
+    assert.equal(withinSkew.statusCode, 200);
+    assert.equal(withinSkew.json().workflowId, "wf_exact");
+    assert.deepEqual(withinSkew.json().fieldMappings, surveyMappings());
 
     const stale = await post(world, undefined, {
       expectedDestinationUpdatedAt: new Date(Date.parse(beforeRow.updatedAt) - 1000).toISOString(),

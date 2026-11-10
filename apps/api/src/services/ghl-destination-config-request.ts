@@ -22,6 +22,35 @@ import { isPersistedLiveDestination } from "./ghl-destination-authorization.js";
 
 export const GHL_DESTINATION_CONFIG_SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * A snapshot timestamp may lead this process by at most five minutes.
+ * That covers ordinary clock skew between the database and the API.
+ * A larger lead is rejected. An unparseable timestamp is rejected.
+ */
+export const GHL_DESTINATION_CONFIG_SNAPSHOT_FUTURE_SKEW_MS = 5 * 60 * 1000;
+
+export type GhlDestinationSnapshotFreshness = "fresh" | "expired" | "future" | "malformed";
+
+export function assessGhlDestinationSnapshotFreshness(
+  fetchedAt: unknown,
+  now: Date
+): GhlDestinationSnapshotFreshness {
+  const parsed = parseSnapshotTimestamp(fetchedAt);
+  if (!parsed) return "malformed";
+  if (now.getTime() - parsed.getTime() > GHL_DESTINATION_CONFIG_SNAPSHOT_MAX_AGE_MS) return "expired";
+  if (parsed.getTime() - now.getTime() > GHL_DESTINATION_CONFIG_SNAPSHOT_FUTURE_SKEW_MS) return "future";
+  return "fresh";
+}
+
+function parseSnapshotTimestamp(value: unknown): Date | null {
+  if (value instanceof Date) return Number.isFinite(value.getTime()) ? value : null;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = Date.parse(trimmed);
+  return Number.isFinite(parsed) ? new Date(parsed) : null;
+}
+
 export const GHL_DESTINATION_CONFIG_SURVEY_KEYS = [
   "desired_coverage",
   "branch_of_service",
@@ -258,11 +287,13 @@ async function applyCommand(
   `;
   const snapshot = snapshots[0];
   if (!snapshot) abort(failure(409, "snapshot_missing", command.requestId));
-  const fetchedAt = snapshot.fetchedAt instanceof Date ? snapshot.fetchedAt : new Date(String(snapshot.fetchedAt));
   const now = deps.now ?? new Date();
-  if (now.getTime() - fetchedAt.getTime() > GHL_DESTINATION_CONFIG_SNAPSHOT_MAX_AGE_MS) {
-    abort(failure(409, "snapshot_expired", command.requestId));
-  }
+  const freshness = assessGhlDestinationSnapshotFreshness(snapshot.fetchedAt, now);
+  if (freshness === "malformed") abort(failure(409, "snapshot_unusable", command.requestId));
+  if (freshness === "future") abort(failure(409, "snapshot_future", command.requestId));
+  if (freshness !== "fresh") abort(failure(409, "snapshot_expired", command.requestId));
+  const fetchedAt = parseSnapshotTimestamp(snapshot.fetchedAt);
+  if (!fetchedAt) abort(failure(409, "snapshot_unusable", command.requestId));
   if (!workflowIds(snapshot.workflowsJson).has(command.workflowId)) {
     abort(failure(409, "workflow_not_in_snapshot", command.requestId));
   }

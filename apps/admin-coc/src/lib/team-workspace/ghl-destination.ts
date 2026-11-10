@@ -18,7 +18,7 @@ export const GUIDED_GHL_SURVEY_LABELS: Record<(typeof GUIDED_GHL_SURVEY_KEYS)[nu
 };
 
 export const GUIDED_GHL_WRITE_BLOCK =
-  "Saving a GoHighLevel location, workflow, or field id from Team Workspace is blocked. The existing destination save rewrites field ids from discovered names and can change a destination that is already live. This page does not turn delivery on, enroll a lead, or change Company Sheets.";
+  "The operational destination save stays blocked. It rewrites field ids from discovered names and can change a destination that is already live. A configuration request can store an intended location, workflow id, and explicit field ids. That request does not turn delivery on, enroll a lead, or change Company Sheets.";
 
 const ISSUE_TEXT: Record<string, string> = {
   client_not_found: "The client record was not found.",

@@ -8,6 +8,7 @@ import {
   readTeamWorkspaceGhlSnapshotAction,
   type GuidedGhlActionResult,
 } from "@/app/actions/team-workspace-ghl-destination";
+import { GhlDestinationConfigRequestPanel } from "@/components/team-workspace/ghl-destination-config-request-panel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -270,6 +271,23 @@ export function GhlDestinationGuide({ clientAccountId }: { clientAccountId: stri
           <IssueList issues={view.issues} />
         </div>
       ) : null}
+      <GhlDestinationConfigRequestPanel
+        clientAccountId={clientAccountId}
+        locations={view?.availability === "ready" ? view.locations : []}
+        locationsState={pending && !view ? "loading" : view?.availability === "ready" ? "ready" : "unavailable"}
+        operational={
+          view?.availability === "ready"
+            ? {
+                configured: view.configured,
+                verified: view.verified,
+                active: view.active,
+                live: view.live,
+                locationId: view.locationId,
+                updatedAt: view.updatedAt,
+              }
+            : null
+        }
+      />
       <p className="text-sm text-slate-600">{view?.writesBlocked ?? GUIDED_GHL_WRITE_BLOCK}</p>
       <p className="text-sm text-slate-600">
         LAL AI Bot-1 webform selection is not changed here. A matching field name is not a saved field id. This page does

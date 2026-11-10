@@ -110,7 +110,10 @@ test("workspace files do not collect a recipient, send mail, or arm delivery", (
     new URL("../../components/team-workspace/source-campaign-request-panel.tsx", import.meta.url),
     new URL("../../app/actions/source-campaign-request.ts", import.meta.url),
     new URL("./ghl-destination.ts", import.meta.url),
+    new URL("./ghl-destination-config-request.ts", import.meta.url),
+    new URL("./ghl-destination-config-request-env.ts", import.meta.url),
     new URL("../../components/team-workspace/ghl-destination-guide.tsx", import.meta.url),
+    new URL("../../components/team-workspace/ghl-destination-config-request-panel.tsx", import.meta.url),
     new URL("../../app/actions/team-workspace-ghl-destination.ts", import.meta.url),
   ];
   const source = files.map((file) => readFileSync(file, "utf8")).join("\n");

@@ -36,6 +36,36 @@ moduleLoader._load = function (request: string, parent: NodeModule, isMain: bool
         calls.push("save");
         return { ok: false, code: "WRITE_BLOCKED", message: "blocked", view: null };
       },
+      loadTeamWorkspaceGhlConfigurationAction: async () => ({
+        ok: false,
+        uncertain: false,
+        code: "FEATURE_DISABLED",
+        message: "GoHighLevel configuration requests are turned off. Nothing was stored, and delivery was not turned on.",
+        head: null,
+      }),
+      previewTeamWorkspaceGhlLocationAction: async () => ({
+        ok: false,
+        uncertain: false,
+        code: "FEATURE_DISABLED",
+        message: "GoHighLevel configuration requests are turned off. Nothing was stored, and delivery was not turned on.",
+        preview: null,
+      }),
+      saveTeamWorkspaceGhlConfigurationRequestAction: async () => {
+        calls.push("config-save");
+        return {
+          ok: false,
+          uncertain: false,
+          stored: false,
+          retainRequestId: false,
+          needsReload: false,
+          code: "FEATURE_DISABLED",
+          message: "GoHighLevel configuration requests are turned off.",
+          revision: null,
+          requestId: null,
+          replayed: false,
+          sent: null,
+        };
+      },
     };
   }
   return originalLoad.call(this, request, parent, isMain);

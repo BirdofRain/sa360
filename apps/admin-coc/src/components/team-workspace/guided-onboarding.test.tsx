@@ -47,6 +47,33 @@ moduleLoader._load = function (request: string, parent: NodeModule, isMain: bool
       readTeamWorkspaceGhlSnapshotAction: async () => ({ ok: false, code: "FEATURE_DISABLED", message: "off", view: null }),
       checkTeamWorkspaceGhlConnectionAction: async () => ({ ok: false, code: "FEATURE_DISABLED", message: "off", view: null }),
       saveTeamWorkspaceGhlDestinationAction: async () => ({ ok: false, code: "WRITE_BLOCKED", message: "blocked", view: null }),
+      loadTeamWorkspaceGhlConfigurationAction: async () => ({
+        ok: false,
+        uncertain: false,
+        code: "FEATURE_DISABLED",
+        message: "GoHighLevel configuration requests are turned off. Nothing was stored, and delivery was not turned on.",
+        head: null,
+      }),
+      previewTeamWorkspaceGhlLocationAction: async () => ({
+        ok: false,
+        uncertain: false,
+        code: "FEATURE_DISABLED",
+        message: "GoHighLevel configuration requests are turned off.",
+        preview: null,
+      }),
+      saveTeamWorkspaceGhlConfigurationRequestAction: async () => ({
+        ok: false,
+        uncertain: false,
+        stored: false,
+        retainRequestId: false,
+        needsReload: false,
+        code: "FEATURE_DISABLED",
+        message: "GoHighLevel configuration requests are turned off.",
+        revision: null,
+        requestId: null,
+        replayed: false,
+        sent: null,
+      }),
     };
   }
   if (request === "@/app/actions/source-campaign-request") {

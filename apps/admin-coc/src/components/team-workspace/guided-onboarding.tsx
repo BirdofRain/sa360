@@ -11,6 +11,7 @@ import {
   type GuidedClientMutationResult,
   type GuidedSetupSaveResult,
 } from "@/app/actions/team-workspace-onboarding";
+import { CompanySheetsDiscoveryGuide } from "@/components/team-workspace/company-sheets-discovery-guide";
 import { GhlDestinationGuide } from "@/components/team-workspace/ghl-destination-guide";
 import { SourceCampaignRequestPanel } from "@/components/team-workspace/source-campaign-request-panel";
 import { SourceCampaignReviewPanel } from "@/components/team-workspace/source-campaign-review-panel";
@@ -885,6 +886,7 @@ function DestinationStep({
       </div>
     </form>
     <GhlDestinationGuide clientAccountId={model.clientAccountId} />
+    <CompanySheetsDiscoveryGuide clientAccountId={model.clientAccountId} />
     </div>
   );
 }
@@ -899,7 +901,7 @@ function DestinationReadout({ model }: { model: GuidedOnboardingModel }) {
       <li>
         Company Sheets row: {sheets.configured ? "Configured" : "Not configured"}. Dispatch: {sheets.campaignDispatchEnabled || sheets.agedDispatchEnabled ? "Active" : "Off"}.
       </li>
-      <li>Company Sheets is not edited here.</li>
+      <li>Company Sheets is not edited here. The discovery guide reads the saved setup and does not save a spreadsheet.</li>
     </ul>
   );
 }

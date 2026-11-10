@@ -1,0 +1,47 @@
+export const NEXTGEN_EXPORT_HEADERS = [
+  "Lead #",
+  "Created",
+  "First Name",
+  "Last Name",
+  "Email",
+  "Phone",
+  "Funnel Name",
+  "IP Address",
+  "Military Status",
+  "State",
+  "Branch of Service",
+  "Marital Status",
+  "Desired Coverage",
+  "Beneficiary",
+  "Date of Birth",
+  "Best Time to Call",
+  "Primary Reason",
+  "Sex",
+  "Custom Extra Field",
+];
+
+export function nextGenCols(overrides: Partial<Record<string, string>> = {}): string[] {
+  const byHeader: Record<string, string> = {
+    "Lead #": "9f3a2c10-4b21-4d88-8a77-6c1e0b2d9e11",
+    Created: "1/15/2025 3:45:00 PM",
+    "First Name": "Jordan",
+    "Last Name": "Rivers",
+    Email: "jordan.rivers@example.test",
+    Phone: "5553219876",
+    "Funnel Name": "Vet FEX NextGen",
+    "IP Address": "203.0.113.42",
+    "Military Status": "Veteran",
+    State: "NC",
+    "Branch of Service": "Army",
+    "Marital Status": "Married",
+    "Desired Coverage": "250000",
+    Beneficiary: "Spouse",
+    "Date of Birth": "05/13/1979",
+    "Best Time to Call": "Evenings",
+    "Primary Reason": "Income replacement",
+    Sex: "Male",
+    "Custom Extra Field": "keep-me",
+    ...overrides,
+  };
+  return NEXTGEN_EXPORT_HEADERS.map((h) => byHeader[h] ?? "");
+}

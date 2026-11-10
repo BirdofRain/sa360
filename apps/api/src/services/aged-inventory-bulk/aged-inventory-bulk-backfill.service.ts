@@ -29,6 +29,7 @@ import {
 import { assertFileSha256, streamCsvFile } from "./aged-inventory-bulk-stream.js";
 import {
   AGED_INVENTORY_BULK_ENRICH_COMMIT_CONFIRMATION,
+  assertMasterOnlyAgedBulkFormat,
   type AgedBulkCliArgs,
   type AgedBulkNormalizedRow,
   type AgedBulkSourceFormat,
@@ -501,6 +502,7 @@ export async function runAgedInventoryBulkEnrichmentBackfill(
 
   if (!args.operator.trim()) throw new Error("operator_required");
 
+  assertMasterOnlyAgedBulkFormat(args.sourceFormat, "enrich");
   const nicheKey = resolveDefaultNiche(args.sourceFormat, args.defaultNiche);
   const batchSize = Math.min(
     Math.max(1, args.batchSize || AGED_INVENTORY_BULK_DEFAULT_BATCH_SIZE),

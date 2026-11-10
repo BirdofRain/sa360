@@ -1,4 +1,33 @@
-export type AgedBulkSourceFormat = "vet_master_v1" | "trucker_master_v1";
+export type AgedBulkMasterSourceFormat = "vet_master_v1" | "trucker_master_v1";
+
+export type AgedBulkNextGenSourceFormat = "leadcapture_nextgen_export_v1";
+
+export type AgedBulkSourceFormat = AgedBulkMasterSourceFormat | AgedBulkNextGenSourceFormat;
+
+export const AGED_BULK_NEXTGEN_SOURCE_FORMAT: AgedBulkNextGenSourceFormat =
+  "leadcapture_nextgen_export_v1";
+
+export function isMasterAgedBulkSourceFormat(
+  sourceFormat: AgedBulkSourceFormat
+): sourceFormat is AgedBulkMasterSourceFormat {
+  return sourceFormat === "vet_master_v1" || sourceFormat === "trucker_master_v1";
+}
+
+export function isNextGenExportSourceFormat(
+  sourceFormat: AgedBulkSourceFormat
+): sourceFormat is AgedBulkNextGenSourceFormat {
+  return sourceFormat === AGED_BULK_NEXTGEN_SOURCE_FORMAT;
+}
+
+/** Master-only workflows (enrich/recovery) must not run against NextGen exports. */
+export function assertMasterOnlyAgedBulkFormat(
+  sourceFormat: AgedBulkSourceFormat,
+  workflow: "enrich" | "recovery"
+): void {
+  if (isNextGenExportSourceFormat(sourceFormat)) {
+    throw new Error(`leadcapture_nextgen_export_v1_not_supported_for_master_${workflow}`);
+  }
+}
 
 export type AgedBulkMode =
   | "preview"
@@ -46,6 +75,7 @@ export type AgedBulkRowDisposition =
   | "reject_invalid_state"
   | "reject_invalid_date"
   | "reject_invalid_name"
+  | "reject_missing_source_lead_id"
   | "reject_future_date"
   | "reject_niche"
   | "already_inventory"
@@ -66,6 +96,10 @@ export type AgedBulkLeadDetailsNiche = {
   primary_concern?: string;
   company_or_independent?: string;
   rig_type?: string;
+  military_status?: string;
+  marital_status?: string;
+  sex?: string;
+  desired_coverage?: string;
 };
 
 export type AgedBulkLeadDetailsPayload = {
@@ -75,7 +109,7 @@ export type AgedBulkLeadDetailsPayload = {
   niche: AgedBulkLeadDetailsNiche;
 };
 
-/** Internal Master provenance — never buyer-facing except intended sales context. */
+/** Internal Master / NextGen provenance — never buyer-facing except intended sales context. */
 export type AgedBulkInternalSource = {
   leadTypeRaw: string;
   dobAgeRaw: string;
@@ -85,6 +119,10 @@ export type AgedBulkInternalSource = {
   syncedRaw: string;
   rowNumber: number;
   sourceFormat: AgedBulkSourceFormat;
+  /** Original CSV Lead # when the NextGen adapter preserves vendor identity. */
+  originalSourceLeadId?: string;
+  /** Original header → cell for every source column, including unmapped extras. */
+  sourceColumns?: Record<string, string>;
 };
 
 export type AgedBulkNormalizedRow = {
@@ -101,6 +139,9 @@ export type AgedBulkNormalizedRow = {
   generatedAt: Date;
   nicheKey: string;
   campaignName: string | null;
+  sourceFunnelName: string | null;
+  /** Canonical source-attribute keys (military_status, ip_address, …). */
+  sourceAttributes: Record<string, string>;
   statusRaw: string | null;
   usedByPresent: boolean;
   consumerAge: number | null;
@@ -128,6 +169,22 @@ export type AgedBulkAggregateCounts = {
   byDisposition: Record<string, number>;
   byState: Record<string, number>;
   byAgeBand: Record<string, number>;
+  byBlocker: Record<string, number>;
+  earliestGeneratedAt: string | null;
+  latestGeneratedAt: string | null;
+};
+
+/** Operator-facing preview block (dry-run). No production writes. */
+export type AgedBulkPreviewReport = {
+  totalCsvRows: number;
+  parseableRows: number;
+  rejectedRows: number;
+  rejectionReasons: Record<string, number>;
+  duplicateCandidates: number;
+  byState: Record<string, number>;
+  byAgeBand: Record<string, number>;
+  earliestCreated: string | null;
+  latestCreated: string | null;
 };
 
 export type AgedBulkCliArgs = {

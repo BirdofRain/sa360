@@ -94,6 +94,33 @@ still do not serve them.
 
 The shared-password login at `/login` is unchanged.
 
+## Internal service credential
+
+The Admin C.O.C. server proves its own identity before the API verifies a
+Google token or a staff session. The credential is
+`SA360_STAFF_GOOGLE_SERVICE_SECRET` (at least 32 characters, no whitespace).
+The server sends it only in the `x-sa360-staff-google-service` header. The
+browser, `NEXT_PUBLIC_` variables, logs, redirects, and response bodies do not
+receive it.
+
+The secret must be distinct from the admin API keys, the Admin C.O.C. session
+secret, the client portal key, the Agent Workspace keys, and the staff session
+secret. Comparison hashes both sides and uses a constant-time check. A missing
+or reused secret leaves the endpoint unconfigured.
+
+Both internal routes use the same readiness check. They return 404 unless the
+flag is exactly `true`, `SA360_STAFF_GOOGLE_CLIENT_ID` is a valid Google
+client id, `SA360_STAFF_SESSION_SECRET` is valid, and the service secret is
+valid and distinct from the other credentials. A missing prerequisite returns
+404 before token verification, session parsing, or a principal lookup. The
+API does not read the Google client secret; that value belongs only on the
+Admin C.O.C. server, which also requires the redirect URI before sign-in
+starts. When the API is ready, a missing or wrong service header returns 401
+before those steps. The shared admin API key, portal key, workspace key,
+operator label, and shared-password cookie do not satisfy the check. A valid
+service header does not identify a person: the existing Google and principal
+checks still have to pass.
+
 ## Google Cloud Console
 
 Create a new web OAuth client. Do not reuse the Drive or Sheets client.
@@ -119,12 +146,37 @@ out-of-band check. Until that exists, every unbound principal is denied.
 - `SA360_STAFF_GOOGLE_CLIENT_SECRET` on the Admin C.O.C. server only
 - `SA360_STAFF_GOOGLE_REDIRECT_URI`
 - `SA360_STAFF_SESSION_SECRET` on the Admin C.O.C. server and the API
+- `SA360_STAFF_GOOGLE_SERVICE_SECRET` on the Admin C.O.C. server and the API
 
 The API does not need the Google client secret. The resolve call uses the
-existing internal API origin and does not send the admin API key.
+existing internal API origin, sends the service credential, and does not send
+the admin API key.
+
+## Remaining activation blockers
+
+1. OAuth state is consumed from a process-local map. That map is not shared
+   across instances, so a callback can miss a state created on another
+   process. A later change needs a shared one-time store.
+2. Logout clears the browser cookie. It does not invalidate a copied staff
+   session, which remains acceptable until its eight-hour expiry or until the
+   principal is disabled. There is no session-epoch column.
+3. First Google subject binding stays disabled. An unbound principal is
+   denied, and email is not the binding. A later enrollment change must write
+   `providerSubject` once, only while it is null, after an out-of-band check.
+4. Production Google OAuth client, redirect URI, feature flag, client secret,
+   session secret, and service secret stay unset until a later staged
+   activation.
+5. Three Admin C.O.C. tests fail on the current baseline and on the commits
+   before this boundary. They are outside staff authentication:
+   `portal-order-request-form.test.tsx` never finds "Mapped source bands.";
+   `admin-coc-privileged-handlers.test.ts` does not match
+   `searchOnboardingDriveAction`, which calls `requireAdminCocAdminSession()`;
+   `clients/onboarding/access.test.ts` expects `captured_event_delivery` to be
+   absent from the onboarding client. This change does not fix them.
 
 ## Recommendation
 
-GO to merge this disabled foundation. NO-GO to provision the client or the
-session secret, turn the flag on, create staff rows, bind a Google subject,
-grant a permission, or execute an association correction.
+GO to merge this disabled service boundary. NO-GO to provision the service
+secret, turn the flag on, create staff rows, bind a Google subject, grant a
+permission, configure production Google OAuth, or execute an association
+correction.

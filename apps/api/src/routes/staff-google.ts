@@ -1,7 +1,12 @@
 import type { FastifyInstance } from "fastify";
 
 import { readStaffGoogleAudience } from "@sa360/shared/staff-google-oidc";
-import { STAFF_SESSION_HEADER, verifyStaffSession } from "@sa360/shared/staff-google-session";
+import { readStaffSessionSecret, STAFF_SESSION_HEADER, verifyStaffSession } from "@sa360/shared/staff-google-session";
+import {
+  readStaffGoogleServiceSecret,
+  STAFF_GOOGLE_SERVICE_HEADER,
+  staffGoogleServiceHeaderMatches,
+} from "@sa360/shared/staff-google-service";
 
 import { findStaffPrincipalByGoogleSubject, findStaffPrincipalById } from "../lib/staff-google-directory.js";
 import { authorizeStaffSessionPrincipal, resolveProvisionedStaffPrincipal } from "../lib/staff-google-identity.js";
@@ -24,8 +29,11 @@ export async function staffGoogleRoutes(app: FastifyInstance, opts: StaffGoogleR
   const env = opts.env ?? process.env;
 
   app.post("/internal/staff/google/resolve", async (request, reply) => {
-    const audience = readStaffGoogleAudience(env);
-    if (!audience) return reply.code(404).send({ ok: false });
+    const ready = staffGoogleApiReady(env);
+    if (!ready) return reply.code(404).send({ ok: false });
+    if (!serviceHeaderAccepted(env, headerValue(request.headers[STAFF_GOOGLE_SERVICE_HEADER]))) {
+      return reply.code(401).send({ ok: false });
+    }
     const body = request.body;
     if (!body || typeof body !== "object" || Array.isArray(body)) return reply.code(401).send({ ok: false });
     const record = body as Record<string, unknown>;
@@ -34,7 +42,7 @@ export async function staffGoogleRoutes(app: FastifyInstance, opts: StaffGoogleR
     }
     const verified = await verifyIdToken({
       idToken: record.idToken,
-      audience: audience.clientId,
+      audience: ready.clientId,
       nonce: record.nonce,
     });
     if (!verified.ok) return reply.code(401).send({ ok: false });
@@ -45,7 +53,10 @@ export async function staffGoogleRoutes(app: FastifyInstance, opts: StaffGoogleR
   });
 
   app.post("/internal/staff/session", async (request, reply) => {
-    if (env.SA360_STAFF_GOOGLE_SIGNIN_ENABLED !== "true") return reply.code(404).send({ ok: false });
+    if (!staffGoogleApiReady(env)) return reply.code(404).send({ ok: false });
+    if (!serviceHeaderAccepted(env, headerValue(request.headers[STAFF_GOOGLE_SERVICE_HEADER]))) {
+      return reply.code(401).send({ ok: false });
+    }
     const header = request.headers[STAFF_SESSION_HEADER];
     const token = Array.isArray(header) ? header[0] : header;
     if (typeof token !== "string" || token.length === 0) return reply.code(401).send({ ok: false });
@@ -63,4 +74,30 @@ export async function staffGoogleRoutes(app: FastifyInstance, opts: StaffGoogleR
     if (!authorized.ok) return reply.code(401).send({ ok: false });
     return { ok: true, staffPrincipalId: authorized.staffPrincipalId };
   });
+}
+
+function staffGoogleApiReady(env: NodeJS.ProcessEnv): { clientId: string } | null {
+  const audience = readStaffGoogleAudience(env);
+  if (!audience || !sessionSecretReady(env) || !readStaffGoogleServiceSecret(env)) return null;
+  return audience;
+}
+
+function serviceHeaderAccepted(env: NodeJS.ProcessEnv, presented: string): boolean {
+  const expected = readStaffGoogleServiceSecret(env);
+  if (!expected) return false;
+  return staffGoogleServiceHeaderMatches(presented, expected);
+}
+
+function headerValue(value: string | string[] | undefined): string {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return typeof raw === "string" ? raw : "";
+}
+
+function sessionSecretReady(env: NodeJS.ProcessEnv): boolean {
+  try {
+    readStaffSessionSecret(env);
+    return true;
+  } catch {
+    return false;
+  }
 }

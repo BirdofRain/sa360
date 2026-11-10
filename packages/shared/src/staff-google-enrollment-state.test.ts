@@ -44,6 +44,8 @@ test("enrollment state is purpose bound and hides nothing a login cookie can sat
     false
   );
   assert.equal(enrollment.claims.grant, grant);
-  const payload = JSON.parse(Buffer.from(enrollment.token.split(".")[1], "base64url").toString("utf8"));
-  assert.equal(payload.grant, grant);
+  assert.equal(enrollment.token.includes(grant), false);
+  const payload = JSON.parse(Buffer.from(enrollment.token.split(".")[1], "base64url").toString("utf8")) as { grant: string };
+  assert.equal(payload.grant.includes(grant), false);
+  assert.match(payload.grant, /^v1\./);
 });

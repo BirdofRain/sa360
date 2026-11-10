@@ -24,9 +24,12 @@ the staff service secret, the staff session secret, and the assertion secret.
 The API accepts it only on `x-sa360-staff-enrollment-issuer`. The browser never
 receives it.
 
-That secret is not a person. Production use requires a separate approval
-before the flag is set, before the secret is placed on the API, and before
-any principal or invitation is written. It is not placed on Admin C.O.C.
+That secret is not a person. Production use requires a separate written
+approval before the flag is set, before the secret is placed on the API, and
+before any principal or invitation is written. The approval names the person
+who authorized the action. `StaffEnrollmentEvent` records issued, canceled,
+and consumed. It does not record that person's name, and presenting the
+issuer secret is not that record. The secret is not placed on Admin C.O.C.
 
 The recipient proves the Google account with Google's signed ID token. The
 invitation secret authorizes which principal may be bound. An email address,
@@ -76,13 +79,15 @@ does not report success.
 
 ## Google verification and binding
 
-The browser flow is `GET /staff/google/enroll/start?enrollment=...`, then
-Google, then `GET /staff/google/enroll/callback`. The redirect URI is
-`SA360_STAFF_GOOGLE_ENROLL_REDIRECT_URI` and its path is exactly
-`/staff/google/enroll/callback`. It is not the login redirect. The start
-response sets `Referrer-Policy: no-referrer` and does not put the invitation
-secret on the Google URL. The secret travels in the httpOnly enrollment
-state cookie.
+The browser flow is `GET /staff/google/enroll/start`, a POST of the
+invitation secret, Google, then `GET /staff/google/enroll/callback`. The
+redirect URI is `SA360_STAFF_GOOGLE_ENROLL_REDIRECT_URI` and its path is
+exactly `/staff/google/enroll/callback`. It is not the login redirect. A
+query parameter named `enrollment` is rejected, so the secret is not accepted
+from a URL. The start response sets `Referrer-Policy: no-referrer` and does
+not put the invitation secret on the Google URL. The httpOnly state cookie
+carries an AES-256-GCM ciphertext of the secret, signed with the session
+secret. The raw secret is not a cookie field.
 
 The flow reuses the staff authorization-code client: PKCE S256, nonce,
 signed purpose-bound state prefix `se1`, and the same atomic Redis state
@@ -119,14 +124,19 @@ subject that is already set.
 consumed event stores the Google sub. It does not store the invitation
 secret, the ID token, the authorization code, or a refresh token.
 
-Operator procedure, only after the separate approval above:
+Operator procedure, only after the separate approval above. Before
+provision, issuance, cancellation, or disabling, record the approving
+person, the action, the principal email, and the time outside this
+database. The issuer credential does not name that person.
 
 1. Provision the principal with the issuer credential. The row is active and
    unbound. No permission is granted.
 2. Issue one invitation. The API returns the secret once.
-3. Deliver `https://<admin>/staff/google/enroll/start?enrollment=<secret>`
-   through a private channel. Access logs can retain that URL. The secret
-   expires in 15 minutes and works once.
+3. Give the secret to the recipient through a private channel that is not a
+   URL. The recipient opens `https://<admin>/staff/google/enroll/start` and
+   submits the secret in the form. Do not put it in a link, bookmark, or
+   message that will be logged as a request URL. It expires in 15 minutes
+   and works once.
 4. The recipient completes Google verification.
 5. Confirm the binding with `POST /internal/staff/enrollment/status`. It
    returns the stored subject. It does not change it.

@@ -4274,7 +4274,7 @@ enum StaffPermissionStatus {
 ///
 /// email is a normalized mailbox label. It is not proof of authentication.
 /// The permanent binding is provider + providerSubject (Google's `sub`) after
-/// a future verified login sets providerSubject. Null providerSubject means the
+/// an approved enrollment sets providerSubject. Null providerSubject means the
 /// principal is provisioned and not yet bound. PostgreSQL treats those nulls as
 /// distinct on StaffPrincipal_provider_subject_key.
 ///

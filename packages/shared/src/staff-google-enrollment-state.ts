@@ -1,11 +1,12 @@
-import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, randomBytes, timingSafeEqual } from "node:crypto";
 
 import { STAFF_ENROLLMENT_SECRET_PATTERN } from "./staff-enrollment.js";
 import { parseStaffGoogleEnrollRedirectUri } from "./staff-google-oidc.js";
 
 /**
- * Signed browser state for staff enrollment. A login state cookie uses a
- * different prefix and cannot satisfy this verifier.
+ * Signed browser state for staff enrollment. The invitation secret is sealed
+ * inside the signed payload. A login state cookie uses a different prefix
+ * and cannot satisfy this verifier.
  */
 
 export const STAFF_ENROLLMENT_STATE_PREFIX = "se1";
@@ -15,6 +16,8 @@ export const STAFF_ENROLLMENT_STATE_TTL_SECONDS = 10 * 60;
 export const STAFF_ENROLLMENT_STATE_MAX_TOKEN_LENGTH = 3072;
 
 const OPAQUE_PATTERN = /^[A-Za-z0-9_-]{43,128}$/;
+const SEALED_GRANT_PATTERN = /^v1\.[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]{20,}$/;
+const GRANT_AAD = Buffer.from("staff_google_enrollment", "utf8");
 const CLAIM_KEYS = ["exp", "grant", "iat", "nonce", "redirectUri", "state", "typ", "v", "verifier"] as const;
 
 export type StaffEnrollmentStateClaims = {
@@ -56,14 +59,17 @@ export function createStaffEnrollmentState(input: {
     state: randomBytes(32).toString("base64url"),
     nonce: randomBytes(32).toString("base64url"),
     verifier: randomBytes(32).toString("base64url"),
-    grant: input.grant,
+    grant: sealGrant(input.grant, secret),
     redirectUri: input.redirectUri,
     iat: nowSec,
     exp: nowSec + STAFF_ENROLLMENT_STATE_TTL_SECONDS,
   };
   const json = canonical(claims);
   const signed = `${STAFF_ENROLLMENT_STATE_PREFIX}.${Buffer.from(json, "utf8").toString("base64url")}`;
-  return { token: `${signed}.${signBytes(signed, secret)}`, claims: { ...claims } };
+  return {
+    token: `${signed}.${signBytes(signed, secret)}`,
+    claims: { ...claims, grant: input.grant },
+  };
 }
 
 export function verifyStaffEnrollmentState(input: {
@@ -110,10 +116,12 @@ function readToken(token: string, secret: string): StaffEnrollmentStateClaims | 
       !OPAQUE_PATTERN.test(record.state) ||
       !OPAQUE_PATTERN.test(record.nonce) ||
       !OPAQUE_PATTERN.test(record.verifier) ||
-      !STAFF_ENROLLMENT_SECRET_PATTERN.test(record.grant)
+      !SEALED_GRANT_PATTERN.test(record.grant)
     ) {
       return null;
     }
+    const grant = openGrant(record.grant, secret);
+    if (!grant) return null;
     if (typeof record.redirectUri !== "string" || !acceptableRedirect(record.redirectUri)) return null;
     if (!isTimestamp(record.iat) || !isTimestamp(record.exp) || record.exp !== record.iat + STAFF_ENROLLMENT_STATE_TTL_SECONDS) {
       return null;
@@ -124,7 +132,7 @@ function readToken(token: string, secret: string): StaffEnrollmentStateClaims | 
       state: record.state,
       nonce: record.nonce,
       verifier: record.verifier,
-      grant: record.grant,
+      grant,
       redirectUri: record.redirectUri,
       iat: record.iat,
       exp: record.exp,
@@ -148,6 +156,45 @@ function canonical(value: object): string {
   const sorted: Record<string, unknown> = {};
   for (const key of Object.keys(record).sort()) sorted[key] = record[key];
   return JSON.stringify(sorted);
+}
+
+function sealGrant(grant: string, secret: string): string {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", grantKey(secret), iv);
+  cipher.setAAD(GRANT_AAD);
+  const encrypted = Buffer.concat([cipher.update(grant, "utf8"), cipher.final(), cipher.getAuthTag()]);
+  return `v1.${iv.toString("base64url")}.${encrypted.toString("base64url")}`;
+}
+
+function openGrant(sealed: string, secret: string): string | null {
+  const parts = sealed.split(".");
+  if (parts.length !== 3 || parts[0] !== "v1") return null;
+  try {
+    const iv = Buffer.from(parts[1], "base64url");
+    const packed = Buffer.from(parts[2], "base64url");
+    if (iv.length !== 12 || packed.length <= 16 || parts[1] !== iv.toString("base64url") || parts[2] !== packed.toString("base64url")) {
+      return null;
+    }
+    const decipher = createDecipheriv("aes-256-gcm", grantKey(secret), iv);
+    decipher.setAAD(GRANT_AAD);
+    decipher.setAuthTag(packed.subarray(packed.length - 16));
+    const grant = Buffer.concat([decipher.update(packed.subarray(0, packed.length - 16)), decipher.final()]).toString("utf8");
+    return STAFF_ENROLLMENT_SECRET_PATTERN.test(grant) ? grant : null;
+  } catch {
+    return null;
+  }
+}
+
+function grantKey(secret: string): Buffer {
+  return Buffer.from(
+    hkdfSync(
+      "sha256",
+      Buffer.from(secret, "utf8"),
+      Buffer.from("sa360-staff-enrollment-grant", "utf8"),
+      Buffer.from("sa360-staff-enrollment-state-grant-v1", "utf8"),
+      32
+    )
+  );
 }
 
 function signBytes(value: string, secret: string): string {

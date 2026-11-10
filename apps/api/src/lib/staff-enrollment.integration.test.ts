@@ -78,25 +78,26 @@ describe("staff enrollment binding (local sa360_test)", { skip: !runIntegration 
     );
     assert.equal(await db.staffPrincipal.count({ where: { email: mailbox } }), 1);
 
+    const boundSub = `bound${randomBytes(8).toString("hex")}`;
     assert.deepEqual(
       await bindStaffEnrollment(
-        { enrollmentSecret: issued.enrollmentSecret, identity: { sub: `${SUB}0`, email: mailbox, emailVerified: true } },
+        { enrollmentSecret: issued.enrollmentSecret, identity: { sub: boundSub, email: mailbox, emailVerified: true } },
         db
       ),
       { ok: true, staffPrincipalId: created.staffPrincipalId }
     );
     const principal = await db.staffPrincipal.findUniqueOrThrow({ where: { id: created.staffPrincipalId } });
-    assert.equal(principal.providerSubject, `${SUB}0`);
+    assert.equal(principal.providerSubject, boundSub);
     assert.equal(principal.emailVerified, true);
     const grant = await db.staffEnrollmentGrant.findUniqueOrThrow({ where: { id: issued.grantId } });
     assert.equal(grant.status, "consumed");
     const event = await db.staffEnrollmentEvent.findFirstOrThrow({ where: { grantId: issued.grantId, kind: "consumed" } });
-    assert.equal(event.googleSub, `${SUB}0`);
+    assert.equal(event.googleSub, boundSub);
     assert.equal(JSON.stringify(event).includes(issued.enrollmentSecret), false);
     assert.equal(await db.staffPermission.count({ where: { staffPrincipalId: created.staffPrincipalId } }), 0);
     assert.equal(
       (await bindStaffEnrollment(
-        { enrollmentSecret: issued.enrollmentSecret, identity: { sub: `${SUB}0`, email: mailbox, emailVerified: true } },
+        { enrollmentSecret: issued.enrollmentSecret, identity: { sub: boundSub, email: mailbox, emailVerified: true } },
         db
       )).ok,
       false

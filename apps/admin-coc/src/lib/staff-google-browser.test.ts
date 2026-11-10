@@ -87,6 +87,7 @@ test("the start redirect is the dedicated google endpoint and the callback binds
       exchangedRedirect = input.config.redirectUri;
       return { ok: true, idToken: "header.payload.signature" };
     },
+    claimState: async () => ({ ok: true }),
     resolve: async (value) => {
       assert.equal(value.nonce, location.searchParams.get("nonce"));
       return { ok: true, staffPrincipalId: PRINCIPAL, googleSub: SUB };
@@ -101,12 +102,17 @@ test("the start redirect is the dedicated google endpoint and the callback binds
   assert.equal(session.claims.sub, PRINCIPAL);
   assert.equal("role" in session.claims, false);
 
+  let claims = 0;
   const reused = await completeStaffGoogleCallback({
     env: ENV,
     code: "authorization-code",
     queryState: location.searchParams.get("state") ?? undefined,
     stateCookie: started.stateCookie.value,
     nowSec: NOW,
+    claimState: async () => {
+      claims += 1;
+      return { ok: false, code: "reused_state" };
+    },
     exchange: async () => {
       throw new Error("reused state must not exchange");
     },
@@ -115,18 +121,24 @@ test("the start redirect is the dedicated google endpoint and the callback binds
     },
   });
   assert.deepEqual(reused, { kind: "denied", reason: "reused_state" });
+  assert.equal(claims, 1);
 });
 
 test("a mismatched state is denied before token exchange", async () => {
   const started = startStaffGoogleSignIn({ env: ENV, nowSec: NOW });
   if (started.kind !== "redirect") throw new Error("expected redirect");
   let called = false;
+  let claimed = false;
   const outcome = await completeStaffGoogleCallback({
     env: ENV,
     code: "authorization-code",
     queryState: "attacker-state-value-that-does-not-match-cookie",
     stateCookie: started.stateCookie.value,
     nowSec: NOW,
+    claimState: async () => {
+      claimed = true;
+      return { ok: true };
+    },
     exchange: async () => {
       called = true;
       return { ok: false, code: "exchange_failed" };
@@ -138,6 +150,31 @@ test("a mismatched state is denied before token exchange", async () => {
   assert.equal(outcome.kind, "denied");
   if (outcome.kind === "denied") assert.equal(outcome.reason, "csrf");
   assert.equal(called, false);
+  assert.equal(claimed, false);
+});
+
+test("a failed state claim does not exchange a code or mint a session", async () => {
+  const started = startStaffGoogleSignIn({ env: ENV, nowSec: NOW });
+  if (started.kind !== "redirect") throw new Error("expected redirect");
+  let exchanged = false;
+  const outcome = await completeStaffGoogleCallback({
+    env: ENV,
+    code: "authorization-code",
+    queryState: new URL(started.location).searchParams.get("state") ?? undefined,
+    stateCookie: started.stateCookie.value,
+    nowSec: NOW,
+    claimState: async () => {
+      throw new Error("redis timeout");
+    },
+    exchange: async () => {
+      exchanged = true;
+      return { ok: true, idToken: "synthetic-id-token" };
+    },
+    resolve: async () => ({ ok: true, staffPrincipalId: PRINCIPAL, googleSub: SUB }),
+  });
+  assert.deepEqual(outcome, { kind: "denied", reason: "state_unavailable" });
+  assert.equal(exchanged, false);
+  assert.equal("sessionToken" in outcome, false);
 });
 
 test("the server client sends the staff service credential and no shared admin key", async () => {
@@ -153,8 +190,21 @@ test("the server client sends the staff service credential and no shared admin k
     nowSec: NOW,
     exchange: async () => ({ ok: true, idToken: "synthetic-id-token" }),
     fetchImpl: async (url, init) => {
-      resolveHeaders = Object.fromEntries(new Headers(init?.headers).entries());
-      assert.equal(String(url), "https://api.example.test/internal/staff/google/resolve");
+      const target = String(url);
+      const headers = Object.fromEntries(new Headers(init?.headers).entries());
+      if (target.endsWith("/internal/staff/google/state/consume")) {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        assert.equal(typeof body.replayId, "string");
+        assert.equal(String(body.replayId).length, 64);
+        assert.equal("verifier" in body, false);
+        assert.equal("code" in body, false);
+        assert.equal("staffPrincipalId" in body, false);
+        assert.equal(headers["x-sa360-staff-google-service"], ENV.SA360_STAFF_GOOGLE_SERVICE_SECRET);
+        assert.equal(headers["x-sa360-admin-key"], undefined);
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      resolveHeaders = headers;
+      assert.equal(target, "https://api.example.test/internal/staff/google/resolve");
       return new Response(JSON.stringify({ ok: true, staffPrincipalId: PRINCIPAL, googleSub: SUB }), { status: 200 });
     },
   });

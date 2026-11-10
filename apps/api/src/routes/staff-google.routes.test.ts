@@ -390,3 +390,90 @@ test("service authentication is required and does not identify a person", async 
   assert.equal(collapsed.statusCode, 404);
   assert.deepEqual(copied.calls, []);
 });
+
+test("state consumption is authenticated, single use, and hidden while unconfigured", async () => {
+  const replayId = "a".repeat(64);
+  const seen = new Set<string>();
+  let claims = 0;
+  const claimReplay = async (id: string) => {
+    claims += 1;
+    if (seen.has(id)) return "reused" as const;
+    seen.add(id);
+    return "claimed" as const;
+  };
+  const calls: string[] = [];
+  const first = Fastify();
+  const second = Fastify();
+  await first.register(staffGoogleRoutes, {
+    env: enabled(),
+    claimReplay,
+    verifyIdToken: async () => {
+      calls.push("verify");
+      return { ok: false, code: "invalid_token" };
+    },
+    findByGoogleSubject: async () => {
+      calls.push("lookup");
+      return null;
+    },
+  });
+  await second.register(staffGoogleRoutes, {
+    env: enabled(),
+    claimReplay,
+    findById: async () => {
+      calls.push("lookup");
+      return null;
+    },
+  });
+
+  const missing = await first.inject({
+    method: "POST",
+    url: "/internal/staff/google/state/consume",
+    headers: { "x-sa360-admin-key": "shared-admin-key" },
+    payload: { replayId, staffPrincipalId: PRINCIPAL },
+  });
+  assert.equal(missing.statusCode, 401);
+  assert.equal(claims, 0);
+
+  const claimed = await first.inject({
+    method: "POST",
+    url: "/internal/staff/google/state/consume",
+    headers: serviceHeaders(),
+    payload: { replayId, staffPrincipalId: PRINCIPAL, sub: SUB },
+  });
+  assert.equal(claimed.statusCode, 200);
+  assert.deepEqual(claimed.json(), { ok: true });
+  const replayed = await second.inject({
+    method: "POST",
+    url: "/internal/staff/google/state/consume",
+    headers: serviceHeaders(),
+    payload: { replayId },
+  });
+  assert.equal(replayed.statusCode, 401);
+  assert.deepEqual(replayed.json(), { ok: false });
+  assert.deepEqual(calls, []);
+
+  const hidden = Fastify();
+  await hidden.register(staffGoogleRoutes, {
+    env: {},
+    claimReplay: async () => {
+      throw new Error("disabled consume must not reach redis");
+    },
+  });
+  const disabled = await hidden.inject({
+    method: "POST",
+    url: "/internal/staff/google/state/consume",
+    headers: serviceHeaders(),
+    payload: { replayId },
+  });
+  assert.equal(disabled.statusCode, 404);
+
+  const down = Fastify();
+  await down.register(staffGoogleRoutes, { env: enabled(), claimReplay: async () => "unavailable" });
+  const failed = await down.inject({
+    method: "POST",
+    url: "/internal/staff/google/state/consume",
+    headers: serviceHeaders(),
+    payload: { replayId: "b".repeat(64) },
+  });
+  assert.equal(failed.statusCode, 503);
+});

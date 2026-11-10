@@ -78,11 +78,9 @@ compare-and-set and can race with another refresh.
 
 ## Missing backend
 
-There is no request table for an intended spreadsheet id and worksheet id.
-`GhlDestinationConfigurationRequest` is the pattern: a stored request that
-delivery, dispatch, and routing do not read. Company Sheets does not have
-that table. Adding it needs a migration, which this change does not include.
-
-Until that request exists, Team Workspace cannot store a spreadsheet choice
-without writing `CompanySheetsDestination` or a Drive file. The guide keeps
-the choice on the page and labels it unsaved.
+The discovery guide still does not store a spreadsheet choice. A later
+request-only table, `CompanySheetsDestinationConfigurationRequest`, can hold
+an intended spreadsheet id and worksheet id. Delivery, dispatch, routing, and
+fulfillment do not read it. The guide does not call that API, and
+`SA360_COMPANY_SHEETS_CONFIG_REQUEST_ENABLED` stays default-off. A choice on
+this page remains unsaved until a separate UI task uses that request.

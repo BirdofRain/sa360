@@ -61,3 +61,11 @@ Applying that row would remain a separate, explicit confirm or rule write. This 
 The admin routes are `GET` and `POST /admin/v1/clients/:clientAccountId/source-campaign-requests`. They require the admin API key. `SA360_SOURCE_CAMPAIGN_REQUEST_ENABLED` must be the exact string `true`. The saved `ClientOnboardingSetup` document must parse, and its revision must match the call. A stale or unreadable setup is not stored.
 
 Merging the migration makes `sa360-migrate` apply it on the next API predeploy. That apply creates an empty table and a foreign key on `ClientAccount`. It does not turn the flag on. Do not merge until that migration is reviewed.
+
+## Phase 2G request panel
+
+Team Workspace shows the current request head inside the guided Source & Campaign step. It uses the existing `GET` and `POST /admin/v1/clients/:clientAccountId/source-campaign-requests` routes. The panel reads the saved setup, echoes that setup's normalized identifiers, and can reject an open proposal. It does not call source confirmation, source reassignment, `CampaignRoutingRule` creation, GoHighLevel delivery, Company Sheets dispatch, or notification sending.
+
+The panel stays off unless `NEXT_PUBLIC_SA360_TEAM_WORKSPACE_ENABLED`, `SA360_TEAM_WORKSPACE_ENABLED`, `SA360_NATIVE_CLIENT_SETUP_ENABLED`, and `SA360_SOURCE_CAMPAIGN_REQUEST_ENABLED` allow it. A stored `requested` or `rejected` row is not an approved association. The source check above the panel remains the evidence for whether source records already confirm ownership.
+
+The request-chain revision is the maximum stored revision. An open proposal can keep an earlier revision after a later ownership rejection is stored. The next submit or operator rejection sends that chain revision as `expectedRevision`. An open revision above the chain revision is not shown.

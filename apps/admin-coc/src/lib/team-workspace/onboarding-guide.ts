@@ -1,6 +1,7 @@
 import type { ClientSetupData } from "@/lib/clients/types";
 
 import { isSafeTeamWorkspaceId } from "./contract";
+import type { SourceCampaignRequestView } from "./source-campaign-request";
 import type { SourceCampaignReviewView } from "./source-campaign-review";
 
 /**
@@ -103,6 +104,8 @@ export type GuidedOnboardingModel = {
    * Missing means the check was not loaded. It is not a verification.
    */
   sourceCampaignReview?: SourceCampaignReviewView | null;
+  /** Current request-chain head. Missing means the request route was not read. */
+  sourceCampaignRequest?: SourceCampaignRequestView | null;
   /** A setup request is never an operational switch. */
   operational: false;
 };

@@ -52,19 +52,45 @@ function verifiedReview(revision: number, overrides: Record<string, unknown> = {
   };
 }
 
+function workspaceBody() {
+  return {
+    ok: true,
+    contractVersion: "team_workspace_delivery_v1",
+    client: { clientAccountId: "alex_gross", clientDisplayName: "Alex Gross", status: "onboarding" },
+    setupRequest: { present: true, status: "draft", revision: 4, destinationChoice: "undecided", operational: false },
+    destinations: {
+      ghl: { configured: false, deliveryEnabled: false, deliveryMode: null, locationIdPresent: false },
+      companySheets: { configured: false, campaignDispatchEnabled: false, campaignDispatchNotBefore: null, agedDispatchEnabled: false },
+      customWebhook: { present: false, enabled: false, endpointHost: null },
+    },
+    recentCanonicalDeliveries: [],
+    clientNotification: { enabled: false, canEnable: false, blockedReason: "recipient_not_verified", recipientVerified: false, revision: 0 },
+    notifications: { items: [] },
+  };
+}
+
 async function loadWith(
   handlers: {
     setup?: () => unknown;
     setupStatus?: number;
     review?: (url: string) => unknown;
+    request?: () => unknown;
+    requestStatus?: number;
   },
-  options: { nativeSetup?: boolean } = {}
+  options: { nativeSetup?: boolean; requestEnabled?: boolean; workspaceReady?: boolean } = {}
 ) {
   process.env.ADMIN_COC_PASSWORD = "operator-password";
   process.env.ADMIN_COC_SESSION_SECRET = SECRET;
   process.env.NEXT_PUBLIC_SA360_TEAM_WORKSPACE_ENABLED = "true";
   if (options.nativeSetup === false) delete process.env.SA360_NATIVE_CLIENT_SETUP_ENABLED;
   else process.env.SA360_NATIVE_CLIENT_SETUP_ENABLED = "true";
+  if (options.requestEnabled) {
+    process.env.SA360_TEAM_WORKSPACE_ENABLED = "true";
+    process.env.SA360_SOURCE_CAMPAIGN_REQUEST_ENABLED = "true";
+  } else {
+    delete process.env.SA360_TEAM_WORKSPACE_ENABLED;
+    delete process.env.SA360_SOURCE_CAMPAIGN_REQUEST_ENABLED;
+  }
   process.env.NEXT_PUBLIC_SA360_API_BASE_URL = "https://api.example.test";
   process.env.SA360_ADMIN_API_KEY = "test-admin-key";
   const session = await import("../admin-coc-session.ts");
@@ -85,8 +111,15 @@ async function loadWith(
       return json(handlers.setup ? handlers.setup() : setupDocument(4), handlers.setupStatus ?? 200);
     }
     if (url.includes("/source-campaign-review")) return json(handlers.review ? handlers.review(url) : verifiedReview(4));
+    if (url.includes("/source-campaign-requests")) {
+      const body = handlers.request ? handlers.request() : { ok: false, error: "source_campaign_request_disabled" };
+      const status = handlers.requestStatus ?? (handlers.request ? 200 : 404);
+      return json(body, status);
+    }
     if (url.includes("/onboarding")) return json({ error: "onboarding_read_disabled" }, 404);
-    if (url.includes("/team-workspace/")) return json({ error: "team_workspace_disabled" }, 404);
+    if (url.includes("/team-workspace/")) {
+      return options.workspaceReady ? json(workspaceBody()) : json({ error: "team_workspace_disabled" }, 404);
+    }
     return json({ error: "request_failed" }, 500);
   }) as typeof fetch;
   try {
@@ -100,6 +133,8 @@ async function loadWith(
     guard.useAdminCocTestSessionCookie(undefined);
     delete process.env.NEXT_PUBLIC_SA360_TEAM_WORKSPACE_ENABLED;
     delete process.env.SA360_NATIVE_CLIENT_SETUP_ENABLED;
+    delete process.env.SA360_TEAM_WORKSPACE_ENABLED;
+    delete process.env.SA360_SOURCE_CAMPAIGN_REQUEST_ENABLED;
   }
 }
 
@@ -222,6 +257,125 @@ test("native setup turned off does not display a verified review", async () => {
   assert.equal(review?.availability, "unavailable");
   assert.equal(review?.sourceAssociated, false);
   assert.match(review?.attention.join(" ") ?? "", /native client setup is turned off/);
+});
+
+test("a disabled request flag does not call the request route", async () => {
+  const { detail, calls } = await loadWith({});
+  assert.equal(calls.some((url) => url.includes("/source-campaign-requests")), false);
+  assert.equal(detail.kind, "ready");
+  if (detail.kind !== "ready") return;
+  assert.equal(detail.guide?.sourceCampaignRequest?.availability, "disabled");
+});
+
+test("the request head is loaded with GET and kept as a proposal", async () => {
+  const { detail, calls } = await loadWith(
+    {
+      request: () => ({
+        ok: true,
+        clientAccountId: "alex_gross",
+        revision: 4,
+        openRequest: {
+          requestId: "11111111-1111-4111-8111-111111111111",
+          status: "requested",
+          revision: 4,
+          setupRevision: 4,
+          providerFunnelId: "funnel-north",
+          parentUrlKey: null,
+          providerCampaignId: "campaign-north",
+          requestedAssociation: true,
+          createdAt: "2026-11-10T16:04:00.000Z",
+        },
+        associationApplied: false,
+        routingRuleApplied: false,
+        deliveryArmed: false,
+        confirmedOperationalAssociation: false,
+      }),
+    },
+    { requestEnabled: true, workspaceReady: true }
+  );
+  const requestCalls = calls.filter((url) => url.includes("/source-campaign-requests"));
+  assert.equal(requestCalls.length, 1);
+  assert.equal(detail.kind, "ready");
+  if (detail.kind !== "ready") return;
+  const head = detail.guide?.sourceCampaignRequest;
+  assert.equal(head?.availability, "ready", JSON.stringify(head));
+  if (head?.availability !== "ready") return;
+  assert.equal(head.revision, 4);
+  assert.equal(head.openRequest?.status, "requested");
+  assert.equal(head.openRequest?.providerCampaignId, "campaign-north");
+  assert.equal(head.openRequest?.setupRevision, 4);
+});
+
+test("an older open proposal remains loaded when a later rejection raised the chain", async () => {
+  const { detail } = await loadWith(
+    {
+      request: () => ({
+        ok: true,
+        clientAccountId: "alex_gross",
+        revision: 2,
+        openRequest: {
+          requestId: "11111111-1111-4111-8111-111111111111",
+          status: "requested",
+          revision: 1,
+          setupRevision: 4,
+          providerFunnelId: "funnel-north",
+          parentUrlKey: null,
+          providerCampaignId: "campaign-north",
+          requestedAssociation: true,
+          createdAt: "2026-11-10T16:04:00.000Z",
+        },
+        associationApplied: false,
+        routingRuleApplied: false,
+        deliveryArmed: false,
+        confirmedOperationalAssociation: false,
+      }),
+    },
+    { requestEnabled: true, workspaceReady: true }
+  );
+  assert.equal(detail.kind, "ready");
+  if (detail.kind !== "ready") return;
+  const head = detail.guide?.sourceCampaignRequest;
+  assert.equal(head?.availability, "ready");
+  if (head?.availability !== "ready") return;
+  assert.equal(head.revision, 2);
+  assert.equal(head.openRequest?.revision, 1);
+  assert.equal(head.openRequest?.setupRevision, 4);
+  assert.equal(head.openRequest?.providerCampaignId, "campaign-north");
+});
+
+test("the team workspace API flag blocks the request read", async () => {
+  const { calls, detail } = await loadWith({ request: () => ({ ok: true }) }, { requestEnabled: true, workspaceReady: false });
+  assert.equal(calls.some((url) => url.includes("/source-campaign-requests")), false);
+  assert.equal(detail.kind, "ready");
+  if (detail.kind !== "ready") return;
+  assert.equal(detail.guide?.sourceCampaignRequest?.availability, "disabled");
+  if (detail.guide?.sourceCampaignRequest?.availability === "disabled") {
+    assert.equal(detail.guide.sourceCampaignRequest.reason, "workspace_api");
+  }
+});
+
+test("a request payload that claims an operational write is not shown", async () => {
+  const { detail } = await loadWith(
+    {
+      request: () => ({
+        ok: true,
+        clientAccountId: "alex_gross",
+        revision: 1,
+        openRequest: null,
+        associationApplied: true,
+        routingRuleApplied: false,
+        deliveryArmed: false,
+        confirmedOperationalAssociation: false,
+      }),
+    },
+    { requestEnabled: true, workspaceReady: true }
+  );
+  assert.equal(detail.kind, "ready");
+  if (detail.kind !== "ready") return;
+  assert.equal(detail.guide?.sourceCampaignRequest?.availability, "error");
+  if (detail.guide?.sourceCampaignRequest?.availability === "error") {
+    assert.match(detail.guide.sourceCampaignRequest.message, /could not be read/);
+  }
 });
 
 function json(body: unknown, status = 200): Response {

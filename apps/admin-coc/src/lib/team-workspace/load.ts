@@ -12,6 +12,13 @@ import { guidedOnboardingFromReads } from "./onboarding-guide";
 import { assembleTeamWorkspaceDetail, projectClientOptions, projectRoutingRules } from "./present";
 import { parseTeamWorkspaceResponse, readAdminErrorCode } from "./parse";
 import { parseSourceCampaignReview, unavailableSourceCampaignReview, type SourceCampaignReviewView } from "./source-campaign-review";
+import {
+  disabledSourceCampaignRequest,
+  parseSourceCampaignRequestHead,
+  sourceCampaignRequestBlockedReason,
+  sourceCampaignRequestPath,
+  type SourceCampaignRequestView,
+} from "./source-campaign-request";
 import type {
   AccountSlice,
   OnboardingSlice,
@@ -63,6 +70,7 @@ export async function loadTeamWorkspaceClient(rawId: string): Promise<TeamWorksp
   });
   if (assembled.kind !== "ready") return assembled;
   const sourceCampaignReview = await loadSourceCampaignReview(clientAccountId, setupEnabled, setupResult);
+  const sourceCampaignRequest = await loadSourceCampaignRequest(clientAccountId, workspace);
   return {
     ...assembled,
     guide: {
@@ -79,8 +87,36 @@ export async function loadTeamWorkspaceClient(rawId: string): Promise<TeamWorksp
         verification: onboardingSlice,
       }),
       sourceCampaignReview,
+      sourceCampaignRequest,
     },
   };
+}
+
+async function loadSourceCampaignRequest(
+  clientAccountId: string,
+  workspace: WorkspaceAvailability
+): Promise<SourceCampaignRequestView> {
+  const blocked = sourceCampaignRequestBlockedReason();
+  if (blocked) return disabledSourceCampaignRequest(blocked);
+  if (workspace.availability === "disabled") return disabledSourceCampaignRequest("workspace_api");
+  const result = await adminFetchJson<unknown>(sourceCampaignRequestPath(clientAccountId));
+  if (!result.ok) {
+    const code = readAdminErrorCode(result.status, result.body);
+    if (code === "source_campaign_request_disabled" || code === "feature_disabled") {
+      return disabledSourceCampaignRequest("request_flag");
+    }
+    if (code === "team_workspace_disabled") return disabledSourceCampaignRequest("workspace_api");
+    return {
+      availability: "error",
+      message: "The source and campaign request could not be loaded. Nothing was submitted.",
+    };
+  }
+  return (
+    parseSourceCampaignRequestHead(result.data) ?? {
+      availability: "error",
+      message: "The source and campaign request could not be read. Nothing was submitted.",
+    }
+  );
 }
 
 const SETUP_STATUSES = new Set(["draft", "submitted", "needs_information", "setup_reviewed"]);

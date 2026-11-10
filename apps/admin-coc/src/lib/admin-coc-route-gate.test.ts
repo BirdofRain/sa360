@@ -387,11 +387,16 @@ test("staff sign-in paths stay exact and do not grant operator access", () => {
   assertAllow(decision(UNAUTH_ADMIN, "/staff/google/start"));
   assertAllow(decision(UNAUTH_ADMIN, "/staff/google/callback"));
   assertAllow(decision(UNAUTH_ADMIN, "/staff/google/logout"));
+  assertAllow(decision(UNAUTH_ADMIN, "/staff/google/enroll/start"));
+  assertAllow(decision(UNAUTH_ADMIN, "/staff/google/enroll/callback"));
+  assertAllow(decision(UNAUTH_ADMIN, "/staff/google/enroll/complete"));
   assertAllow(decision(UNAUTH_ADMIN, "/login"));
   assertRedirect(decision(UNAUTH_ADMIN, "/team-workspace"), "/login", "/team-workspace");
+  assertRedirect(decision(UNAUTH_ADMIN, "/facebook-intake/source-resolution"), "/login", "/facebook-intake/source-resolution");
   assertAllow(decision(AUTH_ADMIN, "/team-workspace"));
   assertRedirect(decision(UNAUTH_ADMIN, "/staff/google/start/extra"), "/login", "/staff/google/start/extra");
   assertRedirect(decision(UNAUTH_ADMIN, "/staff/../login"), "/login", "/staff/../login");
   assert.deepEqual(decision(MARKETING, "/staff"), { kind: "not-found" });
   assert.deepEqual(decision(MARKETING, "/staff/google/callback"), { kind: "not-found" });
+  assert.deepEqual(decision(MARKETING, "/staff/google/enroll/start"), { kind: "not-found" });
 });

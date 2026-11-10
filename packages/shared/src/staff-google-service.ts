@@ -18,6 +18,9 @@ const FORBIDDEN_ENV_KEYS = [
   "AGENT_WORKSPACE_API_KEY",
   "SA360_WORKSPACE_SECRET",
   "SA360_STAFF_SESSION_SECRET",
+  "SA360_STAFF_ENROLLMENT_ISSUER_SECRET",
+  "SA360_STAFF_ASSERTION_SECRET",
+  "ADMIN_COC_PASSWORD",
 ] as const;
 
 export function readStaffGoogleServiceSecret(env: NodeJS.ProcessEnv = process.env): string | null {

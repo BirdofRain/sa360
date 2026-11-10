@@ -4293,7 +4293,7 @@ model StaffPrincipal {
   emailVerified   Boolean               @default(false)
   displayName     String?
   provider        StaffIdentityProvider @default(google)
-  /// Google `sub`, or null until a verified login binds it. Immutable once set.
+  /// Google `sub`, or null until an approved enrollment binds it. Immutable once set.
   providerSubject String?
   status          StaffPrincipalStatus  @default(disabled)
   /// Required while disabled. Must be null while active.
@@ -4301,6 +4301,7 @@ model StaffPrincipal {
   createdAt       DateTime              @default(now())
   updatedAt       DateTime              @updatedAt
   permissions     StaffPermission[]
+  enrollmentGrants StaffEnrollmentGrant[]
 
   @@unique([provider, providerSubject], map: "StaffPrincipal_provider_subject_key")
   @@index([status])
@@ -4332,4 +4333,49 @@ model StaffPermission {
   updatedAt        DateTime              @updatedAt
 
   @@index([staffPrincipalId, permission])
+}
+
+/// One-time authorization to bind one Google subject to one existing principal.
+/// The invitation secret is not stored. secretDigest is its SHA-256 hex.
+/// A pending row is the only usable grant. Consumed and canceled are terminal.
+/// This table does not grant a StaffPermission.
+enum StaffEnrollmentGrantStatus {
+  pending
+  consumed
+  canceled
+}
+
+enum StaffEnrollmentEventKind {
+  issued
+  canceled
+  consumed
+}
+
+model StaffEnrollmentGrant {
+  id               String                     @id @default(cuid())
+  staffPrincipalId String
+  staffPrincipal   StaffPrincipal             @relation(fields: [staffPrincipalId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  secretDigest     String                     @unique
+  status           StaffEnrollmentGrantStatus @default(pending)
+  expiresAt        DateTime
+  consumedAt       DateTime?
+  canceledAt       DateTime?
+  createdAt        DateTime                   @default(now())
+  updatedAt        DateTime                   @updatedAt
+  events           StaffEnrollmentEvent[]
+
+  @@index([staffPrincipalId, status])
+}
+
+/// Append-only enrollment audit. No OAuth token and no invitation secret.
+model StaffEnrollmentEvent {
+  id               String                   @id @default(cuid())
+  grantId          String
+  grant            StaffEnrollmentGrant     @relation(fields: [grantId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  staffPrincipalId String
+  kind             StaffEnrollmentEventKind
+  googleSub        String?
+  createdAt        DateTime                 @default(now())
+
+  @@index([staffPrincipalId, createdAt])
 }

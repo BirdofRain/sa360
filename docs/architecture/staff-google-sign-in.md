@@ -108,14 +108,18 @@ secret, the client portal key, the Agent Workspace keys, and the staff session
 secret. Comparison hashes both sides and uses a constant-time check. A missing
 or reused secret leaves the endpoint unconfigured.
 
-When the feature flag is not exactly `true`, or the audience, session secret,
-or service secret is missing, both internal routes return 404 and do not
-verify a token, validate a session, or look up a principal. When the endpoint
-is configured, a missing or wrong service header returns 401 before those
-steps. The shared admin API key, portal key, workspace key, operator label,
-and shared-password cookie do not satisfy the check. A valid service header
-does not identify a person: the existing Google and principal checks still
-have to pass.
+Both internal routes use the same readiness check. They return 404 unless the
+flag is exactly `true`, `SA360_STAFF_GOOGLE_CLIENT_ID` is a valid Google
+client id, `SA360_STAFF_SESSION_SECRET` is valid, and the service secret is
+valid and distinct from the other credentials. A missing prerequisite returns
+404 before token verification, session parsing, or a principal lookup. The
+API does not read the Google client secret; that value belongs only on the
+Admin C.O.C. server, which also requires the redirect URI before sign-in
+starts. When the API is ready, a missing or wrong service header returns 401
+before those steps. The shared admin API key, portal key, workspace key,
+operator label, and shared-password cookie do not satisfy the check. A valid
+service header does not identify a person: the existing Google and principal
+checks still have to pass.
 
 ## Google Cloud Console
 

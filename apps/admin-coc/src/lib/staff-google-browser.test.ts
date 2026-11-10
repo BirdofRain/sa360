@@ -10,6 +10,7 @@ import { ADMIN_COC_ROLE_ADMIN } from "./admin-coc-observer-access.ts";
 import {
   completeStaffGoogleCallback,
   readLiveStaffSession,
+  staffGoogleConfigReady,
   staffLogoutClearCookie,
   startStaffGoogleSignIn,
 } from "./staff-google-browser.ts";
@@ -32,24 +33,35 @@ const ENV: NodeJS.ProcessEnv = {
 };
 
 test("google staff sign-in stays unavailable until the flag and secrets exist", async () => {
-  let called = false;
-  const exchange = async () => {
-    called = true;
-    return { ok: false as const, code: "exchange_failed" as const };
-  };
-  assert.equal(startStaffGoogleSignIn({ env: {}, nowSec: NOW }).kind, "unavailable");
-  assert.equal(startStaffGoogleSignIn({ env: { ...ENV, SA360_STAFF_GOOGLE_CLIENT_SECRET: "" }, nowSec: NOW }).kind, "unavailable");
-  assert.equal(startStaffGoogleSignIn({ env: { ...ENV, SA360_STAFF_GOOGLE_SERVICE_SECRET: "" }, nowSec: NOW }).kind, "unavailable");
-  const callback = await completeStaffGoogleCallback({
-    env: {},
-    code: "authorization-code",
-    queryState: "state",
-    stateCookie: "cookie",
-    nowSec: NOW,
-    exchange,
-  });
-  assert.deepEqual(callback, { kind: "unavailable" });
-  assert.equal(called, false);
+  const incomplete = [
+    {},
+    { ...ENV, SA360_STAFF_GOOGLE_SIGNIN_ENABLED: "false" },
+    { ...ENV, SA360_STAFF_GOOGLE_CLIENT_ID: "not-a-google-client" },
+    { ...ENV, SA360_STAFF_GOOGLE_CLIENT_SECRET: "" },
+    { ...ENV, SA360_STAFF_GOOGLE_REDIRECT_URI: "" },
+    { ...ENV, SA360_STAFF_SESSION_SECRET: "short" },
+    { ...ENV, SA360_STAFF_GOOGLE_SERVICE_SECRET: "" },
+    { ...ENV, SA360_STAFF_GOOGLE_SERVICE_SECRET: SECRET },
+  ];
+  for (const env of incomplete) {
+    let called = false;
+    assert.equal(staffGoogleConfigReady(env), false);
+    assert.equal(startStaffGoogleSignIn({ env, nowSec: NOW }).kind, "unavailable");
+    const callback = await completeStaffGoogleCallback({
+      env,
+      code: "authorization-code",
+      queryState: "state",
+      stateCookie: "cookie",
+      nowSec: NOW,
+      exchange: async () => {
+        called = true;
+        return { ok: false as const, code: "exchange_failed" as const };
+      },
+    });
+    assert.deepEqual(callback, { kind: "unavailable" });
+    assert.equal(called, false);
+  }
+  assert.equal(staffGoogleConfigReady(ENV), true);
 });
 
 test("the start redirect is the dedicated google endpoint and the callback binds only a resolved principal", async () => {

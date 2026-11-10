@@ -36,6 +36,19 @@ moduleLoader._load = function (request: string, parent: NodeModule, isMain: bool
   if (request === "next/navigation") {
     return { useRouter: () => ({ push: () => undefined, replace: () => undefined, refresh: () => refreshCalls.push("refresh") }) };
   }
+  if (request === "@/app/actions/team-workspace-ghl-destination") {
+    return {
+      loadTeamWorkspaceGhlDestinationAction: async () => ({
+        ok: false,
+        code: "FEATURE_DISABLED",
+        message: "Team Workspace is turned off. The GoHighLevel destination was not read, and delivery was not turned on.",
+        view: null,
+      }),
+      readTeamWorkspaceGhlSnapshotAction: async () => ({ ok: false, code: "FEATURE_DISABLED", message: "off", view: null }),
+      checkTeamWorkspaceGhlConnectionAction: async () => ({ ok: false, code: "FEATURE_DISABLED", message: "off", view: null }),
+      saveTeamWorkspaceGhlDestinationAction: async () => ({ ok: false, code: "WRITE_BLOCKED", message: "blocked", view: null }),
+    };
+  }
   if (request === "@/app/actions/source-campaign-request") {
     return {
       submitSourceCampaignRequestAction: async () => ({

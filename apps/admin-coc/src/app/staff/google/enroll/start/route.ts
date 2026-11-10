@@ -124,12 +124,16 @@ async function readBoundedBody(request: NextRequest): Promise<string | null> {
     body.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  return new TextDecoder("utf-8", { fatal: true }).decode(body);
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(body);
+  } catch {
+    return null;
+  }
 }
 
 function readSingleEnrollmentField(raw: string): string | null {
   if (raw.length === 0 || raw.length > MAX_ENROLLMENT_BODY_BYTES || raw.includes("\0")) return null;
-  const parts = raw.split("&").filter((part) => part.length > 0);
+  const parts = raw.split("&");
   if (parts.length !== 1 || !parts[0]?.startsWith("enrollment=")) return null;
   const encoded = parts[0].slice("enrollment=".length);
   if (encoded.length === 0 || encoded.includes("+") || encoded.includes("%")) return null;

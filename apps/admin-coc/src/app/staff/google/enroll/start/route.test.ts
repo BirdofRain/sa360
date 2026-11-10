@@ -37,7 +37,7 @@ function configure(apiOrigin?: string) {
   };
 }
 
-function formRequest(input: { origin?: string | null; headers?: Record<string, string>; body?: string; url?: string }) {
+function formRequest(input: { origin?: string | null; headers?: Record<string, string>; body?: string | Uint8Array; url?: string }) {
   const presented: Record<string, string> = { ...(input.headers ?? {}) };
   if (!("content-type" in presented)) presented["content-type"] = "application/x-www-form-urlencoded";
   if (input.origin !== undefined && input.origin !== null) presented.origin = input.origin;
@@ -235,6 +235,21 @@ test("cross-origin, malformed, and oversized enrollment posts are rejected", asy
         request: formRequest({ origin: "https://admin.example", body: "enrollment=not-a-secret" }),
         status: 404,
       },
+      {
+        label: "trailing ampersand",
+        request: formRequest({ origin: "https://admin.example", body: `enrollment=${SECRET}&` }),
+        status: 404,
+      },
+      {
+        label: "leading ampersand",
+        request: formRequest({ origin: "https://admin.example", body: `&enrollment=${SECRET}` }),
+        status: 404,
+      },
+      {
+        label: "repeated empty segments",
+        request: formRequest({ origin: "https://admin.example", body: `&&enrollment=${SECRET}&&` }),
+        status: 404,
+      },
     ];
     for (const item of cases) {
       const response = await POST(item.request);
@@ -247,6 +262,56 @@ test("cross-origin, malformed, and oversized enrollment posts are rejected", asy
       assert.equal(response.headers.get("referrer-policy"), "no-referrer", item.label);
     }
   } finally {
+    restore();
+  }
+});
+
+test("invalid UTF-8 and empty form segments never start enrollment", async () => {
+  const restore = configure("http://127.0.0.1:9");
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls += 1;
+    return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const invalidUtf8 = new Uint8Array(SECRET.length + "enrollment=".length);
+    invalidUtf8.set(new TextEncoder().encode(`enrollment=${SECRET}`));
+    invalidUtf8[invalidUtf8.length - 1] = 0xff;
+    const rejected: Array<{ label: string; body: string | Uint8Array; status: number }> = [
+      { label: "invalid utf-8", body: invalidUtf8, status: 403 },
+      { label: "trailing ampersand", body: `enrollment=${SECRET}&`, status: 404 },
+      { label: "leading ampersand", body: `&enrollment=${SECRET}`, status: 404 },
+      { label: "repeated empty segments", body: `enrollment=${SECRET}&&`, status: 404 },
+    ];
+    for (const item of rejected) {
+      const response = await POST(
+        formRequest({
+          origin: "https://admin.example",
+          headers: { "sec-fetch-site": "same-origin", "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" },
+          body: item.body,
+        })
+      );
+      const text = await response.text();
+      assert.equal(response.status, item.status, item.label);
+      assert.equal(text === "Forbidden" || text === "Not Found", true, item.label);
+      assert.equal(text.includes(SECRET), false, item.label);
+      assert.equal(response.headers.get("location"), null, item.label);
+      assert.equal(calls, 0, item.label);
+    }
+    const accepted = await POST(
+      formRequest({
+        origin: "https://admin.example",
+        headers: { "sec-fetch-site": "same-origin", "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" },
+        body: `enrollment=${SECRET}`,
+      })
+    );
+    assert.equal(accepted.status, 303);
+    assert.equal((accepted.headers.get("location") ?? "").startsWith("https://accounts.google.com/"), true);
+    assert.equal((accepted.headers.get("location") ?? "").includes(SECRET), false);
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
     restore();
   }
 });

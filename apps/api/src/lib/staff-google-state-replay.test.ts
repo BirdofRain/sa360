@@ -74,23 +74,78 @@ test("a redis failure or timeout is consumed once and fails closed", async () =>
   assert.equal(calls, 1);
 });
 
-test("two local redis clients share one atomic state claim", async () => {
+const LOCAL_REDIS_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
+const TEST_REDIS_FALLBACK_URL = "redis://127.0.0.1:6379/15";
+
+function readSafeTestRedisUrl(env: NodeJS.ProcessEnv = process.env): string | null {
+  const configured = env.SA360_TEST_REDIS_URL?.trim();
+  const candidate = configured || TEST_REDIS_FALLBACK_URL;
+  let parsed: URL;
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "redis:") return null;
+  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (!LOCAL_REDIS_HOSTS.has(host)) return null;
+  return candidate;
+}
+
+test("the real redis integration accepts only a local test redis url", () => {
+  const remote = readSafeTestRedisUrl({
+    SA360_TEST_REDIS_URL: "rediss://private-db.example.com:25061",
+    REDIS_URL: "redis://127.0.0.1:6379/15",
+  });
+  assert.equal(remote, null);
+  const fallback = readSafeTestRedisUrl({ REDIS_URL: "redis://staging.example:6379" });
+  assert.equal(fallback, TEST_REDIS_FALLBACK_URL);
+  const selected = readSafeTestRedisUrl({ SA360_TEST_REDIS_URL: "redis://localhost:6379/2" });
+  assert.equal(selected, "redis://localhost:6379/2");
+});
+
+test("two real redis clients share one atomic state claim", async (t) => {
+  const redisUrl = readSafeTestRedisUrl();
+  if (!redisUrl) {
+    t.skip("SA360_TEST_REDIS_URL is not a local test Redis; the real Redis integration did not run");
+    return;
+  }
   const state = "browser-state-value-that-must-not-appear-in-redis";
   const replayId = staffGoogleStateReplayId(state);
   const key = `${STAFF_GOOGLE_STATE_REPLAY_PREFIX}${replayId}`;
-  const options = { maxRetriesPerRequest: 1, connectTimeout: 1_000, lazyConnect: true };
-  const first = new Redis("redis://127.0.0.1:6379/15", options);
-  const second = new Redis("redis://127.0.0.1:6379/15", options);
+  const options = {
+    maxRetriesPerRequest: 1,
+    connectTimeout: 1_000,
+    lazyConnect: true,
+    enableOfflineQueue: false,
+    retryStrategy: () => null,
+  };
+  const probe = new Redis(redisUrl, options);
+  probe.on("error", () => undefined);
+  try {
+    await probe.connect();
+    await probe.ping();
+  } catch {
+    t.skip("safe local test Redis unavailable; the real Redis integration did not run");
+    return;
+  } finally {
+    probe.disconnect();
+  }
+
+  const first = new Redis(redisUrl, options);
+  const second = new Redis(redisUrl, options);
+  first.on("error", () => undefined);
+  second.on("error", () => undefined);
   try {
     await first.connect();
     await second.connect();
     await first.del(key);
     const results = await Promise.all([
       claimStaffGoogleStateReplay(replayId, {
-        set: (key, value, expiryMode, ttlSeconds, condition) => first.set(key, value, expiryMode, ttlSeconds, condition),
+        set: (redisKey, value, expiryMode, ttlSeconds, condition) => first.set(redisKey, value, expiryMode, ttlSeconds, condition),
       }),
       claimStaffGoogleStateReplay(replayId, {
-        set: (key, value, expiryMode, ttlSeconds, condition) => second.set(key, value, expiryMode, ttlSeconds, condition),
+        set: (redisKey, value, expiryMode, ttlSeconds, condition) => second.set(redisKey, value, expiryMode, ttlSeconds, condition),
       }),
     ]);
     assert.deepEqual(results.slice().sort(), ["claimed", "reused"]);
@@ -101,8 +156,11 @@ test("two local redis clients share one atomic state claim", async () => {
     const stored = await first.get(key);
     assert.equal(stored?.includes("verifier"), false);
   } finally {
-    await first.del(key);
-    first.disconnect();
-    second.disconnect();
+    try {
+      if (first.status === "ready") await first.del(key);
+    } finally {
+      first.disconnect();
+      second.disconnect();
+    }
   }
 });

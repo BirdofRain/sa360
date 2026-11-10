@@ -173,13 +173,18 @@ export function GhlDestinationConfigRequestPanel({
     }
   }
 
-  async function reload(mode: "manual" | "reconcile" | "after-save", expectedRequestId?: string) {
+  async function reload(mode: "manual" | "reconcile" | "after-save" | "after-replay", expectedRequestId?: string) {
     if (inflight.current) return;
+    const pendingBody = hold?.kind === "submit" ? hold.body : null;
     inflight.current = true;
     setPending("Reloading the stored configuration request…");
     try {
       const result = await loadTeamWorkspaceGhlConfigurationAction(clientAccountId);
       if (!result.ok || !result.head) {
+        if (mode === "reconcile" && pendingBody) {
+          setMessage(unconfirmedReadMessage(result.message, pendingBody.requestId));
+          return;
+        }
         setHold({ kind: "reload" });
         setMessage(result.message ?? "The configuration request could not be read. Retry the read before another request.");
         return;
@@ -199,16 +204,24 @@ export function GhlDestinationConfigRequestPanel({
         );
         return;
       }
-      if (mode === "reconcile") {
+      if (mode === "after-replay") {
+        dirtyRef.current = false;
+        setDraft(draftFromStoredRequest(result.head.configuration));
+        setReplaceConfirmed(false);
         setHold(null);
+        setMessage(replayReloadMessage(expectedRequestId, result.head.configuration, matched));
+        return;
+      }
+      if (mode === "reconcile" && pendingBody) {
         if (matched) {
           dirtyRef.current = false;
           setDraft(draftFromStoredRequest(result.head.configuration));
           setReplaceConfirmed(false);
+          setHold(null);
           setMessage("The earlier request is stored. The operational destination was not changed.");
-        } else {
-          setMessage("The earlier request was not stored. Review these choices and submit a new request when you are ready.");
+          return;
         }
+        setMessage(unconfirmedCurrentMessage(pendingBody.requestId, result.head.configuration));
         return;
       }
       setHold(null);
@@ -223,6 +236,10 @@ export function GhlDestinationConfigRequestPanel({
           : "The stored configuration request was reloaded."
       );
     } catch {
+      if (mode === "reconcile" && pendingBody) {
+        setMessage(unconfirmedReadMessage(null, pendingBody.requestId));
+        return;
+      }
       setHold({ kind: "reload" });
       setMessage("The configuration request could not be read. Retry the read before another request.");
     } finally {
@@ -268,7 +285,7 @@ export function GhlDestinationConfigRequestPanel({
     }
     setMessage(result.message);
     inflight.current = false;
-    await reload("after-save", result.requestId ?? sent.requestId);
+    await reload(result.replayed ? "after-replay" : "after-save", result.requestId ?? sent.requestId);
   }
 
   function submit() {
@@ -332,6 +349,11 @@ export function GhlDestinationConfigRequestPanel({
       {stored ? (
         <p className="text-sm text-slate-700">
           The stored request is revision {stored.revision} for location {stored.locationId} and workflow id {stored.workflowId}. It is awaiting operational application.
+        </p>
+      ) : null}
+      {hold?.kind === "submit" ? (
+        <p className="text-sm text-amber-800" role="status" data-unconfirmed-request={hold.body.requestId}>
+          Unconfirmed request {hold.body.requestId} is still pending. Retry sends that request id and its original payload. A different current stored request does not resolve it.
         </p>
       ) : null}
       {message ? (
@@ -575,6 +597,32 @@ function FieldGroups({
       })}
     </div>
   );
+}
+
+function unconfirmedReadMessage(detail: string | null | undefined, requestId: string): string {
+  const reason = detail?.trim() || "The configuration request could not be read.";
+  return `${reason} Request ${requestId} is still unconfirmed. Retry sends that request id and its original payload.`;
+}
+
+function unconfirmedCurrentMessage(requestId: string, current: GhlConfigHead["configuration"]): string {
+  const currentText = current
+    ? `The current stored request is ${current.requestId} at revision ${current.revision}.`
+    : "No configuration request is current.";
+  return `${currentText} That does not show whether request ${requestId} was stored. Retry sends that request id and its original payload.`;
+}
+
+function replayReloadMessage(
+  requestId: string | undefined,
+  current: GhlConfigHead["configuration"],
+  matched: boolean
+): string {
+  if (matched || !requestId) {
+    return "This configuration request was already stored. The operational destination was not changed.";
+  }
+  if (!current) {
+    return `Request ${requestId} was already stored. No configuration request is current. The operational destination was not changed.`;
+  }
+  return `Request ${requestId} was already stored. The current stored request is ${current.requestId} at revision ${current.revision}. The operational destination was not changed.`;
 }
 
 function OperationalReadout({ operational }: { operational: OperationalDestinationStatus | null }) {

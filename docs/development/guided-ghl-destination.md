@@ -135,8 +135,12 @@ an explicit custom-field id. A display name or field key is left unresolved.
 
 Saving posts one `requestId`, the request-chain `expectedRevision`, and
 `expectedDestinationUpdatedAt` from the last authoritative read. Replacing a
-stored request asks for confirmation first. An uncertain response retries the
-same id and the same payload. A confirmed save reloads the GET result. The
+stored request asks for confirmation first. An uncertain response keeps its
+original id and payload. Reloading the current stored request does not treat a
+different id, or no current request, as proof the unconfirmed request was
+never stored. Retrying that original post uses the backend replay: the same
+payload confirms the original id was stored, even when a later request is now
+current. A confirmed save reloads the GET result. The
 screen does not call the operational destination save, location linking,
 activation, test delivery, workflow enrollment, routing changes, SourceFunnel
 confirmation, or Company Sheets writers.

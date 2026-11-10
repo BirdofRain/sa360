@@ -12,8 +12,8 @@ const saves: Array<GhlConfigSubmitBody & { clientAccountId: string }> = [];
 const previews: string[] = [];
 const storedPreviews = new Map<string, GhlLocationPreview>();
 let loadHead: GhlConfigHead = emptyHead();
-let saveResult: "stored" | "throw" | "conflict" = "stored";
-let loadMode: "ready" | "disabled" = "ready";
+let saveResult: "stored" | "throw" | "conflict" | "replay" = "stored";
+let loadMode: "ready" | "disabled" | "error" = "ready";
 
 const moduleLoader = module as unknown as {
   _load: (request: string, parent: NodeModule, isMain: boolean) => unknown;
@@ -33,6 +33,15 @@ moduleLoader._load = function (request: string, parent: NodeModule, isMain: bool
             head: null,
           };
         }
+        if (loadMode === "error") {
+          return {
+            ok: false,
+            uncertain: true,
+            code: "UNCERTAIN",
+            message: "The configuration request could not be read.",
+            head: null,
+          };
+        }
         return { ok: true, uncertain: false, code: null, message: null, head: loadHead };
       },
       previewTeamWorkspaceGhlLocationAction: async (_client: string, locationId: string) => {
@@ -42,6 +51,21 @@ moduleLoader._load = function (request: string, parent: NodeModule, isMain: bool
       saveTeamWorkspaceGhlConfigurationRequestAction: async (input: GhlConfigSubmitBody & { clientAccountId: string }) => {
         saves.push(input);
         if (saveResult === "throw") throw new Error("socket hang up");
+        if (saveResult === "replay") {
+          return {
+            ok: true,
+            uncertain: false,
+            stored: true,
+            retainRequestId: false,
+            needsReload: false,
+            code: null,
+            message: "This configuration request was already stored. The operational destination was not changed.",
+            revision: input.expectedRevision + 1,
+            requestId: input.requestId,
+            replayed: true,
+            sent: input,
+          };
+        }
         if (saveResult === "conflict") {
           return {
             ok: false,
@@ -208,6 +232,158 @@ test("an uncertain save retries the same payload and does not start another requ
   assert.equal(saves[0]?.workflowId, "wf_exact");
   assert.deepEqual(saves[0]?.fieldMappings, saves[1]?.fieldMappings);
   assert.equal(saves[0]?.expectedRevision, saves[1]?.expectedRevision);
+});
+
+test("a later current request does not resolve an uncertain earlier request", async () => {
+  saveResult = "throw";
+  renderPanel();
+  await fillReady();
+  fireEvent.click(screen.getByRole("button", { name: "Save configuration request" }));
+  await screen.findByText(/still pending/i);
+  const original = saves[0];
+  assert.ok(original);
+  loadHead = emptyHead({
+    revision: 4,
+    configuration: {
+      requestId: "22222222-2222-4222-8222-222222222222",
+      revision: 4,
+      locationId: "loc_saved",
+      workflowId: "wf_a",
+      fieldMappings: [
+        { key: "desired_coverage", fieldId: "field_coverage" },
+        { key: "branch_of_service", fieldId: "field_branch" },
+        { key: "primary_reason", fieldId: "field_reason" },
+      ],
+      snapshotFetchedAt: freshAt(),
+      createdAt: freshAt(),
+    },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Reload the configuration request" }));
+  const status = await screen.findByText(/does not show whether request/i);
+  assert.match(status.textContent ?? "", new RegExp(original.requestId));
+  assert.match(status.textContent ?? "", /22222222-2222-4222-8222-222222222222/);
+  assert.equal(screen.queryByText(/was not stored/i), null);
+  assert.equal(screen.getByRole("button", { name: "Save configuration request" }).hasAttribute("disabled"), true);
+  fireEvent.click(screen.getByRole("button", { name: "Save configuration request" }));
+  assert.equal(saves.length, 1);
+  assert.equal(screen.getByText(/still pending/i).getAttribute("data-unconfirmed-request"), original.requestId);
+
+  saveResult = "replay";
+  fireEvent.click(screen.getByRole("button", { name: "Retry the same configuration request" }));
+  const resolved = await screen.findByText(/was already stored/i);
+  assert.match(resolved.textContent ?? "", new RegExp(original.requestId));
+  assert.match(resolved.textContent ?? "", /current stored request is 22222222-2222-4222-8222-222222222222 at revision 4/i);
+  assert.match(resolved.textContent ?? "", /operational destination was not changed/i);
+  assert.equal(screen.queryByRole("button", { name: "Retry the same configuration request" }), null);
+  assert.equal(saves.length, 2);
+  assert.equal(saves[1]?.requestId, original.requestId);
+  assert.equal(saves[1]?.locationId, original.locationId);
+  assert.equal(saves[1]?.workflowId, original.workflowId);
+  assert.equal(saves[1]?.expectedRevision, original.expectedRevision);
+  assert.equal(saves[1]?.expectedDestinationUpdatedAt, original.expectedDestinationUpdatedAt);
+  assert.deepEqual(saves[1]?.fieldMappings, original.fieldMappings);
+});
+
+test("reloading the same request id resolves the uncertain submission", async () => {
+  saveResult = "throw";
+  renderPanel();
+  await fillReady();
+  fireEvent.click(screen.getByRole("button", { name: "Save configuration request" }));
+  await screen.findByText(/still pending/i);
+  const original = saves[0];
+  assert.ok(original);
+  loadHead = emptyHead({
+    revision: 3,
+    configuration: {
+      requestId: original.requestId,
+      revision: 3,
+      locationId: original.locationId,
+      workflowId: original.workflowId,
+      fieldMappings: original.fieldMappings,
+      snapshotFetchedAt: freshAt(),
+      createdAt: freshAt(),
+    },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Reload the configuration request" }));
+  assert.equal(await screen.findByText(/earlier request is stored/i), screen.getByText(/earlier request is stored/i));
+  assert.equal(screen.queryByRole("button", { name: "Retry the same configuration request" }), null);
+  assert.equal(screen.queryByText(/was not stored/i), null);
+  assert.equal(saves.length, 1);
+});
+
+test("a reload with no current request keeps the original payload", async () => {
+  saveResult = "throw";
+  renderPanel();
+  await fillReady();
+  fireEvent.click(screen.getByRole("button", { name: "Save configuration request" }));
+  await screen.findByText(/still pending/i);
+  const original = saves[0];
+  assert.ok(original);
+  fireEvent.click(screen.getByRole("button", { name: "Reload the configuration request" }));
+  const status = await screen.findByText(/No configuration request is current/i);
+  assert.match(status.textContent ?? "", /does not show whether request/i);
+  assert.match(status.textContent ?? "", new RegExp(original.requestId));
+  assert.equal(screen.queryByText(/was not stored/i), null);
+  fireEvent.click(screen.getByRole("button", { name: "Save configuration request" }));
+  assert.equal(saves.length, 1);
+  saveResult = "stored";
+  fireEvent.click(screen.getByRole("button", { name: "Retry the same configuration request" }));
+  assert.equal(await screen.findByText(/configuration request was stored/i), screen.getByText(/configuration request was stored/i));
+  assert.equal(saves[1]?.requestId, original.requestId);
+  assert.deepEqual(saves[1]?.fieldMappings, original.fieldMappings);
+  assert.equal(saves[1]?.expectedRevision, original.expectedRevision);
+});
+
+test("a failed reload keeps the uncertain request for retry", async () => {
+  saveResult = "throw";
+  renderPanel();
+  await fillReady();
+  fireEvent.click(screen.getByRole("button", { name: "Save configuration request" }));
+  await screen.findByText(/still pending/i);
+  const original = saves[0];
+  assert.ok(original);
+  loadMode = "error";
+  fireEvent.click(screen.getByRole("button", { name: "Reload the configuration request" }));
+  const status = await screen.findByText(/could not be read/i);
+  assert.match(status.textContent ?? "", new RegExp(original.requestId));
+  assert.match(status.textContent ?? "", /still unconfirmed/i);
+  assert.equal(screen.getByText(/still pending/i).getAttribute("data-unconfirmed-request"), original.requestId);
+  assert.equal(screen.queryByText(/was not stored/i), null);
+  loadMode = "ready";
+  saveResult = "stored";
+  fireEvent.click(screen.getByRole("button", { name: "Retry the same configuration request" }));
+  assert.equal(await screen.findByText(/configuration request was stored/i), screen.getByText(/configuration request was stored/i));
+  assert.equal(saves.length, 2);
+  assert.equal(saves[1]?.requestId, original.requestId);
+  assert.deepEqual(saves[1]?.fieldMappings, original.fieldMappings);
+});
+
+test("a definitive stale revision releases the uncertain request", async () => {
+  saveResult = "throw";
+  renderPanel();
+  await fillReady();
+  fireEvent.click(screen.getByRole("button", { name: "Save configuration request" }));
+  await screen.findByText(/still pending/i);
+  const original = saves[0];
+  assert.ok(original);
+  saveResult = "conflict";
+  fireEvent.click(screen.getByRole("button", { name: "Retry the same configuration request" }));
+  assert.equal(await screen.findByText(/request chain changed/i), screen.getByText(/request chain changed/i));
+  assert.match(screen.getByText(/request chain changed/i).textContent ?? "", /Nothing was stored/i);
+  assert.equal(screen.queryByRole("button", { name: "Retry the same configuration request" }), null);
+  assert.equal(screen.queryByText(/still pending/i), null);
+  assert.equal(saves.length, 2);
+  assert.equal(saves[1]?.requestId, original.requestId);
+  assert.deepEqual(saves[1]?.fieldMappings, original.fieldMappings);
+  assert.equal(screen.getByRole("button", { name: "Save configuration request" }).hasAttribute("disabled"), true);
+  loadHead = { ...loadHead, revision: 5 };
+  fireEvent.click(screen.getByRole("button", { name: "Reload the configuration request" }));
+  assert.equal(await screen.findByText(/unsaved choices were kept/i), screen.getByText(/unsaved choices were kept/i));
+  saveResult = "stored";
+  fireEvent.click(screen.getByRole("button", { name: "Save configuration request" }));
+  assert.equal(await screen.findByText(/configuration request was stored/i), screen.getByText(/configuration request was stored/i));
+  assert.notEqual(saves[2]?.requestId, original.requestId);
+  assert.equal(saves[2]?.expectedRevision, 5);
 });
 
 test("a stale request chain must be reloaded before another submission", async () => {

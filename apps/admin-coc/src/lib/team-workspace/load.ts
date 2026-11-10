@@ -11,6 +11,7 @@ import { normalizeTeamWorkspaceClientId } from "./contract";
 import { guidedOnboardingFromReads } from "./onboarding-guide";
 import { assembleTeamWorkspaceDetail, projectClientOptions, projectRoutingRules } from "./present";
 import { parseTeamWorkspaceResponse, readAdminErrorCode } from "./parse";
+import { parseSourceCampaignReview, unavailableSourceCampaignReview, type SourceCampaignReviewView } from "./source-campaign-review";
 import type {
   AccountSlice,
   OnboardingSlice,
@@ -42,13 +43,14 @@ export async function loadTeamWorkspaceClient(rawId: string): Promise<TeamWorksp
   }
 
   const setupEnabled = isNativeClientSetupEnabled();
-  const [workspaceResult, detail, onboarding, list, setupResult, sourceResult] = await Promise.all([
+  const [workspaceResult, detail, onboarding, list, setupResult, sourceResult, reviewResult] = await Promise.all([
     adminFetchJson<unknown>(`/admin/v1/team-workspace/clients/${encodeURIComponent(clientAccountId)}`),
     fetchAdminClientDetail(clientAccountId),
     fetchOnboardingSummary(clientAccountId),
     fetchAdminClients(),
     setupEnabled ? fetchAdminClientSetup(clientAccountId) : Promise.resolve(null),
     fetchAdminClientSourceFunnels(clientAccountId),
+    adminFetchJson<unknown>(`/admin/v1/team-workspace/clients/${encodeURIComponent(clientAccountId)}/source-campaign-review`),
   ]);
 
   const workspace = narrowWorkspace(clientAccountId, workspaceResult);
@@ -63,18 +65,21 @@ export async function loadTeamWorkspaceClient(rawId: string): Promise<TeamWorksp
   if (assembled.kind !== "ready") return assembled;
   return {
     ...assembled,
-    guide: guidedOnboardingFromReads({
-      clientAccountId,
-      setupEnabled,
-      account: detail.data?.item ?? null,
-      setupItem: setupResult?.data?.item ?? null,
-      setupError: setupResult && !setupResult.data ? setupResult.error : null,
-      sourceBody: sourceResult.data,
-      sourceError: sourceResult.error,
-      destinations: workspace.availability === "ready" ? workspace.body.destinations : null,
-      recordedSetup: workspace.availability === "ready" ? workspace.body.setupRequest : null,
-      verification: onboardingSlice,
-    }),
+    guide: {
+      ...guidedOnboardingFromReads({
+        clientAccountId,
+        setupEnabled,
+        account: detail.data?.item ?? null,
+        setupItem: setupResult?.data?.item ?? null,
+        setupError: setupResult && !setupResult.data ? setupResult.error : null,
+        sourceBody: sourceResult.data,
+        sourceError: sourceResult.error,
+        destinations: workspace.availability === "ready" ? workspace.body.destinations : null,
+        recordedSetup: workspace.availability === "ready" ? workspace.body.setupRequest : null,
+        verification: onboardingSlice,
+      }),
+      sourceCampaignReview: narrowReview(reviewResult),
+    },
   };
 }
 
@@ -94,6 +99,16 @@ function narrowWorkspace(
     return { availability: "error", code: "malformed_response" };
   }
   return { availability: "ready", body };
+}
+
+function narrowReview(result: Awaited<ReturnType<typeof adminFetchJson<unknown>>>): SourceCampaignReviewView {
+  if (!result.ok) {
+    return unavailableSourceCampaignReview("The source and campaign check could not be loaded. Nothing was verified.");
+  }
+  return (
+    parseSourceCampaignReview(result.data) ??
+    unavailableSourceCampaignReview("The source and campaign check could not be read. Nothing was verified.")
+  );
 }
 
 function narrowAccount(item: {

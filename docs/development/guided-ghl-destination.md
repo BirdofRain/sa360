@@ -73,11 +73,49 @@ An uncertain read is not described as saved. A later read with a different
 `updatedAt` is shown as a stale saved destination. The guide does not send a
 lead, create a delivery run, or enroll a workflow.
 
-## Missing safe boundary
+## Why the existing writers stay unchanged
 
 There is no existing client destination write that can save a location,
 workflow id, or field id without also merging discovered names and without
-the ability to edit a live row. That boundary belongs in the API, in front of
-`saveClientGhlConfig` and `linkGhlConnectionToClient`, and it was not added
-here. Until it exists, Team Workspace cannot save GoHighLevel destination
-configuration.
+the ability to edit a live row. `saveClientGhlConfig` and
+`linkGhlConnectionToClient` are unchanged.
+
+A non-live `ClientGhlDestination` is still operational. Selected one-lead
+delivery reads its workflow id and field maps without
+`isPersistedLiveDestination`. Association plan generation copies those columns
+into the plan. Ongoing association delivery does re-check the four live flags.
+That check does not make a shadow-column update safe, because the selected
+test path does not use it.
+
+## Configuration requests
+
+`GET` and `POST /admin/v1/clients/:clientAccountId/ghl-destination-configuration`
+store an intended location id, workflow id, and explicit field ids in
+`GhlDestinationConfigurationRequest`. The table is not read by delivery,
+enrollment, or routing. The route does not insert or update
+`ClientGhlDestination`.
+
+`SA360_GHL_DESTINATION_CONFIG_REQUEST_ENABLED` must be the exact string `true`.
+Unset, blank, and `TRUE` stay off. The route requires the admin API key and
+rejects a portal key, portal assertion, or workspace key first. It is not on
+the observer allowlist.
+
+The location must be a connected `GhlLocationConnection` for that client. The
+workflow id must equal a workflow `id` in the newest snapshot for that
+location. A workflow name, including a name containing Webform, is not
+selected. Each field id must equal a custom-field `id` in that same snapshot.
+A field key, display name, or discovered id is not substituted. The same field
+id on two keys is rejected. Desired coverage, branch of service, and primary
+reason stay distinct keys. A snapshot older than 24 hours is expired. A
+missing snapshot is rejected.
+
+The save locks the client and the destination row. After that lock it reads
+the destination again. A live destination aborts the transaction, including a
+destination that became live after the caller loaded it. The caller's
+`expectedDestinationUpdatedAt` must match the locked row, or be null when no
+destination exists. The same `requestId` and payload returns the stored
+result. A different payload with that id is rejected and does not consume a
+new revision. Validation failures are not stored.
+
+Team Workspace still does not call this route. The new flag stays off, and
+this store does not enable delivery.

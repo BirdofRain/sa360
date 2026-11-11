@@ -158,6 +158,13 @@ test("a workflow id is verified only when that id is in the snapshot", () => {
   assert.equal(matched.verified, true);
   assert.equal(matched.active, false);
   assert.equal(matched.configured, true);
+
+  const captured = present({
+    snapshot: snapshot({ snapshotVerification: "previously_captured" }),
+  });
+  assert.equal(captured.workflowInSnapshot, true);
+  assert.equal(captured.verified, false);
+  assert.match(captured.issues.join(" "), /not current GoHighLevel verification/i);
 });
 
 test("delivery flags distinguish a shadow row from a live destination", () => {

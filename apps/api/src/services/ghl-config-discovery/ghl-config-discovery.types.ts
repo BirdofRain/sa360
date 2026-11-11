@@ -1,3 +1,5 @@
+import type { GhlSnapshotVerification } from "../../lib/ghl-config-snapshot-validity.js";
+
 /** SA360 custom field keys used for delivery (read-only detection). */
 export const SA360_REQUIRED_GHL_CUSTOM_FIELD_KEYS = [
   "sa360_lead_uid",
@@ -89,6 +91,8 @@ export type Sa360FieldMappingDiscoveryReport = {
   coreRequiredComplete: boolean;
 };
 
+export type { GhlSnapshotVerification };
+
 export type GhlConfigDiscoveryResult = {
   location: GhlDiscoveredLocation;
   pipelines: GhlDiscoveredPipeline[];
@@ -98,6 +102,12 @@ export type GhlConfigDiscoveryResult = {
   tags: GhlDiscoveredTag[];
   fetchedAt: string;
   fromCache: boolean;
+  /**
+   * `live` was just read from GoHighLevel. `cached` is the newest complete
+   * snapshot. `previously_captured` is an older complete snapshot kept after a
+   * later refresh failed. It is not current verification.
+   */
+  snapshotVerification: GhlSnapshotVerification;
   warnings: string[];
   errors: string[];
   requiredFields: GhlRequiredFieldsReport;

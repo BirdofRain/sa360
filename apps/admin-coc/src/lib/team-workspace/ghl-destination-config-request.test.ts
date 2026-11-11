@@ -5,6 +5,7 @@ import {
   assessGhlConfigSnapshotFreshness,
   buildGhlConfigSubmitBody,
   emptyGhlConfigDraft,
+  ghlConfigRequestErrorMessage,
   parseGhlConfigHead,
   presentGhlConfigRequestProgress,
   presentGhlLocationPreview,
@@ -211,6 +212,35 @@ test("a live destination and a disconnected location block the draft without rew
   assert.equal(expired.canSubmit, false);
 });
 
+test("a previously captured snapshot is not current verification", () => {
+  const preview = {
+    ...readyPreview(),
+    fromCache: true,
+    snapshotVerification: "previously_captured" as const,
+    errors: ["This snapshot was previously captured for this location. It is not current GoHighLevel verification."],
+  };
+  const review = reviewGhlConfigDraft({
+    draft: {
+      locationId: "loc_other",
+      workflowId: "wf_exact",
+      mappings: {
+        desired_coverage: "field_coverage",
+        branch_of_service: "field_branch",
+        primary_reason: "field_reason",
+      },
+    },
+    preview,
+    locations: [connected("loc_other")],
+    liveDestination: false,
+    head: head(),
+    now,
+  });
+  assert.equal(review.snapshotStatus, "previously_captured");
+  assert.match(review.snapshotDetail, /not current GoHighLevel verification/);
+  assert.equal(review.canSubmit, false);
+  assert.match(ghlConfigRequestErrorMessage("snapshot_not_current"), /not a complete GoHighLevel discovery/);
+});
+
 test("a head that claims delivery or enrollment changed is not readable", () => {
   const readable = parseGhlConfigHead(rawHead());
   assert.equal(readable?.revision, 2);
@@ -253,6 +283,7 @@ function readyPreview(): GhlLocationPreview {
     locationId: "loc_other",
     fetchedAt: freshAt,
     fromCache: false,
+    snapshotVerification: null,
     workflows: [
       { id: "wf_web", name: "Intake Webform" },
       { id: "wf_exact", name: "Exact workflow" },

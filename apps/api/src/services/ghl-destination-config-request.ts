@@ -17,6 +17,7 @@ import { createHash } from "node:crypto";
 import type { Prisma, PrismaClient } from "@prisma/client";
 
 import { SA360_ALL_LOGICAL_FIELD_KEYS } from "../lib/sa360-custom-field-keys.js";
+import { isUsableGhlLocationConfigSnapshot } from "../lib/ghl-config-snapshot-validity.js";
 import { isGhlDestinationConfigRequestEnabled } from "../lib/ghl-destination-config-request-env.js";
 import { isPersistedLiveDestination } from "./ghl-destination-authorization.js";
 
@@ -277,16 +278,21 @@ async function applyCommand(
     fetchedAt: Date;
     workflowsJson: Prisma.JsonValue | null;
     customFieldsJson: Prisma.JsonValue | null;
+    errorsJson: Prisma.JsonValue | null;
+    warningsJson: Prisma.JsonValue | null;
   }>>`
-    SELECT "id", "fetchedAt", "workflowsJson", "customFieldsJson"
+    SELECT "id", "fetchedAt", "workflowsJson", "customFieldsJson", "errorsJson", "warningsJson"
     FROM "GhlLocationConfigSnapshot"
     WHERE "locationId" = ${command.locationId}
-    ORDER BY "fetchedAt" DESC
+    ORDER BY "fetchedAt" DESC, "id" DESC
     LIMIT 1
     FOR SHARE
   `;
   const snapshot = snapshots[0];
   if (!snapshot) abort(failure(409, "snapshot_missing", command.requestId));
+  if (!isUsableGhlLocationConfigSnapshot(snapshot)) {
+    abort(failure(409, "snapshot_not_current", command.requestId));
+  }
   const now = deps.now ?? new Date();
   const freshness = assessGhlDestinationSnapshotFreshness(snapshot.fetchedAt, now);
   if (freshness === "malformed") abort(failure(409, "snapshot_unusable", command.requestId));

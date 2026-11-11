@@ -61,7 +61,14 @@ function readableGhlError(error: string | null | undefined, fallback: string): s
     return "This location has no connected GoHighLevel credentials. Nothing was read from GoHighLevel, and nothing was saved.";
   }
   if (isUncertain(error)) return "The GoHighLevel read could not be confirmed. Nothing was saved.";
+  if (isDiscoveryFailureMessage(error)) return error;
   return fallback;
+}
+
+function isDiscoveryFailureMessage(error: string): boolean {
+  return /Reconnect the location|did not respond before the discovery request timed out|was not saved as the usable snapshot|not current GoHighLevel verification|No usable GoHighLevel snapshot|could not be reached for this discovery refresh|could not be read/.test(
+    error
+  );
 }
 
 async function authorize(): Promise<GuidedGhlActionResult | null> {
@@ -170,6 +177,7 @@ export async function readTeamWorkspaceGhlSnapshotAction(
     customFields: discovery.data.customFields,
     fetchedAt: discovery.data.fetchedAt,
     fromCache: discovery.data.fromCache,
+    snapshotVerification: discovery.data.snapshotVerification,
     errors: discovery.data.errors,
   };
   return { ok: true, view: presentGuidedGhlDestination({ ...loaded.present, snapshot }) };
@@ -426,6 +434,7 @@ export async function previewTeamWorkspaceGhlLocationAction(
     customFields: discovery.data.customFields,
     fetchedAt: discovery.data.fetchedAt,
     fromCache: discovery.data.fromCache,
+    snapshotVerification: discovery.data.snapshotVerification,
     errors: discovery.data.errors,
   });
   if (!preview || preview.locationId !== id) {

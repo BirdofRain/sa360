@@ -2,6 +2,11 @@ import { cookies } from "next/headers";
 
 import { ADMIN_COC_SESSION_COOKIE } from "@/lib/admin-coc-auth";
 import { verifyAdminCocSessionToken } from "@/lib/admin-coc-session";
+import { readStaffAdminCocDecision } from "@/lib/staff-admin-coc-access";
+import {
+  STAFF_ADMIN_COC_SESSION_COOKIE,
+  type StaffAdminCocDecision,
+} from "@/lib/staff-admin-coc-decision";
 import { readPortalSessionCookie } from "@/lib/client-portal/portal-session";
 import { CLIENT_PORTAL_SESSION_COOKIE } from "@/lib/client-portal/portal-session-cookie";
 
@@ -18,12 +23,25 @@ export function parseDevRole(roleParam: string | null | undefined): FrontOfficeR
 }
 
 export async function resolveFrontOfficeSession(
-  devRoleParam?: string | null
+  devRoleParam?: string | null,
+  overrides?: {
+    adminToken?: string;
+    portalToken?: string;
+    staffToken?: string;
+    staffDecision?: (token: string) => Promise<StaffAdminCocDecision>;
+  }
 ): Promise<FrontOfficeSession | null> {
-  const cookieStore = await cookies();
+  let adminToken = overrides?.adminToken;
+  let portalToken = overrides?.portalToken;
+  let staffToken = overrides?.staffToken;
+  if (!overrides) {
+    const cookieStore = await cookies();
+    adminToken = cookieStore.get(ADMIN_COC_SESSION_COOKIE)?.value;
+    portalToken = cookieStore.get(CLIENT_PORTAL_SESSION_COOKIE)?.value;
+    staffToken = cookieStore.get(STAFF_ADMIN_COC_SESSION_COOKIE)?.value;
+  }
 
-  const adminCookie = cookieStore.get(ADMIN_COC_SESSION_COOKIE);
-  if (verifyAdminCocSessionToken(adminCookie?.value)) {
+  if (verifyAdminCocSessionToken(adminToken)) {
     return {
       role: "admin",
       displayName: "Operator",
@@ -31,7 +49,19 @@ export async function resolveFrontOfficeSession(
     };
   }
 
-  const portalToken = cookieStore.get(CLIENT_PORTAL_SESSION_COOKIE)?.value;
+  if (staffToken) {
+    const decision = overrides?.staffDecision
+      ? await overrides.staffDecision(staffToken)
+      : await readStaffAdminCocDecision({ sessionToken: staffToken });
+    if (decision === "admin") {
+      return {
+        role: "admin",
+        displayName: "Operator",
+        isDevPreview: false,
+      };
+    }
+  }
+
   const portalPayload = readPortalSessionCookie(portalToken);
   if (portalPayload) {
     return {

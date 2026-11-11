@@ -14,10 +14,11 @@ the Google ID token itself and loads the principal. The shared admin API key
 is not an identity. A request that presents only that key, or a `sub` chosen
 by the caller, is denied.
 
-The staff session cookie is not the shared-password `ac1` cookie. Middleware
-does not treat it as an operator session. A staff session does not grant the
-ADMIN role, Team Workspace write authority, or
-`facebook_association_correction`.
+The staff session cookie is not the shared-password `ac1` cookie. A staff
+session alone does not grant the ADMIN role, Team Workspace write authority,
+or `facebook_association_correction`. Full Admin C.O.C. access is a separate
+granted `admin_coc` permission, checked on every privileged request. See
+`docs/architecture/staff-admin-coc-access.md`.
 
 The Drive and Sheets OAuth client is a different connection. Staff code does
 not read `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, or

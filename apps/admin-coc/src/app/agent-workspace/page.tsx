@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { AgentWorkspaceApp } from "./agent-workspace-app";
+import { requireAdminCocSession } from "@/lib/admin-coc-session-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +21,7 @@ export default async function AgentWorkspacePage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  await requireAdminCocSession();
   const sp = await searchParams;
   const clientAccountId = firstString(sp.clientAccountId)?.trim() ?? "";
 

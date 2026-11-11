@@ -38,14 +38,16 @@ A generic insert stays disabled because `status` defaults to `disabled` and
 | --- | --- |
 | `id` | Stable grant id. |
 | `staffPrincipalId` | Required foreign key. `ON DELETE RESTRICT`, `ON UPDATE RESTRICT`. |
-| `permission` | `facebook_association_correction` only. |
+| `permission` | `facebook_association_correction` or `admin_coc`. Neither implies the other. |
 | `status` | `granted` or `revoked`. There is no default. |
 | `grantedAt` | When this grant row was created. Immutable. |
 | `revokedAt` | Null while granted. Set when revoked. Immutable once set. |
 
-There is no role table and no role column. Nothing in Admin C.O.C., Team
-Workspace, the customer portal, observer access, Meta review, or Agent
-Workspace derives this permission.
+There is no role table and no role column. A shared-password Admin C.O.C.
+session, Team Workspace credential, customer portal session, observer cookie,
+Meta reviewer session, or Agent Workspace credential does not create this
+permission. `admin_coc` is the grant that later authorizes Admin C.O.C. for
+a staff principal. See `docs/architecture/staff-admin-coc-access.md`.
 
 ## Lifecycle
 

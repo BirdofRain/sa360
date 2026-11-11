@@ -46,6 +46,7 @@ import {
   adminCompanySheetsDeliveryRoutes,
   clientCompanySheetsDeliveryRoutes,
 } from "./routes/company-sheets-delivery.js";
+import { staffAdminCocRoutes } from "./routes/staff-admin-coc.js";
 import { staffEnrollmentRoutes } from "./routes/staff-enrollment.js";
 import { staffGoogleRoutes } from "./routes/staff-google.js";
 import { adminLeadDeliveryDirectDemoRoutes } from "./routes/admin-lead-delivery-direct-demo.js";
@@ -223,6 +224,7 @@ export async function buildApp() {
   await app.register(clientCompanySheetsDeliveryRoutes, { prefix: "/client/v1" });
   await app.register(staffGoogleRoutes);
   await app.register(staffEnrollmentRoutes);
+  await app.register(staffAdminCocRoutes);
 
   return app;
 }

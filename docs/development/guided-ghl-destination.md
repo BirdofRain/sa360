@@ -76,12 +76,18 @@ An uncertain read is not described as saved. A later read with a different
 `updatedAt` is shown as a stale saved destination. The guide does not send a
 lead, create a delivery run, or enroll a workflow.
 
-## Why the existing writers stay unchanged
+## What the existing writers still do
 
 There is no existing client destination write that can save a location,
 workflow id, or field id without also merging discovered names and without
-the ability to edit a live row. `saveClientGhlConfig` and
-`linkGhlConnectionToClient` are unchanged.
+the ability to edit a live row. `linkGhlConnectionToClient` is unchanged. `saveClientGhlConfig` and
+`POST /admin/v1/routing/rules/:id/ghl-config` still merge discovered field ids
+when the newest snapshot for that location is a complete discovery no older
+than 24 hours and no more than five minutes ahead of the API clock. A failed,
+partial, stale, or missing snapshot rejects the save before any destination or
+routing write. An older complete snapshot is not used as authorization. Stored
+mappings, workflow ids, owner assignment, and delivery flags stay as they were.
+A failed refresh does not turn delivery off.
 
 A non-live `ClientGhlDestination` is still operational. Selected one-lead
 delivery reads its workflow id and field maps without

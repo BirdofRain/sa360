@@ -111,7 +111,7 @@ export async function findClientGhlDestinationsByClientIds(
 export async function upsertClientGhlDestination(
   clientAccountId: string,
   data: Omit<Prisma.ClientGhlDestinationCreateInput, "clientAccount">,
-  db: PrismaClient = prisma
+  db: PrismaClient | Prisma.TransactionClient = prisma
 ) {
   const id = clientAccountId.trim();
   return db.clientGhlDestination.upsert({

@@ -387,7 +387,7 @@ export async function adminClientsRoutes(
       return reply.status(404).send({ ok: false, error: "Client not found" });
     }
     if ("error" in result) {
-      const status = result.code === "LOCATION_MISMATCH" ? 409 : 400;
+      const status = result.code === "LOCATION_MISMATCH" || result.code.startsWith("SNAPSHOT_") ? 409 : 400;
       return reply.status(status).send({
         ok: false,
         error: result.error,

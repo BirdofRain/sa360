@@ -41,6 +41,10 @@ function readinessBadgeClass(status: ChannelReadinessStatus): string {
       return "border-amber-600/40 bg-amber-50 text-amber-950";
     case "MISSING_CONFIG":
       return "border-red-600/40 bg-red-50 text-red-900";
+    case "BLOCKED":
+      return "border-red-600/40 bg-red-50 text-red-900";
+    case "STALE":
+      return "border-slate-400/40 bg-slate-50 text-slate-700";
     default:
       return "border-slate-400/40 bg-slate-50 text-slate-700";
   }

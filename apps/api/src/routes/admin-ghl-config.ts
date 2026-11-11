@@ -113,7 +113,7 @@ export async function adminGhlConfigRoutes(app: FastifyInstance) {
       return reply.status(404).send({ ok: false, error: "Routing rule not found" });
     }
     if ("error" in result) {
-      const status = result.code === "LOCATION_MISMATCH" ? 409 : 400;
+      const status = result.code === "LOCATION_MISMATCH" || result.code.startsWith("SNAPSHOT_") ? 409 : 400;
       return reply.status(status).send({
         ok: false,
         error: result.error,

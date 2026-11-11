@@ -8,7 +8,6 @@ import {
   findGhlLocationConnectionByLocationId,
   listGhlLocationConnections,
 } from "../../repositories/ghl-location-connection.repository.js";
-import { findLatestGhlLocationConfigSnapshot } from "../../repositories/ghl-location-config-snapshot.repository.js";
 import { presentClientGhlDestination } from "../client-onboarding.present.js";
 import type { ClientGhlDestinationDto } from "../client-onboarding.present.js";
 import {
@@ -30,9 +29,13 @@ import {
 } from "./routing-rule-ghl-config.service.js";
 import { buildFieldMappingSaveReport } from "../sa360-custom-field-mapping.service.js";
 import type { GhlDiscoveredCustomField } from "./ghl-config-discovery.types.js";
-import { snapshotToDiscoveryResult } from "./ghl-config-discovery.present.js";
-import { detectSa360RequiredCustomFields } from "./ghl-config-discovery.service.js";
 import { lalAiBot1VetSavePatch } from "../ghl-delivery-adapter/lal-ai-bot1-vet-snapshot.js";
+import {
+  informationalDiscoverySummary,
+  readInformationalGhlLocationSnapshot,
+  withCurrentOperationalSnapshot,
+  type GhlOperationalSaveDeps,
+} from "./ghl-operational-snapshot.js";
 import type { GhlDiscoveredLocation, GhlDiscoveredUser, GhlDiscoveredWorkflow } from "./ghl-config-discovery.types.js";
 
 export type ClientDeliveryConfigSummary = {
@@ -55,7 +58,20 @@ export type SaveClientGhlConfigResult =
       fieldMapping: ReturnType<typeof buildFieldMappingSaveReport>;
     }
   | { notFound: true }
-  | { error: string; code: "LOCATION_MISMATCH" | "NOT_CONNECTED" | "VALIDATION" | "LAL_WEBFORM_NOT_FOUND" };
+  | {
+      error: string;
+      code:
+        | "LOCATION_MISMATCH"
+        | "NOT_CONNECTED"
+        | "VALIDATION"
+        | "LAL_WEBFORM_NOT_FOUND"
+        | "SNAPSHOT_MISSING"
+        | "SNAPSHOT_NOT_CURRENT"
+        | "SNAPSHOT_EXPIRED"
+        | "SNAPSHOT_FUTURE"
+        | "SNAPSHOT_WRONG_LOCATION"
+        | "SNAPSHOT_BUSY";
+    };
 
 function resolveLocationId(
   queryLocationId: string | undefined,
@@ -105,24 +121,9 @@ export async function getClientDeliveryConfigSummary(
   }
   if (locationMismatch) issueCodes.push("location_mismatch");
 
-  let discoverySummary: Record<string, unknown> | null = null;
-  if (locationId) {
-    const snap = await findLatestGhlLocationConfigSnapshot(locationId);
-    if (snap) {
-      const fields = detectSa360RequiredCustomFields(
-        (snap.customFieldsJson as GhlDiscoveredCustomField[]) ?? []
-      );
-      const d = snapshotToDiscoveryResult(snap, fields);
-      discoverySummary = {
-        fetchedAt: d.fetchedAt,
-        pipelineCount: d.pipelines.length,
-        workflowCount: d.workflows.length,
-        requiredFieldsInstalled: d.requiredFields.requiredFieldsInstalled,
-        missingRequiredFields: d.requiredFields.missingRequiredFields,
-        sa360FieldMapping: d.sa360FieldMapping,
-      };
-    }
-  }
+  const discoverySummary = locationId
+    ? informationalDiscoverySummary(await readInformationalGhlLocationSnapshot(locationId))
+    : null;
 
   const destinationReadiness = dest
     ? evaluateDestinationReadiness(
@@ -165,7 +166,8 @@ export async function getClientDeliveryConfigSummary(
 
 export async function saveClientGhlConfig(
   clientAccountId: string,
-  body: RoutingRuleGhlConfigBody
+  body: RoutingRuleGhlConfigBody,
+  deps: GhlOperationalSaveDeps = {}
 ): Promise<SaveClientGhlConfigResult> {
   const client = await findClientAccountById(clientAccountId.trim());
   if (!client) return { notFound: true };
@@ -201,81 +203,100 @@ export async function saveClientGhlConfig(
   if (mismatch) return mismatch;
 
   const ghlStatus = ghlStatusFromConnection(connection.connectionStatus);
-  const snap = await findLatestGhlLocationConfigSnapshot(locationId);
-  const snapFields = (snap?.customFieldsJson as GhlDiscoveredCustomField[]) ?? [];
-  const mergedFieldMap = buildMergedSa360FieldMapForGhlConfigSave({
-    snapFields,
-    discoveryCustomFields: body.discoveryCustomFields as GhlDiscoveredCustomField[] | undefined,
-    existingDest,
-    bodyMapJson: body.sa360CustomFieldIdMapJson,
-  });
-  const mergedOptionMap = buildMergedSa360OptionMapForGhlConfigSave({
-    existingDest,
-    bodyOptionMapJson: body.sa360CustomFieldOptionMapJson,
-    locationId,
-  });
-  const fieldMappingReport = buildFieldMappingSaveReport(
-    mergedFieldMap,
-    body.customFieldStampRequired ?? existingDest?.customFieldStampRequired ?? false
-  );
-  const location = snap?.locationJson as GhlDiscoveredLocation | null;
-  const lalPatch = lalAiBot1VetSavePatch({
-    applyDemoRetarget: body.applyLalAiBot1WebformConfiguration === true,
-    existingWorkflowId: existingDest?.destinationWorkflowIdGhl,
-    existingWorkflowTriggerMode: existingDest?.workflowTriggerMode,
-    existingAssignedUserId: existingDest?.defaultAssignedUserIdGhl,
-    requestedWorkflowId: body.destinationWorkflowIdGhl,
-    requestedWorkflowTriggerMode: body.workflowTriggerMode,
-    requestedAssignedUserId: body.defaultAssignedUserIdGhl,
-    locationId,
-    locationPrimaryUserId: location?.primaryUserId,
-    workflows: (snap?.workflowsJson as GhlDiscoveredWorkflow[] | null) ?? [],
-    users: (snap?.usersJson as GhlDiscoveredUser[] | null) ?? [],
-    discoveredFields: snapFields,
-    savedSourceAttributeMap: existingDest?.sourceAttributeFieldMapJson,
-    requestedSourceAttributeMap: body.sourceAttributeFieldMapJson,
-    savedPolicy: existingDest?.sourceEnrichmentPolicyJson,
-    requestedPolicy: body.sourceEnrichmentPolicyJson,
-  });
-  if (!lalPatch.ok) return lalPatch;
-  const lal = lalPatch.configuration;
-  const effectiveBody = lal.applied
-    ? {
-        ...body,
-        destinationWorkflowIdGhl: lal.destinationWorkflowIdGhl,
-        workflowTriggerMode: lal.workflowTriggerMode ?? body.workflowTriggerMode,
-        defaultAssignedUserIdGhl: lal.defaultAssignedUserIdGhl ?? body.defaultAssignedUserIdGhl,
-        sourceAttributeFieldMapJson: lal.sourceAttributeFieldMap,
-        sourceEnrichmentPolicyJson: lal.sourceEnrichmentPolicy,
-      }
-    : body;
-
-  const upserted = await upsertClientGhlDestination(
-    client.clientAccountId,
-    buildDestinationUpsertData(
+  const authorized = await withCurrentOperationalSnapshot(locationId, deps, async (tx, snap) => {
+    await tx.$queryRaw`
+      SELECT "id"
+      FROM "ClientGhlDestination"
+      WHERE "clientAccountId" = ${client.clientAccountId}
+      FOR UPDATE
+    `;
+    const lockedDest = await tx.clientGhlDestination.findUnique({
+      where: { clientAccountId: client.clientAccountId },
+    });
+    const lockedMismatch = checkClientGhlLocationMismatch(
+      lockedDest?.destinationSubaccountIdGhl,
       locationId,
-      existingDest,
-      effectiveBody,
+      connection.clientAccountId ? locationId : null,
+      body.confirmLocationMismatch
+    );
+    if (lockedMismatch) return lockedMismatch;
+
+    const snapFields = (snap.customFieldsJson as GhlDiscoveredCustomField[]) ?? [];
+    const mergedFieldMap = buildMergedSa360FieldMapForGhlConfigSave({
+      snapFields,
+      discoveryCustomFields: body.discoveryCustomFields as GhlDiscoveredCustomField[] | undefined,
+      existingDest: lockedDest,
+      bodyMapJson: body.sa360CustomFieldIdMapJson,
+    });
+    const mergedOptionMap = buildMergedSa360OptionMapForGhlConfigSave({
+      existingDest: lockedDest,
+      bodyOptionMapJson: body.sa360CustomFieldOptionMapJson,
+      locationId,
+    });
+    const fieldMappingReport = buildFieldMappingSaveReport(
       mergedFieldMap,
-      mergedOptionMap,
-      ghlStatus,
-      snap?.locationName ?? connection.locationName,
-      lal.applied ? { opportunityCreationEnabled: false } : undefined
-    )
-  );
+      body.customFieldStampRequired ?? lockedDest?.customFieldStampRequired ?? false
+    );
+    const location = snap.locationJson as GhlDiscoveredLocation | null;
+    const lalPatch = lalAiBot1VetSavePatch({
+      applyDemoRetarget: body.applyLalAiBot1WebformConfiguration === true,
+      existingWorkflowId: lockedDest?.destinationWorkflowIdGhl,
+      existingWorkflowTriggerMode: lockedDest?.workflowTriggerMode,
+      existingAssignedUserId: lockedDest?.defaultAssignedUserIdGhl,
+      requestedWorkflowId: body.destinationWorkflowIdGhl,
+      requestedWorkflowTriggerMode: body.workflowTriggerMode,
+      requestedAssignedUserId: body.defaultAssignedUserIdGhl,
+      locationId,
+      locationPrimaryUserId: location?.primaryUserId,
+      workflows: (snap.workflowsJson as GhlDiscoveredWorkflow[] | null) ?? [],
+      users: (snap.usersJson as GhlDiscoveredUser[] | null) ?? [],
+      discoveredFields: snapFields,
+      savedSourceAttributeMap: lockedDest?.sourceAttributeFieldMapJson,
+      requestedSourceAttributeMap: body.sourceAttributeFieldMapJson,
+      savedPolicy: lockedDest?.sourceEnrichmentPolicyJson,
+      requestedPolicy: body.sourceEnrichmentPolicyJson,
+    });
+    if (!lalPatch.ok) return lalPatch;
+    const lal = lalPatch.configuration;
+    const effectiveBody = lal.applied
+      ? {
+          ...body,
+          destinationWorkflowIdGhl: lal.destinationWorkflowIdGhl,
+          workflowTriggerMode: lal.workflowTriggerMode ?? body.workflowTriggerMode,
+          defaultAssignedUserIdGhl: lal.defaultAssignedUserIdGhl ?? body.defaultAssignedUserIdGhl,
+          sourceAttributeFieldMapJson: lal.sourceAttributeFieldMap,
+          sourceEnrichmentPolicyJson: lal.sourceEnrichmentPolicy,
+        }
+      : body;
 
-  const connItem = presentGhlLocationConnection(connection);
-  const destinationReadiness = evaluateDestinationReadiness(
-    destinationInputFromGhlDestination(client, upserted, {
-      connectionStatus: connItem.connectionStatus,
-      lastProbeAt: connItem.lastProbeAt ? new Date(connItem.lastProbeAt) : null,
-      lastError: connItem.lastError,
-    })
-  );
-
-  return {
-    ghlDestination: presentClientGhlDestination(upserted),
-    destinationReadiness,
-    fieldMapping: fieldMappingReport,
-  };
+    const upserted = await upsertClientGhlDestination(
+      client.clientAccountId,
+      buildDestinationUpsertData(
+        locationId,
+        lockedDest,
+        effectiveBody,
+        mergedFieldMap,
+        mergedOptionMap,
+        ghlStatus,
+        snap.locationName ?? connection.locationName,
+        lal.applied ? { opportunityCreationEnabled: false } : undefined
+      ),
+      tx
+    );
+    const connItem = presentGhlLocationConnection(connection);
+    const destinationReadiness = evaluateDestinationReadiness(
+      destinationInputFromGhlDestination(client, upserted, {
+        connectionStatus: connItem.connectionStatus,
+        lastProbeAt: connItem.lastProbeAt ? new Date(connItem.lastProbeAt) : null,
+        lastError: connItem.lastError,
+      })
+    );
+    return {
+      ghlDestination: presentClientGhlDestination(upserted),
+      destinationReadiness,
+      fieldMapping: fieldMappingReport,
+    };
+  });
+  if (!("ok" in authorized)) return authorized;
+  return authorized.value;
 }

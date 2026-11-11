@@ -21,8 +21,12 @@ import { assertLiveDeliveryAllowed, LiveDeliveryNotAllowedError } from "../deliv
 import { ruleToReadinessInput } from "../delivery-readiness-admin.present.js";
 import { getDuplicateRiskForRoutingDecision } from "../lead-identity/lead-identity-correlation.service.js";
 import { findClientAccountById } from "../../repositories/client-account.repository.js";
-import { findLatestGhlLocationConfigSnapshot } from "../../repositories/ghl-location-config-snapshot.repository.js";
+import { findNewestGhlLocationConfigSnapshot } from "../../repositories/ghl-location-config-snapshot.repository.js";
 import type { GhlDiscoveredCustomField } from "../ghl-config-discovery/ghl-config-discovery.types.js";
+import {
+  assessOperationalGhlSnapshot,
+  canaryDiscoveryBlocker,
+} from "../ghl-config-discovery/ghl-operational-snapshot.js";
 import {
   parseSourceEnrichmentPolicyJson,
   resolveEffectiveSourceAttributeFieldMap,
@@ -156,9 +160,18 @@ export async function loadLiveCanaryContext(plan: LeadDeliveryPlan & { steps: un
     ? await findClientAccountById(plan.destinationClientAccountId)
     : null;
   const locationId = plan.destinationSubaccountIdGhl?.trim() ?? "";
-  const snap = locationId ? await findLatestGhlLocationConfigSnapshot(locationId) : null;
+  const snap = locationId ? await findNewestGhlLocationConfigSnapshot(locationId) : null;
+  const mappedFieldIds = Object.values(
+    (clientAccount?.ghlDestination?.sa360CustomFieldIdMapJson as Record<string, unknown> | null) ?? {}
+  ).filter((value): value is string => typeof value === "string");
+  const snapshotFields = Array.isArray(snap?.customFieldsJson)
+    ? (snap.customFieldsJson as GhlDiscoveredCustomField[])
+    : [];
+  const discovery = locationId
+    ? canaryDiscoveryBlocker(assessOperationalGhlSnapshot(snap, locationId, new Date()), mappedFieldIds, snapshotFields)
+    : { kind: "current" as const, blocker: null };
   const discoveredCustomFields =
-    (snap?.customFieldsJson as GhlDiscoveredCustomField[] | null) ?? [];
+    discovery.kind === "current" || discovery.kind === "missing_fields" ? snapshotFields : undefined;
   const destinationFieldMapping = clientAccount?.ghlDestination
     ? {
         sa360CustomFieldIdMapJson: clientAccount.ghlDestination.sa360CustomFieldIdMapJson,
@@ -172,7 +185,7 @@ export async function loadLiveCanaryContext(plan: LeadDeliveryPlan & { steps: un
         sourceAttributeFieldMapJson: clientAccount.ghlDestination.sourceAttributeFieldMapJson,
         sourceEnrichmentPolicyJson: clientAccount.ghlDestination.sourceEnrichmentPolicyJson,
       }
-    : discoveredCustomFields.length > 0
+    : discoveredCustomFields && discoveredCustomFields.length > 0
       ? {
           sa360CustomFieldIdMapJson: {},
           discoveredCustomFields,
@@ -205,6 +218,7 @@ export async function loadLiveCanaryContext(plan: LeadDeliveryPlan & { steps: un
     destinationFieldMapping,
     sourceAttributeFieldMap,
     sourceEnrichmentPolicy,
+    discoveryBlocker: discovery.blocker,
   };
 }
 
@@ -214,6 +228,7 @@ export async function evaluateLiveCanaryPreflight(
   const ctx = await loadLiveCanaryContext(plan);
   const blockers: string[] = [];
   const warnings: string[] = [];
+  if (ctx.discoveryBlocker) blockers.push(ctx.discoveryBlocker);
 
   const runtime = await warmEffectiveDeliveryAdapterMode();
   const adapterMode = getGhlDeliveryAdapterMode();

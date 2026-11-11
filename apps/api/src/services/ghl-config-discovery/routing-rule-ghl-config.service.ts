@@ -22,10 +22,13 @@ import {
   type ClientDestinationFieldMapping,
   type RoutingRuleWithReadinessItem,
 } from "../delivery-readiness-admin.present.js";
-import { findLatestGhlLocationConfigSnapshot } from "../../repositories/ghl-location-config-snapshot.repository.js";
-import { snapshotToDiscoveryResult } from "./ghl-config-discovery.present.js";
-import { detectSa360RequiredCustomFields } from "./ghl-config-discovery.service.js";
 import type { GhlDiscoveredCustomField, GhlDiscoveredLocation, GhlDiscoveredUser, GhlDiscoveredWorkflow } from "./ghl-config-discovery.types.js";
+import {
+  informationalDiscoverySummary,
+  readInformationalGhlLocationSnapshot,
+  withCurrentOperationalSnapshot,
+  type GhlOperationalSaveDeps,
+} from "./ghl-operational-snapshot.js";
 import { lalAiBot1VetSavePatch } from "../ghl-delivery-adapter/lal-ai-bot1-vet-snapshot.js";
 import { SA360_DEMO_CUSTOM_FIELD_OPTION_MAP } from "@sa360/shared";
 import { DIRECT_DEMO_CANONICAL_LOCATION_ID } from "../../lib/direct-demo-delivery-config.js";
@@ -50,7 +53,20 @@ export type SaveRoutingRuleGhlConfigResult =
       fieldMapping: Sa360FieldMappingSaveReport;
     }
   | { notFound: true }
-  | { error: string; code: "LOCATION_MISMATCH" | "NOT_CONNECTED" | "VALIDATION" | "LAL_WEBFORM_NOT_FOUND" };
+  | {
+      error: string;
+      code:
+        | "LOCATION_MISMATCH"
+        | "NOT_CONNECTED"
+        | "VALIDATION"
+        | "LAL_WEBFORM_NOT_FOUND"
+        | "SNAPSHOT_MISSING"
+        | "SNAPSHOT_NOT_CURRENT"
+        | "SNAPSHOT_EXPIRED"
+        | "SNAPSHOT_FUTURE"
+        | "SNAPSHOT_WRONG_LOCATION"
+        | "SNAPSHOT_BUSY";
+    };
 
 export function buildMergedSa360OptionMapForGhlConfigSave(input: {
   existingDest: ClientGhlDestination | null | undefined;
@@ -103,26 +119,12 @@ export async function getRoutingRuleGhlConfigSummary(ruleId: string) {
   const destMapping = clientDestinationFieldMappingFromDest(client?.ghlDestination);
 
   const locationId = trimOrNull(rule.destinationSubaccountIdGhl);
-  let discoverySummary: Record<string, unknown> | null = null;
-  if (locationId) {
-    const snap = await findLatestGhlLocationConfigSnapshot(locationId);
-    if (snap) {
-      const fields = detectSa360RequiredCustomFields(
-        (snap.customFieldsJson as GhlDiscoveredCustomField[]) ?? []
-      );
-      const d = snapshotToDiscoveryResult(snap, fields);
-      discoverySummary = {
-        fetchedAt: d.fetchedAt,
-        pipelineCount: d.pipelines.length,
-        workflowCount: d.workflows.length,
-        requiredFieldsInstalled: d.requiredFields.requiredFieldsInstalled,
-        missingRequiredFields: d.requiredFields.missingRequiredFields,
-        sa360FieldMapping: d.sa360FieldMapping,
+  const discoverySummary = locationId
+    ? informationalDiscoverySummary(await readInformationalGhlLocationSnapshot(locationId), {
         savedFieldMapping: destMapping?.sa360CustomFieldIdMapJson ?? {},
         customFieldStampRequired: destMapping?.customFieldStampRequired ?? false,
-      };
-    }
-  }
+      })
+    : null;
 
   return {
     rule: {
@@ -158,7 +160,8 @@ export function checkRoutingRuleGhlLocationMismatch(
 
 export async function saveRoutingRuleGhlConfig(
   ruleId: string,
-  body: RoutingRuleGhlConfigBody
+  body: RoutingRuleGhlConfigBody,
+  deps: GhlOperationalSaveDeps = {}
 ): Promise<SaveRoutingRuleGhlConfigResult> {
   const existing = await findCampaignRoutingRuleById(ruleId.trim());
   if (!existing) return { notFound: true };
@@ -181,135 +184,149 @@ export async function saveRoutingRuleGhlConfig(
   }
 
   const ghlStatus = ghlStatusFromConnection(connection.connectionStatus);
-
-  const client = await findClientAccountById(existing.clientAccountId);
-  const existingDest = client?.ghlDestination ?? null;
-  const snap = await findLatestGhlLocationConfigSnapshot(locationId);
-  const snapFields = (snap?.customFieldsJson as GhlDiscoveredCustomField[]) ?? [];
-  const mergedFieldMap = buildMergedSa360FieldMapForGhlConfigSave({
-    snapFields,
-    discoveryCustomFields: body.discoveryCustomFields as GhlDiscoveredCustomField[] | undefined,
-    existingDest,
-    bodyMapJson: body.sa360CustomFieldIdMapJson,
-  });
-  const mergedOptionMap = buildMergedSa360OptionMapForGhlConfigSave({
-    existingDest,
-    bodyOptionMapJson: body.sa360CustomFieldOptionMapJson,
-    locationId,
-  });
-  const fieldMappingReport = buildFieldMappingSaveReport(
-    mergedFieldMap,
-    body.customFieldStampRequired ?? existingDest?.customFieldStampRequired ?? false
-  );
-  const location = snap?.locationJson as GhlDiscoveredLocation | null;
-  const lalPatch = lalAiBot1VetSavePatch({
-    applyDemoRetarget: body.applyLalAiBot1WebformConfiguration === true,
-    existingWorkflowId: existingDest?.destinationWorkflowIdGhl ?? existing.destinationWorkflowIdGhl,
-    existingWorkflowTriggerMode: existingDest?.workflowTriggerMode,
-    existingAssignedUserId: existingDest?.defaultAssignedUserIdGhl ?? existing.defaultAssignedUserIdGhl,
-    requestedWorkflowId: body.destinationWorkflowIdGhl,
-    requestedWorkflowTriggerMode: body.workflowTriggerMode,
-    requestedAssignedUserId: body.defaultAssignedUserIdGhl,
-    locationId,
-    locationPrimaryUserId: location?.primaryUserId,
-    workflows: (snap?.workflowsJson as GhlDiscoveredWorkflow[] | null) ?? [],
-    users: (snap?.usersJson as GhlDiscoveredUser[] | null) ?? [],
-    discoveredFields: snapFields,
-    savedSourceAttributeMap: existingDest?.sourceAttributeFieldMapJson ?? existing.sourceAttributeFieldMapJson,
-    requestedSourceAttributeMap: body.sourceAttributeFieldMapJson,
-    savedPolicy: existingDest?.sourceEnrichmentPolicyJson,
-    requestedPolicy: body.sourceEnrichmentPolicyJson,
-  });
-  if (!lalPatch.ok) return lalPatch;
-  const lal = lalPatch.configuration;
-  const effectiveBody = lal.applied
-    ? {
-        ...body,
-        destinationWorkflowIdGhl: lal.destinationWorkflowIdGhl,
-        workflowTriggerMode: lal.workflowTriggerMode ?? body.workflowTriggerMode,
-        defaultAssignedUserIdGhl: lal.defaultAssignedUserIdGhl ?? body.defaultAssignedUserIdGhl,
-        sourceAttributeFieldMapJson: lal.sourceAttributeFieldMap,
-        sourceEnrichmentPolicyJson: lal.sourceEnrichmentPolicy,
-      }
-    : body;
-  const destMapping: ClientDestinationFieldMapping = {
-    sa360CustomFieldIdMapJson: mergedFieldMap,
-    sa360CustomFieldOptionMapJson: mergedOptionMap,
-    customFieldStampRequired:
-      body.customFieldStampRequired ?? existingDest?.customFieldStampRequired ?? false,
-    ownerAssignmentRequired:
-      body.ownerAssignmentRequired ?? existingDest?.ownerAssignmentRequired ?? false,
-    workflowStartRequired:
-      body.workflowStartRequired ?? existingDest?.workflowStartRequired ?? false,
-    workflowTriggerMode:
-      effectiveBody.workflowTriggerMode ?? existingDest?.workflowTriggerMode ?? "tag_trigger",
-  };
-
-  const merged = mergeRuleForAssessment(existing, {
-    destinationPipelineIdGhl: body.destinationPipelineIdGhl,
-    destinationPipelineStageIdGhl: body.destinationPipelineStageIdGhl,
-    destinationWorkflowIdGhl: effectiveBody.destinationWorkflowIdGhl,
-    defaultAssignedUserIdGhl: effectiveBody.defaultAssignedUserIdGhl,
-    snapshotInstalled: body.snapshotInstalled,
-    requiredFieldsInstalled: body.requiredFieldsInstalled,
-    ghlConnectionStatus: ghlStatus,
-  });
-  if (!ruleLocation) {
-    merged.destinationSubaccountIdGhl = locationId;
-  }
-  merged.sa360CustomFieldIdMapJson = destMapping.sa360CustomFieldIdMapJson;
-  merged.sa360CustomFieldOptionMapJson = destMapping.sa360CustomFieldOptionMapJson;
-  merged.customFieldStampRequired = destMapping.customFieldStampRequired;
-
-  const assessment = evaluateDeliveryReadiness(merged);
-
-  const data: Prisma.CampaignRoutingRuleUpdateInput = {
-    destinationPipelineIdGhl: trimOrNull(body.destinationPipelineIdGhl),
-    destinationPipelineStageIdGhl: trimOrNull(body.destinationPipelineStageIdGhl),
-    destinationWorkflowIdGhl: trimOrNull(effectiveBody.destinationWorkflowIdGhl),
-    defaultAssignedUserIdGhl: trimOrNull(effectiveBody.defaultAssignedUserIdGhl),
-    ...(lal.applied ? { opportunityCreationEnabled: false } : {}),
-    ghlConnectionStatus: ghlStatus,
-    ...persistedReadinessAfterAssessment(assessment),
-  };
-  if (body.snapshotInstalled !== undefined) {
-    data.snapshotInstalled = body.snapshotInstalled;
-  }
-  if (body.requiredFieldsInstalled !== undefined) {
-    data.requiredFieldsInstalled = body.requiredFieldsInstalled;
-  }
-  if (!ruleLocation) {
-    data.destinationSubaccountIdGhl = locationId;
-  }
-
-  const updated = await updateCampaignRoutingRuleDeliveryConfig(existing.id, data);
-
-  await upsertClientGhlDestination(
-    existing.clientAccountId,
-    buildDestinationUpsertData(
+  const authorized = await withCurrentOperationalSnapshot(locationId, deps, async (tx, snap) => {
+    await tx.$queryRaw`
+      SELECT "id"
+      FROM "CampaignRoutingRule"
+      WHERE "id" = ${existing.id}
+      FOR UPDATE
+    `;
+    await tx.$queryRaw`
+      SELECT "id"
+      FROM "ClientGhlDestination"
+      WHERE "clientAccountId" = ${existing.clientAccountId}
+      FOR UPDATE
+    `;
+    const lockedRule = await tx.campaignRoutingRule.findUnique({ where: { id: existing.id } });
+    if (!lockedRule) return { notFound: true as const };
+    const lockedLocation = trimOrNull(lockedRule.destinationSubaccountIdGhl);
+    const lockedMismatch = checkRoutingRuleGhlLocationMismatch(
+      lockedLocation,
       locationId,
+      body.confirmLocationMismatch
+    );
+    if (lockedMismatch) return lockedMismatch;
+    const existingDest = await tx.clientGhlDestination.findUnique({
+      where: { clientAccountId: lockedRule.clientAccountId },
+    });
+    const snapFields = (snap.customFieldsJson as GhlDiscoveredCustomField[]) ?? [];
+    const mergedFieldMap = buildMergedSa360FieldMapForGhlConfigSave({
+      snapFields,
+      discoveryCustomFields: body.discoveryCustomFields as GhlDiscoveredCustomField[] | undefined,
       existingDest,
-      effectiveBody,
+      bodyMapJson: body.sa360CustomFieldIdMapJson,
+    });
+    const mergedOptionMap = buildMergedSa360OptionMapForGhlConfigSave({
+      existingDest,
+      bodyOptionMapJson: body.sa360CustomFieldOptionMapJson,
+      locationId,
+    });
+    const fieldMappingReport = buildFieldMappingSaveReport(
       mergedFieldMap,
-      mergedOptionMap,
-      ghlStatus,
-      snap?.locationName,
-      lal.applied ? { opportunityCreationEnabled: false } : undefined
-    )
-  );
+      body.customFieldStampRequired ?? existingDest?.customFieldStampRequired ?? false
+    );
+    const location = snap.locationJson as GhlDiscoveredLocation | null;
+    const lalPatch = lalAiBot1VetSavePatch({
+      applyDemoRetarget: body.applyLalAiBot1WebformConfiguration === true,
+      existingWorkflowId: existingDest?.destinationWorkflowIdGhl ?? lockedRule.destinationWorkflowIdGhl,
+      existingWorkflowTriggerMode: existingDest?.workflowTriggerMode,
+      existingAssignedUserId: existingDest?.defaultAssignedUserIdGhl ?? lockedRule.defaultAssignedUserIdGhl,
+      requestedWorkflowId: body.destinationWorkflowIdGhl,
+      requestedWorkflowTriggerMode: body.workflowTriggerMode,
+      requestedAssignedUserId: body.defaultAssignedUserIdGhl,
+      locationId,
+      locationPrimaryUserId: location?.primaryUserId,
+      workflows: (snap.workflowsJson as GhlDiscoveredWorkflow[] | null) ?? [],
+      users: (snap.usersJson as GhlDiscoveredUser[] | null) ?? [],
+      discoveredFields: snapFields,
+      savedSourceAttributeMap: existingDest?.sourceAttributeFieldMapJson ?? lockedRule.sourceAttributeFieldMapJson,
+      requestedSourceAttributeMap: body.sourceAttributeFieldMapJson,
+      savedPolicy: existingDest?.sourceEnrichmentPolicyJson,
+      requestedPolicy: body.sourceEnrichmentPolicyJson,
+    });
+    if (!lalPatch.ok) return lalPatch;
+    const lal = lalPatch.configuration;
+    const effectiveBody = lal.applied
+      ? {
+          ...body,
+          destinationWorkflowIdGhl: lal.destinationWorkflowIdGhl,
+          workflowTriggerMode: lal.workflowTriggerMode ?? body.workflowTriggerMode,
+          defaultAssignedUserIdGhl: lal.defaultAssignedUserIdGhl ?? body.defaultAssignedUserIdGhl,
+          sourceAttributeFieldMapJson: lal.sourceAttributeFieldMap,
+          sourceEnrichmentPolicyJson: lal.sourceEnrichmentPolicy,
+        }
+      : body;
+    const destMapping: ClientDestinationFieldMapping = {
+      sa360CustomFieldIdMapJson: mergedFieldMap,
+      sa360CustomFieldOptionMapJson: mergedOptionMap,
+      customFieldStampRequired:
+        body.customFieldStampRequired ?? existingDest?.customFieldStampRequired ?? false,
+      ownerAssignmentRequired:
+        body.ownerAssignmentRequired ?? existingDest?.ownerAssignmentRequired ?? false,
+      workflowStartRequired:
+        body.workflowStartRequired ?? existingDest?.workflowStartRequired ?? false,
+      workflowTriggerMode:
+        effectiveBody.workflowTriggerMode ?? existingDest?.workflowTriggerMode ?? "tag_trigger",
+    };
+    const merged = mergeRuleForAssessment(lockedRule, {
+      destinationPipelineIdGhl: body.destinationPipelineIdGhl,
+      destinationPipelineStageIdGhl: body.destinationPipelineStageIdGhl,
+      destinationWorkflowIdGhl: effectiveBody.destinationWorkflowIdGhl,
+      defaultAssignedUserIdGhl: effectiveBody.defaultAssignedUserIdGhl,
+      snapshotInstalled: body.snapshotInstalled,
+      requiredFieldsInstalled: body.requiredFieldsInstalled,
+      ghlConnectionStatus: ghlStatus,
+    });
+    if (!lockedLocation) merged.destinationSubaccountIdGhl = locationId;
+    merged.sa360CustomFieldIdMapJson = destMapping.sa360CustomFieldIdMapJson;
+    merged.sa360CustomFieldOptionMapJson = destMapping.sa360CustomFieldOptionMapJson;
+    merged.customFieldStampRequired = destMapping.customFieldStampRequired;
+    const assessment = evaluateDeliveryReadiness(merged);
+    const data: Prisma.CampaignRoutingRuleUpdateInput = {
+      destinationPipelineIdGhl: trimOrNull(body.destinationPipelineIdGhl),
+      destinationPipelineStageIdGhl: trimOrNull(body.destinationPipelineStageIdGhl),
+      destinationWorkflowIdGhl: trimOrNull(effectiveBody.destinationWorkflowIdGhl),
+      defaultAssignedUserIdGhl: trimOrNull(effectiveBody.defaultAssignedUserIdGhl),
+      ...(lal.applied ? { opportunityCreationEnabled: false } : {}),
+      ghlConnectionStatus: ghlStatus,
+      ...persistedReadinessAfterAssessment(assessment),
+    };
+    if (body.snapshotInstalled !== undefined) data.snapshotInstalled = body.snapshotInstalled;
+    if (body.requiredFieldsInstalled !== undefined) data.requiredFieldsInstalled = body.requiredFieldsInstalled;
+    if (!lockedLocation) data.destinationSubaccountIdGhl = locationId;
 
-  const refreshedClient = await findClientAccountById(existing.clientAccountId);
-  const persistedMapping =
-    clientDestinationFieldMappingFromDest(refreshedClient?.ghlDestination) ?? destMapping;
-  const item = presentRoutingRuleWithReadiness(updated, persistedMapping);
-
-  const discoverySummary = {
-    fetchedAt: snap?.fetchedAt.toISOString() ?? null,
-    locationName: snap?.locationName ?? refreshedClient?.ghlDestination?.locationName ?? null,
-    fieldMapping: fieldMappingReport,
-  };
-
-  return { item, discoverySummary, fieldMapping: fieldMappingReport };
+    const updated = await updateCampaignRoutingRuleDeliveryConfig(lockedRule.id, data, tx);
+    await upsertClientGhlDestination(
+      lockedRule.clientAccountId,
+      buildDestinationUpsertData(
+        locationId,
+        existingDest,
+        effectiveBody,
+        mergedFieldMap,
+        mergedOptionMap,
+        ghlStatus,
+        snap.locationName,
+        lal.applied ? { opportunityCreationEnabled: false } : undefined
+      ),
+      tx
+    );
+    const refreshedDest = await tx.clientGhlDestination.findUnique({
+      where: { clientAccountId: lockedRule.clientAccountId },
+    });
+    const persistedMapping = clientDestinationFieldMappingFromDest(refreshedDest) ?? destMapping;
+    return {
+      item: presentRoutingRuleWithReadiness(updated, persistedMapping),
+      discoverySummary: {
+        fetchedAt: snap.fetchedAt.toISOString(),
+        locationName: snap.locationName ?? refreshedDest?.locationName ?? null,
+        snapshotCurrent: true,
+        fieldMapping: fieldMappingReport,
+      },
+      fieldMapping: fieldMappingReport,
+    };
+  });
+  if (!("ok" in authorized)) return authorized;
+  return authorized.value;
 }
 
 export async function ruleReadinessPreview(ruleId: string) {

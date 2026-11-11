@@ -9,16 +9,20 @@
  * a resource failure in errors or warnings is not usable.
  */
 
-export const GHL_SNAPSHOT_LIST_KEYS = [
-  "pipelines",
-  "workflows",
-  "users",
-  "customFields",
-  "tags",
-  "data",
-  "items",
-  "results",
-] as const;
+export const GHL_DISCOVERY_LIST_RESOURCES = ["pipelines", "workflows", "users", "customFields", "tags"] as const;
+
+export type GhlDiscoveryListResource = (typeof GHL_DISCOVERY_LIST_RESOURCES)[number];
+
+const RESOURCE_COLLECTION_KEY: Record<GhlDiscoveryListResource, string> = {
+  pipelines: "pipelines",
+  workflows: "workflows",
+  users: "users",
+  customFields: "customFields",
+  tags: "tags",
+};
+
+/** Envelopes the discovery parsers already read after the resource's own key. */
+const SHARED_COLLECTION_ENVELOPES = ["data", "items", "results"] as const;
 
 export type GhlSnapshotOutcome =
   | "complete"
@@ -170,32 +174,57 @@ export function providerSignalsAuthentication(value: string | null | undefined):
 }
 
 /**
- * The array a list parser will read, or null when the body is not an explicit
- * collection. An empty array is a successful empty result. An error object
- * with no collection is not an empty result.
+ * The array the named resource parser will read, or null when the body is not
+ * that resource's collection. An empty array is a successful empty result.
+ * Another resource's collection, a non-array value, and an error object are not.
+ * A raw array and the data, items, and results envelopes stay valid.
  */
-export function explicitDiscoveryCollection(json: unknown): unknown[] | null {
+export function explicitDiscoveryCollection(json: unknown, resource: GhlDiscoveryListResource): unknown[] | null {
   if (Array.isArray(json)) return json;
   if (!json || typeof json !== "object") return null;
   const record = json as Record<string, unknown>;
-  for (const key of GHL_SNAPSHOT_LIST_KEYS) {
+  const ownKey = RESOURCE_COLLECTION_KEY[resource];
+  if (ownKey in record) {
+    return Array.isArray(record[ownKey]) ? (record[ownKey] as unknown[]) : null;
+  }
+  for (const key of GHL_DISCOVERY_LIST_RESOURCES) {
+    if (key !== ownKey && key in record) return null;
+  }
+  for (const key of SHARED_COLLECTION_ENVELOPES) {
     if (!(key in record)) continue;
     return Array.isArray(record[key]) ? (record[key] as unknown[]) : null;
   }
   return null;
 }
 
+/**
+ * A location body belongs to the requested location only when the location
+ * object, wrapped or unwrapped, has that location id. An empty object, a
+ * malformed wrapper, an error object, or a different id is not a discovery.
+ */
 export function isWellFormedDiscoveredLocation(json: unknown, locationId: string): boolean {
-  if (!json || typeof json !== "object" || Array.isArray(json)) return false;
-  const wrapped = (json as Record<string, unknown>).location ?? json;
-  if (!wrapped || typeof wrapped !== "object" || Array.isArray(wrapped)) return false;
-  const record = wrapped as Record<string, unknown>;
+  const requested = locationId.trim();
+  if (!requested || !json || typeof json !== "object" || Array.isArray(json)) return false;
+  const root = json as Record<string, unknown>;
+  if (isDiscoveryErrorObject(root)) return false;
+  const record = discoveredLocationRecord(root);
+  if (!record || isDiscoveryErrorObject(record)) return false;
   const id = typeof record.id === "string" ? record.id.trim() : "";
-  const name = typeof record.name === "string" ? record.name.trim() : "";
-  const message = record.message ?? record.error ?? record.msg;
-  if (typeof message === "string" && message.trim() && !id && !name) return false;
-  if (id && id !== locationId) return false;
-  return true;
+  return id === requested;
+}
+
+function discoveredLocationRecord(root: Record<string, unknown>): Record<string, unknown> | null {
+  if (!("location" in root)) return root;
+  const wrapped = root.location;
+  if (!wrapped || typeof wrapped !== "object" || Array.isArray(wrapped)) return null;
+  return wrapped as Record<string, unknown>;
+}
+
+function isDiscoveryErrorObject(record: Record<string, unknown>): boolean {
+  const message = record.message ?? record.msg;
+  if (typeof message === "string" && message.trim()) return true;
+  if (typeof record.error === "string" && record.error.trim()) return true;
+  return Boolean(record.error && typeof record.error === "object");
 }
 
 function isOutcome(value: string): value is GhlSnapshotOutcome {

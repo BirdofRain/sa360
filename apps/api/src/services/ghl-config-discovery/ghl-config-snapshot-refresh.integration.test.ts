@@ -318,6 +318,121 @@ test("an authenticated empty workflow list is a successful discovery", async () 
   if (!request.ok) assert.equal(request.error, "workflow_not_in_snapshot");
 });
 
+test("a malformed HTTP 200 does not replace a usable snapshot", async () => {
+  const world = await seedLocation();
+  const calls: Call[] = [];
+  await discoverGhlLocationConfig({
+    locationId: world.locationId,
+    refresh: true,
+    fetchImpl: mockFetch(successHandlers(world.locationId), calls),
+  });
+  const malformed: Array<{ label: string; handlers: Partial<Handlers> }> = [
+    { label: "empty location", handlers: { location: () => jsonResponse(200, {}) } },
+    { label: "malformed location wrapper", handlers: { location: () => jsonResponse(200, { location: {} }) } },
+    { label: "location id mismatch", handlers: { location: () => jsonResponse(200, { id: "other-location", name: "Other" }) } },
+    { label: "workflow pipelines collection", handlers: { workflows: () => jsonResponse(200, { pipelines: [] }) } },
+    { label: "workflow error object", handlers: { workflows: () => jsonResponse(200, { message: "could not read workflows" }) } },
+  ];
+  for (const item of malformed) {
+    const failed = await discoverGhlLocationConfig({
+      locationId: world.locationId,
+      refresh: true,
+      fetchImpl: mockFetch({ ...successHandlers(world.locationId), ...item.handlers }, calls),
+    });
+    assert.equal(failed.ok, false, item.label);
+    if (!failed.ok) {
+      assert.equal(failed.code, "PARTIAL_FAILURE", item.label);
+      assert.equal(failed.preservedSnapshot?.workflows[0]?.id, "wf_keep", item.label);
+      assert.equal(failed.preservedSnapshot?.snapshotVerification, "previously_captured", item.label);
+    }
+  }
+  const rows = await snapshots(world.locationId);
+  assert.equal(rows.length, 1 + malformed.length);
+  assert.equal(isUsableGhlLocationConfigSnapshot(rows[0]!), false);
+  assert.equal(workflowIds(rows.at(-1)?.workflowsJson).has("wf_keep"), true);
+  const loaded = await discoverGhlLocationConfig({
+    locationId: world.locationId,
+    refresh: false,
+    fetchImpl: offlineFetch(),
+  });
+  assert.equal(loaded.ok, true);
+  if (loaded.ok) {
+    assert.equal(loaded.discovery.workflows[0]?.id, "wf_keep");
+    assert.equal(loaded.discovery.snapshotVerification, "previously_captured");
+  }
+  const request = await recordGhlDestinationConfigRequest(
+    prisma,
+    command(world, "wf_keep"),
+    { SA360_GHL_DESTINATION_CONFIG_REQUEST_ENABLED: "true" }
+  );
+  assert.equal(request.ok, false);
+  if (!request.ok) assert.equal(request.error, "snapshot_not_current");
+  assert.equal(await prisma.ghlDestinationConfigurationRequest.count({ where: { clientAccountId: world.clientAccountId } }), 0);
+  assert.equal(await operationalCount(world.clientAccountId), 0);
+  assert.equal(calls.every((call) => call.method === "GET"), true);
+});
+
+test("wrapped locations and data envelopes are successful discoveries", async () => {
+  const world = await seedLocation();
+  const calls: Call[] = [];
+  const fields = [
+    { id: "field_coverage", name: "Desired Coverage", fieldKey: "contact.desired_coverage" },
+    { id: "field_branch", name: "Branch of Service", fieldKey: "contact.branch_of_service" },
+    { id: "field_reason", name: "Primary Reason", fieldKey: "contact.primary_reason" },
+  ];
+  const discovered = await discoverGhlLocationConfig({
+    locationId: world.locationId,
+    refresh: true,
+    fetchImpl: mockFetch(
+      {
+        location: () => jsonResponse(200, { location: { id: world.locationId, name: "Wrapped", companyId: "co" } }),
+        pipelines: () => jsonResponse(200, { data: [{ id: "pipe_data", name: "Data pipe", stages: [] }] }),
+        workflows: () => jsonResponse(200, { data: [{ id: "wf_data", name: "From data", status: "published" }] }),
+        users: () => jsonResponse(200, { items: [] }),
+        customFields: () => jsonResponse(200, { data: fields }),
+        tags: () => jsonResponse(200, { results: [] }),
+      },
+      calls
+    ),
+  });
+  assert.equal(discovered.ok, true);
+  if (discovered.ok) {
+    assert.equal(discovered.discovery.snapshotVerification, "live");
+    assert.equal(discovered.discovery.location.id, world.locationId);
+    assert.equal(discovered.discovery.location.name, "Wrapped");
+    assert.equal(discovered.discovery.workflows[0]?.id, "wf_data");
+    assert.equal(discovered.discovery.pipelines[0]?.id, "pipe_data");
+    assert.deepEqual(discovered.discovery.errors, []);
+  }
+
+  const empty = await discoverGhlLocationConfig({
+    locationId: world.locationId,
+    refresh: true,
+    fetchImpl: mockFetch(
+      {
+        ...successHandlers(world.locationId, []),
+        workflows: () => jsonResponse(200, { data: [] }),
+      },
+      calls
+    ),
+  });
+  assert.equal(empty.ok, true);
+  if (empty.ok) {
+    assert.deepEqual(empty.discovery.workflows, []);
+    assert.equal(empty.discovery.snapshotVerification, "live");
+    assert.equal(empty.discovery.location.id, world.locationId);
+  }
+  const rejected = await recordGhlDestinationConfigRequest(
+    prisma,
+    command(world, "wf_data"),
+    { SA360_GHL_DESTINATION_CONFIG_REQUEST_ENABLED: "true" }
+  );
+  assert.equal(rejected.ok, false);
+  if (!rejected.ok) assert.equal(rejected.error, "workflow_not_in_snapshot");
+  assert.equal(await operationalCount(world.clientAccountId), 0);
+  assert.equal(calls.every((call) => call.method === "GET"), true);
+});
+
 test("a snapshot from another location is not reused", async () => {
   const first = await seedLocation();
   const second = await seedLocation();

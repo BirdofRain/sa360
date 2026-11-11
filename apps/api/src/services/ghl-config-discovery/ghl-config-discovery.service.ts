@@ -6,6 +6,7 @@ import {
   dominantSnapshotOutcome,
   explicitDiscoveryCollection,
   failureCodeForSnapshotOutcome,
+  type GhlDiscoveryListResource,
   ghlSnapshotMessageStrings,
   ghlSnapshotOutcomeMarker,
   redactGhlDiscoveryText,
@@ -63,6 +64,10 @@ function asArray(value: unknown): unknown[] {
   return [];
 }
 
+function collectionItems(json: unknown, resource: GhlDiscoveryListResource): unknown[] {
+  return explicitDiscoveryCollection(json, resource) ?? [];
+}
+
 function str(v: unknown): string | null {
   return typeof v === "string" && v.trim() ? v.trim() : null;
 }
@@ -93,7 +98,7 @@ function parseLocation(json: unknown, locationId: string): GhlDiscoveredLocation
 
 /** @internal Exported for unit tests only. */
 export function parsePipelines(json: unknown): GhlDiscoveredPipeline[] {
-  return asArray(json)
+  return collectionItems(json, "pipelines")
     .map((item) => {
       if (!item || typeof item !== "object" || Array.isArray(item)) return null;
       const p = item as Record<string, unknown>;
@@ -124,7 +129,7 @@ export function parsePipelines(json: unknown): GhlDiscoveredPipeline[] {
 }
 
 function parseWorkflows(json: unknown): GhlDiscoveredWorkflow[] {
-  return asArray(json)
+  return collectionItems(json, "workflows")
     .map((item) => {
       if (!item || typeof item !== "object" || Array.isArray(item)) return null;
       const w = item as Record<string, unknown>;
@@ -141,7 +146,7 @@ function parseWorkflows(json: unknown): GhlDiscoveredWorkflow[] {
 }
 
 function parseUsers(json: unknown): GhlDiscoveredUser[] {
-  return asArray(json)
+  return collectionItems(json, "users")
     .map((item): GhlDiscoveredUser | null => {
       if (!item || typeof item !== "object" || Array.isArray(item)) return null;
       const u = item as Record<string, unknown>;
@@ -193,7 +198,7 @@ function parsePicklistOptions(raw: unknown): string[] | null {
 }
 
 function parseCustomFields(json: unknown): GhlDiscoveredCustomField[] {
-  return asArray(json)
+  return collectionItems(json, "customFields")
     .map((item) => {
       if (!item || typeof item !== "object" || Array.isArray(item)) return null;
       const f = item as Record<string, unknown>;
@@ -214,7 +219,7 @@ function parseCustomFields(json: unknown): GhlDiscoveredCustomField[] {
 }
 
 function parseTags(json: unknown): GhlDiscoveredTag[] {
-  return asArray(json)
+  return collectionItems(json, "tags")
     .map((item) => {
       if (!item || typeof item !== "object" || Array.isArray(item)) return null;
       const t = item as Record<string, unknown>;
@@ -315,7 +320,7 @@ async function readResource(
     }
     return { ok: true, json: result.json };
   }
-  if (!explicitDiscoveryCollection(result.json)) {
+  if (!explicitDiscoveryCollection(result.json, resource)) {
     return failedResource(resource, "malformed", result.errorMessage);
   }
   return { ok: true, json: result.json };

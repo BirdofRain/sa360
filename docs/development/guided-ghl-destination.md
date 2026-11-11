@@ -107,7 +107,11 @@ The location must be a connected `GhlLocationConnection` for that client. The
 workflow id must equal a workflow `id` in the newest snapshot for that
 location, and that snapshot must be a complete successful discovery. A failed,
 partial, authentication, outage, timeout, or malformed refresh is stored for
-audit and is not current verification. An older usable snapshot is not
+audit and is not current verification. A location response counts only when
+its id is the requested location, wrapped or unwrapped. Each list counts only
+when it is that resource's collection or a data, items, or results envelope.
+An empty list for that resource is a successful discovery. Another resource's
+collection is not. An older usable snapshot is not
 substituted for this check. A workflow name, including a name containing
 Webform, is not selected. Each field id must equal a custom-field `id` in that
 same complete snapshot. A field key, display name, or discovered id is not substituted. The same field

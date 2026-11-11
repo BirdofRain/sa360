@@ -20,6 +20,8 @@ test("parsePipelines normalizes pipelines and stages", () => {
   });
   assert.equal(pipelines[0]?.id, "pipe_1");
   assert.equal(pipelines[0]?.stages[0]?.name, "New Lead");
+  assert.deepEqual(parsePipelines({ workflows: [] }), []);
+  assert.equal(parsePipelines({ data: [{ id: "pipe_data", name: "Data", stages: [] }] })[0]?.id, "pipe_data");
 });
 
 test("detectSa360RequiredCustomFields finds present SA360 keys", () => {

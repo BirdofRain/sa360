@@ -39,8 +39,15 @@ export async function adminGhlConfigRoutes(app: FastifyInstance) {
     });
 
     if (!result.ok) {
-      const status = result.code === "NOT_CONNECTED" ? 400 : 404;
-      return reply.status(status).send({ ok: false, error: result.error, code: result.code });
+      const status = result.code === "NOT_CONNECTED" ? 400 : result.code === "NOT_FOUND" ? 404 : 409;
+      const body = {
+        ok: false as const,
+        error: result.error,
+        code: result.code,
+        preservedSnapshot: result.preservedSnapshot,
+      };
+      assertNoTokensInGhlConfigPayload(body as unknown as Record<string, unknown>);
+      return reply.status(status).send(body);
     }
 
     const payload = { ok: true as const, ...result.discovery };

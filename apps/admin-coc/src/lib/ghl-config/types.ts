@@ -69,6 +69,7 @@ export type GhlLocationConfigDiscoveryResponse = {
   tags: GhlDiscoveredTag[];
   fetchedAt: string;
   fromCache: boolean;
+  snapshotVerification?: "live" | "cached" | "previously_captured";
   warnings: string[];
   errors: string[];
   requiredFields: GhlRequiredFieldsReport;

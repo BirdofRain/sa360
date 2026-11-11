@@ -33,6 +33,7 @@ export function snapshotToDiscoveryResult(
     tags: (row.tagsJson as GhlConfigDiscoveryResult["tags"]) ?? [],
     fetchedAt: row.fetchedAt.toISOString(),
     fromCache: true,
+    snapshotVerification: "cached",
     warnings: Array.isArray(row.warningsJson)
       ? row.warningsJson.filter((w): w is string => typeof w === "string")
       : [],

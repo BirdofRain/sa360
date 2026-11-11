@@ -808,8 +808,21 @@ export async function fetchAdminGhlLocationConfig(
   const res = await adminFetchJson<GhlLocationConfigDiscoveryResponse>(
     `/admin/v1/ghl/locations/${encodeURIComponent(trimmed)}/config${qs}`
   );
-  if (!res.ok) return { data: null, error: formatError(res) };
+  if (!res.ok) return { data: null, error: readSafeGhlDiscoveryError(res.body) ?? formatError(res) };
   return { data: res.data, error: null };
+}
+
+function readSafeGhlDiscoveryError(body: string): string | null {
+  try {
+    const parsed = JSON.parse(body) as { error?: unknown };
+    if (typeof parsed.error !== "string") return null;
+    const message = parsed.error.trim();
+    if (!message || message.length > 500) return null;
+    if (/access_token|refresh_token|client_secret|authorization/i.test(message)) return null;
+    return message;
+  } catch {
+    return null;
+  }
 }
 
 export async function fetchAdminRoutingRuleGhlConfig(

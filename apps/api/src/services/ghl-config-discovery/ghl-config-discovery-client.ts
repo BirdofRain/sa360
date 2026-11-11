@@ -4,6 +4,10 @@
  */
 import { getGhlOAuthApiBaseUrl } from "../../lib/ghl-oauth-env.js";
 import {
+  providerSignalsAuthentication,
+  redactGhlDiscoveryText,
+} from "../../lib/ghl-config-snapshot-validity.js";
+import {
   getGhlWorkspaceSyncTimeoutMs,
 } from "../../lib/ghl-workspace-sync-env.js";
 import { resolveGhlBearerAuthForLocation } from "../ghl-oauth/ghl-auth-resolver.service.js";
@@ -12,11 +16,21 @@ import { logger } from "../../lib/logger.js";
 const GHL_VERSION = "2021-07-28";
 const DEFAULT_TIMEOUT_MS = 15_000;
 
+export type GhlReadFailureClass =
+  | "authentication"
+  | "provider_outage"
+  | "timeout"
+  | "network"
+  | "malformed"
+  | "http_error"
+  | "no_auth";
+
 export type GhlReadOnlyFetchResult = {
   ok: boolean;
   status: number;
   json: unknown;
   errorMessage: string | null;
+  failureClass: GhlReadFailureClass | null;
 };
 
 export const GHL_CONFIG_DISCOVERY_PATHS = {
@@ -42,6 +56,7 @@ export async function ghlReadOnlyGet(
       status: 0,
       json: null,
       errorMessage: "No GHL OAuth connection for this location.",
+      failureClass: "no_auth",
     };
   }
 
@@ -74,17 +89,77 @@ export async function ghlReadOnlyGet(
         http_status: res.status,
         location_suffix: locationId.slice(-4),
       });
-      let errorMessage = `HTTP ${res.status}`;
-      if (json && typeof json === "object" && !Array.isArray(json)) {
-        const o = json as Record<string, unknown>;
-        const msg = o.message ?? o.error ?? o.msg;
-        if (typeof msg === "string" && msg.trim()) errorMessage = msg.trim().slice(0, 200);
-      }
-      return { ok: false, status: res.status, json, errorMessage };
+      const classified = classifyHttpFailure(res.status, json);
+      return { ok: false, status: res.status, json, ...classified };
     }
-    return { ok: true, status: res.status, json, errorMessage: null };
+    if (text && json === null) {
+      return {
+        ok: false,
+        status: res.status,
+        json,
+        errorMessage: "Response was not valid JSON.",
+        failureClass: "malformed",
+      };
+    }
+    if (!text) {
+      return {
+        ok: false,
+        status: res.status,
+        json: null,
+        errorMessage: "Response was empty.",
+        failureClass: "malformed",
+      };
+    }
+    const providerMessage = providerErrorMessage(json);
+    if (providerSignalsAuthentication(providerMessage)) {
+      return {
+        ok: false,
+        status: res.status,
+        json,
+        errorMessage: redactGhlDiscoveryText(providerMessage ?? "Invalid JWT"),
+        failureClass: "authentication",
+      };
+    }
+    return { ok: true, status: res.status, json, errorMessage: null, failureClass: null };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, status: 0, json: null, errorMessage: msg.slice(0, 200) };
+    const timeout = isTimeoutError(err);
+    const raw = err instanceof Error ? err.message : String(err);
+    return {
+      ok: false,
+      status: 0,
+      json: null,
+      errorMessage: redactGhlDiscoveryText(raw || (timeout ? "timed out" : "network error")),
+      failureClass: timeout ? "timeout" : "network",
+    };
   }
+}
+
+function classifyHttpFailure(
+  status: number,
+  json: unknown
+): { errorMessage: string; failureClass: GhlReadFailureClass } {
+  const providerMessage = providerErrorMessage(json);
+  const errorMessage = redactGhlDiscoveryText(providerMessage ?? `HTTP ${status}`);
+  if (status === 401 || providerSignalsAuthentication(providerMessage)) {
+    return { errorMessage, failureClass: "authentication" };
+  }
+  if (status === 408 || status === 429 || status >= 500) {
+    return { errorMessage, failureClass: "provider_outage" };
+  }
+  return { errorMessage, failureClass: "http_error" };
+}
+
+function providerErrorMessage(json: unknown): string | null {
+  if (!json || typeof json !== "object" || Array.isArray(json)) return null;
+  const message = (json as Record<string, unknown>).message ?? (json as Record<string, unknown>).error ?? (json as Record<string, unknown>).msg;
+  return typeof message === "string" && message.trim() ? message.trim() : null;
+}
+
+function isTimeoutError(err: unknown): boolean {
+  if (typeof err === "object" && err && "name" in err) {
+    const name = String((err as { name: unknown }).name);
+    if (name === "TimeoutError" || name === "AbortError") return true;
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return /timeout|aborted due to timeout/i.test(message);
 }

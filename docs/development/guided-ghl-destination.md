@@ -15,8 +15,10 @@ does not turn them on.
   does not call GoHighLevel when the stored snapshot is enough for that summary.
 - `GET /admin/v1/ghl/connections?clientAccountId=` lists linked locations.
 - `GET /admin/v1/ghl/locations/:locationId/config` reads the stored location
-  snapshot. `refresh=true` refreshes that snapshot from GoHighLevel. It does
-  not enroll a contact.
+  snapshot. `refresh=true` refreshes that snapshot from GoHighLevel. A failed
+  refresh is stored for audit and does not replace the last complete snapshot.
+  Loading the location returns that earlier snapshot marked previously
+  captured. It is not current verification. The read does not enroll a contact.
 - `POST /admin/v1/ghl/connections/:id/probe` checks one linked location's
   credentials and updates the connection probe status. It does not write
   `ClientGhlDestination`.
@@ -103,9 +105,16 @@ the observer allowlist.
 
 The location must be a connected `GhlLocationConnection` for that client. The
 workflow id must equal a workflow `id` in the newest snapshot for that
-location. A workflow name, including a name containing Webform, is not
-selected. Each field id must equal a custom-field `id` in that same snapshot.
-A field key, display name, or discovered id is not substituted. The same field
+location, and that snapshot must be a complete successful discovery. A failed,
+partial, authentication, outage, timeout, or malformed refresh is stored for
+audit and is not current verification. A location response counts only when
+its id is the requested location, wrapped or unwrapped. Each list counts only
+when it is that resource's collection or a data, items, or results envelope.
+An empty list for that resource is a successful discovery. Another resource's
+collection is not. An older usable snapshot is not
+substituted for this check. A workflow name, including a name containing
+Webform, is not selected. Each field id must equal a custom-field `id` in that
+same complete snapshot. A field key, display name, or discovered id is not substituted. The same field
 id on two keys is rejected. Desired coverage, branch of service, and primary
 reason stay distinct keys. A snapshot older than 24 hours is expired. A snapshot more than five minutes
 ahead of the API clock is rejected. Five minutes is the only permitted clock

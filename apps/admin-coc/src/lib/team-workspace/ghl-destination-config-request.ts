@@ -81,6 +81,7 @@ export type GhlLocationPreview = {
   locationId: string;
   fetchedAt: string | null;
   fromCache: boolean;
+  snapshotVerification?: "live" | "cached" | "previously_captured" | null;
   workflows: Array<{ id: string; name: string }>;
   fields: Array<{ id: string; name: string; key: string | null; fieldKey: string | null }>;
   errors: string[];
@@ -104,7 +105,7 @@ export type GhlConfigReview = {
   locationDetail: string;
   workflowStatus: "missing" | "unresolved" | "ready";
   workflowDetail: string;
-  snapshotStatus: "missing" | GhlSnapshotFreshness;
+  snapshotStatus: "missing" | "previously_captured" | GhlSnapshotFreshness;
   snapshotDetail: string;
   rows: GhlConfigMappingReview[];
   blockers: string[];
@@ -162,6 +163,7 @@ export function presentGhlLocationPreview(input: {
   customFields?: unknown;
   fetchedAt?: unknown;
   fromCache?: unknown;
+  snapshotVerification?: unknown;
   errors?: unknown;
 }): GhlLocationPreview | null {
   const locationId = input.locationId.trim();
@@ -190,10 +192,15 @@ export function presentGhlLocationPreview(input: {
         return message ? [message] : [];
       })
     : [];
+  const verification = text(input.snapshotVerification);
   return {
     locationId,
     fetchedAt: text(input.fetchedAt),
     fromCache: input.fromCache === true,
+    snapshotVerification:
+      verification === "live" || verification === "cached" || verification === "previously_captured"
+        ? verification
+        : null,
     workflows,
     fields,
     errors,
@@ -261,6 +268,8 @@ export function ghlConfigRequestErrorMessage(code: string): string {
       return "The location snapshot is dated ahead of the server. Refresh it, then submit again. Nothing was stored.";
     case "snapshot_unusable":
       return "The location snapshot time could not be read. Refresh it, then submit again. Nothing was stored.";
+    case "snapshot_not_current":
+      return "The newest location snapshot is not a complete GoHighLevel discovery. An earlier snapshot was not used as current verification. Refresh the location, then submit again. Nothing was stored.";
     case "workflow_not_in_snapshot":
       return "That workflow id is not in this location's snapshot. A workflow name was not used in its place. Nothing was stored.";
     case "field_id_unverified":
@@ -386,7 +395,8 @@ export function reviewGhlConfigDraft(input: {
         : `${location?.locationName ?? locationId} (${locationId}) is connected. This choice is not saved yet.`;
 
   const freshness = preview ? assessGhlConfigSnapshotFreshness(preview.fetchedAt, now) : null;
-  const snapshotStatus = freshness ?? "missing";
+  const snapshotStatus =
+    preview?.snapshotVerification === "previously_captured" ? "previously_captured" : freshness ?? "missing";
   const snapshotDetail = snapshotCopy(snapshotStatus, preview);
 
   const workflowId = input.draft.workflowId.trim();
@@ -561,6 +571,9 @@ function disconnectedDetail(locationId: string, location: GhlConfigLocationChoic
 
 function snapshotCopy(status: GhlConfigReview["snapshotStatus"], preview: GhlLocationPreview | null): string {
   if (status === "missing") return "Load this location's snapshot. A snapshot from another location is not used.";
+  if (status === "previously_captured") {
+    return "This snapshot was previously captured. It is not current GoHighLevel verification. Refresh the location before submitting.";
+  }
   if (status === "expired") return "This location's snapshot is older than 24 hours. Refresh it before submitting.";
   if (status === "future") return "This location's snapshot is dated ahead of the server. Refresh it before submitting.";
   if (status === "malformed") return "This location's snapshot time could not be read. Refresh it before submitting.";

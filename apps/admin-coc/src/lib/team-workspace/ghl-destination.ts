@@ -94,6 +94,7 @@ export type GuidedGhlSnapshot = {
   customFields: Array<{ id?: unknown; name?: unknown; key?: unknown; fieldKey?: unknown }>;
   fetchedAt?: unknown;
   fromCache?: unknown;
+  snapshotVerification?: unknown;
   errors?: unknown;
 };
 
@@ -226,6 +227,7 @@ export function presentGuidedGhlDestination(input: GuidedGhlPresentInput): Guide
     snapshotForSaved,
     snapshotError: input.snapshotError ?? null,
     snapshotErrors: snapshot?.errors ?? [],
+    previouslyCaptured: snapshot?.previouslyCaptured === true,
     live,
     differentSnapshot: Boolean(snapshot && destination?.locationId && snapshot.locationId !== destination.locationId),
   });
@@ -236,7 +238,8 @@ export function presentGuidedGhlDestination(input: GuidedGhlPresentInput): Guide
     fields.every((field) => field.status === "verified") &&
     stampFields.length > 0 &&
     stampFields.every((field) => field.status === "verified") &&
-    !issues.some((issue) => /revoked|not been checked|does not match the connected location|credentials/i.test(issue));
+    snapshot?.previouslyCaptured !== true &&
+    !issues.some((issue) => /revoked|not been checked|does not match the connected location|credentials|not current GoHighLevel verification/i.test(issue));
 
   return {
     ...base,
@@ -407,6 +410,7 @@ function collectIssues(input: {
   snapshotForSaved: boolean;
   snapshotError: string | null;
   snapshotErrors: string[];
+  previouslyCaptured: boolean;
   live: boolean;
   differentSnapshot: boolean;
 }): string[] {
@@ -436,6 +440,12 @@ function collectIssues(input: {
   }
   if (input.snapshotError) issues.push(input.snapshotError);
   for (const error of input.snapshotErrors) issues.push(error);
+  if (
+    input.previouslyCaptured &&
+    !issues.some((issue) => /not current GoHighLevel verification/i.test(issue))
+  ) {
+    issues.push("This snapshot was previously captured. It is not current GoHighLevel verification.");
+  }
   for (const field of [...input.fields, ...input.stampFields]) {
     if (field.status !== "verified") issues.push(`${field.label}: ${field.detail}`);
   }
@@ -528,6 +538,7 @@ function readSnapshot(snapshot: GuidedGhlSnapshot | null | undefined): {
   fields: DiscoveredDestinationField[];
   fetchedAt: string | null;
   fromCache: boolean;
+  previouslyCaptured: boolean;
   errors: string[];
 } | null {
   if (!snapshot) return null;
@@ -550,12 +561,17 @@ function readSnapshot(snapshot: GuidedGhlSnapshot | null | undefined): {
         return message ? [message] : [];
       })
     : [];
+  const verification = text(snapshot.snapshotVerification);
+  const previouslyCaptured =
+    verification === "previously_captured" ||
+    errors.some((error) => /not current GoHighLevel verification/i.test(error));
   return {
     locationId,
     workflows,
     fields,
     fetchedAt: text(snapshot.fetchedAt),
     fromCache: snapshot.fromCache === true,
+    previouslyCaptured,
     errors,
   };
 }

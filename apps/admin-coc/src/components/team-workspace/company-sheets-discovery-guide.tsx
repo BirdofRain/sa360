@@ -9,12 +9,18 @@ import {
   readTeamWorkspaceCompanySheetsWorksheetsAction,
   type CompanySheetsDiscoveryActionResult,
 } from "@/app/actions/team-workspace-company-sheets";
+import { CompanySheetsConfigRequestPanel } from "@/components/team-workspace/company-sheets-config-request-panel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   presentCompanySheetsDiscovery,
   type CompanySheetsDiscoverySnapshot,
+  type CompanySheetsDiscoveryView,
 } from "@/lib/team-workspace/company-sheets-discovery";
+import {
+  parseCompanySpreadsheetRef,
+  type CompanySheetsConfigContext,
+} from "@/lib/team-workspace/company-sheets-config-request";
 
 const BADGE = {
   on: "border-sky-200 bg-sky-50 text-sky-950",
@@ -33,10 +39,14 @@ export function CompanySheetsDiscoveryGuide({ clientAccountId }: { clientAccount
   const [selectedWorksheetId, setSelectedWorksheetId] = useState<number | null>(null);
   const [nextPageToken, setNextPageToken] = useState<string | null>(null);
 
+  const typed = typedSpreadsheet.trim();
+  const parsedTyped = typed ? parseCompanySpreadsheetRef(typed) : null;
+  const spreadsheetInputInvalid = Boolean(parsedTyped && !parsedTyped.ok);
+  const normalizedSelection = parsedTyped ? (parsedTyped.ok ? parsedTyped.spreadsheetId : null) : selectedSpreadsheetId;
   const view = snapshot
     ? presentCompanySheetsDiscovery({
         ...snapshot,
-        selection: { spreadsheetId: typedSpreadsheet.trim() || selectedSpreadsheetId, worksheetId: selectedWorksheetId },
+        selection: { spreadsheetId: normalizedSelection, worksheetId: selectedWorksheetId },
       })
     : null;
 
@@ -64,6 +74,23 @@ export function CompanySheetsDiscoveryGuide({ clientAccountId }: { clientAccount
     };
   }, [clientAccountId]);
 
+  function invalidateIfSpreadsheetChanged(next: string | null) {
+    const previous = normalizedSelection;
+    if (previous === next) return;
+    const readId = snapshot?.worksheetRead?.spreadsheetId ?? null;
+    const keepRead = previous == null && next != null && readId === next;
+    if (keepRead) return;
+    setSelectedWorksheetId(null);
+    setSnapshot((current) => (current?.worksheetRead ? { ...current, worksheetRead: null } : current));
+  }
+
+  function reviewStoredSpreadsheet(spreadsheetId: string) {
+    setTypedSpreadsheet("");
+    setSelectedSpreadsheetId(spreadsheetId);
+    setSelectedWorksheetId(null);
+    setSnapshot((current) => (current?.worksheetRead ? { ...current, worksheetRead: null } : current));
+  }
+
   async function run(label: string, work: () => Promise<void>) {
     setPending(label);
     try {
@@ -84,13 +111,19 @@ export function CompanySheetsDiscoveryGuide({ clientAccountId }: { clientAccount
   }, [spreadsheetQuery, view?.spreadsheets]);
   const worksheets = useMemo(() => {
     const query = worksheetQuery.trim().toLowerCase();
-    return (view?.worksheets ?? []).filter((item) => {
+    const listed = (view?.worksheets ?? []).filter((item) => {
       if (!query) return true;
       return `${item.title} ${item.worksheetId}`.toLowerCase().includes(query);
     });
-  }, [view?.worksheets, worksheetQuery]);
+    if (normalizedSelection && view?.worksheetReadFor && view.worksheetReadFor !== normalizedSelection) return [];
+    return listed;
+  }, [normalizedSelection, view?.worksheetReadFor, view?.worksheets, worksheetQuery]);
 
-  const highlightedSpreadsheet = typedSpreadsheet.trim() || selectedSpreadsheetId;
+  const highlightedSpreadsheet = normalizedSelection;
+  const requestContextValue =
+    view && snapshot
+      ? requestContext(view, snapshot, normalizedSelection, spreadsheetInputInvalid, selectedWorksheetId)
+      : null;
   const saved = view?.savedDestination ?? null;
   const unsavedSpreadsheet = Boolean(highlightedSpreadsheet && highlightedSpreadsheet !== saved?.spreadsheetId);
   const unsavedWorksheet = selectedWorksheetId != null && saved != null && selectedWorksheetId !== saved.worksheetId;
@@ -103,7 +136,9 @@ export function CompanySheetsDiscoveryGuide({ clientAccountId }: { clientAccount
           Life Agent Launch owns the Google account. This guide reads the company connection, approved storage, the
           client folder, spreadsheets, and worksheet ids. Configured means a destination row is saved. Verified means
           this session confirmed company control and the bound campaign worksheet. Active means dispatch is already on.
-          A readable link is not company control. Nothing here creates a file, saves a destination, or turns delivery on.
+          A readable link is not company control. A Google Sheets link and its spreadsheet id are the same file. Nothing here
+          creates a file, changes the operational destination, or turns delivery on. A configuration request is stored
+          separately and is not delivery.
         </p>
       </div>
       {pending ? <p className="text-sm text-slate-600" role="status">{pending}</p> : null}
@@ -201,8 +236,24 @@ export function CompanySheetsDiscoveryGuide({ clientAccountId }: { clientAccount
           </label>
           <label className="grid gap-1 text-sm text-slate-800">
             Check a spreadsheet id or link
-            <Input value={typedSpreadsheet} onChange={(event) => setTypedSpreadsheet(event.target.value)} placeholder="Spreadsheet id or Google Sheets link" />
+            <Input
+              value={typedSpreadsheet}
+              onChange={(event) => {
+                const value = event.target.value;
+                const trimmed = value.trim();
+                const parsed = trimmed ? parseCompanySpreadsheetRef(trimmed) : null;
+                const next = parsed ? (parsed.ok ? parsed.spreadsheetId : null) : selectedSpreadsheetId;
+                invalidateIfSpreadsheetChanged(next);
+                setTypedSpreadsheet(value);
+              }}
+              placeholder="Spreadsheet id or Google Sheets link"
+            />
           </label>
+          {spreadsheetInputInvalid ? (
+            <p className="text-sm text-amber-900" role="status">
+              Enter a spreadsheet id or a Google Sheets link. A link and its spreadsheet id are the same file.
+            </p>
+          ) : null}
           <p className="text-sm text-slate-600">Files in the recorded folder are not company-controlled until worksheets are read.</p>
           <ul className="grid gap-2">
             {spreadsheets.map((item) => (
@@ -212,6 +263,7 @@ export function CompanySheetsDiscoveryGuide({ clientAccountId }: { clientAccount
                   className={`w-full rounded-md border px-3 py-2 text-left text-sm ${highlightedSpreadsheet === item.spreadsheetId ? "border-sky-300 bg-sky-50" : "border-slate-200"}`}
                   aria-pressed={highlightedSpreadsheet === item.spreadsheetId}
                   onClick={() => {
+                    invalidateIfSpreadsheetChanged(item.spreadsheetId);
                     setSelectedSpreadsheetId(item.spreadsheetId);
                     setTypedSpreadsheet("");
                   }}
@@ -265,6 +317,11 @@ export function CompanySheetsDiscoveryGuide({ clientAccountId }: { clientAccount
               Load more spreadsheets
             </Button>
           ) : null}
+          {highlightedSpreadsheet && worksheets.length === 0 ? (
+            <p className="text-sm text-slate-600">
+              No worksheets are listed for this spreadsheet. Read it to see its grid tabs. Worksheets from another spreadsheet are not choices.
+            </p>
+          ) : null}
           <label className="grid gap-1 text-sm text-slate-800">
             Find a worksheet
             <Input value={worksheetQuery} onChange={(event) => setWorksheetQuery(event.target.value)} placeholder="Search by title or worksheet id" />
@@ -291,10 +348,51 @@ export function CompanySheetsDiscoveryGuide({ clientAccountId }: { clientAccount
             Campaign contract: {view.campaignContract ? `${view.campaignContract.setupState}, worksheet ${view.campaignContract.worksheetId ?? "none"}` : "none"}.
             Column mapping: {view.columnMappingReadiness}. Delivery execution was not read and was not turned on.
           </p>
+          {requestContextValue ? (
+            <CompanySheetsConfigRequestPanel
+              clientAccountId={clientAccountId}
+              context={requestContextValue}
+              onReviewStoredSpreadsheet={reviewStoredSpreadsheet}
+            />
+          ) : null}
         </>
       ) : null}
     </section>
   );
+}
+
+function requestContext(
+  view: CompanySheetsDiscoveryView,
+  snapshot: CompanySheetsDiscoverySnapshot,
+  spreadsheetId: string | null,
+  spreadsheetInputInvalid: boolean,
+  worksheetId: number | null
+): CompanySheetsConfigContext {
+  const connection = snapshot.connection;
+  return {
+    connection: connection
+      ? {
+          connected: connection.connected,
+          reconnectRequired: connection.reconnectRequired,
+          status: connection.status,
+          googleEmail: connection.googleEmail,
+          sheetsSetupAvailable: connection.sheetsSetupAvailable,
+          approvedParentStored: Boolean(connection.destinationFolder),
+        }
+      : null,
+    folderStatus: view.clientFolderStatus,
+    folderDetail: view.clientFolderDetail,
+    spreadsheetId,
+    spreadsheetInputInvalid,
+    worksheetId,
+    verification: snapshot.worksheetRead,
+    discoveryDestination: {
+      exists: Boolean(snapshot.destination),
+      destinationRevision: snapshot.destination?.destinationRevision ?? null,
+      campaignDispatchEnabled: snapshot.dispatch?.campaignDispatchEnabled === true,
+      agedDispatchEnabled: snapshot.dispatch?.agedDispatchEnabled === true,
+    },
+  };
 }
 
 function StateBadge({ on, label, warn = false }: { on: boolean; label: string; warn?: boolean }) {

@@ -901,7 +901,7 @@ function DestinationReadout({ model }: { model: GuidedOnboardingModel }) {
       <li>
         Company Sheets row: {sheets.configured ? "Configured" : "Not configured"}. Dispatch: {sheets.campaignDispatchEnabled || sheets.agedDispatchEnabled ? "Active" : "Off"}.
       </li>
-      <li>Company Sheets is not edited here. The discovery guide reads the saved setup and does not save a spreadsheet.</li>
+      <li>Company Sheets delivery is not edited here. The guide can store an intended spreadsheet request when that feature is on. It does not change the operational destination or dispatch.</li>
     </ul>
   );
 }

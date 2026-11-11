@@ -49,7 +49,7 @@ test("staff schema is an explicit principal and grant, not a password or a role"
   assert.match(permission, /permission\s+StaffPermissionKey/);
   assert.doesNotMatch(permission, /@@unique\(\[staffPrincipalId, permission\]\)/);
   assert.doesNotMatch(permission, /password|role/i);
-  assert.match(schema, /enum StaffPermissionKey \{\s*facebook_association_correction\s*\}/);
+  assert.match(schema, /enum StaffPermissionKey \{\s*facebook_association_correction\s*admin_coc\s*\}/);
   assert.match(schema, /enum StaffIdentityProvider \{\s*google\s*\}/);
 });
 
@@ -92,6 +92,20 @@ test("existing admin, workspace, and portal auth does not reference staff permis
     const source = readFileSync(join(repoRoot, relativePath), "utf8");
     assert.doesNotMatch(source, /StaffPrincipal|StaffPermission|facebook_association_correction/);
   }
+});
+
+test("admin_coc migration adds the enum value and does not grant it", () => {
+  const sql = readFileSync(
+    join(migrationsDir, "20261111180000_staff_admin_coc_permission", "migration.sql"),
+    "utf8"
+  );
+  const ddl = sql.replace(/--.*$/gm, "");
+  assert.match(sql, /ADD VALUE IF NOT EXISTS 'admin_coc'/);
+  assert.doesNotMatch(ddl, /\bINSERT\s+INTO\b/i);
+  assert.doesNotMatch(ddl, /\bUPDATE\b/i);
+  assert.doesNotMatch(ddl, /\bDROP\b/i);
+  assert.doesNotMatch(ddl, /facebook_association_correction/);
+  assert.doesNotMatch(sql, /sam@lifeagentlaunch\.com/);
 });
 
 test("prisma seeds do not create staff principals or permissions", () => {

@@ -4359,9 +4359,13 @@ enum StaffPrincipalStatus {
   active
 }
 
-/// The only recognized staff permission. Absence of a granted row is denial.
+/// Recognized staff permissions. Absence of a granted row is denial.
+/// admin_coc is full Admin C.O.C. access. It does not include
+/// facebook_association_correction, and that correction permission does not
+/// grant Admin C.O.C. access.
 enum StaffPermissionKey {
   facebook_association_correction
+  admin_coc
 }
 
 /// Explicit grant state. revoked is not authorization.

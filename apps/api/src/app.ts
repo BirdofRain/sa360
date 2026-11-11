@@ -49,6 +49,7 @@ import {
 import { staffAdminCocRoutes } from "./routes/staff-admin-coc.js";
 import { staffEnrollmentRoutes } from "./routes/staff-enrollment.js";
 import { staffGoogleRoutes } from "./routes/staff-google.js";
+import { staffTeamRoutes } from "./routes/staff-team.js";
 import { adminLeadDeliveryDirectDemoRoutes } from "./routes/admin-lead-delivery-direct-demo.js";
 import { adminLeadDeliveryRoutes } from "./routes/admin-lead-delivery.js";
 import { adminLeadOrderRoutes } from "./routes/admin-lead-orders.js";
@@ -225,6 +226,7 @@ export async function buildApp() {
   await app.register(staffGoogleRoutes);
   await app.register(staffEnrollmentRoutes);
   await app.register(staffAdminCocRoutes);
+  await app.register(staffTeamRoutes);
 
   return app;
 }

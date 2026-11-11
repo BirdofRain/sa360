@@ -19,6 +19,8 @@ import { verifyStaffGoogleIdToken } from "../lib/staff-google-oidc.js";
 import type { ProvisionedStaffPrincipal } from "../lib/staff-google-identity.js";
 import { claimStaffGoogleStateReplay, type StaffGoogleStateClaim } from "../lib/staff-google-state-replay.js";
 import { createRedisStaffSessionRegistry, type StaffSessionRegistry } from "../lib/staff-session-registry.js";
+import { claimApprovedStaffInvitation, recordStaffSignIn } from "../lib/staff-team-management.js";
+import { STAFF_HOSTED_DOMAIN } from "../lib/staff-team-policy.js";
 
 const PRINCIPAL_ID_PATTERN = /^c[a-z0-9]{24}$/;
 
@@ -28,6 +30,8 @@ export type StaffGoogleRouteDeps = {
   verifyIdToken?: typeof verifyStaffGoogleIdToken;
   claimReplay?: (replayId: string) => Promise<StaffGoogleStateClaim>;
   sessionRegistry?: StaffSessionRegistry;
+  claimApproved?: typeof claimApprovedStaffInvitation;
+  recordSignIn?: typeof recordStaffSignIn;
   env?: NodeJS.ProcessEnv;
 };
 
@@ -37,6 +41,8 @@ export async function staffGoogleRoutes(app: FastifyInstance, opts: StaffGoogleR
   const verifyIdToken = opts.verifyIdToken ?? verifyStaffGoogleIdToken;
   const claimReplay = opts.claimReplay ?? claimStaffGoogleStateReplay;
   const sessionRegistry = opts.sessionRegistry ?? createRedisStaffSessionRegistry();
+  const claimApproved = opts.claimApproved ?? claimApprovedStaffInvitation;
+  const recordSignIn = opts.recordSignIn ?? recordStaffSignIn;
   const env = opts.env ?? process.env;
 
   app.post("/internal/staff/google/resolve", async (request, reply) => {
@@ -60,7 +66,41 @@ export async function staffGoogleRoutes(app: FastifyInstance, opts: StaffGoogleR
     const principal = await findByGoogleSubject(verified.identity.sub);
     const resolved = resolveProvisionedStaffPrincipal(verified.identity, principal);
     if (!resolved.ok) return reply.code(401).send({ ok: false });
+    await recordSignIn({ staffPrincipalId: resolved.staffPrincipalId, googleSub: verified.identity.sub });
     return { ok: true, staffPrincipalId: resolved.staffPrincipalId, googleSub: verified.identity.sub };
+  });
+
+  app.post("/internal/staff/google/claim", async (request, reply) => {
+    const ready = staffGoogleApiReady(env);
+    if (!ready) return reply.code(404).send({ ok: false });
+    if (!serviceHeaderAccepted(env, headerValue(request.headers[STAFF_GOOGLE_SERVICE_HEADER]))) {
+      return reply.code(401).send({ ok: false });
+    }
+    const body = request.body;
+    if (!body || typeof body !== "object" || Array.isArray(body)) return reply.code(401).send({ ok: false });
+    const record = body as Record<string, unknown>;
+    if (typeof record.idToken !== "string" || typeof record.nonce !== "string") {
+      return reply.code(401).send({ ok: false });
+    }
+    if ("staffPrincipalId" in record || "enrollmentSecret" in record) return reply.code(401).send({ ok: false });
+    const verified = await verifyIdToken({
+      idToken: record.idToken,
+      audience: ready.clientId,
+      nonce: record.nonce,
+    });
+    if (!verified.ok) return reply.code(401).send({ ok: false });
+    const claimed = await claimApproved({
+      identity: {
+        sub: verified.identity.sub,
+        email: verified.identity.email,
+        emailVerified: verified.identity.emailVerified,
+        hd: verified.identity.hd ?? null,
+        name: verified.identity.name ?? null,
+      },
+      hostedDomain: STAFF_HOSTED_DOMAIN,
+    });
+    if (!claimed.ok) return reply.code(claimed.code === "unavailable" ? 503 : 401).send({ ok: false });
+    return { ok: true, staffPrincipalId: claimed.staffPrincipalId, googleSub: verified.identity.sub };
   });
 
   app.post("/internal/staff/session", async (request, reply) => {

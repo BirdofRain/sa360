@@ -68,6 +68,35 @@ test("id token failures stay specific", async () => {
   assert.equal(failureCode(await verify(await token({ ...valid, sub: "short" }))), "invalid_token");
 });
 
+test("hosted domain and name are returned and a missing hosted domain still verifies", async () => {
+  const withDomain = await token({
+    sub: SUB,
+    email: "person@lifeagentlaunch.com",
+    email_verified: true,
+    nonce: NONCE,
+    azp: CLIENT_ID,
+    hd: "lifeagentlaunch.com",
+    name: "Pat Manager",
+  });
+  const verified = await verify(withDomain);
+  assert.equal(verified.ok, true);
+  if (!verified.ok) return;
+  assert.equal(verified.identity.hd, "lifeagentlaunch.com");
+  assert.equal(verified.identity.name, "Pat Manager");
+
+  const withoutDomain = await token({
+    sub: SUB,
+    email: "person@example.com",
+    email_verified: true,
+    nonce: NONCE,
+    azp: CLIENT_ID,
+  });
+  const existing = await verify(withoutDomain);
+  assert.equal(existing.ok, true);
+  if (!existing.ok) return;
+  assert.equal(existing.identity.hd, undefined);
+});
+
 test("staff id token verification does not use the drive oauth client", () => {
   const source = readFileSync(new URL("./staff-google-oidc.ts", import.meta.url), "utf8");
   assert.equal(source.includes("google-oauth-env"), false);

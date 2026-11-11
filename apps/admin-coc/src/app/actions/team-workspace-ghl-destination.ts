@@ -1,6 +1,6 @@
 "use server";
 
-import { requireAdminCocAdminSession, requireAdminCocSession } from "@/lib/admin-coc-session-guard";
+import { requireAdminCocAdminSession, requireAdminCocSession, requireStaffWorkspacePermission } from "@/lib/admin-coc-session-guard";
 import {
   fetchAdminClientDeliveryConfig,
   fetchAdminGhlConnections,
@@ -271,8 +271,6 @@ function configDisabledMessage(): string | null {
 }
 
 async function authorizeConfig(): Promise<GhlConfigLoadResult | null> {
-  await requireAdminCocSession();
-  await requireAdminCocAdminSession();
   const message = configDisabledMessage();
   if (!message) return null;
   return { ok: false, uncertain: false, code: "FEATURE_DISABLED", message, head: null };
@@ -352,6 +350,7 @@ function uncertainSave(message: string, sent: GhlConfigSubmitBody): GhlConfigSav
 }
 
 export async function loadTeamWorkspaceGhlConfigurationAction(clientAccountId: string): Promise<GhlConfigLoadResult> {
+  await requireStaffWorkspacePermission("team_workspace");
   const denied = await authorizeConfig();
   if (denied) return denied;
   const id = clientAccountId.trim();
@@ -388,9 +387,11 @@ export async function previewTeamWorkspaceGhlLocationAction(
   locationId: string,
   refresh = false
 ): Promise<GhlLocationPreviewResult> {
-  const denied = await authorizeConfig();
-  if (denied) {
-    return { ok: false, uncertain: false, code: denied.code, message: denied.message, preview: null };
+  await requireAdminCocSession();
+  await requireAdminCocAdminSession();
+  const flagged = configDisabledMessage();
+  if (flagged) {
+    return { ok: false, uncertain: false, code: "FEATURE_DISABLED", message: flagged, preview: null };
   }
   const loaded = await loadDestination(clientAccountId);
   const view = loaded.result.view;
@@ -452,6 +453,7 @@ export async function previewTeamWorkspaceGhlLocationAction(
 export async function saveTeamWorkspaceGhlConfigurationRequestAction(
   input: GhlConfigSubmitBody & { clientAccountId: string }
 ): Promise<GhlConfigSaveResult> {
+  await requireStaffWorkspacePermission("team_manager");
   const denied = await authorizeConfig();
   if (denied) return closedSave("FEATURE_DISABLED", denied.message ?? ghlConfigRequestErrorMessage("FEATURE_DISABLED"));
   const clientAccountId = input.clientAccountId.trim();

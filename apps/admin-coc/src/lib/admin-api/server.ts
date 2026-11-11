@@ -95,9 +95,12 @@ import type {
 } from "../source-intake/types";
 
 import {
-  adminCocAdminApiUnauthorized,
+  ADMIN_COC_FORBIDDEN,
   observerAdminApiKeyDenied,
+  readAdminCocAccess,
 } from "../admin-coc-session-guard.ts";
+import { ADMIN_COC_SIGN_IN_REQUIRED } from "../admin-coc-session.ts";
+import { staffWorkspaceAdminApiAllowed } from "../staff-workspace-api-allowlist.ts";
 import { getSa360PublicApiBaseUrl } from "../sa360-public-api-base-url";
 import { formatAdminApiError, readAdminApiErrorCode } from "./admin-api-error";
 
@@ -203,9 +206,17 @@ export async function adminRequestJson<T>(
   body?: unknown,
   init?: { signal?: AbortSignal }
 ): Promise<AdminFetchResult<T>> {
-  const denied = await adminCocAdminApiUnauthorized();
-  if (denied) return denied;
-  const observerDenied = await observerAdminApiKeyDenied(method, path);
+  const access = await readAdminCocAccess();
+  if (access.kind === "staff_workspace") {
+    if (!staffWorkspaceAdminApiAllowed(access.permissions, method, path)) {
+      return { ok: false, status: 403, body: ADMIN_COC_FORBIDDEN };
+    }
+    return executeAuthorizedAdminApiRequest<T>(method, path, body, init);
+  }
+  if (access.kind !== "admin" && access.kind !== "observer") {
+    return { ok: false, status: 401, body: ADMIN_COC_SIGN_IN_REQUIRED };
+  }
+  const observerDenied = access.kind === "observer" ? await observerAdminApiKeyDenied(method, path) : null;
   if (observerDenied) return observerDenied;
   return executeAuthorizedAdminApiRequest<T>(method, path, body, init);
 }

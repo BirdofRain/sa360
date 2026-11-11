@@ -1,6 +1,6 @@
 "use server";
 
-import { AdminCocForbiddenError, requireAdminCocAdminSession, requireAdminCocSession } from "@/lib/admin-coc-session-guard";
+import { AdminCocForbiddenError, requireStaffWorkspacePermission } from "@/lib/admin-coc-session-guard";
 import { fetchAdminClientDetail, patchAdminClient, patchAdminClientSetup, postAdminClient } from "@/lib/admin-api/server";
 import { isNativeClientSetupEnabled } from "@/lib/clients/native-client-setup-env";
 import type { ClientSetup, ClientSetupData } from "@/lib/clients/types";
@@ -98,8 +98,7 @@ export async function createGuidedClientAction(input: {
   primaryNicheKeys: string[];
   primaryProductTypes: string[];
 }): Promise<GuidedClientMutationResult> {
-  await requireAdminCocSession();
-  await requireAdminCocAdminSession();
+  await requireStaffWorkspacePermission("team_manager");
   const closed = workspaceUnavailable();
   if (closed) return closed;
   try {
@@ -142,8 +141,7 @@ export async function updateGuidedClientAction(input: {
   primaryNicheKeys: string[];
   primaryProductTypes: string[];
 }): Promise<GuidedClientMutationResult> {
-  await requireAdminCocSession();
-  await requireAdminCocAdminSession();
+  await requireStaffWorkspacePermission("team_manager");
   const closed = workspaceUnavailable();
   if (closed) return closed;
   try {
@@ -181,8 +179,7 @@ export async function saveGuidedSetupAction(input: {
   requestId: string;
   expectedRevision: number;
 }): Promise<GuidedSetupSaveResult> {
-  await requireAdminCocSession();
-  await requireAdminCocAdminSession();
+  await requireStaffWorkspacePermission("team_manager");
   const closed = workspaceUnavailable();
   if (closed) return closed;
   if (!isSafeTeamWorkspaceId(input.clientAccountId)) {

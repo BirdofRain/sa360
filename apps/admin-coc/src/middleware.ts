@@ -3,10 +3,10 @@ import { NextResponse, type NextRequest } from "next/server";
 import { ADMIN_COC_SESSION_COOKIE } from "@/lib/admin-coc-auth";
 import { resolveAdminCocRouteGate } from "@/lib/admin-coc-route-gate";
 import {
-  fetchStaffAdminCocDecision,
+  fetchStaffCapabilities,
   readStaffAdminCocOrigin,
   STAFF_ADMIN_COC_SESSION_COOKIE,
-  type StaffAdminCocDecision,
+  type StaffCapabilities,
 } from "@/lib/staff-admin-coc-decision";
 import { ADMIN_COC_ROLE_ADMIN } from "@/lib/admin-coc-observer-access";
 import { parseAdminCocSessionTokenEdge } from "@/lib/admin-coc-session-edge";
@@ -130,8 +130,9 @@ export async function middleware(request: NextRequest) {
   }
 }
 
-function staffAccessFromDecision(decision: StaffAdminCocDecision): "admin" | "limited" | "none" {
+function staffAccessFromDecision(decision: StaffCapabilities["access"]): "admin" | "workspace" | "limited" | "none" {
   if (decision === "admin") return "admin";
+  if (decision === "workspace") return "workspace";
   if (decision === "limited") return "limited";
   return "none";
 }
@@ -141,14 +142,15 @@ function staffAccessFromDecision(decision: StaffAdminCocDecision): "admin" | "li
  * authorize call. A missing or rejected check does not grant admin access.
  * The shared-password admin session skips this call.
  */
-async function readMiddlewareStaffDecision(sessionToken: string | undefined): Promise<StaffAdminCocDecision> {
+async function readMiddlewareStaffDecision(sessionToken: string | undefined): Promise<StaffCapabilities["access"]> {
   if (!sessionToken) return "anonymous";
   const origin = readStaffAdminCocOrigin(
     process.env.SA360_API_INTERNAL_URL ?? process.env.NEXT_PUBLIC_SA360_API_BASE_URL
   );
   const serviceSecret = process.env.SA360_STAFF_GOOGLE_SERVICE_SECRET ?? "";
   if (!origin || serviceSecret.length < 32 || /\s/u.test(serviceSecret)) return "anonymous";
-  return fetchStaffAdminCocDecision({ origin, serviceSecret, sessionToken });
+  const capabilities = await fetchStaffCapabilities({ origin, serviceSecret, sessionToken });
+  return capabilities.access;
 }
 
 export const config = {

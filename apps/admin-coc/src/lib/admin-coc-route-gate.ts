@@ -60,9 +60,10 @@ export type AdminCocRouteGateInput = {
   /**
    * Live staff Admin C.O.C. decision from the API. `none` is the default.
    * Middleware must not invent this from the cookie alone. `admin` is a
-   * granted admin_coc session. `limited` is a live staff session without it.
+   * granted admin_coc session. `workspace` is a live staff session with
+   * team_workspace and without admin_coc. `limited` has neither.
    */
-  staffAccess?: "admin" | "limited" | "none";
+  staffAccess?: "admin" | "workspace" | "limited" | "none";
   hasValidPortalSession: boolean;
   clientPortalLiveConfigured: boolean;
   frontOfficeDevPreview: boolean;
@@ -83,6 +84,11 @@ function requestedPath(pathname: string, search: string | undefined): string {
 
 export function isAgentWorkspaceDocumentPath(pathname: string): boolean {
   return pathname === "/agent-workspace" || pathname.startsWith("/agent-workspace/");
+}
+
+export function isTeamWorkspaceDocumentPath(pathname: string): boolean {
+  const canonical = canonicalSecurityPath(pathname);
+  return canonical === "/team-workspace" || canonical?.startsWith("/team-workspace/") === true;
 }
 
 export function isAdminCocOAuthCallbackPath(pathname: string): boolean {
@@ -185,12 +191,12 @@ function resolveFrontOfficeGate(input: AdminCocRouteGateInput): AdminCocRouteGat
 
   if (
     input.adminPasswordConfigured &&
-    input.staffAccess === "limited" &&
+    (input.staffAccess === "limited" || input.staffAccess === "workspace") &&
     !input.hasAdminSession &&
     !input.hasValidPortalSession &&
     !input.frontOfficeDevPreview
   ) {
-    return { kind: "redirect", pathname: "/staff" };
+    return { kind: "redirect", pathname: input.staffAccess === "workspace" ? "/team-workspace" : "/staff" };
   }
 
   const authenticated =
@@ -246,6 +252,12 @@ function resolveAdminPasswordGate(input: AdminCocRouteGateInput): AdminCocRouteG
   }
 
   if (role === ADMIN_COC_ROLE_ADMIN) return allow(attachAgentWorkspaceCsp);
+
+  if (input.staffAccess === "workspace") {
+    if (isTeamWorkspaceDocumentPath(pathname)) return allow(false);
+    if (isAdminApiPath(pathname)) return { kind: "forbidden", surface: "api" };
+    return { kind: "redirect", pathname: "/team-workspace" };
+  }
 
   if (input.staffAccess === "limited") {
     if (isAdminApiPath(pathname)) return { kind: "forbidden", surface: "api" };

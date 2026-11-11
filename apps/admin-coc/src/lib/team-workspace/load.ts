@@ -1,14 +1,19 @@
 import "server-only";
 
 import { fetchOnboardingSummary } from "@/lib/admin-api/client-onboarding-v2";
+import { fetchCompanySheetsDestinationConfiguration } from "@/lib/admin-api/company-google-sheets";
 import { fetchAdminClientSourceFunnels } from "@/lib/admin-api/source-funnels-server";
-import { adminFetchJson, fetchAdminClientDetail, fetchAdminClientSetup, fetchAdminClients, isAdminApiConfigured } from "@/lib/admin-api/server";
+import { adminFetchJson, fetchAdminClientDetail, fetchAdminClientSetup, fetchAdminClients, fetchAdminGhlDestinationConfiguration, isAdminApiConfigured } from "@/lib/admin-api/server";
 import { requireAdminCocAdminSession } from "@/lib/admin-coc-session-guard";
 import { isNativeClientSetupEnabled } from "@/lib/clients/native-client-setup-env";
 
-import { isTeamWorkspaceEnabled } from "./config";
+import { isCompanySheetsConfigRequestEnabled } from "./company-sheets-config-request-env";
+import { companySheetsConfigRequestErrorMessage, parseCompanySheetsConfigHead, readCompanySheetsConfigError } from "./company-sheets-config-request";
+import { isTeamWorkspaceEnabled, isTeamWorkspaceServerEnabled } from "./config";
 import { normalizeTeamWorkspaceClientId } from "./contract";
-import { guidedOnboardingFromReads } from "./onboarding-guide";
+import { isGhlDestinationConfigRequestEnabled } from "./ghl-destination-config-request-env";
+import { ghlConfigRequestErrorMessage, parseGhlConfigHead, readGhlConfigError } from "./ghl-destination-config-request";
+import { guidedOnboardingFromReads, type GuideDestinationRequestRead } from "./onboarding-guide";
 import { assembleTeamWorkspaceDetail, projectClientOptions, projectRoutingRules } from "./present";
 import { parseTeamWorkspaceResponse, readAdminErrorCode } from "./parse";
 import { parseSourceCampaignReview, unavailableSourceCampaignReview, type SourceCampaignReviewView } from "./source-campaign-review";
@@ -69,8 +74,12 @@ export async function loadTeamWorkspaceClient(rawId: string): Promise<TeamWorksp
     onboarding: onboardingSlice,
   });
   if (assembled.kind !== "ready") return assembled;
-  const sourceCampaignReview = await loadSourceCampaignReview(clientAccountId, setupEnabled, setupResult);
-  const sourceCampaignRequest = await loadSourceCampaignRequest(clientAccountId, workspace);
+  const [sourceCampaignReview, sourceCampaignRequest, ghlConfigurationRequest, companySheetsConfigurationRequest] = await Promise.all([
+    loadSourceCampaignReview(clientAccountId, setupEnabled, setupResult),
+    loadSourceCampaignRequest(clientAccountId, workspace),
+    loadGhlConfigurationRequest(clientAccountId, workspace),
+    loadCompanySheetsConfigurationRequest(clientAccountId, workspace),
+  ]);
   return {
     ...assembled,
     guide: {
@@ -85,9 +94,116 @@ export async function loadTeamWorkspaceClient(rawId: string): Promise<TeamWorksp
         destinations: workspace.availability === "ready" ? workspace.body.destinations : null,
         recordedSetup: workspace.availability === "ready" ? workspace.body.setupRequest : null,
         verification: onboardingSlice,
+        ghlConfigurationRequest,
+        companySheetsConfigurationRequest,
       }),
       sourceCampaignReview,
       sourceCampaignRequest,
+    },
+  };
+}
+
+function parseJsonBody(body: string): unknown {
+  try {
+    return JSON.parse(body) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function configurationGate(kind: "ghl" | "sheets"): string | null {
+  const label = kind === "ghl" ? "GoHighLevel" : "Company Sheets";
+  if (!isTeamWorkspaceEnabled() || !isTeamWorkspaceServerEnabled()) {
+    return `Team Workspace is turned off. The ${label} configuration request was not read, and it is not treated as saved.`;
+  }
+  if (!isNativeClientSetupEnabled()) {
+    return `Client setup is turned off. The ${label} configuration request was not read, and it is not treated as saved.`;
+  }
+  if (kind === "ghl" && !isGhlDestinationConfigRequestEnabled()) {
+    return `${ghlConfigRequestErrorMessage("FEATURE_DISABLED")} It is not treated as saved.`;
+  }
+  if (kind === "sheets" && !isCompanySheetsConfigRequestEnabled()) {
+    return `${companySheetsConfigRequestErrorMessage("FEATURE_DISABLED")} It is not treated as saved.`;
+  }
+  return null;
+}
+
+function failedConfigurationRead(kind: "ghl" | "sheets", status: number, body: string): GuideDestinationRequestRead {
+  const label = kind === "ghl" ? "GoHighLevel" : "Company Sheets";
+  const parsed = parseJsonBody(body);
+  const code = kind === "ghl" ? readGhlConfigError(parsed) : readCompanySheetsConfigError(parsed);
+  const adminCode = readAdminErrorCode(status, body);
+  const resolved = code ?? adminCode;
+  if (resolved === "forbidden" || resolved === "unauthorized" || status === 401 || status === 403) {
+    return {
+      availability: "unauthorized",
+      message: `The ${label} configuration request could not be read because this session is not allowed to read it. It is not treated as saved.`,
+    };
+  }
+  if (
+    resolved === "feature_disabled" ||
+    resolved === "FEATURE_DISABLED" ||
+    resolved === "ghl_destination_config_request_disabled" ||
+    resolved === "company_sheets_config_request_disabled"
+  ) {
+    const base = kind === "ghl" ? ghlConfigRequestErrorMessage("FEATURE_DISABLED") : companySheetsConfigRequestErrorMessage("FEATURE_DISABLED");
+    return {
+      availability: "disabled",
+      message: `${base} It is not treated as saved.`,
+    };
+  }
+  return {
+    availability: "unreadable",
+    message: `The ${label} configuration request could not be read. It is not treated as saved.`,
+  };
+}
+
+async function loadGhlConfigurationRequest(clientAccountId: string, workspace: WorkspaceAvailability): Promise<GuideDestinationRequestRead> {
+  const blocked = configurationGate("ghl");
+  if (blocked) return { availability: "disabled", message: blocked };
+  if (workspace.availability === "disabled") {
+    return {
+      availability: "disabled",
+      message: "Team Workspace is turned off on the API. The GoHighLevel configuration request was not read, and it is not treated as saved.",
+    };
+  }
+  const response = await fetchAdminGhlDestinationConfiguration(clientAccountId);
+  if (!response.ok) return failedConfigurationRead("ghl", response.status, response.body);
+  const head = parseGhlConfigHead(response.data);
+  if (!head || head.clientAccountId !== clientAccountId) {
+    return failedConfigurationRead("ghl", 200, "");
+  }
+  return {
+    availability: "ready",
+    request: head.configuration ? { requestId: head.configuration.requestId, revision: head.configuration.revision } : null,
+    operational: { configured: head.destinationUpdatedAt !== null, deliveryActive: head.liveDestination },
+  };
+}
+
+async function loadCompanySheetsConfigurationRequest(
+  clientAccountId: string,
+  workspace: WorkspaceAvailability
+): Promise<GuideDestinationRequestRead> {
+  const blocked = configurationGate("sheets");
+  if (blocked) return { availability: "disabled", message: blocked };
+  if (workspace.availability === "disabled") {
+    return {
+      availability: "disabled",
+      message: "Team Workspace is turned off on the API. The Company Sheets configuration request was not read, and it is not treated as saved.",
+    };
+  }
+  const response = await fetchCompanySheetsDestinationConfiguration(clientAccountId);
+  if (!response.ok) return failedConfigurationRead("sheets", response.status, response.body);
+  const head = parseCompanySheetsConfigHead(response.data);
+  if (!head || head.clientAccountId !== clientAccountId) {
+    return failedConfigurationRead("sheets", 200, "");
+  }
+  return {
+    availability: "ready",
+    request: head.configuration ? { requestId: head.configuration.requestId, revision: head.configuration.revision } : null,
+    operational: {
+      configured: head.operationalDestination.exists,
+      deliveryActive: head.operationalDestination.campaignDispatchEnabled || head.operationalDestination.agedDispatchEnabled,
     },
   };
 }

@@ -216,6 +216,8 @@ function guide(overrides: Partial<GuidedOnboardingModel> = {}): GuidedOnboarding
       companySheets: { configured: false, campaignDispatchEnabled: false, agedDispatchEnabled: false },
     },
     verification: { availability: "ready", blockers: [] },
+    ghlConfigurationRequest: { availability: "unreadable", message: "The GoHighLevel configuration request was not loaded. It is not treated as saved." },
+    companySheetsConfigurationRequest: { availability: "unreadable", message: "The Company Sheets configuration request was not loaded. It is not treated as saved." },
     operational: false,
     ...overrides,
   };
@@ -380,9 +382,71 @@ test("a rejected create keeps the same client id and does not send a second crea
 
 test("partial setup keeps the notification words distinct on the summary", () => {
   render(<GuidedOnboarding model={guide()} step="summary" clients={[]} />);
-  assert.equal(screen.getByText("3 of 5 steps saved").textContent, "3 of 5 steps saved");
+  const summary = document.querySelector("[data-progress-summary]")?.textContent ?? "";
+  assert.equal(/\d+ of 5/.test(summary), false);
+  assert.equal(/steps saved/i.test(summary), false);
+  assert.equal(/\bcomplete\b/i.test(summary), false);
   assert.equal(document.querySelector("[data-fact='destination_choice']")?.getAttribute("data-state"), "pending");
   assert.equal(document.querySelector("[data-fact='activation']")?.getAttribute("data-state"), "pending");
   assert.equal(document.querySelector("[data-fact='setup_request']")?.getAttribute("data-state"), "saved");
+  assert.equal(document.querySelector("[data-fact='client_information']")?.getAttribute("data-state"), "pending");
   assert.equal(screen.getByText(/Operational: false/).textContent?.includes("does not activate"), true);
+  assert.equal(screen.getByRole("heading", { name: "Remaining actions" }).textContent, "Remaining actions");
+});
+
+test("a niche selection on screen does not mark client information saved", () => {
+  render(<GuidedOnboarding model={guide()} step="information" clients={[]} />);
+  fireEvent.click(screen.getByRole("button", { name: "Term life" }));
+  const information = screen.getAllByText("Pending").length;
+  assert.equal(information > 0, true);
+  assert.equal(screen.queryByText("5 of 5 steps saved"), null);
+  assert.equal(document.querySelector("[data-progress-summary]")?.textContent?.includes("Client information is pending"), true);
+});
+
+test("leaving and returning keeps Northshore requests awaiting application", () => {
+  const northshore = guide({
+    clientAccountId: "northshore_mutual",
+    account: { clientDisplayName: "Northshore Mutual", status: "onboarding", primaryNicheKeys: ["VET"], primaryProductTypes: ["final_expense"] },
+    setup: {
+      status: "draft",
+      revision: 4,
+      repairRequired: false,
+      missingRequiredFields: [],
+      data: { destinationChoice: "both", clientEmail: "ops@northshore.example", clientPhone: "555-0101", geography: "Florida" },
+    },
+    recordedSetup: { present: true, status: "draft", revision: 4, destinationChoice: "both" },
+    sourceCampaignRequest: {
+      availability: "ready",
+      revision: 2,
+      openRequest: {
+        requestId: "11111111-1111-4111-8111-111111111111",
+        status: "requested",
+        revision: 2,
+        setupRevision: 4,
+        providerFunnelId: "funnel-north",
+        parentUrlKey: null,
+        providerCampaignId: "campaign-north",
+        requestedAssociation: true,
+        createdAt: "2026-11-11T17:20:00.000Z",
+      },
+    },
+    ghlConfigurationRequest: { availability: "ready", request: { requestId: "0addf0ce-1111-4111-8111-111111111111", revision: 1 }, operational: { configured: false, deliveryActive: false } },
+    companySheetsConfigurationRequest: { availability: "ready", request: { requestId: "018ffb0a-2222-4222-8222-222222222222", revision: 1 }, operational: { configured: false, deliveryActive: false } },
+    verification: { availability: "unavailable" },
+  });
+  const view = render(<GuidedOnboarding model={northshore} step="summary" clients={[]} />);
+  const before = document.querySelector("[data-progress-summary]")?.textContent ?? "";
+  assert.match(before, /Request saved — awaiting application/);
+  assert.equal(/5 of 5|steps saved|\bcomplete\b/i.test(before), false);
+  assert.equal(document.querySelector("[data-fact='activation']")?.getAttribute("data-state"), "pending");
+  assert.equal(screen.getAllByText("Request saved — awaiting application").length >= 2, true);
+  fireEvent.click(screen.getByRole("button", { name: /Delivery destination/ }));
+  fireEvent.click(screen.getByRole("radio", { name: "GoHighLevel" }));
+  assert.equal(document.querySelector("[data-progress-summary]")?.textContent, before);
+  view.rerender(<GuidedOnboarding model={northshore} step="destination" clients={[]} />);
+  assert.equal(document.querySelector("[data-progress-summary]")?.textContent, before);
+  view.rerender(<GuidedOnboarding model={northshore} step="summary" clients={[]} />);
+  assert.equal(document.querySelector("[data-progress-summary]")?.textContent, before);
+  assert.equal(screen.queryByText(/Saving a GoHighLevel location or a Company Sheets spreadsheet is not available/), null);
+  assert.equal(screen.getAllByText(/Applying a request to the operational destination is a separate step/).length > 0, true);
 });

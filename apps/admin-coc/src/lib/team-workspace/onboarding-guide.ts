@@ -36,7 +36,22 @@ export type GuideFactState =
   | "active"
   | "pending"
   | "unavailable"
-  | "blocked";
+  | "blocked"
+  | "not_applicable";
+
+/**
+ * Authoritative read of one configuration-request GET.
+ * Disabled, unauthorized, and unreadable are explicit. They are not "no request".
+ */
+export type GuideDestinationRequestRead =
+  | { availability: "disabled"; message: string }
+  | { availability: "unauthorized"; message: string }
+  | { availability: "unreadable"; message: string }
+  | {
+      availability: "ready";
+      request: { requestId: string; revision: number } | null;
+      operational: { configured: boolean; deliveryActive: boolean };
+    };
 
 export type GuideFact = {
   id: string;
@@ -106,6 +121,10 @@ export type GuidedOnboardingModel = {
   sourceCampaignReview?: SourceCampaignReviewView | null;
   /** Current request-chain head. Missing means the request route was not read. */
   sourceCampaignRequest?: SourceCampaignRequestView | null;
+  /** GET of the GoHighLevel configuration request. Not destinationChoice and not local form state. */
+  ghlConfigurationRequest: GuideDestinationRequestRead;
+  /** GET of the Company Sheets configuration request. Not destinationChoice and not local form state. */
+  companySheetsConfigurationRequest: GuideDestinationRequestRead;
   /** A setup request is never an operational switch. */
   operational: false;
 };
@@ -135,12 +154,27 @@ export type GuideSaveRecovery = {
 
 export const GUIDE_LIMITATIONS = [
   "Creating or changing a campaign routing rule is not available in this guided setup.",
-  "Linking a lead source to this client is not available in this guided setup.",
-  "Saving a GoHighLevel location or a Company Sheets spreadsheet is not available in this guided setup.",
-  "The setup request can store one source name, one funnel id, and one campaign id.",
+  "Linking a lead source to this client is not available in this guided setup. A source and campaign association request is a separate saved proposal.",
+  "Intended GoHighLevel and Company Sheets configuration requests can be saved here. Applying a request to the operational destination is a separate step, and this page does not apply it.",
+  "A Company Sheets column-header match does not prove GoHighLevel survey-field mapping, and it does not prove Age or date-of-birth source normalization.",
+  "The setup request can store one source name, one funnel id, and one campaign id. That draft is not the association request.",
   "Saving this request does not turn delivery on.",
   "A saved, configured, or verified row is not authorization to activate.",
 ] as const;
+
+const PROFILE_CONTRACT_FIELDS = ["primaryNicheKeys", "primaryProductTypes"] as const;
+
+export const GHL_REQUEST_NOT_LOADED: GuideDestinationRequestRead = {
+  availability: "unreadable",
+  message: "The GoHighLevel configuration request was not loaded. It is not treated as saved.",
+};
+
+export const SHEETS_REQUEST_NOT_LOADED: GuideDestinationRequestRead = {
+  availability: "unreadable",
+  message: "The Company Sheets configuration request was not loaded. It is not treated as saved.",
+};
+
+const AWAITING_APPLICATION = "Request saved — awaiting application";
 
 const SETUP_TEXT_KEYS = [
   "clientEmail",
@@ -179,11 +213,13 @@ const STEP_TITLES: Record<GuideStepId, string> = {
 export const GUIDE_STEP_EXPLANATIONS: Record<GuideStepId, string> = {
   client: "Choose a client that already exists, or create one. Creating a client does not turn on delivery.",
   information:
-    "Check the name and account status, then add contact details. Account status is not lead delivery.",
+    "Check the name and account status, then save contact details. A niche or a product selection does not finish this step. Account status is not lead delivery.",
   sources:
-    "Record the lead source and campaign you intend to use. This does not create a routing rule or link a source.",
-  destination: "Choose GoHighLevel, Company Sheets, or both. The choice is a request. It does not arm delivery.",
-  summary: "Save the setup request, then review what is saved, configured, verified, active, or still blocked.",
+    "Save a source and campaign association request. A confirmed source link and an active routing rule stay separate, and this step does not create them.",
+  destination:
+    "Choose GoHighLevel, Company Sheets, both, or intake only. A saved choice is not a configuration request. An existing operational destination stays configured without a new request.",
+  summary:
+    "Review persisted client information, association requests, configuration requests, operational destinations, verification, and delivery. A draft or a destination choice does not finish setup.",
 };
 
 export function parseGuideStep(value: unknown): GuideStepId | null {
@@ -377,6 +413,8 @@ export function guidedOnboardingFromReads(input: {
   destinations: unknown;
   recordedSetup: unknown;
   verification: GuidedOnboardingModel["verification"];
+  ghlConfigurationRequest?: GuideDestinationRequestRead;
+  companySheetsConfigurationRequest?: GuideDestinationRequestRead;
 }): GuidedOnboardingModel {
   const setup = input.setupEnabled ? readSetupDocument(input.setupItem) : null;
   const recorded = readRecordedSetup(input.recordedSetup);
@@ -419,6 +457,8 @@ export function guidedOnboardingFromReads(input: {
     },
     destinations: readDestinations(input.destinations),
     verification: input.verification,
+    ghlConfigurationRequest: input.ghlConfigurationRequest ?? GHL_REQUEST_NOT_LOADED,
+    companySheetsConfigurationRequest: input.companySheetsConfigurationRequest ?? SHEETS_REQUEST_NOT_LOADED,
     operational: false,
   };
 }
@@ -563,21 +603,211 @@ export function validateNewClient(input: { clientAccountId: string; clientDispla
   return errors;
 }
 
-function choiceSaved(choice: GuideDestinationChoice | "" | null | undefined): boolean {
-  return choice === "ghl" || choice === "google_sheets" || choice === "both" || choice === "intake_only";
+function persistedDestinationChoice(model: GuidedOnboardingModel): GuideDestinationChoice | null {
+  if (model.setupStale) return null;
+  const fromSetup = model.setup?.data.destinationChoice;
+  if (fromSetup && fromSetup !== "undecided") return fromSetup;
+  if (!model.setup && model.recordedSetup?.present && model.recordedSetup.destinationChoice !== "undecided") {
+    return model.recordedSetup.destinationChoice;
+  }
+  return null;
 }
 
-function sourceRequestSaved(data: ClientSetupData | undefined): boolean {
-  if (!data) return false;
-  return Boolean(data.sourceProvider || textField(data, "trafficSourceName") || textField(data, "providerCampaignId"));
+function destinationScope(choice: GuideDestinationChoice | null): {
+  ghl: boolean;
+  sheets: boolean;
+  intakeOnly: boolean;
+  chosen: boolean;
+} {
+  if (choice === "ghl") return { ghl: true, sheets: false, intakeOnly: false, chosen: true };
+  if (choice === "google_sheets") return { ghl: false, sheets: true, intakeOnly: false, chosen: true };
+  if (choice === "both") return { ghl: true, sheets: true, intakeOnly: false, chosen: true };
+  if (choice === "intake_only") return { ghl: false, sheets: false, intakeOnly: true, chosen: true };
+  return { ghl: false, sheets: false, intakeOnly: false, chosen: false };
 }
 
-export function guideFacts(model: GuidedOnboardingModel): GuideFact[] {
-  const data = model.setup?.data;
-  const destinationChoice = data?.destinationChoice ?? (model.setup ? null : model.recordedSetup?.present ? model.recordedSetup.destinationChoice : null);
-  const ghl = model.destinations?.ghl ?? null;
-  const sheets = model.destinations?.companySheets ?? null;
-  const deliveryAlreadyOn = Boolean(ghl?.deliveryEnabled || sheets?.campaignDispatchEnabled || sheets?.agedDispatchEnabled || model.campaigns.rules.some((rule) => rule.deliveryEnabled));
+type OperationalEvidence = { known: boolean; configured: boolean; active: boolean };
+
+function operationalEvidence(
+  workspace: { configured: boolean; active: boolean } | null,
+  request: GuideDestinationRequestRead
+): OperationalEvidence {
+  const fromRequest = request.availability === "ready" ? request.operational : null;
+  if (!workspace && !fromRequest) return { known: false, configured: false, active: false };
+  return {
+    known: true,
+    configured: Boolean(workspace?.configured || fromRequest?.configured),
+    active: Boolean(workspace?.active || fromRequest?.deliveryActive),
+  };
+}
+
+function ghlOperational(model: GuidedOnboardingModel): OperationalEvidence {
+  return operationalEvidence(
+    model.destinations ? { configured: model.destinations.ghl.configured, active: model.destinations.ghl.deliveryEnabled } : null,
+    model.ghlConfigurationRequest
+  );
+}
+
+function sheetsOperational(model: GuidedOnboardingModel): OperationalEvidence {
+  const sheets = model.destinations?.companySheets;
+  return operationalEvidence(
+    sheets
+      ? { configured: sheets.configured, active: Boolean(sheets.campaignDispatchEnabled || sheets.agedDispatchEnabled) }
+      : null,
+    model.companySheetsConfigurationRequest
+  );
+}
+
+function requestStored(read: GuideDestinationRequestRead): { requestId: string; revision: number } | null {
+  return read.availability === "ready" ? read.request : null;
+}
+
+function clientInformationFact(model: GuidedOnboardingModel): GuideFact {
+  if (!model.account) {
+    return {
+      id: "client_information",
+      label: "Client information",
+      state: "unavailable",
+      detail: "Client information could not be loaded. A niche or product selection is not treated as saved.",
+    };
+  }
+  if (!model.setup || model.setup.repairRequired) {
+    return {
+      id: "client_information",
+      label: "Client information",
+      state: "pending",
+      detail: "Client information is pending. The stored setup request cannot confirm the checklist, so a niche or product selection is not treated as saved.",
+    };
+  }
+  const missingProfile = PROFILE_CONTRACT_FIELDS.filter((field) => model.setup?.missingRequiredFields.includes(field));
+  const nicheSaved = model.account.primaryNicheKeys.length > 0;
+  const productSaved = model.account.primaryProductTypes.length > 0;
+  const contact = [textField(model.setup.data, "clientEmail"), textField(model.setup.data, "clientPhone"), textField(model.setup.data, "geography")].filter(Boolean);
+  if (!nicheSaved || !productSaved || missingProfile.length > 0) {
+    const missingLabels = [
+      !nicheSaved || missingProfile.includes("primaryNicheKeys") ? "niche" : null,
+      !productSaved || missingProfile.includes("primaryProductTypes") ? "product" : null,
+    ].filter((item): item is string => Boolean(item));
+    return {
+      id: "client_information",
+      label: "Client information",
+      state: "pending",
+      detail: `Client information is pending. The setup checklist still needs ${missingLabels.join(" and ") || "the saved profile"}. Selecting a niche or a product does not finish this step.`,
+    };
+  }
+  const contactDetail = contact.length > 0 ? ` Contact details on the setup request: ${contact.join(", ")}.` : " Contact details are not stored. The checklist does not add a contact field beyond niche and product.";
+  return {
+    id: "client_information",
+    label: "Client information",
+    state: "saved",
+    detail: `Client information is saved. Niche and product are both on the stored account, and the setup checklist does not still list them.${contactDetail} Account status is not lead delivery.`,
+  };
+}
+
+function sourceRequestFact(model: GuidedOnboardingModel): GuideFact & { awaitingApplication?: boolean } {
+  const request = model.sourceCampaignRequest;
+  if (!request) {
+    return {
+      id: "source_campaign_request",
+      label: "Source and campaign request",
+      state: "unavailable",
+      detail: "The source and campaign request was not loaded. A setup draft, a confirmed source link, or a routing rule is not treated as that request.",
+    };
+  }
+  if (request.availability === "disabled" || request.availability === "error") {
+    return {
+      id: "source_campaign_request",
+      label: "Source and campaign request",
+      state: "unavailable",
+      detail: request.message,
+    };
+  }
+  if (request.openRequest) {
+    return {
+      id: "source_campaign_request",
+      label: "Source and campaign request",
+      state: "saved",
+      awaitingApplication: true,
+      detail: `${AWAITING_APPLICATION}. Revision ${request.openRequest.revision}. This proposal is not a confirmed source link and not an active routing rule.`,
+    };
+  }
+  return {
+    id: "source_campaign_request",
+    label: "Source and campaign request",
+    state: "pending",
+    detail: "No source and campaign association request is stored. A funnel or campaign on the setup draft is not that request. A confirmed source link and a routing rule are recorded separately.",
+  };
+}
+
+function configurationRequestFact(input: {
+  id: string;
+  label: string;
+  read: GuideDestinationRequestRead;
+  required: boolean;
+  intakeOnly: boolean;
+  chosen: boolean;
+  operational: OperationalEvidence;
+}): GuideFact & { awaitingApplication?: boolean } {
+  const stored = requestStored(input.read);
+  if (input.read.availability === "disabled" || input.read.availability === "unauthorized" || input.read.availability === "unreadable") {
+    return {
+      id: input.id,
+      label: input.label,
+      state: "unavailable",
+      detail: input.read.message,
+    };
+  }
+  if (stored) {
+    return {
+      id: input.id,
+      label: input.label,
+      state: "saved",
+      awaitingApplication: true,
+      detail: `${input.label}: ${AWAITING_APPLICATION}. Revision ${stored.revision}. This stored request is not an operational destination, and it is not verified or active.${input.intakeOnly ? " Delivery is not ready." : ""}`,
+    };
+  }
+  if (input.operational.configured) {
+    return {
+      id: input.id,
+      label: input.label,
+      state: "pending",
+      detail: input.operational.active
+        ? `No ${input.label} is stored. The existing destination is already active, and it is not relabeled as a new request.`
+        : `No ${input.label} is stored. The existing destination is already configured, so a new request is not required to call it configured. Delivery on that destination is off.`,
+    };
+  }
+  if (!input.required) {
+    if (!input.chosen) {
+      return {
+        id: input.id,
+        label: input.label,
+        state: "pending",
+        detail: `No ${input.label} is stored. A destination has not been saved, so this request is not required yet.`,
+      };
+    }
+    return {
+      id: input.id,
+      label: input.label,
+      state: "not_applicable",
+      detail: input.intakeOnly
+        ? `${input.label} is not applicable for intake only. No delivery destination is requested, and delivery is not ready.`
+        : `${input.label} is not applicable for the saved destination. Nothing was inferred from the other destination.`,
+    };
+  }
+  return {
+    id: input.id,
+    label: input.label,
+    state: "pending",
+    detail: `No ${input.label} is stored. A destination choice does not create one.`,
+  };
+}
+
+export function guideFacts(model: GuidedOnboardingModel): Array<GuideFact & { awaitingApplication?: boolean }> {
+  const destinationChoice = persistedDestinationChoice(model);
+  const scope = destinationScope(destinationChoice);
+  const ghlOps = ghlOperational(model);
+  const sheetsOps = sheetsOperational(model);
+  const deliveryAlreadyOn = Boolean(ghlOps.active || sheetsOps.active || model.campaigns.rules.some((rule) => rule.deliveryEnabled));
 
   const setupState: GuideFact = model.setupStale
     ? {
@@ -682,62 +912,28 @@ export function guideFacts(model: GuidedOnboardingModel): GuideFact[] {
               detail: "No campaign routing rule is configured. Creating one is not available here.",
             };
 
-  const ghlFact: GuideFact = !ghl
-    ? {
-        id: "ghl_destination",
-        label: "GoHighLevel destination",
-        state: "unavailable",
-        detail: "The GoHighLevel destination could not be read. This page did not create one.",
-      }
-    : ghl.deliveryEnabled
-      ? {
-          id: "ghl_destination",
-          label: "GoHighLevel destination",
-          state: "active",
-          detail: "Live delivery is already on. This guided setup did not turn it on and cannot turn it off.",
-        }
-      : ghl.configured
-        ? {
-            id: "ghl_destination",
-            label: "GoHighLevel destination",
-            state: "configured",
-            detail: "A GoHighLevel destination is configured. Live delivery is off. This page cannot edit that destination.",
-          }
-        : {
-            id: "ghl_destination",
-            label: "GoHighLevel destination",
-            state: "pending",
-            detail: "No GoHighLevel destination is configured. Saving a destination choice does not create one.",
-          };
-
-  const sheetsActive = Boolean(sheets?.campaignDispatchEnabled || sheets?.agedDispatchEnabled);
-  const sheetsFact: GuideFact = !sheets
-    ? {
-        id: "sheets_destination",
-        label: "Company Sheets destination",
-        state: "unavailable",
-        detail: "The Company Sheets destination could not be read. This page did not create one.",
-      }
-    : sheetsActive
-      ? {
-          id: "sheets_destination",
-          label: "Company Sheets destination",
-          state: "active",
-          detail: "Sheets dispatch is already on. This guided setup did not turn it on and cannot turn it off.",
-        }
-      : sheets.configured
-        ? {
-            id: "sheets_destination",
-            label: "Company Sheets destination",
-            state: "configured",
-            detail: "A Company Sheets destination is configured. Dispatch is off. This page cannot edit that destination.",
-          }
-        : {
-            id: "sheets_destination",
-            label: "Company Sheets destination",
-            state: "pending",
-            detail: "No Company Sheets destination is configured. Saving a destination choice does not create one.",
-          };
+  const ghlFact: GuideFact = destinationOperationalFact("ghl_destination", "GoHighLevel destination", ghlOps, "GoHighLevel");
+  const sheetsFact: GuideFact = destinationOperationalFact("sheets_destination", "Company Sheets destination", sheetsOps, "Company Sheets");
+  const ghlRequestFact = configurationRequestFact({
+    id: "ghl_configuration_request",
+    label: "GoHighLevel configuration request",
+    read: model.ghlConfigurationRequest,
+    required: scope.ghl,
+    intakeOnly: scope.intakeOnly,
+    chosen: scope.chosen,
+    operational: ghlOps,
+  });
+  const sheetsRequestFact = configurationRequestFact({
+    id: "sheets_configuration_request",
+    label: "Company Sheets configuration request",
+    read: model.companySheetsConfigurationRequest,
+    required: scope.sheets,
+    intakeOnly: scope.intakeOnly,
+    chosen: scope.chosen,
+    operational: sheetsOps,
+  });
+  const information = clientInformationFact(model);
+  const sourceRequest = sourceRequestFact(model);
 
   const verificationFact: GuideFact =
     model.verification.availability !== "ready"
@@ -745,21 +941,28 @@ export function guideFacts(model: GuidedOnboardingModel): GuideFact[] {
           id: "verification",
           label: "Onboarding verification",
           state: "unavailable",
-          detail: "Onboarding verification could not be read, so this client is not marked verified.",
+          detail: "Verification is unavailable. It was not treated as passed.",
         }
       : model.verification.blockers.length > 0
         ? {
             id: "verification",
             label: "Onboarding verification",
             state: "blocked",
-            detail: `Onboarding reported a blocker: ${model.verification.blockers.join(", ").replaceAll("_", " ")}. This page did not clear it.`,
+            detail: `Verification is available and reported a blocker: ${model.verification.blockers.join(", ").replaceAll("_", " ")}. This page did not clear it.`,
           }
-        : {
-            id: "verification",
-            label: "Onboarding verification",
-            state: "pending",
-            detail: "No onboarding blocker was reported. That is not a verification of live delivery.",
-          };
+        : model.setup?.status === "setup_reviewed"
+          ? {
+              id: "verification",
+              label: "Onboarding verification",
+              state: "verified",
+              detail: "Verification is available and the setup request was marked reviewed. That review is not delivery activation and not an applied destination.",
+            }
+          : {
+              id: "verification",
+              label: "Onboarding verification",
+              state: "pending",
+              detail: "Verification is available and reported no blocker. The setup request has not been marked reviewed, so verification has not passed.",
+            };
 
   return [
     model.account
@@ -775,36 +978,31 @@ export function guideFacts(model: GuidedOnboardingModel): GuideFact[] {
           state: "unavailable",
           detail: "Client details could not be loaded. Nothing was changed.",
         },
+    information,
     setupState,
     reviewState,
-    sourceRequestSaved(data)
-      ? {
-          id: "lead_source_request",
-          label: "Source and campaign request",
-          state: "saved",
-          detail: "The source and campaign on the setup request are saved. This is not a routing rule.",
-        }
-      : {
-          id: "lead_source_request",
-          label: "Source and campaign request",
-          state: model.setupWritable ? "pending" : "unavailable",
-          detail: "No source or campaign is saved on the setup request yet.",
-        },
+    sourceRequest,
     sourceRows,
     campaignRows,
-    choiceSaved(destinationChoice)
+    scope.chosen
       ? {
           id: "destination_choice",
           label: "Destination choice",
           state: "saved",
-          detail: "The intended destination is saved on the setup request. Saved is not configured and not active.",
+          detail: scope.intakeOnly
+            ? "Intake only is saved on the setup request. Delivery destinations are not applicable, and delivery is not ready."
+            : "The intended destination is saved on the setup request. A saved choice is not a configuration request, not an operational destination, and not delivery.",
         }
       : {
           id: "destination_choice",
           label: "Destination choice",
-          state: model.setupWritable || model.recordedSetup ? "pending" : "unavailable",
-          detail: "GoHighLevel, Company Sheets, or both has not been chosen on the setup request.",
+          state: model.setupStale ? "blocked" : model.setupWritable || model.recordedSetup ? "pending" : "unavailable",
+          detail: model.setupStale
+            ? "The destination choice could not be confirmed because the setup request changed. Reload it before treating a choice as saved."
+            : "GoHighLevel, Company Sheets, both, or intake only has not been saved on the setup request.",
         },
+    ghlRequestFact,
+    sheetsRequestFact,
     ghlFact,
     sheetsFact,
     verificationFact,
@@ -813,65 +1011,205 @@ export function guideFacts(model: GuidedOnboardingModel): GuideFact[] {
       label: "Delivery activation",
       state: deliveryAlreadyOn ? "active" : "pending",
       detail: deliveryAlreadyOn
-        ? "Delivery is already active somewhere on this client. This guided setup cannot change that, and saving a request does not authorize it."
-        : "Delivery is not active from this setup. Saving the request does not turn it on.",
+        ? "Delivery is already active on an existing destination or campaign rule. This is not a new configuration request, and this guided setup cannot change it."
+        : scope.intakeOnly
+          ? "Delivery is off. Intake only means delivery is not ready."
+          : "Delivery is off. A saved configuration request does not turn it on.",
     },
   ];
+}
+
+function destinationOperationalFact(id: string, label: string, evidence: OperationalEvidence, name: string): GuideFact {
+  if (!evidence.known) {
+    return {
+      id,
+      label,
+      state: "unavailable",
+      detail: `The ${name} operational destination could not be read. A configuration request was not assumed, and this page did not create a destination.`,
+    };
+  }
+  if (evidence.active) {
+    return {
+      id,
+      label,
+      state: "active",
+      detail: `${name} delivery is already active on the existing destination. This is not a new configuration request. This guided setup did not turn it on and cannot turn it off.`,
+    };
+  }
+  if (evidence.configured) {
+    return {
+      id,
+      label,
+      state: "configured",
+      detail: `A ${name} destination is configured. Delivery is off. This is existing operational evidence, not a new configuration request, and this page cannot edit that destination.`,
+    };
+  }
+  return {
+    id,
+    label,
+    state: "pending",
+    detail: `No ${name} operational destination is configured. A destination choice or a stored request does not create one.`,
+  };
 }
 
 export type GuideStepProgress = {
   id: GuideStepId;
   title: string;
   state: GuideFactState;
+  badge: string;
   explanation: string;
 };
 
-export function guideProgress(model: GuidedOnboardingModel | null): { steps: GuideStepProgress[]; savedCount: number } {
-  const facts = model ? guideFacts(model) : [];
+export type GuideProgress = {
+  steps: GuideStepProgress[];
+  summary: string;
+  remaining: string[];
+};
+
+function badgeFor(state: GuideFactState, awaitingApplication = false): string {
+  if (awaitingApplication) return AWAITING_APPLICATION;
+  if (state === "saved") return "Saved";
+  if (state === "configured") return "Configured";
+  if (state === "verified") return "Verified";
+  if (state === "active") return "Active";
+  if (state === "blocked") return "Blocked";
+  if (state === "unavailable") return "Unavailable";
+  if (state === "not_applicable") return "Not applicable";
+  return "Pending";
+}
+
+export function guideRemaining(model: GuidedOnboardingModel): string[] {
+  const facts = guideFacts(model);
   const fact = (id: string) => facts.find((item) => item.id === id);
-  const informationSaved = Boolean(
-    model?.account &&
-      (model.account.primaryNicheKeys.length > 0 ||
-        model.account.primaryProductTypes.length > 0 ||
-        model.setup?.data.clientEmail ||
-        model.setup?.data.clientPhone ||
-        model.setup?.data.geography)
-  );
+  const remaining: string[] = [];
+  const information = fact("client_information");
+  if (information?.state !== "saved") remaining.push(information?.detail ?? "Save client information from the stored account and setup checklist.");
+  const source = fact("source_campaign_request");
+  if (source?.state !== "saved") remaining.push(source?.detail ?? "Save a source and campaign association request.");
+  else remaining.push(source.detail);
+  for (const id of ["ghl_configuration_request", "sheets_configuration_request"] as const) {
+    const request = fact(id);
+    if (!request || request.state === "not_applicable") continue;
+    remaining.push(request.detail);
+  }
+  const verification = fact("verification");
+  if (verification) remaining.push(verification.detail);
+  const activation = fact("activation");
+  if (activation?.state !== "active") remaining.push(activation?.detail ?? "Delivery is off.");
+  if (fact("ghl_destination")?.state === "configured" || fact("sheets_destination")?.state === "configured") {
+    remaining.push("An existing operational destination is recognized on its own. A new configuration request is not required to call that destination configured.");
+  }
+  return remaining;
+}
+
+export function guideSummary(model: GuidedOnboardingModel | null): string {
+  if (!model) return "Choose a client. Delivery is off.";
+  const facts = guideFacts(model);
+  const fact = (id: string) => facts.find((item) => item.id === id);
+  const sentences = [
+    fact("client_information")?.detail,
+    fact("source_campaign_request")?.detail,
+    fact("ghl_configuration_request")?.detail,
+    fact("sheets_configuration_request")?.detail,
+    fact("ghl_destination")?.detail,
+    fact("sheets_destination")?.detail,
+    fact("verification")?.detail,
+    fact("activation")?.detail,
+  ].filter((sentence): sentence is string => Boolean(sentence));
+  return sentences.join(" ");
+}
+
+function destinationStep(model: GuidedOnboardingModel, facts: Array<GuideFact & { awaitingApplication?: boolean }>): { state: GuideFactState; badge: string } {
+  const choice = persistedDestinationChoice(model);
+  const scope = destinationScope(choice);
+  const ghlRequest = facts.find((item) => item.id === "ghl_configuration_request");
+  const sheetsRequest = facts.find((item) => item.id === "sheets_configuration_request");
+  const ghlDestination = facts.find((item) => item.id === "ghl_destination");
+  const sheetsDestination = facts.find((item) => item.id === "sheets_destination");
+  if (!scope.chosen) {
+    const destinationStates = [ghlDestination?.state, sheetsDestination?.state];
+    if (ghlRequest?.state === "unavailable" || sheetsRequest?.state === "unavailable") {
+      if (!destinationStates.some((state) => state === "configured" || state === "active")) {
+        return { state: "unavailable", badge: "Unavailable" };
+      }
+    }
+    if (ghlRequest?.awaitingApplication || sheetsRequest?.awaitingApplication) {
+      return { state: "saved", badge: AWAITING_APPLICATION };
+    }
+    if (destinationStates.includes("active")) return { state: "active", badge: "Active" };
+    if (destinationStates.includes("configured")) return { state: "configured", badge: "Configured" };
+    return { state: model.setupStale ? "blocked" : "pending", badge: model.setupStale ? "Blocked" : "Pending" };
+  }
+  const required = [
+    scope.ghl ? { request: ghlRequest, destination: ghlDestination } : null,
+    scope.sheets ? { request: sheetsRequest, destination: sheetsDestination } : null,
+  ].filter((item): item is { request: typeof ghlRequest; destination: typeof ghlDestination } => Boolean(item));
+  if (scope.intakeOnly) {
+    const stored = [ghlRequest, sheetsRequest].some((item) => item?.awaitingApplication);
+    const unread = [ghlRequest, sheetsRequest].some((item) => item?.state === "unavailable");
+    if (unread) return { state: "unavailable", badge: "Unavailable" };
+    if (stored) return { state: "saved", badge: AWAITING_APPLICATION };
+    return { state: "not_applicable", badge: "Not applicable" };
+  }
+  const settled = (state: GuideFactState | undefined) => state === "configured" || state === "active";
+  const unreadRequired = required.some((item) => item.request?.state === "unavailable" && !settled(item.destination?.state));
+  if (unreadRequired) return { state: "unavailable", badge: "Unavailable" };
+  const pendingRequired = required.some((item) => item.request?.state === "pending" && !settled(item.destination?.state));
+  if (pendingRequired) return { state: "pending", badge: "Pending" };
+  const requestStillWaiting = required.some((item) => item.request?.awaitingApplication && !settled(item.destination?.state));
+  if (requestStillWaiting) return { state: "saved", badge: AWAITING_APPLICATION };
+  if (required.every((item) => item.destination?.state === "active")) return { state: "active", badge: "Active" };
+  if (required.every((item) => settled(item.destination?.state))) return { state: "configured", badge: "Configured" };
+  return { state: "pending", badge: "Pending" };
+}
+
+export function guideProgress(model: GuidedOnboardingModel | null): GuideProgress {
+  const facts = model ? guideFacts(model) : [];
+  const information = facts.find((item) => item.id === "client_information");
+  const source = facts.find((item) => item.id === "source_campaign_request");
+  const verification = facts.find((item) => item.id === "verification");
+  const destination = model ? destinationStep(model, facts) : { state: "unavailable" as const, badge: "Unavailable" };
   const steps: GuideStepProgress[] = [
     {
       id: "client",
       title: STEP_TITLES.client,
       state: model?.account ? "saved" : "pending",
+      badge: model?.account ? "Saved" : "Pending",
       explanation: GUIDE_STEP_EXPLANATIONS.client,
     },
     {
       id: "information",
       title: STEP_TITLES.information,
-      state: model?.account ? (informationSaved ? "saved" : "pending") : "unavailable",
+      state: information?.state ?? "unavailable",
+      badge: badgeFor(information?.state ?? "unavailable"),
       explanation: GUIDE_STEP_EXPLANATIONS.information,
     },
     {
       id: "sources",
       title: STEP_TITLES.sources,
-      state: fact("lead_source_request")?.state === "saved" ? "saved" : fact("campaign_rules")?.state === "configured" ? "configured" : fact("linked_sources")?.state === "configured" ? "configured" : model ? "pending" : "unavailable",
+      state: source?.state ?? "unavailable",
+      badge: badgeFor(source?.state ?? "unavailable", source?.awaitingApplication),
       explanation: GUIDE_STEP_EXPLANATIONS.sources,
     },
     {
       id: "destination",
       title: STEP_TITLES.destination,
-      state: fact("destination_choice")?.state === "saved" ? "saved" : model ? "pending" : "unavailable",
+      state: destination.state,
+      badge: destination.badge,
       explanation: GUIDE_STEP_EXPLANATIONS.destination,
     },
     {
       id: "summary",
       title: STEP_TITLES.summary,
-      state: fact("setup_request")?.state === "saved" ? "saved" : fact("setup_request")?.state === "blocked" ? "blocked" : model?.setupWritable ? "pending" : "unavailable",
+      state: model ? "pending" : "unavailable",
+      badge: verification?.state === "unavailable" ? "Verification unavailable" : "In review",
       explanation: GUIDE_STEP_EXPLANATIONS.summary,
     },
   ];
   return {
     steps,
-    savedCount: steps.filter((step) => step.state === "saved").length,
+    summary: guideSummary(model),
+    remaining: model ? guideRemaining(model) : ["Choose a client. Delivery is off."],
   };
 }
 
@@ -879,8 +1217,17 @@ export function guideBlockers(model: GuidedOnboardingModel): string[] {
   const blockers: string[] = [...GUIDE_LIMITATIONS];
   if (model.setupUnavailableReason && !model.setupWritable) blockers.unshift(model.setupUnavailableReason);
   if (model.sources.availability !== "ready") blockers.push("The lead-source list could not be loaded.");
-  if (!model.destinations) blockers.push("Live destination rows could not be read, so configured and active are unknown.");
-  if (model.verification.availability !== "ready") blockers.push("Onboarding verification is unavailable, so this client is not marked verified.");
+  if (!model.destinations && model.ghlConfigurationRequest.availability !== "ready" && model.companySheetsConfigurationRequest.availability !== "ready") {
+    blockers.push("Operational destinations could not be read, so configured and active are unknown.");
+  }
+  for (const read of [model.ghlConfigurationRequest, model.companySheetsConfigurationRequest]) {
+    if (read.availability === "disabled" || read.availability === "unauthorized" || read.availability === "unreadable") {
+      blockers.push(read.message);
+    }
+  }
+  if (!model.sourceCampaignRequest) blockers.push("The source and campaign request was not loaded. It is not treated as saved.");
+  else if (model.sourceCampaignRequest.availability !== "ready") blockers.push(model.sourceCampaignRequest.message);
+  if (model.verification.availability !== "ready") blockers.push("Verification is unavailable. It was not treated as passed.");
   else if (model.verification.blockers.length > 0) {
     blockers.push(...model.verification.blockers.map((blocker) => blocker.replaceAll("_", " ")));
   }

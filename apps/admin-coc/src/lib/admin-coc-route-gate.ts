@@ -57,6 +57,12 @@ export type AdminCocRouteGateInput = {
    * is reachable.
    */
   hasMetaReviewerSession?: boolean;
+  /**
+   * Live staff Admin C.O.C. decision from the API. `none` is the default.
+   * Middleware must not invent this from the cookie alone. `admin` is a
+   * granted admin_coc session. `limited` is a live staff session without it.
+   */
+  staffAccess?: "admin" | "limited" | "none";
   hasValidPortalSession: boolean;
   clientPortalLiveConfigured: boolean;
   frontOfficeDevPreview: boolean;
@@ -177,8 +183,21 @@ function resolveFrontOfficeGate(input: AdminCocRouteGateInput): AdminCocRouteGat
   if (!isFrontOfficePath(pathname)) return null;
   if (isFrontOfficeLoginChooserPath(pathname)) return allow();
 
+  if (
+    input.adminPasswordConfigured &&
+    input.staffAccess === "limited" &&
+    !input.hasAdminSession &&
+    !input.hasValidPortalSession &&
+    !input.frontOfficeDevPreview
+  ) {
+    return { kind: "redirect", pathname: "/staff" };
+  }
+
   const authenticated =
-    input.hasAdminSession || input.hasValidPortalSession || input.frontOfficeDevPreview;
+    input.hasAdminSession ||
+    input.hasValidPortalSession ||
+    input.frontOfficeDevPreview ||
+    input.staffAccess === "admin";
   if (authenticated) return allow();
 
   if (pathname.startsWith("/api/front-office")) return { kind: "unauthorized" };
@@ -214,6 +233,8 @@ function resolveAdminPasswordGate(input: AdminCocRouteGateInput): AdminCocRouteG
   const role: AdminCocRole | null =
     input.adminSessionRole ?? (input.hasAdminSession ? ADMIN_COC_ROLE_ADMIN : null);
 
+  if (input.staffAccess === "admin") return allow(attachAgentWorkspaceCsp);
+
   if (role === ADMIN_COC_ROLE_OBSERVER) {
     if (isObserverDocumentPath(pathname)) return allow(false);
     if (isAdminApiPath(pathname)) {
@@ -225,6 +246,11 @@ function resolveAdminPasswordGate(input: AdminCocRouteGateInput): AdminCocRouteG
   }
 
   if (role === ADMIN_COC_ROLE_ADMIN) return allow(attachAgentWorkspaceCsp);
+
+  if (input.staffAccess === "limited") {
+    if (isAdminApiPath(pathname)) return { kind: "forbidden", surface: "api" };
+    return { kind: "redirect", pathname: "/staff" };
+  }
 
   if (isAdminApiPath(pathname)) return { kind: "unauthorized" };
 
@@ -257,7 +283,7 @@ export function resolveAdminCocRouteGate(
     return { kind: "not-found" };
   }
 
-  if (input.hasMetaReviewerSession && !input.hasAdminSession) {
+  if (input.hasMetaReviewerSession && !input.hasAdminSession && input.staffAccess !== "admin") {
     return resolveMetaReviewerIsolation(input);
   }
 

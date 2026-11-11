@@ -382,6 +382,46 @@ test("public /login does not grant privileged operator access (Server Action POS
   );
 });
 
+test("a granted staff admin can open the command center and an unprivileged staff session cannot", () => {
+  const staffAdmin = { ...UNAUTH_ADMIN, staffAccess: "admin" as const };
+  assertAllow(decision(staffAdmin, "/"), false, "command center");
+  assertAllow(decision(staffAdmin, "/team-workspace"));
+  assertAllow(decision(staffAdmin, "/action-center"));
+  assertAllow(decision(staffAdmin, "/agent-workspace"), true);
+  assertAllow(decision(staffAdmin, "/api/coc/orders", { method: "POST" }));
+  assertRedirect(decision(staffAdmin, "/portal"), "/portal/login", "/portal");
+  assert.deepEqual(decision(staffAdmin, "/api/client-portal/account"), { kind: "unauthorized" });
+  assertAllow(decision({ ...staffAdmin, hasMetaReviewerSession: true }, "/team-workspace"));
+  assert.deepEqual(decision({ ...UNAUTH_ADMIN, hasMetaReviewerSession: true }, "/"), {
+    kind: "forbidden",
+    surface: "reviewer",
+  });
+
+  const limited = { ...UNAUTH_ADMIN, staffAccess: "limited" as const };
+  assertRedirect(decision(limited, "/"), "/staff");
+  assertRedirect(decision(limited, "/team-workspace"), "/staff");
+  assertRedirect(decision(limited, "/front-office"), "/staff");
+  assert.deepEqual(decision(limited, "/api/coc/orders", { method: "GET" }), {
+    kind: "forbidden",
+    surface: "api",
+  });
+  assertAllow(decision(limited, "/staff"));
+  assertAllow(decision(limited, "/login"));
+  assertRedirect(decision(limited, "/portal"), "/portal/login", "/portal");
+  assert.deepEqual(decision({ ...MARKETING, staffAccess: "admin" }, "/team-workspace"), { kind: "not-found" });
+
+  const observerAndStaff = {
+    ...UNAUTH_ADMIN,
+    hasAdminSession: false,
+    adminSessionRole: "SA360_OBSERVER" as const,
+    staffAccess: "limited" as const,
+  };
+  assertAllow(decision(observerAndStaff, "/webhooks"));
+  assert.deepEqual(decision(observerAndStaff, "/team-workspace"), { kind: "forbidden", surface: "document" });
+  assertAllow(decision({ ...observerAndStaff, staffAccess: "admin" }, "/team-workspace"));
+  assertAllow(decision(AUTH_ADMIN, "/"));
+});
+
 test("staff sign-in paths stay exact and do not grant operator access", () => {
   assertAllow(decision(UNAUTH_ADMIN, "/staff"));
   assertAllow(decision(UNAUTH_ADMIN, "/staff/google/start"));

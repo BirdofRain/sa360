@@ -6,6 +6,7 @@ import {
   fetchActionDashboardToday,
   isAdminApiConfigured,
 } from "@/lib/admin-api/server";
+import { requireAdminCocSession } from "@/lib/admin-coc-session-guard";
 import { mapActionDashboardToUi } from "@/lib/action-center/map-action-dashboard";
 
 export const dynamic = "force-dynamic";
@@ -35,6 +36,7 @@ export default async function ActionCenterPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  await requireAdminCocSession();
   const sp = await searchParams;
   const clientAccountId = firstString(sp.clientAccountId)?.trim() ?? "";
   const locationId = firstString(sp.locationId);

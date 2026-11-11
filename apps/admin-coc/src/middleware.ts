@@ -2,6 +2,12 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { ADMIN_COC_SESSION_COOKIE } from "@/lib/admin-coc-auth";
 import { resolveAdminCocRouteGate } from "@/lib/admin-coc-route-gate";
+import {
+  fetchStaffAdminCocDecision,
+  readStaffAdminCocOrigin,
+  STAFF_ADMIN_COC_SESSION_COOKIE,
+  type StaffAdminCocDecision,
+} from "@/lib/staff-admin-coc-decision";
 import { ADMIN_COC_ROLE_ADMIN } from "@/lib/admin-coc-observer-access";
 import { parseAdminCocSessionTokenEdge } from "@/lib/admin-coc-session-edge";
 import {
@@ -45,6 +51,9 @@ export async function middleware(request: NextRequest) {
   const hasMetaReviewerSession = await verifyMetaReviewerSessionTokenEdge(
     request.cookies.get(META_REVIEWER_SESSION_COOKIE)?.value
   );
+  const staffDecision = hasAdminSession
+    ? "anonymous"
+    : await readMiddlewareStaffDecision(request.cookies.get(STAFF_ADMIN_COC_SESSION_COOKIE)?.value);
 
   const decision = resolveAdminCocRouteGate({
     pathname,
@@ -56,6 +65,7 @@ export async function middleware(request: NextRequest) {
     hasAdminSession,
     adminSessionRole,
     hasMetaReviewerSession,
+    staffAccess: staffAccessFromDecision(staffDecision),
     hasValidPortalSession,
     clientPortalLiveConfigured: isClientPortalLiveConfigured(),
     frontOfficeDevPreview: isFrontOfficeDevPreview(request),
@@ -118,6 +128,27 @@ export async function middleware(request: NextRequest) {
       return applyAuthenticatedCacheHeaders(res, pathname, hasMetaReviewerSession);
     }
   }
+}
+
+function staffAccessFromDecision(decision: StaffAdminCocDecision): "admin" | "limited" | "none" {
+  if (decision === "admin") return "admin";
+  if (decision === "limited") return "limited";
+  return "none";
+}
+
+/**
+ * Routing hint only. Pages, server actions, and BFF handlers repeat the
+ * authorize call. A missing or rejected check does not grant admin access.
+ * The shared-password admin session skips this call.
+ */
+async function readMiddlewareStaffDecision(sessionToken: string | undefined): Promise<StaffAdminCocDecision> {
+  if (!sessionToken) return "anonymous";
+  const origin = readStaffAdminCocOrigin(
+    process.env.SA360_API_INTERNAL_URL ?? process.env.NEXT_PUBLIC_SA360_API_BASE_URL
+  );
+  const serviceSecret = process.env.SA360_STAFF_GOOGLE_SERVICE_SECRET ?? "";
+  if (!origin || serviceSecret.length < 32 || /\s/u.test(serviceSecret)) return "anonymous";
+  return fetchStaffAdminCocDecision({ origin, serviceSecret, sessionToken });
 }
 
 export const config = {

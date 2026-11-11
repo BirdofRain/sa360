@@ -244,7 +244,7 @@ const routes: { prefix: string; meta: PageMeta }[] = [
 ];
 
 const home: PageMeta = {
-  title: "Command Center",
+  title: "SA360 Command Center",
   description: "Live fulfillment operations health across proof, verification, inventory, orders, and delivery audit.",
 };
 

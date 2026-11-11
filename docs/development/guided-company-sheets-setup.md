@@ -76,11 +76,25 @@ the contract the writer snapshots at enqueue; a worksheet-only destination
 save changes the target for the next job; token refresh uses
 compare-and-set and can race with another refresh.
 
-## Missing backend
+## Configuration request
 
-The discovery guide still does not store a spreadsheet choice. A later
-request-only table, `CompanySheetsDestinationConfigurationRequest`, can hold
-an intended spreadsheet id and worksheet id. Delivery, dispatch, routing, and
-fulfillment do not read it. The guide does not call that API, and
-`SA360_COMPANY_SHEETS_CONFIG_REQUEST_ENABLED` stays default-off. A choice on
-this page remains unsaved until a separate UI task uses that request.
+An authorized operator can save an intended spreadsheet id and GRID worksheet
+id through `CompanySheetsDestinationConfigurationRequest`. The Team Workspace
+guide calls:
+
+`GET /admin/v1/clients/:clientAccountId/company-sheets-destination-configuration`
+
+`POST /admin/v1/clients/:clientAccountId/company-sheets-destination-configuration`
+
+`SA360_COMPANY_SHEETS_CONFIG_REQUEST_ENABLED` must be the exact string `true`
+after trim. It stays default-off. The flag does not turn on OAuth, Sheets
+setup, execution, or dispatch.
+
+The saved operational destination, the stored request, the unsaved selection,
+and this session's Google metadata read stay separate. A stored request is
+not a destination. A previous read is not verification after the spreadsheet
+selection changes. POST sends `requestId`, `expectedRevision`,
+`expectedDestinationRevision`, `spreadsheetId`, and `worksheetId`. It does
+not send titles, control basis, or credentials. The guide does not call
+destination save or delete, tab bind, column-map publish, folder or file
+creation, access tests, write probes, or delivery.

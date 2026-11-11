@@ -249,6 +249,42 @@ export function fetchCompanySheetsDestination(clientAccountId: string) {
   );
 }
 
+/** Intended configuration request. This does not read or write CompanySheetsDestination. */
+export function fetchCompanySheetsDestinationConfiguration(clientAccountId: string) {
+  const id = clientAccountId.trim();
+  if (!id) {
+    return Promise.resolve({
+      ok: false as const,
+      status: 400,
+      body: JSON.stringify({ ok: false, error: "client_not_found" }),
+    });
+  }
+  return adminRequestJson<unknown>(
+    "GET",
+    `/admin/v1/clients/${encodeURIComponent(id)}/company-sheets-destination-configuration`
+  );
+}
+
+/** Stores an intended spreadsheet and worksheet. Callers must not send titles or credentials. */
+export function postCompanySheetsDestinationConfiguration(
+  clientAccountId: string,
+  body: Record<string, unknown>
+) {
+  const id = clientAccountId.trim();
+  if (!id) {
+    return Promise.resolve({
+      ok: false as const,
+      status: 400,
+      body: JSON.stringify({ ok: false, error: "client_not_found" }),
+    });
+  }
+  return adminRequestJson<unknown>(
+    "POST",
+    `/admin/v1/clients/${encodeURIComponent(id)}/company-sheets-destination-configuration`,
+    body
+  );
+}
+
 export type CompanySheetsStoredTabContract = {
   role: "campaign" | "aged" | "canary";
   setupState: string;

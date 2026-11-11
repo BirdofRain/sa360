@@ -118,6 +118,10 @@ test("workspace files do not collect a recipient, send mail, or arm delivery", (
     new URL("./company-sheets-discovery.ts", import.meta.url),
     new URL("../../components/team-workspace/company-sheets-discovery-guide.tsx", import.meta.url),
     new URL("../../app/actions/team-workspace-company-sheets.ts", import.meta.url),
+    new URL("./company-sheets-config-request.ts", import.meta.url),
+    new URL("./company-sheets-config-request-env.ts", import.meta.url),
+    new URL("../../components/team-workspace/company-sheets-config-request-panel.tsx", import.meta.url),
+    new URL("../../app/actions/team-workspace-company-sheets-config.ts", import.meta.url),
   ];
   const source = files.map((file) => readFileSync(file, "utf8")).join("\n");
   assert.equal(source.includes("/team\""), false);

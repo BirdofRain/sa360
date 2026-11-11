@@ -74,6 +74,30 @@ const moduleLoader = module as unknown as {
 const originalLoad = moduleLoader._load;
 moduleLoader._load = function (request: string, parent: NodeModule, isMain: boolean) {
   if (request === "server-only") return {};
+  if (request === "@/app/actions/team-workspace-company-sheets-config") {
+    return {
+      loadTeamWorkspaceCompanySheetsConfigurationAction: async () => ({
+        ok: true,
+        uncertain: false,
+        code: null,
+        message: null,
+        head: {
+          clientAccountId: "alex_gross",
+          revision: 3,
+          operationalDestination: {
+            exists: true,
+            destinationRevision: 4,
+            campaignDispatchEnabled: true,
+            agedDispatchEnabled: false,
+          },
+          configuration: null,
+        },
+      }),
+      saveTeamWorkspaceCompanySheetsConfigurationRequestAction: async () => {
+        throw new Error("configuration save must not run from the discovery test");
+      },
+    };
+  }
   if (request === "@/app/actions/team-workspace-company-sheets") {
     return {
       loadTeamWorkspaceCompanySheetsAction: async () => {
@@ -84,9 +108,16 @@ moduleLoader._load = function (request: string, parent: NodeModule, isMain: bool
         calls.push("storage");
         return { ok: true, code: "READ", message: null, uncertain: false, snapshot: readySnapshot(), nextPageToken: null };
       },
-      readTeamWorkspaceCompanySheetsWorksheetsAction: async () => {
-        calls.push("worksheets");
-        return { ok: true, code: "READ", message: null, uncertain: false, read: readySnapshot().worksheetRead };
+      readTeamWorkspaceCompanySheetsWorksheetsAction: async (_client: string, spreadsheet: string) => {
+        calls.push(`worksheets:${spreadsheet}`);
+        const read = readySnapshot().worksheetRead;
+        return {
+          ok: true,
+          code: "READ",
+          message: null,
+          uncertain: false,
+          read: read ? { ...read, spreadsheetId: spreadsheet } : null,
+        };
       },
       pageTeamWorkspaceCompanySheetsSpreadsheetsAction: async () => {
         calls.push("page");
@@ -127,7 +158,7 @@ test("an active destination stays distinct from verified and an unsaved workshee
   assert.equal(screen.queryByRole("button", { name: /save spreadsheet/i }), null);
   assert.equal(screen.queryByRole("button", { name: /create folder/i }), null);
   assert.equal(calls.includes("storage"), false);
-  assert.equal(calls.includes("worksheets"), false);
+  assert.equal(calls.some((call) => call.startsWith("worksheets")), false);
   fireEvent.click(screen.getByRole("button", { name: /Notes/ }));
   assert.equal(screen.getByText(/Not saved\./).textContent?.includes("202"), true);
   fireEvent.change(screen.getByLabelText("Find a spreadsheet"), { target: { value: "other" } });
@@ -135,4 +166,38 @@ test("an active destination stays distinct from verified and an unsaved workshee
   assert.equal(screen.getByRole("button", { name: /Other workbook/ }), screen.getByRole("button", { name: /Other workbook/ }));
   const presented = presentCompanySheetsDiscovery(readySnapshot());
   assert.equal(presented.operationalWrite, false);
+  assert.equal(screen.getByRole("button", { name: /Campaign Leads/ }).getAttribute("aria-pressed"), "false");
+  assert.equal(screen.getByRole("button", { name: /Notes/ }).getAttribute("aria-pressed"), "true");
+});
+
+test("changing the spreadsheet clears the worksheet and hides the other file's tabs", async () => {
+  render(<Guide clientAccountId="alex_gross" />);
+  await screen.findByText(/Configured\. Verified\. Active\./);
+  fireEvent.click(screen.getByRole("button", { name: /Notes/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Other workbook/ }));
+  assert.equal(screen.queryByRole("button", { name: /Notes/ }), null);
+  assert.match(screen.getByText(/Not saved\./).textContent ?? "", /sheet-2/);
+  assert.match(screen.getByText(/Not saved\./).textContent ?? "", /Worksheet none/);
+  assert.match(screen.getByText(/Worksheets from another spreadsheet are not choices/).textContent ?? "", /not choices/);
+  assert.equal(calls.some((call) => call.startsWith("worksheets")), false);
+});
+
+test("a Google Sheets link and its spreadsheet id stay one file", async () => {
+  render(<Guide clientAccountId="alex_gross" />);
+  await screen.findByText(/Configured\. Verified\. Active\./);
+  const link = "https://docs.google.com/spreadsheets/d/1a2b3c4d5e6f7g8h/edit?usp=sharing#gid=101";
+  fireEvent.change(screen.getByLabelText("Check a spreadsheet id or link"), { target: { value: link } });
+  fireEvent.click(screen.getByRole("button", { name: "Read worksheets" }));
+  assert.equal(calls.includes("worksheets:1a2b3c4d5e6f7g8h"), true);
+  const notes = await screen.findByRole("button", { name: /Notes/ });
+  fireEvent.click(notes);
+  assert.equal(notes.getAttribute("aria-pressed"), "true");
+  fireEvent.change(screen.getByLabelText("Check a spreadsheet id or link"), { target: { value: "1a2b3c4d5e6f7g8h" } });
+  assert.equal(screen.getByRole("button", { name: /Notes/ }).getAttribute("aria-pressed"), "true");
+  fireEvent.change(screen.getByLabelText("Check a spreadsheet id or link"), {
+    target: { value: "https://docs.google.com/spreadsheets/d/1a2b3c4d5e6f7g8z/edit" },
+  });
+  assert.equal(screen.queryByRole("button", { name: /Notes/ }), null);
+  assert.match(screen.getByText(/Not saved\./).textContent ?? "", /1a2b3c4d5e6f7g8z/);
+  assert.match(screen.getByText(/Not saved\./).textContent ?? "", /Worksheet none/);
 });

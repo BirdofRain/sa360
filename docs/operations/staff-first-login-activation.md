@@ -105,9 +105,11 @@ Acceptance criteria, all required:
    This is a new sign-in, not a reuse of the enrollment callback.
 2. The API registers `sa360_staff_session` in the shared Redis allowlist.
 3. A second API instance accepts that session.
-4. The session does not open shared-password Admin C.O.C. pages, Team
-   Workspace, Source Resolution, Meta association correction, or GHL, Sheets,
-   or fulfillment controls. Those remain behind the admin session.
+4. Until a separate `admin_coc` grant exists, the session does not open
+   shared-password Admin C.O.C. pages, Team Workspace, Source Resolution, Meta
+   association correction, or GHL, Sheets, or fulfillment controls. The grant
+   procedure is `docs/operations/staff-admin-coc-grant.md`. It is not part of
+   this activation.
 5. Logout returns 303 to `/staff`, revokes the registry row, and clears only
    the staff cookie.
 6. Presenting the copied staff cookie afterward is denied.

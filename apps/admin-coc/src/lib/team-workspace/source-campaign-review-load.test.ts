@@ -76,6 +76,10 @@ async function loadWith(
     review?: (url: string) => unknown;
     request?: () => unknown;
     requestStatus?: number;
+    ghlConfiguration?: () => unknown;
+    ghlConfigurationStatus?: number;
+    sheetsConfiguration?: () => unknown;
+    sheetsConfigurationStatus?: number;
   },
   options: { nativeSetup?: boolean; requestEnabled?: boolean; workspaceReady?: boolean } = {}
 ) {
@@ -116,6 +120,12 @@ async function loadWith(
       const status = handlers.requestStatus ?? (handlers.request ? 200 : 404);
       return json(body, status);
     }
+    if (url.includes("/ghl-destination-configuration")) {
+      return json(handlers.ghlConfiguration ? handlers.ghlConfiguration() : { ok: false, error: "feature_disabled" }, handlers.ghlConfigurationStatus ?? (handlers.ghlConfiguration ? 200 : 404));
+    }
+    if (url.includes("/company-sheets-destination-configuration")) {
+      return json(handlers.sheetsConfiguration ? handlers.sheetsConfiguration() : { ok: false, error: "feature_disabled" }, handlers.sheetsConfigurationStatus ?? (handlers.sheetsConfiguration ? 200 : 404));
+    }
     if (url.includes("/onboarding")) return json({ error: "onboarding_read_disabled" }, 404);
     if (url.includes("/team-workspace/")) {
       return options.workspaceReady ? json(workspaceBody()) : json({ error: "team_workspace_disabled" }, 404);
@@ -135,6 +145,8 @@ async function loadWith(
     delete process.env.SA360_NATIVE_CLIENT_SETUP_ENABLED;
     delete process.env.SA360_TEAM_WORKSPACE_ENABLED;
     delete process.env.SA360_SOURCE_CAMPAIGN_REQUEST_ENABLED;
+    delete process.env.SA360_GHL_DESTINATION_CONFIG_REQUEST_ENABLED;
+    delete process.env.SA360_COMPANY_SHEETS_CONFIG_REQUEST_ENABLED;
   }
 }
 
@@ -257,6 +269,111 @@ test("native setup turned off does not display a verified review", async () => {
   assert.equal(review?.availability, "unavailable");
   assert.equal(review?.sourceAssociated, false);
   assert.match(review?.attention.join(" ") ?? "", /native client setup is turned off/);
+});
+
+test("destination configuration reads stay off until their flags are on", async () => {
+  const { detail, calls } = await loadWith({}, { requestEnabled: true, workspaceReady: true });
+  assert.equal(calls.some((url) => url.includes("/ghl-destination-configuration")), false);
+  assert.equal(calls.some((url) => url.includes("/company-sheets-destination-configuration")), false);
+  assert.equal(detail.kind, "ready");
+  if (detail.kind !== "ready") return;
+  assert.equal(detail.guide?.ghlConfigurationRequest.availability, "disabled");
+  assert.equal(detail.guide?.companySheetsConfigurationRequest.availability, "disabled");
+  assert.match(detail.guide?.ghlConfigurationRequest.availability === "disabled" ? detail.guide.ghlConfigurationRequest.message : "", /not treated as saved/);
+});
+
+test("stored destination configuration reads stay requests and do not become delivery", async () => {
+  process.env.SA360_GHL_DESTINATION_CONFIG_REQUEST_ENABLED = "true";
+  process.env.SA360_COMPANY_SHEETS_CONFIG_REQUEST_ENABLED = "true";
+  const { detail, calls } = await loadWith(
+    {
+      ghlConfiguration: () => ({
+        ok: true,
+        clientAccountId: "alex_gross",
+        revision: 1,
+        destinationUpdatedAt: null,
+        liveDestination: false,
+        configuration: {
+          requestId: "0addf0ce-1111-4111-8111-111111111111",
+          revision: 1,
+          locationId: "loc_north",
+          workflowId: "wfNorthIntake0001",
+          fieldMappings: [
+            { key: "desired_coverage", fieldId: "field_coverage" },
+            { key: "branch_of_service", fieldId: "field_branch" },
+            { key: "primary_reason", fieldId: "field_reason" },
+          ],
+          snapshotFetchedAt: "2026-11-11T16:00:00.000Z",
+          createdAt: "2026-11-11T16:00:00.000Z",
+        },
+        destinationUpdated: false,
+        deliveryArmed: false,
+        enrollmentPerformed: false,
+        routingChanged: false,
+        liveDestinationChanged: false,
+      }),
+      sheetsConfiguration: () => ({
+        ok: true,
+        clientAccountId: "alex_gross",
+        revision: 1,
+        operationalDestination: { exists: false, destinationRevision: null, campaignDispatchEnabled: false, agedDispatchEnabled: false },
+        configuration: {
+          requestId: "018ffb0a-2222-4222-8222-222222222222",
+          revision: 1,
+          spreadsheetId: "1NorthSheet0000001",
+          worksheetId: 101,
+          spreadsheetTitle: "Northshore",
+          worksheetTitle: "Campaign",
+          controlBasis: "approved_shared_drive",
+          controlCheckedAt: "2026-11-11T16:05:00.000Z",
+          expectedDestinationRevision: null,
+          createdAt: "2026-11-11T16:05:00.000Z",
+        },
+        operationalWrite: false,
+        destinationUpdated: false,
+        dispatchChanged: false,
+        driveChanged: false,
+        tabContractChanged: false,
+        columnMapPublished: false,
+        deliveryArmed: false,
+        routingChanged: false,
+        fulfillmentChanged: false,
+      }),
+    },
+    { requestEnabled: true, workspaceReady: true }
+  );
+  assert.equal(calls.filter((url) => url.includes("/ghl-destination-configuration")).length, 1);
+  assert.equal(calls.filter((url) => url.includes("/company-sheets-destination-configuration")).length, 1);
+  assert.equal(detail.kind, "ready");
+  if (detail.kind !== "ready") return;
+  const ghl = detail.guide?.ghlConfigurationRequest;
+  const sheets = detail.guide?.companySheetsConfigurationRequest;
+  assert.equal(ghl?.availability, "ready");
+  assert.equal(sheets?.availability, "ready");
+  if (ghl?.availability !== "ready" || sheets?.availability !== "ready") return;
+  assert.equal(ghl.request?.requestId, "0addf0ce-1111-4111-8111-111111111111");
+  assert.equal(ghl.operational.deliveryActive, false);
+  assert.equal(sheets.request?.revision, 1);
+  assert.equal(sheets.operational.configured, false);
+  assert.equal(sheets.operational.deliveryActive, false);
+});
+
+test("an unauthorized configuration read is not treated as an empty request", async () => {
+  process.env.SA360_GHL_DESTINATION_CONFIG_REQUEST_ENABLED = "true";
+  process.env.SA360_COMPANY_SHEETS_CONFIG_REQUEST_ENABLED = "true";
+  const { detail } = await loadWith(
+    {
+      ghlConfiguration: () => ({ ok: false, error: "forbidden" }),
+      ghlConfigurationStatus: 403,
+      sheetsConfiguration: () => ({ ok: false, error: "company_sheets_config_request_disabled" }),
+      sheetsConfigurationStatus: 404,
+    },
+    { requestEnabled: true, workspaceReady: true }
+  );
+  assert.equal(detail.kind, "ready");
+  if (detail.kind !== "ready") return;
+  assert.equal(detail.guide?.ghlConfigurationRequest.availability, "unauthorized");
+  assert.equal(detail.guide?.companySheetsConfigurationRequest.availability, "disabled");
 });
 
 test("a disabled request flag does not call the request route", async () => {

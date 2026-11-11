@@ -180,6 +180,36 @@ export async function exchangeStaffGoogleCode(input: {
   return { ok: true, idToken: record.id_token };
 }
 
+/** Canonical staff sign-in origin. Invitation links cannot use any other public host. */
+export const STAFF_SIGN_IN_ORIGIN = "https://sa360-api-staging-coo57.ondigitalocean.app";
+export const STAFF_SIGN_IN_PATH = "/staff/google/start";
+
+/**
+ * Invitation sign-in link. The path is fixed. Query strings, fragments, and
+ * public hosts other than the canonical origin are rejected. Localhost is
+ * accepted only for local tests.
+ */
+export function parseStaffSignInUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (trimmed !== value || trimmed.length === 0 || trimmed.length > 300) return null;
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  if (url.username || url.password || url.search || url.hash) return null;
+  if (url.pathname !== STAFF_SIGN_IN_PATH) return null;
+  const localhost = url.hostname === "localhost" || url.hostname === "127.0.0.1";
+  if (localhost) {
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    return `${url.origin}${url.pathname}`;
+  }
+  if (url.protocol !== "https:" || url.origin !== STAFF_SIGN_IN_ORIGIN) return null;
+  return `${STAFF_SIGN_IN_ORIGIN}${STAFF_SIGN_IN_PATH}`;
+}
+
 export function readStaffApiOrigin(value: unknown): string | null {
   if (typeof value !== "string" || value.length === 0 || value.length > 300 || value.trim() !== value) return null;
   let url: URL;

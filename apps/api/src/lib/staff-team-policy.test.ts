@@ -38,15 +38,19 @@ test("ordinary access levels never include admin_coc", () => {
   assert.equal(accessLevelFromPermissions(["facebook_association_correction"]), "none");
 });
 
-test("sign-in links cannot carry a secret", () => {
-  assert.equal(
-    parseStaffSignInUrl("https://sa360-api-staging-coo57.ondigitalocean.app/staff/google/start"),
-    "https://sa360-api-staging-coo57.ondigitalocean.app/staff/google/start"
-  );
-  assert.equal(parseStaffSignInUrl("https://admin.example/staff/google/start?code=secret"), null);
-  assert.equal(parseStaffSignInUrl("https://admin.example/staff/google/enroll/start"), null);
+test("sign-in links stay on the approved origin or localhost", () => {
+  const approved = "https://sa360-api-staging-coo57.ondigitalocean.app/staff/google/start";
+  assert.equal(parseStaffSignInUrl(approved), approved);
+  assert.equal(parseStaffSignInUrl("http://127.0.0.1:3456/staff/google/start"), "http://127.0.0.1:3456/staff/google/start");
+  assert.equal(parseStaffSignInUrl("http://localhost:3000/staff/google/start"), "http://localhost:3000/staff/google/start");
+  assert.equal(parseStaffSignInUrl("https://evil.example/staff/google/start"), null);
+  assert.equal(parseStaffSignInUrl("https://admin.example/staff/google/start"), null);
+  assert.equal(parseStaffSignInUrl("https://sa360-api-staging-coo57.ondigitalocean.app.evil.com/staff/google/start"), null);
+  assert.equal(parseStaffSignInUrl(`${approved}?code=secret`), null);
+  assert.equal(parseStaffSignInUrl("https://sa360-api-staging-coo57.ondigitalocean.app/staff/google/enroll/start"), null);
   assert.equal(parseStaffSignInUrl("http://evil.example/staff/google/start"), null);
-  assert.equal(parseStaffSignInUrl("https://user:pass@admin.example/staff/google/start"), null);
+  assert.equal(parseStaffSignInUrl("http://sa360-api-staging-coo57.ondigitalocean.app/staff/google/start"), null);
+  assert.equal(parseStaffSignInUrl(`https://user:pass@sa360-api-staging-coo57.ondigitalocean.app/staff/google/start`), null);
 });
 
 test("account status follows the principal, the grant, and the invitation", () => {

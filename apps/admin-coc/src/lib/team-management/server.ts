@@ -2,7 +2,7 @@ import "server-only";
 
 import { cookies } from "next/headers";
 
-import { readStaffGoogleBrowserConfig } from "@sa360/shared/staff-google-oidc";
+import { parseStaffSignInUrl, readStaffGoogleBrowserConfig } from "@sa360/shared/staff-google-oidc";
 import { STAFF_GOOGLE_SERVICE_HEADER, readStaffGoogleServiceSecret } from "@sa360/shared/staff-google-service";
 import { STAFF_SESSION_COOKIE, STAFF_SESSION_HEADER } from "@sa360/shared/staff-google-session";
 
@@ -15,16 +15,21 @@ export function staffSignInUrl(env: NodeJS.ProcessEnv = process.env): string | n
   const config = readStaffGoogleBrowserConfig(env);
   if (!config) return null;
   try {
-    return `${new URL(config.redirectUri).origin}/staff/google/start`;
+    return parseStaffSignInUrl(`${new URL(config.redirectUri).origin}/staff/google/start`);
   } catch {
     return null;
   }
 }
 
-export async function loadTeamDirectory(): Promise<{ members: TeamMember[]; signInUrl: string | null }> {
+export async function loadTeamDirectory(): Promise<{
+  members: TeamMember[];
+  signInUrl: string | null;
+  actorStaffPrincipalId: string;
+}> {
+  const actor = await requireStaffAdministrator();
   const result = await teamRequest<{ members: TeamMember[] }>("/internal/staff/team/members", {});
   if (!result.ok) throw new TeamManagementError(result.message);
-  return { members: result.data.members, signInUrl: staffSignInUrl() };
+  return { members: result.data.members, signInUrl: staffSignInUrl(), actorStaffPrincipalId: actor.staffPrincipalId };
 }
 
 export async function loadTeamMember(staffPrincipalId: string, email: string): Promise<TeamMemberDetail> {
@@ -132,6 +137,8 @@ function messageForCode(code: string | null, status: number): string {
   if (code === "already_bound") return "That person has already connected a Google account.";
   if (code === "expired") return "That invitation is expired. Renew it and send the sign-in link again.";
   if (code === "email_mismatch") return "That email does not match the selected person.";
+  if (code === "self_protected") return "You cannot remove your own administrator access or disable your own account.";
+  if (code === "last_administrator") return "Another active administrator must remain. This change was not saved.";
   if (code === "unavailable" || status === 503) return "The team service is unavailable. Nothing was changed.";
   if (status === 404) return "Team management is not enabled on the API.";
   return "The team request was rejected. Check the company email and try again.";

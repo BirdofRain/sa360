@@ -22,7 +22,9 @@ No team permission implies `admin_coc`.
 
 `StaffInvitation` stores the approved mailbox, access label, status (`pending`, `consumed`, `canceled`), expiry, and inviting principal. There is no bearer secret and no invitation code. A pending invitation lasts 7 days. Expiry is a pending row whose `expiresAt` is in the past. One pending invitation is allowed per principal.
 
-The sign-in URL is the existing `/staff/google/start` page. Query strings and fragments are rejected so a secret cannot be attached. When `RESEND_API_KEY` and `SA360_TRANSACTIONAL_EMAIL_FROM` are set, the API sends that URL. Otherwise the invitation stays pending and the admin copies the link. The response says the email was not sent.
+The sign-in URL is `/staff/google/start` on `https://sa360-api-staging-coo57.ondigitalocean.app`, or on localhost for a local test. The API rejects every other hostname, plus query strings and fragments. The Admin server builds that URL from the configured Google redirect origin only when the origin is one of those two. A client-supplied hostname is not used. When `RESEND_API_KEY` and `SA360_TRANSACTIONAL_EMAIL_FROM` are set, the API sends that URL. Otherwise the invitation stays pending and the admin copies the link. The response says the email was not sent.
+
+An administrator cannot demote, revoke, or disable their own account. A change that would leave no active, bound `admin_coc` principal is rejected. Those checks lock the effective grant rows inside the same transaction. Other staff can still be changed.
 
 ## First login
 

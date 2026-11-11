@@ -253,6 +253,7 @@ function statusFor(code: StaffTeamCode): 400 | 401 | 409 | 503 {
   if (code === "unavailable") return 503;
   if (code === "duplicate") return 409;
   if (code === "confirmation_required" || code === "rejected") return 400;
+  if (code === "self_protected" || code === "last_administrator") return 409;
   return 401;
 }
 

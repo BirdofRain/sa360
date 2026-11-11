@@ -1,3 +1,5 @@
+import { parseStaffSignInUrl as parseApprovedStaffSignInUrl } from "@sa360/shared/staff-google-oidc";
+
 /**
  * Pure staff team rules. Authorization is still the live StaffPermission rows.
  * This module does not read the database and does not accept a caller-supplied role
@@ -56,24 +58,7 @@ export function hostedDomainMatches(value: unknown, domain: string = STAFF_HOSTE
 }
 
 export function parseStaffSignInUrl(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  if (trimmed !== value || trimmed.length === 0 || trimmed.length > 300) return null;
-  let url: URL;
-  try {
-    url = new URL(trimmed);
-  } catch {
-    return null;
-  }
-  if (url.username || url.password || url.search || url.hash) return null;
-  if (url.pathname !== "/staff/google/start") return null;
-  const localhost = url.hostname === "localhost" || url.hostname === "127.0.0.1";
-  if (url.protocol === "http:") {
-    if (!localhost) return null;
-  } else if (url.protocol !== "https:") {
-    return null;
-  }
-  return `${url.origin}${url.pathname}`;
+  return parseApprovedStaffSignInUrl(value);
 }
 
 export function staffAccountStatus(input: {

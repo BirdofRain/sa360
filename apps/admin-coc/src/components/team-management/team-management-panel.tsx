@@ -12,6 +12,8 @@ import {
 } from "@/app/actions/team-management";
 import type { TeamAccessLevel, TeamActivityEntry, TeamMember } from "@/lib/team-management/types";
 
+const APPROVED_SIGN_IN = "https://sa360-api-staging-coo57.ondigitalocean.app/staff/google/start";
+
 const ROLES: Array<{ value: TeamAccessLevel; label: string; detail: string }> = [
   { value: "manager", label: "Manager", detail: "Team Workspace, client setup, and configuration requests." },
   { value: "operations", label: "Operations", detail: "Team Workspace client status. No staff administration." },
@@ -21,9 +23,11 @@ const ROLES: Array<{ value: TeamAccessLevel; label: string; detail: string }> = 
 export function TeamManagementPanel({
   members,
   signInUrl,
+  actorStaffPrincipalId,
 }: {
   members: TeamMember[];
   signInUrl: string | null;
+  actorStaffPrincipalId: string;
 }) {
   const [rows, setRows] = useState(members);
   const [email, setEmail] = useState("");
@@ -192,6 +196,7 @@ export function TeamManagementPanel({
           activity={activity}
           pending={pending}
           signInUrl={signInUrl}
+          self={selected.staffPrincipalId === actorStaffPrincipalId}
           onMessage={apply}
           onError={fail}
         />
@@ -205,6 +210,7 @@ function MemberDetail({
   activity,
   pending,
   signInUrl,
+  self,
   onMessage,
   onError,
 }: {
@@ -212,13 +218,17 @@ function MemberDetail({
   activity: TeamActivityEntry[];
   pending: boolean;
   signInUrl: string | null;
+  self: boolean;
   onMessage: (member: TeamMember, message: string) => void;
   onError: (message: string) => void;
 }) {
-  const [accessLevel, setAccessLevel] = useState<TeamAccessLevel>(member.accessLevel === "none" ? "manager" : member.accessLevel);
+  const [accessLevel, setAccessLevel] = useState<TeamAccessLevel>(
+    self ? "administrator" : member.accessLevel === "none" ? "manager" : member.accessLevel
+  );
   const [confirmAdmin, setConfirmAdmin] = useState(false);
   const [confirmDanger, setConfirmDanger] = useState(false);
-  const link = signInUrl ?? "";
+  const link = displaySignInUrl(signInUrl);
+  const roles = self ? ROLES.filter((role) => role.value === "administrator") : ROLES;
 
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-4 sm:p-6">
@@ -231,7 +241,7 @@ function MemberDetail({
           type="button"
           className="rounded-md border border-slate-300 px-3 py-2 text-sm"
           onClick={() => {
-            const value = link || `${window.location.origin}/staff/google/start`;
+            const value = localPageSignInUrl() ?? link;
             void navigator.clipboard?.writeText(value).then(
               () => onMessage(member, "Sign-in link copied. It contains no invitation code."),
               () => onError("The link could not be copied. Select it from the field below.")
@@ -259,7 +269,7 @@ function MemberDetail({
             onChange={(event) => setAccessLevel(event.target.value as TeamAccessLevel)}
             className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
           >
-            {ROLES.map((role) => (
+            {roles.map((role) => (
               <option key={role.value} value={role.value}>{role.label}</option>
             ))}
           </select>
@@ -296,6 +306,9 @@ function MemberDetail({
           <input type="checkbox" checked={confirmDanger} onChange={(event) => setConfirmDanger(event.target.checked)} />
           Confirm revoke or disable
         </label>
+        {self ? (
+          <p className="text-sm text-slate-600">You cannot revoke or disable your own account.</p>
+        ) : null}
         <button
           type="button"
           disabled={pending || member.bound}
@@ -310,7 +323,7 @@ function MemberDetail({
         </button>
         <button
           type="button"
-          disabled={pending || !confirmDanger}
+          disabled={pending || self || !confirmDanger}
           className="rounded-md border border-amber-300 px-3 py-2 text-sm text-amber-900 disabled:opacity-50"
           onClick={() => {
             void revokeTeamAccessAction({ staffPrincipalId: member.staffPrincipalId, email: member.email }).then((result) =>
@@ -322,7 +335,7 @@ function MemberDetail({
         </button>
         <button
           type="button"
-          disabled={pending || !confirmDanger}
+          disabled={pending || self || !confirmDanger}
           className="rounded-md border border-red-300 px-3 py-2 text-sm text-red-800 disabled:opacity-50"
           onClick={() => {
             void disableTeamMemberAction({ staffPrincipalId: member.staffPrincipalId, email: member.email }).then((result) =>
@@ -388,6 +401,33 @@ function labelStatus(value: string): string {
 function labelActivity(kind: string, detail: string | null): string {
   const suffix = detail ? ` (${detail.replaceAll("_", " ")})` : "";
   return `${kind.replaceAll("_", " ")}${suffix}`;
+}
+
+function displaySignInUrl(signInUrl: string | null): string {
+  if (signInUrl && (signInUrl === APPROVED_SIGN_IN || isLocalSignIn(signInUrl))) return signInUrl;
+  return APPROVED_SIGN_IN;
+}
+
+function localPageSignInUrl(): string | null {
+  if (typeof window === "undefined") return null;
+  if (window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1") return null;
+  return `${window.location.origin}/staff/google/start`;
+}
+
+function isLocalSignIn(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      url.pathname === "/staff/google/start" &&
+      (url.hostname === "localhost" || url.hostname === "127.0.0.1") &&
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      !url.username &&
+      !url.search &&
+      !url.hash
+    );
+  } catch {
+    return false;
+  }
 }
 
 function formatWhen(value: string): string {

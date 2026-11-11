@@ -23,7 +23,7 @@ import type { SendTransactionalEmailResult } from "./transactional-email.js";
 
 const integrationUrlRaw = process.env.SA360_TEST_DATABASE_URL?.trim() || "";
 const runIntegration = Boolean(integrationUrlRaw);
-const SIGN_IN = "https://admin.example/staff/google/start";
+const SIGN_IN = "https://sa360-api-staging-coo57.ondigitalocean.app/staff/google/start";
 const DOMAIN = "lifeagentlaunch.com";
 
 function mailbox(label: string): string {
@@ -300,4 +300,230 @@ describe("staff team invitation and first Google claim (local sa360_test)", { sk
     );
     assert.deepEqual(admin, { ok: false, code: "confirmation_required" });
   });
+
+  it("rejects self-demotion, self-revocation, and self-disable", async () => {
+    const admin = await boundAdministrator(db, actorId, "self");
+    const other = await boundAdministrator(db, actorId, "other");
+    assert.equal(
+      failureCode(
+        await changeStaffAccess(
+          {
+            actorStaffPrincipalId: admin.id,
+            staffPrincipalId: admin.id,
+            email: admin.email,
+            accessLevel: "manager",
+          },
+          db
+        )
+      ),
+      "self_protected"
+    );
+    assert.equal(
+      failureCode(
+        await revokeStaffAccess({ actorStaffPrincipalId: admin.id, staffPrincipalId: admin.id, email: admin.email }, db)
+      ),
+      "self_protected"
+    );
+    assert.equal(
+      failureCode(
+        await disableStaffTeamMember({ actorStaffPrincipalId: admin.id, staffPrincipalId: admin.id, email: admin.email }, db)
+      ),
+      "self_protected"
+    );
+    const still = await db.staffPermission.count({
+      where: { staffPrincipalId: admin.id, permission: "admin_coc", status: "granted", revokedAt: null },
+    });
+    assert.equal(still, 1);
+    const row = await db.staffPrincipal.findUniqueOrThrow({ where: { id: admin.id } });
+    assert.equal(row.status, "active");
+    assert.equal(
+      (await changeStaffAccess(
+        {
+          actorStaffPrincipalId: other.id,
+          staffPrincipalId: admin.id,
+          email: admin.email,
+          accessLevel: "operations",
+        },
+        db
+      )).ok,
+      true
+    );
+    assert.equal(
+      await db.staffPermission.count({
+        where: { staffPrincipalId: other.id, permission: "admin_coc", status: "granted", revokedAt: null },
+      }),
+      1
+    );
+  });
+
+  it("protects the last active administrator and still changes other staff", async () => {
+    const admin = await collapseToOneAdministrator(db, actorId);
+    const manager = await inviteStaffMember(
+      { actorStaffPrincipalId: actorId, email: mailbox("managed"), accessLevel: "manager", signInUrl: SIGN_IN, sendEmail },
+      db
+    );
+    assert.equal(manager.ok, true);
+    if (!manager.ok) return;
+    assert.equal(
+      failureCode(
+        await changeStaffAccess(
+          {
+            actorStaffPrincipalId: actorId,
+            staffPrincipalId: admin.id,
+            email: admin.email,
+            accessLevel: "manager",
+          },
+          db
+        )
+      ),
+      "last_administrator"
+    );
+    assert.equal(
+      failureCode(
+        await revokeStaffAccess({ actorStaffPrincipalId: actorId, staffPrincipalId: admin.id, email: admin.email }, db)
+      ),
+      "last_administrator"
+    );
+    assert.equal(
+      failureCode(
+        await disableStaffTeamMember(
+          { actorStaffPrincipalId: actorId, staffPrincipalId: admin.id, email: admin.email },
+          db
+        )
+      ),
+      "last_administrator"
+    );
+    const changed = await changeStaffAccess(
+      {
+        actorStaffPrincipalId: admin.id,
+        staffPrincipalId: manager.member.staffPrincipalId,
+        email: manager.member.email,
+        accessLevel: "operations",
+      },
+      db
+    );
+    assert.equal(changed.ok, true);
+    if (!changed.ok) return;
+    assert.deepEqual(changed.member.permissions.sort(), ["team_operations", "team_workspace"]);
+    const revoked = await revokeStaffAccess(
+      { actorStaffPrincipalId: admin.id, staffPrincipalId: manager.member.staffPrincipalId, email: manager.member.email },
+      db
+    );
+    assert.equal(revoked.ok, true);
+    if (!revoked.ok) return;
+    assert.deepEqual(revoked.member.permissions, []);
+    assert.equal(
+      await db.staffPermission.count({
+        where: { staffPrincipalId: admin.id, permission: "admin_coc", status: "granted", revokedAt: null },
+      }),
+      1
+    );
+    const principal = await db.staffPrincipal.findUniqueOrThrow({ where: { id: admin.id } });
+    assert.equal(principal.status, "active");
+  });
+
+  it("does not let two administrators revoke each other down to zero", async () => {
+    const url = assertSafeTestDatabaseUrl(integrationUrlRaw);
+    const firstDb = new PrismaClient({ datasources: { db: { url } } });
+    const secondDb = new PrismaClient({ datasources: { db: { url } } });
+    try {
+      const first = await collapseToOneAdministrator(firstDb, actorId);
+      const second = await boundAdministrator(firstDb, actorId, "race-admin-b");
+      const results = await Promise.all([
+        revokeStaffAccess(
+          { actorStaffPrincipalId: first.id, staffPrincipalId: second.id, email: second.email },
+          firstDb
+        ),
+        revokeStaffAccess(
+          { actorStaffPrincipalId: second.id, staffPrincipalId: first.id, email: first.email },
+          secondDb
+        ),
+      ]);
+      assert.equal(results.filter((result) => result.ok).length, 1);
+      assert.equal(results.filter((result) => !result.ok && result.code === "last_administrator").length, 1);
+      const remaining = await firstDb.staffPermission.count({
+        where: {
+          staffPrincipalId: { in: [first.id, second.id] },
+          permission: "admin_coc",
+          status: "granted",
+          revokedAt: null,
+        },
+      });
+      assert.equal(remaining, 1);
+      const effective = await firstDb.$queryRaw<Array<{ id: string }>>`
+        SELECT principal.id
+        FROM "StaffPermission" perm
+        JOIN "StaffPrincipal" principal ON principal.id = perm."staffPrincipalId"
+        WHERE perm.permission = 'admin_coc'::"StaffPermissionKey"
+          AND perm.status = 'granted'::"StaffPermissionStatus"
+          AND perm."revokedAt" IS NULL
+          AND principal.status = 'active'::"StaffPrincipalStatus"
+          AND principal."disabledAt" IS NULL
+          AND principal."providerSubject" IS NOT NULL
+      `;
+      assert.equal(effective.length, 1);
+    } finally {
+      await firstDb.$disconnect();
+      await secondDb.$disconnect();
+    }
+  });
 });
+
+async function boundAdministrator(
+  db: PrismaClient,
+  actorStaffPrincipalId: string,
+  label: string
+): Promise<{ id: string; email: string }> {
+  const email = mailbox(label);
+  const invited = await inviteStaffMember(
+    {
+      actorStaffPrincipalId,
+      email,
+      accessLevel: "administrator",
+      confirmAdministrator: true,
+      signInUrl: SIGN_IN,
+      sendEmail,
+    },
+    db
+  );
+  assert.equal(invited.ok, true);
+  if (!invited.ok) throw new Error("administrator invitation failed");
+  const claimed = await claimApprovedStaffInvitation(
+    { identity: { sub: sub(label), email, emailVerified: true, hd: DOMAIN, name: "Synthetic Admin" } },
+    db
+  );
+  assert.equal(claimed.ok, true);
+  return { id: invited.member.staffPrincipalId, email };
+}
+
+async function collapseToOneAdministrator(
+  db: PrismaClient,
+  actorStaffPrincipalId: string
+): Promise<{ id: string; email: string }> {
+  const rows = await db.$queryRaw<Array<{ id: string; email: string }>>`
+    SELECT principal.id, principal.email
+    FROM "StaffPermission" perm
+    JOIN "StaffPrincipal" principal ON principal.id = perm."staffPrincipalId"
+    WHERE perm.permission = 'admin_coc'::"StaffPermissionKey"
+      AND perm.status = 'granted'::"StaffPermissionStatus"
+      AND perm."revokedAt" IS NULL
+      AND principal.status = 'active'::"StaffPrincipalStatus"
+      AND principal."disabledAt" IS NULL
+      AND principal."providerSubject" IS NOT NULL
+    ORDER BY principal."createdAt" ASC
+  `;
+  const keeper = rows[0] ?? (await boundAdministrator(db, actorStaffPrincipalId, "kept"));
+  for (const extra of rows.slice(rows[0] ? 1 : 0)) {
+    const changed = await changeStaffAccess(
+      {
+        actorStaffPrincipalId: keeper.id,
+        staffPrincipalId: extra.id,
+        email: extra.email,
+        accessLevel: "manager",
+      },
+      db
+    );
+    assert.equal(changed.ok, true);
+  }
+  return keeper;
+}

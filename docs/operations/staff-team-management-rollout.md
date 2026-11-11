@@ -23,7 +23,7 @@ Apply it with the existing local-then-deploy migration path. A second `prisma mi
 5. Leave delivery, Sheets, GoHighLevel activation, and Meta correction flags unchanged.
 6. Sign in as the existing Google administrator and open `/team-management`. A shared-password session can see the navigation link and then the page explains that it cannot manage staff.
 7. Add one synthetic or approved company mailbox only when the operator is ready. Choose Manager or Operations. Administrator requires the confirmation checkbox.
-8. If email is configured (`RESEND_API_KEY` and `SA360_TRANSACTIONAL_EMAIL_FROM`), the roster shows that the message was sent. If email is not configured, the roster stays Pending and the operator uses Copy sign-in link. The link is `/staff/google/start` on the staff Google origin. It has no code.
+8. If email is configured (`RESEND_API_KEY` and `SA360_TRANSACTIONAL_EMAIL_FROM`), the roster shows that the message was sent. If email is not configured, the roster stays Pending and the operator uses Copy sign-in link. The link is exactly `https://sa360-api-staging-coo57.ondigitalocean.app/staff/google/start`. It has no code. An administrator cannot remove their own access, and the last active administrator cannot be removed.
 9. The employee opens that page, chooses the approved Workspace account, and lands on `/team-workspace` for Manager or Operations, or `/` for an administrator.
 
 ## Rollback

@@ -49,6 +49,8 @@ export type StaffTeamCode =
   | "email_mismatch"
   | "not_invited"
   | "collision"
+  | "self_protected"
+  | "last_administrator"
   | "unavailable";
 
 export type StaffClaimIdentity = {
@@ -281,7 +283,9 @@ export async function changeStaffAccess(
       if (!principal) throw new TeamAbort("rejected");
       if (principal.email !== email) throw new TeamAbort("email_mismatch");
       if (principal.status !== "active" || principal.disabledAt != null) throw new TeamAbort("disabled");
-      await grantDesired(tx, principal.id, permissionsForAccessLevel(input.accessLevel), now);
+      const desired = permissionsForAccessLevel(input.accessLevel);
+      await guardAdministratorRemoval(tx, input.actorStaffPrincipalId, principal, !desired.includes("admin_coc"));
+      await grantDesired(tx, principal.id, desired, now);
       await tx.staffInvitation.updateMany({
         where: { staffPrincipalId: principal.id, status: "pending" },
         data: { accessLevel: input.accessLevel, updatedAt: now },
@@ -566,6 +570,61 @@ export async function recordStaffSignIn(
   }
 }
 
+/**
+ * An administrator cannot remove their own access. A change that would leave
+ * no active, bound admin_coc principal is rejected, including when two such
+ * requests run together. The effective grant rows are locked in id order.
+ */
+async function guardAdministratorRemoval(
+  tx: Prisma.TransactionClient,
+  actorStaffPrincipalId: string,
+  principal: LockedPrincipal,
+  removesAdministrator: boolean
+): Promise<void> {
+  if (!removesAdministrator) return;
+  if (actorStaffPrincipalId === principal.id) throw new TeamAbort("self_protected");
+  if (!(await principalHasAdminGrant(tx, principal))) return;
+  const administrators = await lockEffectiveAdministratorIds(tx);
+  if (!administrators.includes(principal.id)) return;
+  const survivors = new Set(administrators);
+  survivors.delete(principal.id);
+  if (survivors.size < 1) throw new TeamAbort("last_administrator");
+}
+
+async function principalHasAdminGrant(
+  tx: Prisma.TransactionClient,
+  principal: LockedPrincipal
+): Promise<boolean> {
+  if (principal.status !== "active" || principal.disabledAt != null || principal.providerSubject == null) return false;
+  const rows = await tx.$queryRaw<Array<{ id: string }>>`
+    SELECT id
+    FROM "StaffPermission"
+    WHERE "staffPrincipalId" = ${principal.id}
+      AND permission = 'admin_coc'::"StaffPermissionKey"
+      AND status = 'granted'::"StaffPermissionStatus"
+      AND "revokedAt" IS NULL
+  `;
+  return rows.length > 0;
+}
+
+async function lockEffectiveAdministratorIds(tx: Prisma.TransactionClient): Promise<string[]> {
+  const rows = await tx.$queryRaw<Array<{ staffPrincipalId: string }>>`
+    SELECT perm."staffPrincipalId"
+    FROM "StaffPermission" perm
+    JOIN "StaffPrincipal" principal ON principal.id = perm."staffPrincipalId"
+    WHERE perm.permission = 'admin_coc'::"StaffPermissionKey"
+      AND perm.status = 'granted'::"StaffPermissionStatus"
+      AND perm."revokedAt" IS NULL
+      AND principal.status = 'active'::"StaffPrincipalStatus"
+      AND principal."disabledAt" IS NULL
+      AND principal.provider = 'google'::"StaffIdentityProvider"
+      AND principal."providerSubject" IS NOT NULL
+    ORDER BY perm.id
+    FOR UPDATE OF perm
+  `;
+  return rows.map((row) => row.staffPrincipalId);
+}
+
 async function mutateMembership(
   input: { actorStaffPrincipalId: string; staffPrincipalId: string; email: string; now?: Date },
   db: TeamDb,
@@ -581,6 +640,7 @@ async function mutateMembership(
       const principal = await lockPrincipal(tx, input.staffPrincipalId);
       if (!principal) throw new TeamAbort("rejected");
       if (principal.email !== email) throw new TeamAbort("email_mismatch");
+      await guardAdministratorRemoval(tx, input.actorStaffPrincipalId, principal, true);
       await change(tx, principal, now);
     });
     const member = await readStaffTeamMember({ staffPrincipalId: input.staffPrincipalId, now }, db);

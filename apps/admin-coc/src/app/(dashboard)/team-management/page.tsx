@@ -8,7 +8,13 @@ export const metadata = { title: "Team Management" };
 export default async function TeamManagementPage() {
   try {
     const directory = await loadTeamDirectory();
-    return <TeamManagementPanel members={directory.members} signInUrl={directory.signInUrl} />;
+    return (
+      <TeamManagementPanel
+        members={directory.members}
+        signInUrl={directory.signInUrl}
+        actorStaffPrincipalId={directory.actorStaffPrincipalId}
+      />
+    );
   } catch (error) {
     if (error instanceof AdminCocForbiddenError) {
       return (

@@ -1,6 +1,6 @@
 "use server";
 
-import { requireAdminCocAdminSession, requireAdminCocSession } from "@/lib/admin-coc-session-guard";
+import { requireStaffWorkspacePermission } from "@/lib/admin-coc-session-guard";
 import {
   fetchCompanySheetsDestinationConfiguration,
   postCompanySheetsDestinationConfiguration,
@@ -60,8 +60,6 @@ function configDisabledMessage(): string | null {
 }
 
 async function authorizeConfig(): Promise<CompanySheetsConfigLoadResult | null> {
-  await requireAdminCocSession();
-  await requireAdminCocAdminSession();
   const message = configDisabledMessage();
   if (!message) return null;
   return { ok: false, uncertain: false, code: "FEATURE_DISABLED", message, head: null };
@@ -144,6 +142,7 @@ function uncertainSave(message: string, sent: CompanySheetsConfigSubmitBody): Co
 export async function loadTeamWorkspaceCompanySheetsConfigurationAction(
   clientAccountId: string
 ): Promise<CompanySheetsConfigLoadResult> {
+  await requireStaffWorkspacePermission("team_workspace");
   const denied = await authorizeConfig();
   if (denied) return denied;
   const id = clientAccountId.trim();
@@ -180,6 +179,7 @@ export async function loadTeamWorkspaceCompanySheetsConfigurationAction(
 export async function saveTeamWorkspaceCompanySheetsConfigurationRequestAction(
   input: CompanySheetsConfigSubmitBody & { clientAccountId: string }
 ): Promise<CompanySheetsConfigSaveResult> {
+  await requireStaffWorkspacePermission("team_manager");
   const denied = await authorizeConfig();
   if (denied) return closedSave("FEATURE_DISABLED", denied.message ?? companySheetsConfigRequestErrorMessage("FEATURE_DISABLED"));
   const clientAccountId = input.clientAccountId.trim();

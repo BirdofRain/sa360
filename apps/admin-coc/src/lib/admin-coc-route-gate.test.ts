@@ -440,3 +440,20 @@ test("staff sign-in paths stay exact and do not grant operator access", () => {
   assert.deepEqual(decision(MARKETING, "/staff/google/callback"), { kind: "not-found" });
   assert.deepEqual(decision(MARKETING, "/staff/google/enroll/start"), { kind: "not-found" });
 });
+
+test("workspace staff can open Team Workspace and cannot open the command center or team management", () => {
+  const workspace = { ...UNAUTH_ADMIN, staffAccess: "workspace" as const };
+  assertAllow(decision(workspace, "/team-workspace"));
+  assertAllow(decision(workspace, "/team-workspace/client_1"));
+  assertRedirect(decision(workspace, "/"), "/team-workspace");
+  assertRedirect(decision(workspace, "/team-management"), "/team-workspace");
+  assertRedirect(decision(workspace, "/action-center"), "/team-workspace");
+  assertRedirect(decision(workspace, "/webhooks"), "/team-workspace");
+  assertRedirect(decision(workspace, "/front-office"), "/team-workspace");
+  assert.deepEqual(decision(workspace, "/api/coc/orders", { method: "POST" }), { kind: "forbidden", surface: "api" });
+  assert.deepEqual(decision(workspace, "/api/admin/clients", { method: "GET" }), { kind: "forbidden", surface: "api" });
+  assertRedirect(decision(workspace, "/portal"), "/portal/login", "/portal");
+  assert.deepEqual(decision({ ...workspace, hasMetaReviewerSession: true }, "/"), { kind: "forbidden", surface: "reviewer" });
+  assertAllow(decision(AUTH_ADMIN, "/team-management"));
+  assertRedirect(decision({ ...UNAUTH_ADMIN, staffAccess: "limited" }, "/team-management"), "/staff");
+});

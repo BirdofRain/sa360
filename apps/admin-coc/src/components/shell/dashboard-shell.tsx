@@ -18,6 +18,7 @@ type DashboardShellProps = {
   description?: string;
   adminGateEnabled: boolean;
   sessionRole: AdminCocRole | null;
+  navigation?: "admin" | "observer" | "workspace";
 };
 
 /**
@@ -30,8 +31,10 @@ export function DashboardShell({
   description,
   adminGateEnabled,
   sessionRole,
+  navigation = "admin",
 }: DashboardShellProps) {
-  const readOnly = sessionRole === ADMIN_COC_ROLE_OBSERVER;
+  const readOnly = navigation === "observer" || sessionRole === ADMIN_COC_ROLE_OBSERVER;
+  const workspaceOnly = navigation === "workspace";
   return (
     <AdminCocAccessProvider role={sessionRole}>
     <div className="flex h-screen min-h-screen w-full flex-col bg-slate-50 text-slate-900 md:flex-row">
@@ -52,11 +55,11 @@ export function DashboardShell({
           <div className="rounded-md bg-slate-50 px-2.5 py-2">
             <div className="text-[10px] uppercase tracking-wider text-slate-400">Workspace</div>
             <div className="text-xs font-medium text-slate-800">
-              {readOnly ? "SA360 · Read-only Observer" : "SA360 · Internal Admin"}
+              {workspaceOnly ? "SA360 · Team Workspace" : readOnly ? "SA360 · Read-only Observer" : "SA360 · Internal Admin"}
             </div>
           </div>
         </div>
-        <SidebarNav />
+        <SidebarNav navigation={workspaceOnly ? "workspace" : "operator"} />
         <div className="mt-auto space-y-3 border-t border-slate-100 px-3 py-3">
           <AdminSessionFooter gateEnabled={adminGateEnabled} readOnly={readOnly} />
           <p className="text-[11px] leading-snug text-slate-500">
@@ -70,14 +73,14 @@ export function DashboardShell({
           Smart Agent 360 menu
         </summary>
         <div className="max-h-[70vh] overflow-auto border-t border-slate-100 pb-3">
-          <SidebarNav />
+          <SidebarNav navigation={workspaceOnly ? "workspace" : "operator"} />
         </div>
       </details>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <DashboardHeader title={title} subtitle={description} />
         <main className="flex-1 overflow-auto p-3 sm:p-6">{children}</main>
       </div>
-      {readOnly ? null : <SupportTicketLauncher />}
+      {readOnly || workspaceOnly ? null : <SupportTicketLauncher />}
     </div>
     </AdminCocAccessProvider>
   );

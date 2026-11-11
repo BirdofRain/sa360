@@ -49,7 +49,10 @@ test("staff schema is an explicit principal and grant, not a password or a role"
   assert.match(permission, /permission\s+StaffPermissionKey/);
   assert.doesNotMatch(permission, /@@unique\(\[staffPrincipalId, permission\]\)/);
   assert.doesNotMatch(permission, /password|role/i);
-  assert.match(schema, /enum StaffPermissionKey \{\s*facebook_association_correction\s*admin_coc\s*\}/);
+  assert.match(
+    schema,
+    /enum StaffPermissionKey \{\s*facebook_association_correction\s*admin_coc\s*team_workspace\s*team_manager\s*team_operations\s*\}/
+  );
   assert.match(schema, /enum StaffIdentityProvider \{\s*google\s*\}/);
 });
 
@@ -106,6 +109,21 @@ test("admin_coc migration adds the enum value and does not grant it", () => {
   assert.doesNotMatch(ddl, /\bDROP\b/i);
   assert.doesNotMatch(ddl, /facebook_association_correction/);
   assert.doesNotMatch(sql, /sam@lifeagentlaunch\.com/);
+});
+
+test("team management migration adds empty invitation tables and does not grant access", () => {
+  const sql = readFileSync(join(migrationsDir, "20261111220000_staff_team_management", "migration.sql"), "utf8");
+  const ddl = sql.replace(/--.*$/gm, "");
+  assert.match(sql, /ADD VALUE IF NOT EXISTS 'team_workspace'/);
+  assert.match(sql, /ADD VALUE IF NOT EXISTS 'team_manager'/);
+  assert.match(sql, /ADD VALUE IF NOT EXISTS 'team_operations'/);
+  assert.match(sql, /CREATE UNIQUE INDEX "StaffInvitation_one_pending_key"/);
+  assert.match(sql, /Staff team management rows are retained/);
+  assert.doesNotMatch(ddl, /\bINSERT\s+INTO\b/i);
+  assert.doesNotMatch(ddl, /\bCOPY\b/i);
+  assert.doesNotMatch(sql, /lifeagentlaunch\.com/);
+  assert.doesNotMatch(sql, /admin_coc/);
+  assert.doesNotMatch(ddl, /DROP INDEX "StaffPermission_one_effective_grant_key"/);
 });
 
 test("prisma seeds do not create staff principals or permissions", () => {

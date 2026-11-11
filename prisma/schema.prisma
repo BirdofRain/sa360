@@ -4363,9 +4363,14 @@ enum StaffPrincipalStatus {
 /// admin_coc is full Admin C.O.C. access. It does not include
 /// facebook_association_correction, and that correction permission does not
 /// grant Admin C.O.C. access.
+/// team_workspace, team_manager, and team_operations are staff workspace
+/// permissions. None of them grants admin_coc.
 enum StaffPermissionKey {
   facebook_association_correction
   admin_coc
+  team_workspace
+  team_manager
+  team_operations
 }
 
 /// Explicit grant state. revoked is not authorization.
@@ -4407,8 +4412,11 @@ model StaffPrincipal {
   disabledAt      DateTime?             @default(now())
   createdAt       DateTime              @default(now())
   updatedAt       DateTime              @updatedAt
-  permissions     StaffPermission[]
+  permissions      StaffPermission[]
   enrollmentGrants StaffEnrollmentGrant[]
+  invitations      StaffInvitation[]       @relation("StaffInvitationSubject")
+  invitationsSent  StaffInvitation[]       @relation("StaffInvitationInviter")
+  managementEvents StaffManagementEvent[]  @relation("StaffManagementEventSubject")
 
   @@unique([provider, providerSubject], map: "StaffPrincipal_provider_subject_key")
   @@index([status])
@@ -4483,6 +4491,71 @@ model StaffEnrollmentEvent {
   kind             StaffEnrollmentEventKind
   googleSub        String?
   createdAt        DateTime                 @default(now())
+
+  @@index([staffPrincipalId, createdAt])
+}
+
+/// Approved mailbox invitation. There is no bearer secret.
+/// The employee proves the mailbox with Google. pending is the only usable row.
+/// expired is pending whose expiresAt has passed. consumed and canceled are terminal.
+enum StaffAccessLevel {
+  administrator
+  manager
+  operations
+}
+
+enum StaffInvitationStatus {
+  pending
+  consumed
+  canceled
+}
+
+model StaffInvitation {
+  id                       String                 @id @default(cuid())
+  staffPrincipalId         String
+  staffPrincipal           StaffPrincipal         @relation("StaffInvitationSubject", fields: [staffPrincipalId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  /// Normalized mailbox copied from the principal. Not proof of authentication.
+  email                    String
+  /// Label recorded at invite time. Authorization is StaffPermission, not this label.
+  accessLevel              StaffAccessLevel
+  status                   StaffInvitationStatus  @default(pending)
+  expiresAt                DateTime
+  invitedByStaffPrincipalId String
+  invitedBy                StaffPrincipal         @relation("StaffInvitationInviter", fields: [invitedByStaffPrincipalId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  consumedAt               DateTime?
+  canceledAt               DateTime?
+  createdAt                DateTime               @default(now())
+  updatedAt                DateTime               @updatedAt
+
+  @@index([staffPrincipalId, status])
+  @@index([email, status])
+}
+
+/// Append-only staff administration audit. No OAuth token and no invitation secret.
+enum StaffManagementEventKind {
+  invited
+  invitation_renewed
+  invitation_canceled
+  invitation_consumed
+  invitation_email_sent
+  invitation_email_skipped
+  role_changed
+  permissions_revoked
+  disabled
+  signed_in
+  claim_rejected
+}
+
+model StaffManagementEvent {
+  id                    String                    @id @default(cuid())
+  staffPrincipalId      String
+  staffPrincipal        StaffPrincipal            @relation("StaffManagementEventSubject", fields: [staffPrincipalId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  actorStaffPrincipalId String?
+  kind                  StaffManagementEventKind
+  /// Short machine code. Never a token, secret, or URL query.
+  detail                String?
+  googleSub             String?
+  createdAt             DateTime                  @default(now())
 
   @@index([staffPrincipalId, createdAt])
 }

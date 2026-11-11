@@ -22,6 +22,22 @@ const PUBLIC_PORTAL_ACTIONS = new Set([
 /** Separate reviewer gate. Must not accept an Admin C.O.C. session as its login. */
 const REVIEWER_LOGIN_ACTIONS = new Set(["meta-reviewer-login.ts"]);
 
+/**
+ * Team Workspace actions a live staff permission may call.
+ * The permission string must appear in the exported function. admin_coc is not a substitute.
+ */
+const STAFF_WORKSPACE_ACTIONS = new Map<string, "team_workspace" | "team_manager">([
+  ["loadTeamWorkspaceCompanySheetsConfigurationAction", "team_workspace"],
+  ["saveTeamWorkspaceCompanySheetsConfigurationRequestAction", "team_manager"],
+  ["loadTeamWorkspaceGhlConfigurationAction", "team_workspace"],
+  ["saveTeamWorkspaceGhlConfigurationRequestAction", "team_manager"],
+  ["submitSourceCampaignRequestAction", "team_manager"],
+  ["rejectSourceCampaignRequestAction", "team_manager"],
+  ["createGuidedClientAction", "team_manager"],
+  ["updateGuidedClientAction", "team_manager"],
+  ["saveGuidedSetupAction", "team_manager"],
+]);
+
 const PUBLIC_BFF_PREFIXES = ["client-portal/", "front-office/", "health/"];
 
 function listFiles(dir: string, suffix: string): string[] {
@@ -62,6 +78,18 @@ test("privileged Admin C.O.C. server actions call requireAdminCocSession", () =>
       }
       continue;
     }
+    if (name === "team-management.ts") {
+      assert.match(src, /from ["']@\/lib\/admin-coc-session-guard["']/);
+      assert.doesNotMatch(src, /SA360_ADMIN_API_KEY|ADMIN_API_KEY|x-sa360-admin-key|NEXT_PUBLIC_|STAFF_ENROLLMENT_ISSUER/);
+      const chunks = src.split(/(?=^export async function )/m).slice(1);
+      assert.ok(chunks.length >= 5, "team management actions");
+      for (const chunk of chunks) {
+        const fn = chunk.match(/^export async function (\w+)/)?.[1] ?? "";
+        assert.match(chunk, /await requireStaffAdministrator\(\);/, fn);
+        assert.equal(chunk.includes("requireAdminCocSession"), false, fn);
+      }
+      continue;
+    }
     assert.match(
       src,
       /from ["']@\/lib\/admin-coc-session-guard["']/,
@@ -71,6 +99,12 @@ test("privileged Admin C.O.C. server actions call requireAdminCocSession", () =>
     assert.ok(chunks.length > 0, `${name}: expected exported actions`);
     for (const chunk of chunks) {
       const fn = chunk.match(/^export async function (\w+)/)?.[1] ?? "";
+      const delegated = STAFF_WORKSPACE_ACTIONS.get(fn);
+      if (delegated) {
+        assert.match(chunk, new RegExp(`await requireStaffWorkspacePermission\\("${delegated}"\\);`), fn);
+        assert.equal(chunk.includes("admin_coc"), false, fn);
+        continue;
+      }
       assert.match(chunk, /await requireAdminCoc(?:Read)?Session\(\);|await requireAdminCocSession\(\);/, `${name}:${fn}`);
       if (isObserverReadServerAction(fn)) {
         assert.match(chunk, /await requireAdminCocReadSession\(\);/, `${fn} is an observer read`);

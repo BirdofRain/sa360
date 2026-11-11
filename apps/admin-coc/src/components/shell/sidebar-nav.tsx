@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, UserPlus, Users } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
@@ -95,7 +95,7 @@ function NavRows({
   ));
 }
 
-export function SidebarNav() {
+export function SidebarNav({ navigation = "operator" }: { navigation?: "operator" | "workspace" }) {
   const pathname = usePathname();
   const canMutate = useAdminCocCanMutate();
   const showSupport = canMutate && isSupportTicketsEnabled();
@@ -113,14 +113,30 @@ export function SidebarNav() {
   const activeItems = canMutate ? adminItems : observerItems;
   const activeHref = resolveActiveNavHref(pathname, activeItems);
   const adminSectionActive = adminSection.some((item) => item.href === activeHref);
-
   const [open, setOpen] = useState(adminSectionActive);
   const [trackedPath, setTrackedPath] = useState(pathname);
   if (trackedPath !== pathname) {
     setTrackedPath(pathname);
     setOpen(adminSectionActive);
   }
-
+  if (navigation === "workspace") {
+    const workspaceEnabled = isTeamWorkspaceEnabled();
+    return (
+      <nav className="mt-2 flex min-h-0 flex-1 flex-col overflow-y-auto px-2" aria-label="Main">
+        <div className="px-2 pb-1 pt-2 text-[10px] uppercase tracking-wider text-slate-400">Team</div>
+        {workspaceEnabled ? (
+          <NavRow
+            href="/team-workspace"
+            label="Team Workspace"
+            icon={Users}
+            active={pathname === "/team-workspace" || pathname.startsWith("/team-workspace/")}
+          />
+        ) : (
+          <p className="px-2 py-2 text-sm text-slate-600">Team Workspace is turned off.</p>
+        )}
+      </nav>
+    );
+  }
   return (
     <nav className="mt-2 flex min-h-0 flex-1 flex-col overflow-y-auto px-2" aria-label="Main">
       {canMutate ? (
@@ -128,6 +144,12 @@ export function SidebarNav() {
           <div className="px-2 pb-1 pt-2 text-[10px] uppercase tracking-wider text-slate-400">
             Team
           </div>
+          <NavRow
+            href="/team-management"
+            label="Team Management"
+            icon={UserPlus}
+            active={pathname === "/team-management" || pathname.startsWith("/team-management/")}
+          />
           <NavRows items={teamItems} pathname={pathname} activeItems={activeItems} />
           <button
             type="button"

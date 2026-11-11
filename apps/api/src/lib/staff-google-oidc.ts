@@ -11,6 +11,8 @@ export type VerifiedGoogleIdToken = {
   email: string;
   emailVerified: true;
   nonce: string;
+  hd?: string;
+  name?: string;
 };
 
 export type GoogleIdTokenFailure =
@@ -60,10 +62,17 @@ export async function verifyStaffGoogleIdToken(input: {
     return { ok: false, code: "missing_email" };
   }
   if (payload.email_verified !== true) return { ok: false, code: "unverified_email" };
-  return {
-    ok: true,
-    identity: { sub: payload.sub, email: payload.email, emailVerified: true, nonce: input.nonce },
+  const identity: VerifiedGoogleIdToken = {
+    sub: payload.sub,
+    email: payload.email,
+    emailVerified: true,
+    nonce: input.nonce,
   };
+  if (typeof payload.hd === "string" && /^[a-z0-9.-]{1,253}$/.test(payload.hd)) identity.hd = payload.hd;
+  if (typeof payload.name === "string" && payload.name.trim() === payload.name && payload.name.length >= 1 && payload.name.length <= 200) {
+    identity.name = payload.name;
+  }
+  return { ok: true, identity };
 }
 
 function googleJwks(): JWTVerifyGetKey {

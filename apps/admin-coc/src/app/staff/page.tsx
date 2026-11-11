@@ -4,7 +4,8 @@ import { notFound, redirect } from "next/navigation";
 import { STAFF_SESSION_COOKIE } from "@sa360/shared/staff-google-session";
 import { staffGoogleSignInEnabled } from "@sa360/shared/staff-google-oidc";
 
-import { readStaffAdminCocDecision } from "@/lib/staff-admin-coc-access";
+import { readStaffCapabilities } from "@/lib/staff-admin-coc-access";
+import { staffCapabilitiesLandingPath } from "@/lib/staff-admin-coc-decision";
 import { readLiveStaffSession, staffGoogleConfigReady } from "@/lib/staff-google-browser";
 
 export const dynamic = "force-dynamic";
@@ -23,8 +24,11 @@ export default async function StaffHomePage({
   const params = await searchParams;
   const denied = params.error === "denied" || live.kind === "denied";
   const startAvailable = live.kind !== "signed_in" && staffGoogleConfigReady(process.env);
-  const adminDecision = live.kind === "signed_in" ? await readStaffAdminCocDecision() : "anonymous";
-  if (adminDecision === "admin") redirect("/");
+  const capabilities = live.kind === "signed_in" ? await readStaffCapabilities() : null;
+  if (capabilities && capabilities.access !== "anonymous" && capabilities.access !== "limited") {
+    redirect(staffCapabilitiesLandingPath(capabilities.access));
+  }
+  const adminDecision = capabilities?.access ?? "anonymous";
 
   return (
     <main className="mx-auto grid min-h-dvh max-w-md place-items-center p-6">

@@ -4,9 +4,9 @@ import { readStaffGoogleServiceSecret } from "@sa360/shared/staff-google-service
 import { STAFF_GOOGLE_STATE_COOKIE } from "@sa360/shared/staff-google-state";
 
 import {
-  fetchStaffAdminCocDecision,
+  fetchStaffCapabilities,
   readStaffAdminCocOrigin,
-  staffAdminCocLandingPath,
+  staffCapabilitiesLandingPath,
 } from "@/lib/staff-admin-coc-decision";
 import { completeStaffGoogleCallback, staffSessionBrowserCookie, staffStateClearCookie } from "@/lib/staff-google-browser";
 
@@ -40,14 +40,14 @@ export async function GET(request: NextRequest) {
   return finish(process.env, landing, outcome.sessionToken);
 }
 
-async function landingForNewSession(sessionToken: string): Promise<"/" | "/staff"> {
+async function landingForNewSession(sessionToken: string): Promise<"/" | "/team-workspace" | "/staff"> {
   const origin = readStaffAdminCocOrigin(
     process.env.SA360_API_INTERNAL_URL ?? process.env.NEXT_PUBLIC_SA360_API_BASE_URL
   );
   const serviceSecret = readStaffGoogleServiceSecret(process.env);
   if (!origin || !serviceSecret) return "/staff";
-  const decision = await fetchStaffAdminCocDecision({ origin, serviceSecret, sessionToken });
-  return staffAdminCocLandingPath(decision);
+  const capabilities = await fetchStaffCapabilities({ origin, serviceSecret, sessionToken });
+  return staffCapabilitiesLandingPath(capabilities.access);
 }
 
 export function POST() {

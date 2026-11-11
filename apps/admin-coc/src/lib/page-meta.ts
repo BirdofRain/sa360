@@ -117,6 +117,13 @@ const routes: { prefix: string; meta: PageMeta }[] = [
     },
   },
   {
+    prefix: "/team-management",
+    meta: {
+      title: "Team Management",
+      description: "Approve company staff, assign access, and review invitation status.",
+    },
+  },
+  {
     prefix: "/team-workspace",
     meta: {
       title: "Team Workspace",

@@ -3,7 +3,7 @@ import "server-only";
 import { fetchOnboardingSummary } from "@/lib/admin-api/client-onboarding-v2";
 import { fetchAdminClientSourceFunnels } from "@/lib/admin-api/source-funnels-server";
 import { adminFetchJson, fetchAdminClientDetail, fetchAdminClientSetup, fetchAdminClients, isAdminApiConfigured } from "@/lib/admin-api/server";
-import { requireAdminCocAdminSession } from "@/lib/admin-coc-session-guard";
+import { requireStaffWorkspacePermission } from "@/lib/admin-coc-session-guard";
 import { isNativeClientSetupEnabled } from "@/lib/clients/native-client-setup-env";
 
 import { isTeamWorkspaceEnabled } from "./config";
@@ -30,7 +30,7 @@ import type {
 const CLIENT_LIST_ERROR = "The client list could not be loaded.";
 
 export async function loadTeamWorkspaceIndex(): Promise<TeamWorkspaceIndexModel> {
-  await requireAdminCocAdminSession();
+  await requireStaffWorkspacePermission("team_workspace");
   if (!isTeamWorkspaceEnabled()) return { kind: "disabled" };
   if (!isAdminApiConfigured()) {
     return { kind: "error", message: "The admin API is not configured for this app." };
@@ -41,7 +41,7 @@ export async function loadTeamWorkspaceIndex(): Promise<TeamWorkspaceIndexModel>
 }
 
 export async function loadTeamWorkspaceClient(rawId: string): Promise<TeamWorkspaceDetailModel> {
-  await requireAdminCocAdminSession();
+  await requireStaffWorkspacePermission("team_workspace");
   if (!isTeamWorkspaceEnabled()) return { kind: "disabled" };
   const clientAccountId = normalizeTeamWorkspaceClientId(rawId);
   if (!clientAccountId) return { kind: "invalid_client" };

@@ -154,6 +154,9 @@ test("an active destination is active without becoming verified", () => {
   assert.equal(view.configured, true);
   assert.equal(view.verified, false);
   assert.equal(view.active, true);
+  assert.match(view.columnMappingDetail, /does not prove GoHighLevel survey-field mapping/);
+  assert.match(view.columnMappingDetail, /Age or date-of-birth source normalization/);
+  assert.match(view.summary, /does not prove GoHighLevel survey-field mapping/);
   assert.match(view.blockers.join(" "), /will not change it/);
   assert.equal(view.delivery.executionFlagRead, false);
 });

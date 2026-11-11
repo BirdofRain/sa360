@@ -484,7 +484,8 @@ function mappingFact(
     return { readiness: "not_read", detail: "Column mapping has not been reviewed. No column map was published." };
   }
   const details: Record<string, string> = {
-    ready: "The bound campaign header matches the reviewed template. Cells were not rewritten.",
+    ready:
+      "The bound campaign header matches the reviewed template. Cells were not rewritten. This column-header match does not prove GoHighLevel survey-field mapping, and it does not prove Age or date-of-birth source normalization.",
     destination_not_saved: "No destination is saved, so there is no column mapping to review.",
     tab_not_bound: "No campaign tab contract is bound, so column mapping is not ready.",
     schema_not_bound: "The bound campaign tab uses a different schema than this review.",
@@ -705,7 +706,10 @@ function collectSteps(args: {
       id: "contract",
       label: "Tab and columns",
       state: args.campaign?.setupState === "bound" && args.mapping.readiness === "ready" ? "complete" : "attention",
-      detail: args.mapping.readiness === "ready" ? "Mapping ready" : "Mapping not ready",
+      detail:
+        args.mapping.readiness === "ready"
+          ? "Column header matches the template. This does not prove GoHighLevel survey-field mapping or Age and date-of-birth source normalization."
+          : "Mapping not ready",
     },
     {
       id: "delivery",
@@ -726,7 +730,9 @@ function summaryFor(view: CompanySheetsDiscoveryView): string {
     view.verified ? "Verified" : "Not verified",
     view.active ? "Active" : "Not active",
     folder,
-    `Column mapping ${view.columnMappingReadiness.replaceAll("_", " ")}`,
+    view.columnMappingReadiness === "ready"
+      ? "Column header matches the template only. This does not prove GoHighLevel survey-field mapping or Age and date-of-birth source normalization"
+      : `Column mapping ${view.columnMappingReadiness.replaceAll("_", " ")}`,
     view.active ? "Dispatch on" : "Dispatch off",
   ].join(". ") + ".";
 }

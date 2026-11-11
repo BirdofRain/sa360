@@ -58,6 +58,7 @@ const STATE_CLASS: Record<GuideFactState, string> = {
   pending: "border-slate-200 bg-slate-50 text-slate-700",
   unavailable: "border-slate-200 bg-slate-100 text-slate-600",
   blocked: "border-amber-200 bg-amber-50 text-amber-950",
+  not_applicable: "border-slate-200 bg-slate-100 text-slate-600",
 };
 
 const actions = {
@@ -332,11 +333,11 @@ export function GuidedOnboarding({
             Guided client setup
           </h2>
           <p className="mt-1 max-w-2xl text-sm text-slate-600">
-            {GUIDE_STEP_EXPLANATIONS[model ? current : "client"]} Saved, configured, verified, and active are different. This setup only saves a request.
+            {GUIDE_STEP_EXPLANATIONS[model ? current : "client"]} Saved, configured, verified, and active are different. A draft or a destination choice does not finish setup.
           </p>
         </div>
-        <p className="text-sm font-medium text-slate-700" data-progress={progress.savedCount}>
-          {progress.savedCount} of 5 steps saved
+        <p className="max-w-xl text-sm font-medium text-slate-700" data-progress-summary="">
+          {progress.summary}
         </p>
       </div>
       <ol className="mt-4 flex gap-2 overflow-x-auto pb-1 lg:grid lg:grid-cols-5" aria-label="Guided setup steps">
@@ -354,7 +355,7 @@ export function GuidedOnboarding({
                 <span className="block text-xs opacity-80">{index + 1}</span>
                 <span className="font-medium">{item.title}</span>
                 <span className={`mt-1 inline-flex rounded-full border px-2 py-0.5 text-[11px] ${selected ? "border-white/30 text-white" : STATE_CLASS[item.state]}`}>
-                  {labelFor(item.state)}
+                  {item.badge}
                 </span>
               </button>
             </li>
@@ -481,13 +482,15 @@ function nextStep(step: GuideStepId): GuideStepId {
   return order[Math.min(order.length - 1, index + 1)] ?? "summary";
 }
 
-function labelFor(state: GuideFactState): string {
+function labelFor(state: GuideFactState, awaitingApplication = false): string {
+  if (awaitingApplication) return "Request saved — awaiting application";
   if (state === "saved") return "Saved";
   if (state === "configured") return "Configured";
   if (state === "verified") return "Verified";
   if (state === "active") return "Active";
   if (state === "blocked") return "Blocked";
   if (state === "unavailable") return "Unavailable";
+  if (state === "not_applicable") return "Not applicable";
   return "Pending";
 }
 
@@ -902,6 +905,7 @@ function DestinationReadout({ model }: { model: GuidedOnboardingModel }) {
         Company Sheets row: {sheets.configured ? "Configured" : "Not configured"}. Dispatch: {sheets.campaignDispatchEnabled || sheets.agedDispatchEnabled ? "Active" : "Off"}.
       </li>
       <li>Company Sheets delivery is not edited here. The guide can store an intended spreadsheet request when that feature is on. It does not change the operational destination or dispatch.</li>
+      <li>A column-header match on Company Sheets does not prove GoHighLevel survey-field mapping, and it does not prove Age or date-of-birth source normalization.</li>
     </ul>
   );
 }
@@ -909,17 +913,26 @@ function DestinationReadout({ model }: { model: GuidedOnboardingModel }) {
 function SummaryStep({ model, busy, onSave }: { model: GuidedOnboardingModel; busy: boolean; onSave: () => void }) {
   const facts = guideFacts(model);
   const blockers = guideBlockers(model);
+  const remaining = guideProgress(model).remaining;
   return (
     <div className="space-y-4">
       <p className="text-sm text-slate-600">
-        Operational: false. Saving records the setup request. It does not activate delivery.
+        Operational: false. Saving records a request. It does not activate delivery, and it does not apply a destination.
       </p>
+      <div>
+        <h3 className="text-sm font-medium text-slate-950">Remaining actions</h3>
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-700">
+          {remaining.map((item, index) => (
+            <li key={`${index}-${item}`}>{item}</li>
+          ))}
+        </ul>
+      </div>
       <ul className="grid gap-2 sm:grid-cols-2">
         {facts.map((fact) => (
           <li key={fact.id} data-fact={fact.id} data-state={fact.state} className="rounded-md border border-slate-200 p-3">
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="text-sm font-medium text-slate-950">{fact.label}</h3>
-              <span className={`rounded-full border px-2 py-0.5 text-[11px] ${STATE_CLASS[fact.state]}`}>{labelFor(fact.state)}</span>
+              <span className={`rounded-full border px-2 py-0.5 text-[11px] ${STATE_CLASS[fact.state]}`}>{labelFor(fact.state, fact.awaitingApplication)}</span>
             </div>
             <p className="mt-1 text-sm text-slate-600">{fact.detail}</p>
           </li>

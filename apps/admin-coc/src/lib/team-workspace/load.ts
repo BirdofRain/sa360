@@ -255,16 +255,16 @@ async function loadSourceCampaignReview(
   setupResult: Awaited<ReturnType<typeof fetchAdminClientSetup>> | null
 ): Promise<SourceCampaignReviewView> {
   const decision = setupRevisionForReview(setupEnabled, setupResult);
+  if (decision.kind === "disabled") {
+    return unavailableSourceCampaignReview("The setup request could not be checked because native client setup is turned off. Nothing was verified.");
+  }
   if (decision.kind === "untrusted") {
     return unavailableSourceCampaignReview("The saved setup request could not be read. Nothing was verified.");
   }
   const path = `/admin/v1/team-workspace/clients/${encodeURIComponent(clientAccountId)}/source-campaign-review`;
-  const url = decision.kind === "revision" ? `${path}?expectedRevision=${decision.revision}` : path;
+  const url = `${path}?expectedRevision=${decision.revision}`;
   const result = await adminFetchJson<unknown>(url);
   const parsed = narrowReview(result);
-  if (decision.kind === "disabled" && parsed.availability === "ready") {
-    return unavailableSourceCampaignReview("The setup request could not be checked because native client setup is turned off. Nothing was verified.");
-  }
   if (decision.kind === "revision" && parsed.revision !== decision.revision) {
     return unavailableSourceCampaignReview("The saved request changed. Reload before relying on this check. Nothing was verified.");
   }

@@ -263,8 +263,7 @@ test("native setup turned off does not display a verified review", async () => {
     },
     { nativeSetup: false }
   );
-  const reviewUrl = calls.find((url) => url.includes("/source-campaign-review")) ?? "";
-  assert.equal(reviewUrl.includes("expectedRevision"), false);
+  assert.equal(calls.some((url) => url.includes("/source-campaign-review")), false);
   const review = reviewOf(detail);
   assert.equal(review?.availability, "unavailable");
   assert.equal(review?.sourceAssociated, false);

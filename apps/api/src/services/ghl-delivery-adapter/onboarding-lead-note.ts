@@ -70,9 +70,17 @@ const FORBIDDEN_KEY_SEGMENTS = new Set([
   "signature",
 ]);
 
-const EXPLICIT_FORBIDDEN_NORMALIZED = new Set([
+/**
+ * Compared after underscores are removed. `normalizeSourceFieldKey` inserts
+ * underscores at camelCase boundaries, so `xxTrustedFormCertUrl` becomes
+ * `xx_trusted_form_cert_url` and would miss a collapsed denylist entry.
+ * These are the TrustedForm certificate keys the proof extractor reads, plus
+ * the pixel cookies the note already excludes.
+ */
+const EXPLICIT_FORBIDDEN_COLLAPSED = new Set([
   "xxtrustedformcerturl",
   "trustedformcerturl",
+  "trustedformcertificateurl",
   "fbp",
   "fbc",
 ]);
@@ -187,7 +195,7 @@ export function isForbiddenOnboardingAnswerKey(key: string): boolean {
   const normalized = normalizeSourceFieldKey(key);
   if (!normalized) return true;
   if (isReservedSourceRawKey(key)) return true;
-  if (EXPLICIT_FORBIDDEN_NORMALIZED.has(normalized)) return true;
+  if (EXPLICIT_FORBIDDEN_COLLAPSED.has(normalized.replace(/_/g, ""))) return true;
   if (normalized.startsWith("utm_")) return true;
   if (TRACKING_CANONICAL_KEYS.has(normalized)) return true;
   if (normalized.includes("api_key") || normalized.includes("apikey")) return true;

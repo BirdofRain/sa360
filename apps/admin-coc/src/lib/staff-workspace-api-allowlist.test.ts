@@ -24,6 +24,13 @@ test("workspace reads stay on the client and configuration-request list", () => 
     true
   );
   assert.equal(staffWorkspaceAdminApiAllowed(OPERATIONS, "GET", `/admin/v1/clients/${CLIENT}`), true);
+  assert.equal(staffWorkspaceAdminApiAllowed(MANAGER, "GET", `/admin/v1/clients/${CLIENT}/delivery-config`), true);
+  assert.equal(staffWorkspaceAdminApiAllowed(OPERATIONS, "GET", `/admin/v1/clients/${CLIENT}/delivery-config`), true);
+  assert.equal(staffWorkspaceAdminApiAllowed(WORKSPACE, "GET", `/admin/v1/clients/${CLIENT}/delivery-config`), true);
+  assert.equal(staffWorkspaceAdminApiAllowed([], "GET", `/admin/v1/clients/${CLIENT}/delivery-config`), false);
+  assert.equal(staffWorkspaceAdminApiAllowed(MANAGER, "GET", "/portal/harbor_benefits"), false);
+  assert.equal(staffWorkspaceAdminApiAllowed(MANAGER, "POST", `/admin/v1/clients/${CLIENT}/ghl-config`), false);
+  assert.equal(staffWorkspaceAdminApiAllowed(OPERATIONS, "POST", `/admin/v1/clients/${CLIENT}/ghl-config`), false);
   assert.equal(staffWorkspaceAdminApiAllowed([], "GET", "/admin/v1/clients"), false);
 });
 

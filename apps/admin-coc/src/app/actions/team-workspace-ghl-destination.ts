@@ -1,6 +1,11 @@
 "use server";
 
-import { requireAdminCocAdminSession, requireAdminCocSession, requireStaffWorkspacePermission } from "@/lib/admin-coc-session-guard";
+import {
+  readAdminCocAccess,
+  requireAdminCocAdminSession,
+  requireAdminCocSession,
+  requireStaffWorkspacePermission,
+} from "@/lib/admin-coc-session-guard";
 import {
   fetchAdminClientDeliveryConfig,
   fetchAdminGhlConnections,
@@ -79,8 +84,16 @@ async function authorize(): Promise<GuidedGhlActionResult | null> {
   return { ok: false, code: "FEATURE_DISABLED", message, view: null };
 }
 
+/** Destination readout. Managers and Operations may read. This does not save. */
+async function authorizeRead(): Promise<GuidedGhlActionResult | null> {
+  await requireStaffWorkspacePermission("team_workspace");
+  const message = disabledMessage();
+  if (!message) return null;
+  return { ok: false, code: "FEATURE_DISABLED", message, view: null };
+}
+
 async function loadDestination(clientAccountId: string): Promise<LoadedDestination> {
-  const denied = await authorize();
+  const denied = await authorizeRead();
   if (denied) return { result: denied, present: null };
   const id = clientAccountId.trim();
   if (!isSafeTeamWorkspaceId(id)) {
@@ -89,9 +102,10 @@ async function loadDestination(clientAccountId: string): Promise<LoadedDestinati
       present: null,
     };
   }
+  const access = await readAdminCocAccess();
   const [config, connections] = await Promise.all([
     fetchAdminClientDeliveryConfig(id),
-    fetchAdminGhlConnections(id),
+    access.kind === "admin" ? fetchAdminGhlConnections(id) : Promise.resolve({ data: null, error: null }),
   ]);
   if (!config.data || config.error) {
     const message = readableGhlError(config.error, "The GoHighLevel destination could not be read.");

@@ -11,6 +11,7 @@ const WORKSPACE_READS = [
   new RegExp(`^/admin/v1/clients/${CLIENT_ID}$`),
   new RegExp(`^/admin/v1/clients/${CLIENT_ID}/setup$`),
   new RegExp(`^/admin/v1/clients/${CLIENT_ID}/onboarding$`),
+  new RegExp(`^/admin/v1/clients/${CLIENT_ID}/delivery-config$`),
   new RegExp(`^/admin/v1/clients/${CLIENT_ID}/source-funnels$`),
   new RegExp(`^/admin/v1/clients/${CLIENT_ID}/source-campaign-requests$`),
   new RegExp(`^/admin/v1/clients/${CLIENT_ID}/ghl-destination-configuration$`),

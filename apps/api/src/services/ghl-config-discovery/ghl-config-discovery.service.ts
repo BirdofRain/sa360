@@ -1,12 +1,30 @@
 import type { Prisma } from "@prisma/client";
 import { findGhlLocationConnectionByLocationId } from "../../repositories/ghl-location-connection.repository.js";
 import {
+  discoveryFailureDetail,
+  discoveryFailureSummary,
+  dominantSnapshotOutcome,
+  explicitDiscoveryCollection,
+  failureCodeForSnapshotOutcome,
+  type GhlDiscoveryListResource,
+  ghlSnapshotMessageStrings,
+  ghlSnapshotOutcomeMarker,
+  redactGhlDiscoveryText,
+  isWellFormedDiscoveredLocation,
+  previouslyCapturedSnapshotMessage,
+  resourceFailureLine,
+  type GhlDiscoveryFailureCode,
+  type GhlSnapshotOutcome,
+} from "../../lib/ghl-config-snapshot-validity.js";
+import {
   createGhlLocationConfigSnapshot,
-  findLatestGhlLocationConfigSnapshot,
+  findLatestUsableGhlLocationConfigSnapshot,
+  findNewestGhlLocationConfigSnapshot,
 } from "../../repositories/ghl-location-config-snapshot.repository.js";
 import {
   GHL_CONFIG_DISCOVERY_PATHS,
   ghlReadOnlyGet,
+  type GhlReadFailureClass,
 } from "./ghl-config-discovery-client.js";
 import {
   assertNoTokensInGhlConfigPayload,
@@ -46,6 +64,10 @@ function asArray(value: unknown): unknown[] {
   return [];
 }
 
+function collectionItems(json: unknown, resource: GhlDiscoveryListResource): unknown[] {
+  return explicitDiscoveryCollection(json, resource) ?? [];
+}
+
 function str(v: unknown): string | null {
   return typeof v === "string" && v.trim() ? v.trim() : null;
 }
@@ -76,7 +98,7 @@ function parseLocation(json: unknown, locationId: string): GhlDiscoveredLocation
 
 /** @internal Exported for unit tests only. */
 export function parsePipelines(json: unknown): GhlDiscoveredPipeline[] {
-  return asArray(json)
+  return collectionItems(json, "pipelines")
     .map((item) => {
       if (!item || typeof item !== "object" || Array.isArray(item)) return null;
       const p = item as Record<string, unknown>;
@@ -107,7 +129,7 @@ export function parsePipelines(json: unknown): GhlDiscoveredPipeline[] {
 }
 
 function parseWorkflows(json: unknown): GhlDiscoveredWorkflow[] {
-  return asArray(json)
+  return collectionItems(json, "workflows")
     .map((item) => {
       if (!item || typeof item !== "object" || Array.isArray(item)) return null;
       const w = item as Record<string, unknown>;
@@ -124,7 +146,7 @@ function parseWorkflows(json: unknown): GhlDiscoveredWorkflow[] {
 }
 
 function parseUsers(json: unknown): GhlDiscoveredUser[] {
-  return asArray(json)
+  return collectionItems(json, "users")
     .map((item): GhlDiscoveredUser | null => {
       if (!item || typeof item !== "object" || Array.isArray(item)) return null;
       const u = item as Record<string, unknown>;
@@ -176,7 +198,7 @@ function parsePicklistOptions(raw: unknown): string[] | null {
 }
 
 function parseCustomFields(json: unknown): GhlDiscoveredCustomField[] {
-  return asArray(json)
+  return collectionItems(json, "customFields")
     .map((item) => {
       if (!item || typeof item !== "object" || Array.isArray(item)) return null;
       const f = item as Record<string, unknown>;
@@ -197,7 +219,7 @@ function parseCustomFields(json: unknown): GhlDiscoveredCustomField[] {
 }
 
 function parseTags(json: unknown): GhlDiscoveredTag[] {
-  return asArray(json)
+  return collectionItems(json, "tags")
     .map((item) => {
       if (!item || typeof item !== "object" || Array.isArray(item)) return null;
       const t = item as Record<string, unknown>;
@@ -257,94 +279,150 @@ export function detectSa360RequiredCustomFields(
   };
 }
 
+type ResourceName = "location" | "pipelines" | "workflows" | "users" | "customFields" | "tags";
+
+type ResourceFailure = {
+  resource: ResourceName;
+  failureClass: GhlReadFailureClass;
+  providerDetail: string | null;
+};
+
+type LiveDiscovery = {
+  discovery: GhlConfigDiscoveryResult;
+  outcome: GhlSnapshotOutcome;
+  failures: ResourceFailure[];
+};
+
+function emptyLocation(locationId: string): GhlDiscoveredLocation {
+  return { id: locationId, name: null, companyId: null, timezone: null, primaryUserId: null };
+}
+
+function failedResource(
+  resource: ResourceName,
+  failureClass: GhlReadFailureClass | null,
+  providerDetail: string | null
+): ResourceFailure {
+  return { resource, failureClass: failureClass ?? "http_error", providerDetail };
+}
+
+async function readResource(
+  locationId: string,
+  resource: ResourceName,
+  path: string,
+  query: Record<string, string> | undefined,
+  fetchImpl: typeof fetch
+): Promise<{ ok: true; json: unknown } | ResourceFailure> {
+  const result = await ghlReadOnlyGet(locationId, path, query, fetchImpl);
+  if (!result.ok) return failedResource(resource, result.failureClass, result.errorMessage);
+  if (resource === "location") {
+    if (!isWellFormedDiscoveredLocation(result.json, locationId)) {
+      return failedResource(resource, "malformed", result.errorMessage);
+    }
+    return { ok: true, json: result.json };
+  }
+  if (!explicitDiscoveryCollection(result.json, resource)) {
+    return failedResource(resource, "malformed", result.errorMessage);
+  }
+  return { ok: true, json: result.json };
+}
+
 async function fetchDiscoveryLive(
   locationId: string,
   fetchImpl: typeof fetch
-): Promise<GhlConfigDiscoveryResult> {
+): Promise<LiveDiscovery> {
   const trimmed = locationId.trim();
-  const errors: string[] = [];
-  const warnings: string[] = [];
   const query = { locationId: trimmed };
+  const failures: ResourceFailure[] = [];
 
-  const locationRes = await ghlReadOnlyGet(
+  const locationRead = await readResource(
     trimmed,
+    "location",
     GHL_CONFIG_DISCOVERY_PATHS.location(trimmed),
     undefined,
     fetchImpl
   );
-  const location = locationRes.ok
-    ? parseLocation(locationRes.json, trimmed)
-    : { id: trimmed, name: null, companyId: null, timezone: null };
-  if (!locationRes.ok) errors.push(`location: ${locationRes.errorMessage}`);
+  const location = "ok" in locationRead ? parseLocation(locationRead.json, trimmed) : emptyLocation(trimmed);
+  if (!("ok" in locationRead)) failures.push(locationRead);
 
-  const pipelinesRes = await ghlReadOnlyGet(
+  const pipelinesRead = await readResource(
     trimmed,
+    "pipelines",
     GHL_CONFIG_DISCOVERY_PATHS.pipelines,
     query,
     fetchImpl
   );
-  const pipelines = pipelinesRes.ok ? parsePipelines(pipelinesRes.json) : [];
-  if (!pipelinesRes.ok) errors.push(`pipelines: ${pipelinesRes.errorMessage}`);
+  const pipelines = "ok" in pipelinesRead ? parsePipelines(pipelinesRead.json) : [];
+  if (!("ok" in pipelinesRead)) failures.push(pipelinesRead);
 
-  const workflowsRes = await ghlReadOnlyGet(
+  const workflowsRead = await readResource(
     trimmed,
+    "workflows",
     GHL_CONFIG_DISCOVERY_PATHS.workflows,
     query,
     fetchImpl
   );
-  const workflows = workflowsRes.ok ? parseWorkflows(workflowsRes.json) : [];
-  if (!workflowsRes.ok) warnings.push(`workflows: ${workflowsRes.errorMessage}`);
+  const workflows = "ok" in workflowsRead ? parseWorkflows(workflowsRead.json) : [];
+  if (!("ok" in workflowsRead)) failures.push(workflowsRead);
 
-  const usersRes = await ghlReadOnlyGet(
-    trimmed,
-    GHL_CONFIG_DISCOVERY_PATHS.users,
-    query,
-    fetchImpl
-  );
-  const users = usersRes.ok ? parseUsers(usersRes.json) : [];
-  if (!usersRes.ok) warnings.push(`users: ${usersRes.errorMessage}`);
+  const usersRead = await readResource(trimmed, "users", GHL_CONFIG_DISCOVERY_PATHS.users, query, fetchImpl);
+  const users = "ok" in usersRead ? parseUsers(usersRead.json) : [];
+  if (!("ok" in usersRead)) failures.push(usersRead);
 
-  const fieldsRes = await ghlReadOnlyGet(
+  const fieldsRead = await readResource(
     trimmed,
+    "customFields",
     GHL_CONFIG_DISCOVERY_PATHS.customFields(trimmed),
     undefined,
     fetchImpl
   );
-  const customFields = fieldsRes.ok ? parseCustomFields(fieldsRes.json) : [];
-  if (!fieldsRes.ok) warnings.push(`customFields: ${fieldsRes.errorMessage}`);
+  const customFields = "ok" in fieldsRead ? parseCustomFields(fieldsRead.json) : [];
+  if (!("ok" in fieldsRead)) failures.push(fieldsRead);
 
-  const tagsRes = await ghlReadOnlyGet(
+  const tagsRead = await readResource(
     trimmed,
+    "tags",
     GHL_CONFIG_DISCOVERY_PATHS.tags(trimmed),
     undefined,
     fetchImpl
   );
-  const tags = tagsRes.ok ? parseTags(tagsRes.json) : [];
-  if (!tagsRes.ok) warnings.push(`tags: ${tagsRes.errorMessage}`);
+  const tags = "ok" in tagsRead ? parseTags(tagsRead.json) : [];
+  if (!("ok" in tagsRead)) failures.push(tagsRead);
 
+  const outcome: GhlSnapshotOutcome =
+    failures.length === 0 ? "complete" : dominantSnapshotOutcome(failures.map((failure) => failure.failureClass), 6);
   const requiredFields = detectSa360RequiredCustomFields(customFields);
-  const sa360FieldMapping = buildSa360FieldMappingDiscoveryReport(customFields);
-  const fetchedAt = new Date().toISOString();
-
-  return {
+  const discovery: GhlConfigDiscoveryResult = {
     location,
     pipelines,
     workflows,
     users,
     customFields,
     tags,
-    fetchedAt,
+    fetchedAt: new Date().toISOString(),
     fromCache: false,
-    warnings,
-    errors,
+    snapshotVerification: outcome === "complete" ? "live" : "cached",
+    warnings: [],
+    errors: failures.map((failure) =>
+      resourceFailureLine(failure.resource, failure.failureClass, failure.providerDetail)
+    ),
     requiredFields,
-    sa360FieldMapping,
+    sa360FieldMapping: buildSa360FieldMappingDiscoveryReport(customFields),
   };
+  return { discovery, outcome, failures };
 }
 
 export type DiscoverGhlLocationConfigDeps = {
   findGhlLocationConnectionByLocationId?: typeof findGhlLocationConnectionByLocationId;
 };
+
+export type DiscoverGhlLocationConfigResult =
+  | { ok: true; discovery: GhlConfigDiscoveryResult }
+  | {
+      ok: false;
+      error: string;
+      code: "NOT_CONNECTED" | "NOT_FOUND" | GhlDiscoveryFailureCode;
+      preservedSnapshot: GhlConfigDiscoveryResult | null;
+    };
 
 export async function discoverGhlLocationConfig(
   input: {
@@ -354,13 +432,10 @@ export async function discoverGhlLocationConfig(
     fetchImpl?: typeof fetch;
   },
   deps: DiscoverGhlLocationConfigDeps = {}
-): Promise<
-  | { ok: true; discovery: GhlConfigDiscoveryResult }
-  | { ok: false; error: string; code: "NOT_CONNECTED" | "NOT_FOUND" }
-> {
+): Promise<DiscoverGhlLocationConfigResult> {
   const locationId = input.locationId.trim();
   if (!locationId) {
-    return { ok: false, error: "locationId is required.", code: "NOT_FOUND" };
+    return { ok: false, error: "locationId is required.", code: "NOT_FOUND", preservedSnapshot: null };
   }
 
   const findConnection =
@@ -371,40 +446,108 @@ export async function discoverGhlLocationConfig(
       ok: false,
       error: "No connected GHL OAuth location for this locationId.",
       code: "NOT_CONNECTED",
+      preservedSnapshot: null,
     };
   }
 
   const fetchImpl = input.fetchImpl ?? fetch;
+  const clientAccountId = input.clientAccountId?.trim() || connection.clientAccountId;
 
   if (!input.refresh) {
-    const cached = await findLatestGhlLocationConfigSnapshot(locationId);
-    if (cached) {
-      const fields = detectSa360RequiredCustomFields(
-        (cached.customFieldsJson as GhlDiscoveredCustomField[]) ?? []
-      );
-      const discovery = snapshotToDiscoveryResult(cached, fields);
-      assertNoTokensInGhlConfigPayload(discovery as unknown as Record<string, unknown>);
-      return { ok: true, discovery };
-    }
+    const loaded = await loadStoredDiscovery(locationId);
+    if (loaded) return loaded;
   }
 
-  const discovery = await fetchDiscoveryLive(locationId, fetchImpl);
-  assertNoTokensInGhlConfigPayload(discovery as unknown as Record<string, unknown>);
-
+  const live = await fetchDiscoveryLive(locationId, fetchImpl);
+  const summary =
+    live.outcome === "complete"
+      ? null
+      : discoveryFailureSummary({
+          outcome: live.outcome,
+          providerDetail: live.failures.find((failure) => failure.providerDetail)?.providerDetail ?? null,
+        });
+  const storedErrors = summary ? [summary, ...live.discovery.errors] : live.discovery.errors;
+  assertNoTokensInGhlConfigPayload({ ...live.discovery, errors: storedErrors } as unknown as Record<string, unknown>);
   await createGhlLocationConfigSnapshot({
     locationId,
-    clientAccountId: input.clientAccountId?.trim() || connection.clientAccountId,
-    fetchedAt: new Date(discovery.fetchedAt),
-    locationName: discovery.location.name,
-    locationJson: discovery.location as Prisma.InputJsonValue,
-    pipelinesJson: discovery.pipelines as Prisma.InputJsonValue,
-    workflowsJson: discovery.workflows as Prisma.InputJsonValue,
-    usersJson: discovery.users as Prisma.InputJsonValue,
-    customFieldsJson: discovery.customFields as Prisma.InputJsonValue,
-    tagsJson: discovery.tags as Prisma.InputJsonValue,
-    errorsJson: discovery.errors as Prisma.InputJsonValue,
-    warningsJson: discovery.warnings as Prisma.InputJsonValue,
+    clientAccountId,
+    fetchedAt: new Date(live.discovery.fetchedAt),
+    locationName: live.discovery.location.name,
+    locationJson: live.discovery.location as Prisma.InputJsonValue,
+    pipelinesJson: live.discovery.pipelines as Prisma.InputJsonValue,
+    workflowsJson: live.discovery.workflows as Prisma.InputJsonValue,
+    usersJson: live.discovery.users as Prisma.InputJsonValue,
+    customFieldsJson: live.discovery.customFields as Prisma.InputJsonValue,
+    tagsJson: live.discovery.tags as Prisma.InputJsonValue,
+    errorsJson: [ghlSnapshotOutcomeMarker(live.outcome), ...storedErrors] as Prisma.InputJsonValue,
+    warningsJson: live.discovery.warnings as Prisma.InputJsonValue,
   });
 
+  if (live.outcome === "complete") {
+    assertNoTokensInGhlConfigPayload(live.discovery as unknown as Record<string, unknown>);
+    return { ok: true, discovery: live.discovery };
+  }
+
+  const preserved = await presentUsableSnapshot(locationId, summary);
+  const code = failureCodeForSnapshotOutcome(live.outcome);
+  return {
+    ok: false,
+    code,
+    error: `${summary}${discoveryFailureDetail(Boolean(preserved))}`,
+    preservedSnapshot: preserved,
+  };
+}
+
+async function loadStoredDiscovery(locationId: string): Promise<DiscoverGhlLocationConfigResult | null> {
+  const newest = await findNewestGhlLocationConfigSnapshot(locationId);
+  if (!newest) return null;
+  const usable = await findLatestUsableGhlLocationConfigSnapshot(locationId);
+  if (!usable) {
+    const summary = storedFailureSummary(newest.errorsJson);
+    return {
+      ok: false,
+      code: "NO_USABLE_SNAPSHOT",
+      error: `No usable GoHighLevel snapshot is stored for this location. The latest refresh failed: ${summary}`,
+      preservedSnapshot: null,
+    };
+  }
+  const superseded = newest.id !== usable.id;
+  const summary = superseded ? storedFailureSummary(newest.errorsJson) : null;
+  const discovery = presentSnapshot(usable, superseded ? "previously_captured" : "cached", summary);
   return { ok: true, discovery };
+}
+
+async function presentUsableSnapshot(
+  locationId: string,
+  failureSummary: string | null
+): Promise<GhlConfigDiscoveryResult | null> {
+  const usable = await findLatestUsableGhlLocationConfigSnapshot(locationId);
+  if (!usable) return null;
+  return presentSnapshot(usable, "previously_captured", failureSummary);
+}
+
+function storedFailureSummary(errorsJson: unknown): string {
+  const redacted = redactGhlDiscoveryText(
+    ghlSnapshotMessageStrings(errorsJson)[0] ?? "The latest GoHighLevel discovery did not succeed."
+  );
+  return redacted || "The latest GoHighLevel discovery did not succeed.";
+}
+
+function presentSnapshot(
+  row: NonNullable<Awaited<ReturnType<typeof findLatestUsableGhlLocationConfigSnapshot>>>,
+  verification: GhlConfigDiscoveryResult["snapshotVerification"],
+  failureSummary: string | null
+): GhlConfigDiscoveryResult {
+  const fields = detectSa360RequiredCustomFields((row.customFieldsJson as GhlDiscoveredCustomField[]) ?? []);
+  const discovery = snapshotToDiscoveryResult(row, fields);
+  discovery.snapshotVerification = verification;
+  if (verification === "previously_captured") {
+    discovery.errors = [
+      previouslyCapturedSnapshotMessage(
+        failureSummary ?? "The latest GoHighLevel discovery did not succeed."
+      ),
+    ];
+  }
+  assertNoTokensInGhlConfigPayload(discovery as unknown as Record<string, unknown>);
+  return discovery;
 }

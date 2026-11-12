@@ -70,7 +70,13 @@ export type ChannelWriteModeInfo = {
   liveWritesEnabled: boolean;
 };
 
-export type ChannelReadinessStatus = "READY" | "PARTIAL" | "MISSING_CONFIG" | "UNKNOWN";
+export type ChannelReadinessStatus =
+  | "READY"
+  | "PARTIAL"
+  | "MISSING_CONFIG"
+  | "UNKNOWN"
+  | "STALE"
+  | "BLOCKED";
 
 export type ChannelReadinessReport = {
   status: ChannelReadinessStatus;
@@ -82,6 +88,8 @@ export type ChannelReadinessReport = {
   missingCustomValues: string[];
   unverifiedCustomValues: string[];
   customValuesVerified: boolean;
+  /** False when the field list is historical or discovery failed. READY requires true. */
+  snapshotCurrent?: boolean;
   canApplyProfileToGhl: boolean;
   warnings: string[];
   notes: string[];

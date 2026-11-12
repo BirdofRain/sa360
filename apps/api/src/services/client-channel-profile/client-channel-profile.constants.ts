@@ -124,4 +124,6 @@ export type ClientChannelReadinessStatus =
   | "READY"
   | "PARTIAL"
   | "MISSING_CONFIG"
-  | "UNKNOWN";
+  | "UNKNOWN"
+  | "STALE"
+  | "BLOCKED";

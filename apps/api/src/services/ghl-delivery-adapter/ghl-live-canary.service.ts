@@ -167,6 +167,14 @@ export async function executeLiveCanaryForPlan(
   }
 
   const ctx = await loadLiveCanaryContext(plan);
+  if (ctx.discoveryBlocker) {
+    return {
+      blocked: true as const,
+      blockers: [ctx.discoveryBlocker],
+      preflight,
+      statusCode: 409,
+    };
+  }
   const startedAt = new Date();
   const idempotencyKey = ctx.idempotencyKey;
 

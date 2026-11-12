@@ -333,13 +333,19 @@ export function GuidedOnboarding({
             Guided client setup
           </h2>
           <p className="mt-1 max-w-2xl text-sm text-slate-600">
-            {GUIDE_STEP_EXPLANATIONS[model ? current : "client"]} Saved, configured, verified, and active are different. A draft or a destination choice does not finish setup.
+            {GUIDE_STEP_EXPLANATIONS[model ? current : "client"]}
           </p>
         </div>
-        <p className="max-w-xl text-sm font-medium text-slate-700" data-progress-summary="">
-          {progress.summary}
-        </p>
       </div>
+      {model && !model.setupWritable && model.setupUnavailableReason ? (
+        <p role="status" className="mt-3 rounded-md bg-amber-50 p-3 text-sm text-amber-950">
+          {model.setupUnavailableReason}
+        </p>
+      ) : null}
+      <details className="mt-3 text-sm text-slate-600">
+        <summary className="cursor-pointer font-medium">Technical setup details</summary>
+        <p className="mt-2 max-w-3xl" data-progress-summary="">{progress.summary}</p>
+      </details>
       <ol className="mt-4 flex gap-2 overflow-x-auto pb-1 lg:grid lg:grid-cols-5" aria-label="Guided setup steps">
         {progress.steps.map((item, index) => {
           const selected = model ? current === item.id : item.id === "client";
@@ -347,7 +353,7 @@ export function GuidedOnboarding({
             <li key={item.id} className="min-w-[9.5rem] lg:min-w-0">
               <button
                 type="button"
-                className={`w-full rounded-md border px-3 py-2 text-left text-sm ${selected ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-800"}`}
+                className={`flex h-full w-full flex-col items-start rounded-md border px-3 py-2 text-left text-sm ${selected ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-800"}`}
                 aria-current={selected ? "step" : undefined}
                 disabled={!model && item.id !== "client"}
                 onClick={() => go(item.id)}

@@ -1,6 +1,6 @@
 "use server";
 
-import { AdminCocForbiddenError, requireAdminCocAdminSession, requireAdminCocSession } from "@/lib/admin-coc-session-guard";
+import { AdminCocForbiddenError, requireStaffWorkspacePermission } from "@/lib/admin-coc-session-guard";
 import { fetchAdminClientSetup, postAdminSourceCampaignRequest, adminFetchJson } from "@/lib/admin-api/server";
 import { isSafeTeamWorkspaceId } from "@/lib/team-workspace/contract";
 import {
@@ -194,8 +194,7 @@ function clientEcho(input: SubmitInput): SavedSourceEcho | null {
 }
 
 export async function submitSourceCampaignRequestAction(input: SubmitInput): Promise<SourceCampaignRequestActionResult> {
-  await requireAdminCocSession();
-  await requireAdminCocAdminSession();
+  await requireStaffWorkspacePermission("team_manager");
   const flagged = flagClosed();
   if (flagged) return flagged;
   if (!isSafeTeamWorkspaceId(input.clientAccountId) || !UUID.test(input.requestId)) {
@@ -271,8 +270,7 @@ export async function submitSourceCampaignRequestAction(input: SubmitInput): Pro
 }
 
 export async function rejectSourceCampaignRequestAction(input: RejectInput): Promise<SourceCampaignRequestActionResult> {
-  await requireAdminCocSession();
-  await requireAdminCocAdminSession();
+  await requireStaffWorkspacePermission("team_manager");
   const flagged = flagClosed();
   if (flagged) return flagged;
   if (!isSafeTeamWorkspaceId(input.clientAccountId) || !UUID.test(input.requestId)) {

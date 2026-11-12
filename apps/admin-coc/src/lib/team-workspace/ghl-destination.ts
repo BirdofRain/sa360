@@ -8,6 +8,7 @@ import {
   savedMappingEntries,
   type DiscoveredDestinationField,
 } from "@/lib/clients/onboarding/ghl-vet-setup-display";
+import { assessGhlConfigSnapshotFreshness } from "@/lib/team-workspace/ghl-snapshot-freshness";
 
 export const GUIDED_GHL_SURVEY_KEYS = ["desired_coverage", "branch_of_service", "primary_reason"] as const;
 
@@ -94,6 +95,7 @@ export type GuidedGhlSnapshot = {
   customFields: Array<{ id?: unknown; name?: unknown; key?: unknown; fieldKey?: unknown }>;
   fetchedAt?: unknown;
   fromCache?: unknown;
+  snapshotVerification?: unknown;
   errors?: unknown;
 };
 
@@ -110,6 +112,8 @@ export type GuidedGhlPresentInput = {
   snapshot?: GuidedGhlSnapshot | null;
   snapshotError?: string | null;
   extraIssues?: string[];
+  /** Clock for the 24-hour / five-minute snapshot window. Defaults to the current time. */
+  now?: Date;
 };
 
 type DestinationShape = {
@@ -176,29 +180,34 @@ export function presentGuidedGhlDestination(input: GuidedGhlPresentInput): Guide
   const destination = readDestination(input.destination);
   const locations = readLocations(input.connections, input.connection, destination?.locationId ?? null);
   const savedLocation = locations.find((location) => location.saved) ?? null;
-  const snapshot = readSnapshot(input.snapshot);
+  const snapshot = readSnapshot(input.snapshot, input.now ?? new Date());
   const snapshotForSaved = Boolean(snapshot && destination?.locationId && snapshot.locationId === destination.locationId);
   const fieldsForReview = snapshotForSaved ? snapshot?.fields ?? [] : [];
   const discoveryLoaded = snapshotForSaved;
   const sourceIds = savedIds(destination?.sourceMap);
-  const duplicateIds = duplicateSavedIds({ ...sourceIds, ...(destination?.stampMap ?? {}) });
-  const fields = GUIDED_GHL_SURVEY_KEYS.map((key) =>
-    reviewField({
+  const stampIds = destination?.stampMap ?? {};
+  const duplicateIds = duplicateSavedIds({ ...sourceIds, ...stampIds });
+  const canVerify = discoveryLoaded && snapshot?.verificationCurrent === true;
+  const fields = GUIDED_GHL_SURVEY_KEYS.map((key) => {
+    const savedId = sourceIds[key] ?? stampIds[key] ?? null;
+    return reviewField({
       key,
       label: GUIDED_GHL_SURVEY_LABELS[key],
-      savedId: sourceIds[key] ?? null,
+      savedId,
       fields: fieldsForReview,
       discoveryLoaded,
-      duplicate: Boolean(sourceIds[key] && duplicateIds.has(sourceIds[key])),
-    })
-  );
-  const stampFields = Object.entries(destination?.stampMap ?? {}).map(([key, savedId]) =>
+      canVerify,
+      duplicate: Boolean(savedId && duplicateIds.has(savedId)),
+    });
+  });
+  const stampFields = Object.entries(stampIds).map(([key, savedId]) =>
     reviewField({
       key,
       label: key,
       savedId,
       fields: fieldsForReview,
       discoveryLoaded,
+      canVerify,
       duplicate: duplicateIds.has(savedId),
     })
   );
@@ -226,6 +235,7 @@ export function presentGuidedGhlDestination(input: GuidedGhlPresentInput): Guide
     snapshotForSaved,
     snapshotError: input.snapshotError ?? null,
     snapshotErrors: snapshot?.errors ?? [],
+    previouslyCaptured: snapshot?.previouslyCaptured === true,
     live,
     differentSnapshot: Boolean(snapshot && destination?.locationId && snapshot.locationId !== destination.locationId),
   });
@@ -236,7 +246,8 @@ export function presentGuidedGhlDestination(input: GuidedGhlPresentInput): Guide
     fields.every((field) => field.status === "verified") &&
     stampFields.length > 0 &&
     stampFields.every((field) => field.status === "verified") &&
-    !issues.some((issue) => /revoked|not been checked|does not match the connected location|credentials/i.test(issue));
+    snapshot?.previouslyCaptured !== true &&
+    !issues.some((issue) => /revoked|not been checked|does not match the connected location|credentials|not current GoHighLevel verification/i.test(issue));
 
   return {
     ...base,
@@ -319,6 +330,7 @@ function reviewField(input: {
   savedId: string | null;
   fields: DiscoveredDestinationField[];
   discoveryLoaded: boolean;
+  canVerify: boolean;
   duplicate: boolean;
 }): GuidedGhlFieldRow {
   const savedId = input.savedId?.trim() || null;
@@ -351,13 +363,15 @@ function reviewField(input: {
       detail: "No field id is saved.",
     };
   }
-  if (!input.discoveryLoaded) {
+  if (!input.canVerify) {
     return {
       key: input.key,
       label: input.label,
       savedId,
       status: "unverified",
-      detail: "This saved id has not been compared with a location snapshot.",
+      detail: input.discoveryLoaded
+        ? "This id is saved. This snapshot is not current GoHighLevel verification, so the id is not currently verified."
+        : "This saved id has not been compared with a location snapshot.",
     };
   }
   const byId = input.fields.find((field) => field.id === savedId);
@@ -407,6 +421,7 @@ function collectIssues(input: {
   snapshotForSaved: boolean;
   snapshotError: string | null;
   snapshotErrors: string[];
+  previouslyCaptured: boolean;
   live: boolean;
   differentSnapshot: boolean;
 }): string[] {
@@ -436,6 +451,12 @@ function collectIssues(input: {
   }
   if (input.snapshotError) issues.push(input.snapshotError);
   for (const error of input.snapshotErrors) issues.push(error);
+  if (
+    input.previouslyCaptured &&
+    !issues.some((issue) => /not current GoHighLevel verification/i.test(issue))
+  ) {
+    issues.push("This snapshot was previously captured. It is not current GoHighLevel verification.");
+  }
   for (const field of [...input.fields, ...input.stampFields]) {
     if (field.status !== "verified") issues.push(`${field.label}: ${field.detail}`);
   }
@@ -522,12 +543,14 @@ function readLocation(value: unknown): GuidedGhlLocationChoice | null {
   };
 }
 
-function readSnapshot(snapshot: GuidedGhlSnapshot | null | undefined): {
+function readSnapshot(snapshot: GuidedGhlSnapshot | null | undefined, now: Date): {
   locationId: string;
   workflows: Array<{ id: string; name: string }>;
   fields: DiscoveredDestinationField[];
   fetchedAt: string | null;
   fromCache: boolean;
+  previouslyCaptured: boolean;
+  verificationCurrent: boolean;
   errors: string[];
 } | null {
   if (!snapshot) return null;
@@ -550,12 +573,21 @@ function readSnapshot(snapshot: GuidedGhlSnapshot | null | undefined): {
         return message ? [message] : [];
       })
     : [];
+  const verification = text(snapshot.snapshotVerification);
+  const previouslyCaptured =
+    verification === "previously_captured" ||
+    errors.some((error) => /not current GoHighLevel verification/i.test(error));
+  const failedRefresh = errors.length > 0;
+  const successfulDiscovery = verification === "live" || verification === "cached";
+  const freshness = assessGhlConfigSnapshotFreshness(snapshot.fetchedAt, now);
   return {
     locationId,
     workflows,
     fields,
     fetchedAt: text(snapshot.fetchedAt),
     fromCache: snapshot.fromCache === true,
+    previouslyCaptured,
+    verificationCurrent: successfulDiscovery && !previouslyCaptured && !failedRefresh && freshness === "fresh",
     errors,
   };
 }

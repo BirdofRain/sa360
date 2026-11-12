@@ -311,6 +311,69 @@ test("the server client sends the staff service credential and no shared admin k
   assert.equal(client.includes("NEXT_PUBLIC_SA360_STAFF"), false);
 });
 
+test("an approved invitation is claimed only after resolve denies the account", async () => {
+  const started = startStaffGoogleSignIn({ env: ENV, nowSec: NOW });
+  if (started.kind !== "redirect") throw new Error("expected redirect");
+  let claimed = 0;
+  const pending = await completeStaffGoogleCallback({
+    env: ENV,
+    code: "authorization-code",
+    queryState: new URL(started.location).searchParams.get("state") ?? undefined,
+    stateCookie: started.stateCookie.value,
+    nowSec: NOW,
+    claimState: async () => ({ ok: true }),
+    exchange: async () => ({ ok: true, idToken: "synthetic-id-token" }),
+    registerSession: async () => ({ ok: true }),
+    resolve: async () => ({ ok: false }),
+    claimInvitation: async (value) => {
+      claimed += 1;
+      assert.equal(value.idToken, "synthetic-id-token");
+      assert.equal(value.idToken.includes("."), false);
+      return { ok: true, staffPrincipalId: PRINCIPAL, googleSub: SUB };
+    },
+  });
+  assert.equal(claimed, 1);
+  assert.equal(pending.kind, "signed_in");
+
+  const bound = startStaffGoogleSignIn({ env: ENV, nowSec: NOW });
+  if (bound.kind !== "redirect") throw new Error("expected redirect");
+  let claimAfterResolve = 0;
+  const existing = await completeStaffGoogleCallback({
+    env: ENV,
+    code: "authorization-code",
+    queryState: new URL(bound.location).searchParams.get("state") ?? undefined,
+    stateCookie: bound.stateCookie.value,
+    nowSec: NOW,
+    claimState: async () => ({ ok: true }),
+    exchange: async () => ({ ok: true, idToken: "synthetic-id-token" }),
+    registerSession: async () => ({ ok: true }),
+    resolve: async () => ({ ok: true, staffPrincipalId: PRINCIPAL, googleSub: SUB }),
+    claimInvitation: async () => {
+      claimAfterResolve += 1;
+      return { ok: false };
+    },
+  });
+  assert.equal(claimAfterResolve, 0);
+  assert.equal(existing.kind, "signed_in");
+
+  const rejected = startStaffGoogleSignIn({ env: ENV, nowSec: NOW });
+  if (rejected.kind !== "redirect") throw new Error("expected redirect");
+  const denied = await completeStaffGoogleCallback({
+    env: ENV,
+    code: "authorization-code",
+    queryState: new URL(rejected.location).searchParams.get("state") ?? undefined,
+    stateCookie: rejected.stateCookie.value,
+    nowSec: NOW,
+    claimState: async () => ({ ok: true }),
+    exchange: async () => ({ ok: true, idToken: "synthetic-id-token" }),
+    registerSession: async () => ({ ok: true }),
+    resolve: async () => ({ ok: false }),
+    claimInvitation: async () => ({ ok: false }),
+  });
+  assert.deepEqual(denied, { kind: "denied", reason: "denied" });
+  assert.equal("sessionToken" in denied, false);
+});
+
 test("a shared-password session cannot impersonate staff and logout clears only the staff cookie", () => {
   const admin = createAdminCocSessionToken(NOW, SECRET, ADMIN_COC_ROLE_ADMIN);
   assert.ok(admin);

@@ -49,7 +49,9 @@ One stored row per client. Older rows stay as `superseded`. `requestId` is
 unique. The same id and payload replays the stored result. A different payload
 with that id is `request_id_reused`. `revision` is `expectedRevision + 1`.
 `payloadHash` is SHA-256 of the client, both expected tokens, the parsed
-spreadsheet id, and the worksheet id. `actor` is `ADMIN`. There is no delivery
+spreadsheet id, and the worksheet id. `actor` is `ADMIN` for the shared
+admin key, or a `StaffPrincipal` id when a verified staff assertion is
+present. There is no delivery
 authorization column.
 
 `expectedDestinationRevision` is null only when no destination row exists.

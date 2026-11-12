@@ -1,6 +1,11 @@
 "use server";
 
-import { requireAdminCocAdminSession, requireAdminCocSession } from "@/lib/admin-coc-session-guard";
+import {
+  readAdminCocAccess,
+  requireAdminCocAdminSession,
+  requireAdminCocSession,
+  requireStaffWorkspacePermission,
+} from "@/lib/admin-coc-session-guard";
 import {
   fetchAdminClientDeliveryConfig,
   fetchAdminGhlConnections,
@@ -61,7 +66,14 @@ function readableGhlError(error: string | null | undefined, fallback: string): s
     return "This location has no connected GoHighLevel credentials. Nothing was read from GoHighLevel, and nothing was saved.";
   }
   if (isUncertain(error)) return "The GoHighLevel read could not be confirmed. Nothing was saved.";
+  if (isDiscoveryFailureMessage(error)) return error;
   return fallback;
+}
+
+function isDiscoveryFailureMessage(error: string): boolean {
+  return /Reconnect the location|did not respond before the discovery request timed out|was not saved as the usable snapshot|not current GoHighLevel verification|No usable GoHighLevel snapshot|could not be reached for this discovery refresh|could not be read/.test(
+    error
+  );
 }
 
 async function authorize(): Promise<GuidedGhlActionResult | null> {
@@ -72,8 +84,16 @@ async function authorize(): Promise<GuidedGhlActionResult | null> {
   return { ok: false, code: "FEATURE_DISABLED", message, view: null };
 }
 
+/** Destination readout. Managers and Operations may read. This does not save. */
+async function authorizeRead(): Promise<GuidedGhlActionResult | null> {
+  await requireStaffWorkspacePermission("team_workspace");
+  const message = disabledMessage();
+  if (!message) return null;
+  return { ok: false, code: "FEATURE_DISABLED", message, view: null };
+}
+
 async function loadDestination(clientAccountId: string): Promise<LoadedDestination> {
-  const denied = await authorize();
+  const denied = await authorizeRead();
   if (denied) return { result: denied, present: null };
   const id = clientAccountId.trim();
   if (!isSafeTeamWorkspaceId(id)) {
@@ -82,9 +102,10 @@ async function loadDestination(clientAccountId: string): Promise<LoadedDestinati
       present: null,
     };
   }
+  const access = await readAdminCocAccess();
   const [config, connections] = await Promise.all([
     fetchAdminClientDeliveryConfig(id),
-    fetchAdminGhlConnections(id),
+    access.kind === "admin" ? fetchAdminGhlConnections(id) : Promise.resolve({ data: null, error: null }),
   ]);
   if (!config.data || config.error) {
     const message = readableGhlError(config.error, "The GoHighLevel destination could not be read.");
@@ -170,6 +191,7 @@ export async function readTeamWorkspaceGhlSnapshotAction(
     customFields: discovery.data.customFields,
     fetchedAt: discovery.data.fetchedAt,
     fromCache: discovery.data.fromCache,
+    snapshotVerification: discovery.data.snapshotVerification,
     errors: discovery.data.errors,
   };
   return { ok: true, view: presentGuidedGhlDestination({ ...loaded.present, snapshot }) };
@@ -263,8 +285,6 @@ function configDisabledMessage(): string | null {
 }
 
 async function authorizeConfig(): Promise<GhlConfigLoadResult | null> {
-  await requireAdminCocSession();
-  await requireAdminCocAdminSession();
   const message = configDisabledMessage();
   if (!message) return null;
   return { ok: false, uncertain: false, code: "FEATURE_DISABLED", message, head: null };
@@ -344,6 +364,7 @@ function uncertainSave(message: string, sent: GhlConfigSubmitBody): GhlConfigSav
 }
 
 export async function loadTeamWorkspaceGhlConfigurationAction(clientAccountId: string): Promise<GhlConfigLoadResult> {
+  await requireStaffWorkspacePermission("team_workspace");
   const denied = await authorizeConfig();
   if (denied) return denied;
   const id = clientAccountId.trim();
@@ -380,9 +401,11 @@ export async function previewTeamWorkspaceGhlLocationAction(
   locationId: string,
   refresh = false
 ): Promise<GhlLocationPreviewResult> {
-  const denied = await authorizeConfig();
-  if (denied) {
-    return { ok: false, uncertain: false, code: denied.code, message: denied.message, preview: null };
+  await requireAdminCocSession();
+  await requireAdminCocAdminSession();
+  const flagged = configDisabledMessage();
+  if (flagged) {
+    return { ok: false, uncertain: false, code: "FEATURE_DISABLED", message: flagged, preview: null };
   }
   const loaded = await loadDestination(clientAccountId);
   const view = loaded.result.view;
@@ -426,6 +449,7 @@ export async function previewTeamWorkspaceGhlLocationAction(
     customFields: discovery.data.customFields,
     fetchedAt: discovery.data.fetchedAt,
     fromCache: discovery.data.fromCache,
+    snapshotVerification: discovery.data.snapshotVerification,
     errors: discovery.data.errors,
   });
   if (!preview || preview.locationId !== id) {
@@ -443,6 +467,7 @@ export async function previewTeamWorkspaceGhlLocationAction(
 export async function saveTeamWorkspaceGhlConfigurationRequestAction(
   input: GhlConfigSubmitBody & { clientAccountId: string }
 ): Promise<GhlConfigSaveResult> {
+  await requireStaffWorkspacePermission("team_manager");
   const denied = await authorizeConfig();
   if (denied) return closedSave("FEATURE_DISABLED", denied.message ?? ghlConfigRequestErrorMessage("FEATURE_DISABLED"));
   const clientAccountId = input.clientAccountId.trim();

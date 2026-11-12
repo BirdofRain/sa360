@@ -92,7 +92,7 @@ export async function findCampaignRoutingRuleById(id: string, db: PrismaClient =
 export async function updateCampaignRoutingRuleDeliveryConfig(
   id: string,
   data: Prisma.CampaignRoutingRuleUpdateInput,
-  db: PrismaClient = prisma
+  db: PrismaClient | Prisma.TransactionClient = prisma
 ) {
   return db.campaignRoutingRule.update({ where: { id }, data });
 }

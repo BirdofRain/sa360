@@ -18,6 +18,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   if (access.kind === "anonymous" && adminGateEnabled) redirect("/login");
   const sessionRole =
     access.kind === "admin" ? ADMIN_COC_ROLE_ADMIN : access.kind === "observer" ? ADMIN_COC_ROLE_OBSERVER : null;
+  const navigation = access.kind === "observer" ? "observer" : access.kind === "staff_workspace" ? "workspace" : "admin";
   if (sessionRole !== ADMIN_COC_ROLE_ADMIN) {
     const reviewer = await readValidMetaReviewerSession();
     // Middleware already returns 403. This layout must not render operator
@@ -32,7 +33,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
     }
   }
   return (
-    <DashboardChrome adminGateEnabled={adminGateEnabled} sessionRole={sessionRole}>
+    <DashboardChrome adminGateEnabled={adminGateEnabled} sessionRole={sessionRole} navigation={navigation}>
       {children}
     </DashboardChrome>
   );

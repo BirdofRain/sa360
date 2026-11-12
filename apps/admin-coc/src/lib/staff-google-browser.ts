@@ -96,6 +96,7 @@ export async function completeStaffGoogleCallback(input: {
   fetchImpl?: FetchLike;
   exchange?: typeof exchangeStaffGoogleCode;
   resolve?: (value: { idToken: string; nonce: string }) => Promise<StaffGoogleResolution>;
+  claimInvitation?: (value: { idToken: string; nonce: string }) => Promise<StaffGoogleResolution>;
   claimState?: (replayId: string) => Promise<{ ok: true } | { ok: false; code: "reused_state" | "state_unavailable" }>;
   registerSession?: (token: string) => Promise<{ ok: true } | { ok: false; code: "session_rejected" | "session_unavailable" }>;
 }): Promise<StaffCallbackOutcome> {
@@ -142,6 +143,17 @@ export async function completeStaffGoogleCallback(input: {
     resolved = await resolve({ idToken: exchanged.idToken, nonce: verified.claims.nonce });
   } catch {
     return { kind: "denied", reason: "resolve_failed" };
+  }
+  if (!resolved.ok) {
+    const claimInvitation =
+      input.claimInvitation ??
+      ((value) => claimInvitationWithApi(origin as string, value, input.env, input.fetchImpl));
+    if (!input.claimInvitation && !origin) return { kind: "denied", reason: "denied" };
+    try {
+      resolved = await claimInvitation({ idToken: exchanged.idToken, nonce: verified.claims.nonce });
+    } catch {
+      return { kind: "denied", reason: "denied" };
+    }
   }
   if (!resolved.ok) return { kind: "denied", reason: "denied" };
   if (!PRINCIPAL_ID_PATTERN.test(resolved.staffPrincipalId) || !GOOGLE_SUB_PATTERN.test(resolved.googleSub)) {
@@ -203,6 +215,31 @@ async function registerSessionWithApi(
   if (response.status === 200) return { ok: true };
   if (response.status === 503) return { ok: false, code: "session_unavailable" };
   return { ok: false, code: "session_rejected" };
+}
+
+async function claimInvitationWithApi(
+  origin: string,
+  value: { idToken: string; nonce: string },
+  env: NodeJS.ProcessEnv,
+  fetchImpl: FetchLike | undefined
+): Promise<StaffGoogleResolution> {
+  const serviceHeaders = serviceCredentialHeaders(env);
+  if (!serviceHeaders || !origin) return { ok: false };
+  const response = await (fetchImpl ?? fetch)(`${origin}/internal/staff/google/claim`, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json", ...serviceHeaders },
+    body: JSON.stringify({ idToken: value.idToken, nonce: value.nonce }),
+    redirect: "error",
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) return { ok: false };
+  const parsed = (await response.json()) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { ok: false };
+  const record = parsed as Record<string, unknown>;
+  if (record.ok !== true || typeof record.staffPrincipalId !== "string" || typeof record.googleSub !== "string") {
+    return { ok: false };
+  }
+  return { ok: true, staffPrincipalId: record.staffPrincipalId, googleSub: record.googleSub };
 }
 
 async function resolveWithApi(

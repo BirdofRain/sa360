@@ -4,7 +4,7 @@ import { fetchOnboardingSummary } from "@/lib/admin-api/client-onboarding-v2";
 import { fetchCompanySheetsDestinationConfiguration } from "@/lib/admin-api/company-google-sheets";
 import { fetchAdminClientSourceFunnels } from "@/lib/admin-api/source-funnels-server";
 import { adminFetchJson, fetchAdminClientDetail, fetchAdminClientSetup, fetchAdminClients, fetchAdminGhlDestinationConfiguration, isAdminApiConfigured } from "@/lib/admin-api/server";
-import { requireAdminCocAdminSession } from "@/lib/admin-coc-session-guard";
+import { requireStaffWorkspacePermission } from "@/lib/admin-coc-session-guard";
 import { isNativeClientSetupEnabled } from "@/lib/clients/native-client-setup-env";
 
 import { isCompanySheetsConfigRequestEnabled } from "./company-sheets-config-request-env";
@@ -35,7 +35,7 @@ import type {
 const CLIENT_LIST_ERROR = "The client list could not be loaded.";
 
 export async function loadTeamWorkspaceIndex(): Promise<TeamWorkspaceIndexModel> {
-  await requireAdminCocAdminSession();
+  await requireStaffWorkspacePermission("team_workspace");
   if (!isTeamWorkspaceEnabled()) return { kind: "disabled" };
   if (!isAdminApiConfigured()) {
     return { kind: "error", message: "The admin API is not configured for this app." };
@@ -46,7 +46,7 @@ export async function loadTeamWorkspaceIndex(): Promise<TeamWorkspaceIndexModel>
 }
 
 export async function loadTeamWorkspaceClient(rawId: string): Promise<TeamWorkspaceDetailModel> {
-  await requireAdminCocAdminSession();
+  await requireStaffWorkspacePermission("team_workspace");
   if (!isTeamWorkspaceEnabled()) return { kind: "disabled" };
   const clientAccountId = normalizeTeamWorkspaceClientId(rawId);
   if (!clientAccountId) return { kind: "invalid_client" };
@@ -255,16 +255,16 @@ async function loadSourceCampaignReview(
   setupResult: Awaited<ReturnType<typeof fetchAdminClientSetup>> | null
 ): Promise<SourceCampaignReviewView> {
   const decision = setupRevisionForReview(setupEnabled, setupResult);
+  if (decision.kind === "disabled") {
+    return unavailableSourceCampaignReview("The setup request could not be checked because native client setup is turned off. Nothing was verified.");
+  }
   if (decision.kind === "untrusted") {
     return unavailableSourceCampaignReview("The saved setup request could not be read. Nothing was verified.");
   }
   const path = `/admin/v1/team-workspace/clients/${encodeURIComponent(clientAccountId)}/source-campaign-review`;
-  const url = decision.kind === "revision" ? `${path}?expectedRevision=${decision.revision}` : path;
+  const url = `${path}?expectedRevision=${decision.revision}`;
   const result = await adminFetchJson<unknown>(url);
   const parsed = narrowReview(result);
-  if (decision.kind === "disabled" && parsed.availability === "ready") {
-    return unavailableSourceCampaignReview("The setup request could not be checked because native client setup is turned off. Nothing was verified.");
-  }
   if (decision.kind === "revision" && parsed.revision !== decision.revision) {
     return unavailableSourceCampaignReview("The saved request changed. Reload before relying on this check. Nothing was verified.");
   }

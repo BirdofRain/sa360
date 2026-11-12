@@ -6,6 +6,17 @@
 
 import { fieldSuggestions, type DiscoveredDestinationField } from "@/lib/clients/onboarding/ghl-vet-setup-display";
 import { GUIDED_GHL_SURVEY_KEYS, GUIDED_GHL_SURVEY_LABELS } from "@/lib/team-workspace/ghl-destination";
+import {
+  assessGhlConfigSnapshotFreshness,
+  type GhlSnapshotFreshness,
+} from "@/lib/team-workspace/ghl-snapshot-freshness";
+
+export {
+  assessGhlConfigSnapshotFreshness,
+  GHL_CONFIG_SNAPSHOT_FUTURE_SKEW_MS,
+  GHL_CONFIG_SNAPSHOT_MAX_AGE_MS,
+  type GhlSnapshotFreshness,
+} from "@/lib/team-workspace/ghl-snapshot-freshness";
 
 /** Keep aligned with apps/api/src/lib/sa360-custom-field-keys.ts */
 export const GHL_CONFIG_LOGICAL_FIELD_KEYS = [
@@ -30,9 +41,6 @@ export const GHL_CONFIG_LOGICAL_FIELD_KEYS = [
   "sa360_delivery_idempotency_key",
   "sa360_delivery_mode",
 ] as const;
-
-export const GHL_CONFIG_SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-export const GHL_CONFIG_SNAPSHOT_FUTURE_SKEW_MS = 5 * 60 * 1000;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ERROR_CODE = /^[a-z0-9_]{1,80}$/;
@@ -81,12 +89,11 @@ export type GhlLocationPreview = {
   locationId: string;
   fetchedAt: string | null;
   fromCache: boolean;
+  snapshotVerification?: "live" | "cached" | "previously_captured" | null;
   workflows: Array<{ id: string; name: string }>;
   fields: Array<{ id: string; name: string; key: string | null; fieldKey: string | null }>;
   errors: string[];
 };
-
-export type GhlSnapshotFreshness = "fresh" | "expired" | "future" | "malformed";
 
 export type GhlConfigMappingStatus = "ready" | "missing" | "omitted" | "unresolved" | "duplicate" | "name_only";
 
@@ -104,7 +111,7 @@ export type GhlConfigReview = {
   locationDetail: string;
   workflowStatus: "missing" | "unresolved" | "ready";
   workflowDetail: string;
-  snapshotStatus: "missing" | GhlSnapshotFreshness;
+  snapshotStatus: "missing" | "previously_captured" | GhlSnapshotFreshness;
   snapshotDetail: string;
   rows: GhlConfigMappingReview[];
   blockers: string[];
@@ -147,14 +154,6 @@ export function draftFromStoredRequest(stored: GhlConfigStoredRequest | null): G
   return { locationId: stored.locationId, workflowId: stored.workflowId, mappings };
 }
 
-export function assessGhlConfigSnapshotFreshness(fetchedAt: unknown, now: Date): GhlSnapshotFreshness {
-  const parsed = parseTimestamp(fetchedAt);
-  if (!parsed) return "malformed";
-  if (now.getTime() - parsed.getTime() > GHL_CONFIG_SNAPSHOT_MAX_AGE_MS) return "expired";
-  if (parsed.getTime() - now.getTime() > GHL_CONFIG_SNAPSHOT_FUTURE_SKEW_MS) return "future";
-  return "fresh";
-}
-
 export function presentGhlLocationPreview(input: {
   locationId: string;
   reportedLocationId?: unknown;
@@ -162,6 +161,7 @@ export function presentGhlLocationPreview(input: {
   customFields?: unknown;
   fetchedAt?: unknown;
   fromCache?: unknown;
+  snapshotVerification?: unknown;
   errors?: unknown;
 }): GhlLocationPreview | null {
   const locationId = input.locationId.trim();
@@ -190,10 +190,15 @@ export function presentGhlLocationPreview(input: {
         return message ? [message] : [];
       })
     : [];
+  const verification = text(input.snapshotVerification);
   return {
     locationId,
     fetchedAt: text(input.fetchedAt),
     fromCache: input.fromCache === true,
+    snapshotVerification:
+      verification === "live" || verification === "cached" || verification === "previously_captured"
+        ? verification
+        : null,
     workflows,
     fields,
     errors,
@@ -261,6 +266,8 @@ export function ghlConfigRequestErrorMessage(code: string): string {
       return "The location snapshot is dated ahead of the server. Refresh it, then submit again. Nothing was stored.";
     case "snapshot_unusable":
       return "The location snapshot time could not be read. Refresh it, then submit again. Nothing was stored.";
+    case "snapshot_not_current":
+      return "The newest location snapshot is not a complete GoHighLevel discovery. An earlier snapshot was not used as current verification. Refresh the location, then submit again. Nothing was stored.";
     case "workflow_not_in_snapshot":
       return "That workflow id is not in this location's snapshot. A workflow name was not used in its place. Nothing was stored.";
     case "field_id_unverified":
@@ -386,7 +393,8 @@ export function reviewGhlConfigDraft(input: {
         : `${location?.locationName ?? locationId} (${locationId}) is connected. This choice is not saved yet.`;
 
   const freshness = preview ? assessGhlConfigSnapshotFreshness(preview.fetchedAt, now) : null;
-  const snapshotStatus = freshness ?? "missing";
+  const snapshotStatus =
+    preview?.snapshotVerification === "previously_captured" ? "previously_captured" : freshness ?? "missing";
   const snapshotDetail = snapshotCopy(snapshotStatus, preview);
 
   const workflowId = input.draft.workflowId.trim();
@@ -561,6 +569,9 @@ function disconnectedDetail(locationId: string, location: GhlConfigLocationChoic
 
 function snapshotCopy(status: GhlConfigReview["snapshotStatus"], preview: GhlLocationPreview | null): string {
   if (status === "missing") return "Load this location's snapshot. A snapshot from another location is not used.";
+  if (status === "previously_captured") {
+    return "This snapshot was previously captured. It is not current GoHighLevel verification. Refresh the location before submitting.";
+  }
   if (status === "expired") return "This location's snapshot is older than 24 hours. Refresh it before submitting.";
   if (status === "future") return "This location's snapshot is dated ahead of the server. Refresh it before submitting.";
   if (status === "malformed") return "This location's snapshot time could not be read. Refresh it before submitting.";
@@ -655,15 +666,6 @@ function boundaryClear(record: Record<string, unknown>): boolean {
 
 function revisionOf(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
-}
-
-function parseTimestamp(value: unknown): Date | null {
-  if (value instanceof Date) return Number.isFinite(value.getTime()) ? value : null;
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  const parsed = Date.parse(trimmed);
-  return Number.isFinite(parsed) ? new Date(parsed) : null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

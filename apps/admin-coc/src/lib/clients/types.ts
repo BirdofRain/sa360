@@ -35,6 +35,8 @@ export type ClientGhlDestination = {
   sourceAttributeFieldMapJson?: unknown;
   sourceEnrichmentPolicyJson?: unknown;
   sourceFieldAliasOverridesJson?: unknown;
+  /** Stored logical key → custom-field id. Absent on older payloads. */
+  sa360CustomFieldIdMapJson?: unknown;
   updatedAt: string;
 };
 

@@ -324,12 +324,24 @@ test("a mismatched client id is refused before a note is built", () => {
 
 test("forbidden keys and the combined age/dob label are recognized", () => {
   assert.equal(isForbiddenOnboardingAnswerKey("fbclid"), true);
-  assert.equal(isForbiddenOnboardingAnswerKey("xxTrustedFormCertUrl"), true);
-  assert.equal(isForbiddenOnboardingAnswerKey("trustedform_cert_url"), true);
+  for (const key of [
+    "xxTrustedFormCertUrl",
+    "xxTrustedFormCertURL",
+    "trustedformCertUrl",
+    "trustedform_cert_url",
+    "trustedform_certificate_url",
+    "Trusted Form Cert URL",
+  ]) {
+    assert.equal(isForbiddenOnboardingAnswerKey(key), true, key);
+  }
   assert.equal(isForbiddenOnboardingAnswerKey("leadid_token"), true);
   assert.equal(isForbiddenOnboardingAnswerKey("api_key"), true);
   assert.equal(isForbiddenOnboardingAnswerKey("X-Ghl-Signature"), true);
   assert.equal(isForbiddenOnboardingAnswerKey("Primary Reason"), false);
+  assert.equal(isForbiddenOnboardingAnswerKey("desired_coverage"), false);
+  assert.equal(isForbiddenOnboardingAnswerKey("military_status"), false);
+  assert.equal(isForbiddenOnboardingAnswerKey("notes"), false);
+  assert.equal(isForbiddenOnboardingAnswerKey("certificate"), false);
   assert.equal(isCombinedAgeDobLabel("Age/ DOB"), true);
   assert.equal(isCombinedAgeDobLabel("Age/DOB"), true);
   assert.equal(isCombinedAgeDobLabel("Age / DOB"), true);

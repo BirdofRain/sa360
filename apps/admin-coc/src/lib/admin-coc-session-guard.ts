@@ -15,7 +15,13 @@ import {
   ADMIN_COC_SIGN_IN_REQUIRED,
   parseAdminCocSessionToken,
 } from "./admin-coc-session.ts";
-import { readStaffAdminCocDecision, type StaffAdminCocDecision } from "./staff-admin-coc-access.ts";
+import {
+  readStaffCapabilities,
+  staffCapabilitiesFromTestDecision,
+  useStaffCapabilitiesTestResult,
+  type StaffCapability,
+} from "./staff-admin-coc-access.ts";
+import type { StaffAdminCocDecision } from "./staff-admin-coc-decision.ts";
 
 export const ADMIN_COC_FORBIDDEN = "Forbidden";
 
@@ -32,20 +38,23 @@ export class AdminCocForbiddenError extends Error {
  * Direct BFF tests use it because `cookies()` throws outside a request.
  */
 let testSessionCookie: string | undefined;
-let testStaffDecision: StaffAdminCocDecision | undefined;
 
 export function useAdminCocTestSessionCookie(value: string | undefined): void {
   testSessionCookie = value;
 }
 
 /** Test-only staff grant decision. Production requests leave this unset and call the API. */
-export function useStaffAdminCocTestDecision(value: StaffAdminCocDecision | undefined): void {
-  testStaffDecision = value;
+export function useStaffAdminCocTestDecision(value: StaffAdminCocDecision | "workspace" | undefined): void {
+  useStaffCapabilitiesTestResult(value === undefined ? undefined : staffCapabilitiesFromTestDecision(value));
 }
 
+export type StaffWorkspacePermission = Exclude<StaffCapability, "admin_coc">;
+
 export type AdminCocAccess =
-  | { kind: "admin"; source: "shared_password" | "staff" }
+  | { kind: "admin"; source: "shared_password" }
+  | { kind: "admin"; source: "staff"; staffPrincipalId: string }
   | { kind: "observer" }
+  | { kind: "staff_workspace"; permissions: readonly StaffWorkspacePermission[]; staffPrincipalId: string }
   | { kind: "staff_limited" }
   | { kind: "anonymous" };
 
@@ -58,10 +67,19 @@ export async function readAdminCocAccess(): Promise<AdminCocAccess> {
   const cookie = await readAdminCocSessionCookieValue();
   const role = parseAdminCocSessionToken(cookie)?.role ?? null;
   if (role === ADMIN_COC_ROLE_ADMIN) return { kind: "admin", source: "shared_password" };
-  const staff = testStaffDecision ?? (await readStaffAdminCocDecision());
-  if (staff === "admin") return { kind: "admin", source: "staff" };
+  const staff = await readStaffCapabilities();
+  if (staff.access === "admin" && staff.staffPrincipalId) {
+    return { kind: "admin", source: "staff", staffPrincipalId: staff.staffPrincipalId };
+  }
+  if (staff.access === "workspace" && staff.staffPrincipalId) {
+    return {
+      kind: "staff_workspace",
+      permissions: staff.permissions.filter((permission): permission is StaffWorkspacePermission => permission !== "admin_coc"),
+      staffPrincipalId: staff.staffPrincipalId,
+    };
+  }
   if (role === ADMIN_COC_ROLE_OBSERVER) return { kind: "observer" };
-  if (staff === "limited") return { kind: "staff_limited" };
+  if (staff.access === "limited") return { kind: "staff_limited" };
   return { kind: "anonymous" };
 }
 
@@ -95,8 +113,34 @@ export async function readAdminCocSessionRole(): Promise<AdminCocRole | null> {
 export async function requireAdminCocSession(): Promise<void> {
   const access = await readAdminCocAccess();
   if (access.kind === "admin" || access.kind === "observer") return;
+  if (access.kind === "staff_workspace") redirect("/team-workspace");
   if (access.kind === "staff_limited") redirect("/staff");
   redirect("/login");
+}
+
+/**
+ * Team Workspace permission. Shared-password admins and staff administrators pass.
+ * A staff session must hold the named permission. admin_coc is not implied by it.
+ */
+export async function requireStaffWorkspacePermission(permission: StaffWorkspacePermission): Promise<void> {
+  const access = await readAdminCocAccess();
+  if (access.kind === "admin") return;
+  if (access.kind === "staff_workspace" && access.permissions.includes(permission)) return;
+  if (access.kind === "staff_workspace") throw new AdminCocForbiddenError();
+  if (access.kind === "observer") throw new AdminCocForbiddenError();
+  if (access.kind === "staff_limited") redirect("/staff");
+  redirect("/login");
+}
+
+/**
+ * Individual Google administrator. A shared-password session is not enough.
+ */
+export async function requireStaffAdministrator(): Promise<{ staffPrincipalId: string }> {
+  const staff = await readStaffCapabilities();
+  if (staff.access !== "admin" || !staff.staffPrincipalId || !staff.permissions.includes("admin_coc")) {
+    throw new AdminCocForbiddenError();
+  }
+  return { staffPrincipalId: staff.staffPrincipalId };
 }
 
 /** Read actions on the observer allowlist. Same gate as `requireAdminCocSession`. */
@@ -122,7 +166,7 @@ export async function unauthorizedAdminCocBffResponse(
   request?: Request
 ): Promise<Response | null> {
   const access = await readAdminCocAccess();
-  if (access.kind === "staff_limited") {
+  if (access.kind === "staff_limited" || access.kind === "staff_workspace") {
     return Response.json({ ok: false, error: ADMIN_COC_FORBIDDEN }, { status: 403 });
   }
   if (access.kind !== "admin" && access.kind !== "observer") {
@@ -171,6 +215,7 @@ export async function adminCocAdminApiUnauthorized(): Promise<{
   body: string;
 } | null> {
   const access = await readAdminCocAccess();
+  if (access.kind === "staff_workspace") return { ok: false, status: 403, body: ADMIN_COC_FORBIDDEN };
   if (access.kind === "admin" || access.kind === "observer") return null;
   return { ok: false, status: 401, body: ADMIN_COC_SIGN_IN_REQUIRED };
 }

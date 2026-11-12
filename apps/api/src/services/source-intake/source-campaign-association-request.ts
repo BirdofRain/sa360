@@ -14,6 +14,7 @@ import { createHash } from "node:crypto";
 import { Prisma, type PrismaClient } from "@prisma/client";
 
 import { isClientOnboardingSetupEnabled } from "../../lib/client-onboarding-setup-env.js";
+import { acceptedOnboardingActor } from "../../lib/onboarding-staff-actor.js";
 import { isSourceCampaignRequestEnabled } from "../../lib/source-campaign-request-env.js";
 import {
   SOURCE_CAMPAIGN_MATCH_LIMIT,
@@ -27,7 +28,6 @@ import {
   type SourceCampaignRequestReview,
 } from "./source-association-request-review.js";
 
-const ACTOR = "ADMIN";
 const TRANSACTION = { timeout: 10_000 } as const;
 
 const BOUNDARY = {
@@ -52,7 +52,8 @@ export type SourceCampaignRequestError =
   | "unreadable_request"
   | "source_owned_by_other_client"
   | "ambiguous_source"
-  | "campaign_owned_by_other_client";
+  | "campaign_owned_by_other_client"
+  | "actor_rejected";
 
 type OwnershipRejection =
   | "source_owned_by_other_client"
@@ -61,7 +62,7 @@ type OwnershipRejection =
 
 export type SourceCampaignRequestFailure = typeof BOUNDARY & {
   ok: false;
-  statusCode: 404 | 409;
+  statusCode: 403 | 404 | 409;
   error: SourceCampaignRequestError;
   replayed: boolean;
   status?: "rejected";
@@ -218,13 +219,19 @@ export async function readSourceCampaignAssociationHead(
 export async function recordSourceCampaignAssociationRequest(
   db: PrismaClient,
   command: SourceCampaignRequestCommand,
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  actor?: string
 ): Promise<SourceCampaignRequestResult> {
   if (!isSourceCampaignRequestEnabled(env)) return failure(404, "feature_disabled");
   const clientAccountId = command.clientAccountId.trim();
   if (!clientAccountId) return failure(404, "client_not_found");
+  const recordedActor = acceptedOnboardingActor(actor);
+  if (!recordedActor) return failure(403, "actor_rejected");
   try {
-    return await db.$transaction((tx) => applyCommand(tx, { ...command, clientAccountId }, env), TRANSACTION);
+    return await db.$transaction(
+      (tx) => applyCommand(tx, { ...command, clientAccountId }, env, recordedActor),
+      TRANSACTION
+    );
   } catch (error) {
     if (isUniqueConflict(error)) return failure(409, "revision_conflict");
     throw error;
@@ -234,7 +241,8 @@ export async function recordSourceCampaignAssociationRequest(
 async function applyCommand(
   tx: Prisma.TransactionClient,
   command: SourceCampaignRequestCommand,
-  env: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv,
+  actor: string
 ): Promise<SourceCampaignRequestResult> {
   await tx.$queryRaw`
     SELECT 1 AS "locked"
@@ -268,7 +276,7 @@ async function applyCommand(
   if (command.intent === "reject") {
     return rejectOpen(tx, command, setup.revision, currentRevision);
   }
-  return recordProposal(tx, command, setup.identity, setup.revision, currentRevision);
+  return recordProposal(tx, command, setup.identity, setup.revision, currentRevision, actor);
 }
 
 async function recordProposal(
@@ -276,7 +284,8 @@ async function recordProposal(
   command: RecordCommand,
   identity: SavedSetupSourceIdentity,
   setupRevision: number,
-  currentRevision: number
+  currentRevision: number,
+  actor: string
 ): Promise<SourceCampaignRequestResult> {
   if (!identity.providerFunnelId && !identity.parentUrlKey) return failure(409, "setup_incomplete");
   if (!identity.providerCampaignId) return failure(409, "setup_incomplete");
@@ -362,7 +371,7 @@ async function recordProposal(
       status: reason === null ? "requested" : "rejected",
       payloadHash,
       recordResultJson: snapshot,
-      actor: ACTOR,
+      actor,
       dispositionReason: reason,
       rejectedAt: reason === null ? null : new Date(),
     },
@@ -653,7 +662,7 @@ function blank(value: string | null | undefined): string | null {
   return trimmed ? trimmed : null;
 }
 
-function failure(statusCode: 404 | 409, error: SourceCampaignRequestError): SourceCampaignRequestFailure {
+function failure(statusCode: 403 | 404 | 409, error: SourceCampaignRequestError): SourceCampaignRequestFailure {
   return { ...BOUNDARY, ok: false, statusCode, error, replayed: false };
 }
 

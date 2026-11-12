@@ -11,10 +11,12 @@ export function DashboardChrome({
   children,
   adminGateEnabled,
   sessionRole,
+  navigation = "admin",
 }: {
   children: ReactNode;
   adminGateEnabled: boolean;
   sessionRole: AdminCocRole | null;
+  navigation?: "admin" | "observer" | "workspace";
 }) {
   const pathname = usePathname();
   const meta = resolvePageMeta(pathname);
@@ -25,6 +27,7 @@ export function DashboardChrome({
       description={meta.description}
       adminGateEnabled={adminGateEnabled}
       sessionRole={sessionRole}
+      navigation={navigation}
     >
       {children}
     </DashboardShell>

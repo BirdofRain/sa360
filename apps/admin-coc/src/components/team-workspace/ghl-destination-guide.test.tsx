@@ -180,8 +180,10 @@ test("unresolved, duplicate, and mismatched workflow issues stay visible", async
         ],
         fetchedAt: "2026-11-10T12:00:00.000Z",
         fromCache: true,
+        snapshotVerification: "live",
         errors: [],
       },
+      now: new Date("2026-11-10T12:00:00.000Z"),
     }),
   };
   render(<Guide clientAccountId="phase2g_demo" />);
@@ -190,6 +192,55 @@ test("unresolved, duplicate, and mismatched workflow issues stay visible", async
   assert.equal(screen.getAllByText(/Branch of service/i).some((node) => /duplicate/i.test(node.textContent ?? "")), true);
   assert.equal(screen.getAllByText(/not in the location snapshot/i).length > 0, true);
   assert.match(screen.getByText(/HTTP 401/).textContent ?? "", /401/);
+  assert.equal(screen.queryByRole("button", { name: /save gohighlevel/i }), null);
+});
+
+test("Harbor saved ids stay visible when the latest snapshot is not current", async () => {
+  loadResult = {
+    ok: true,
+    view: presentGuidedGhlDestination({
+      clientAccountId: "harbor_benefits",
+      destination: {
+        destinationSubaccountIdGhl: "loc_harbor_local",
+        locationName: "Harbor location",
+        destinationWorkflowIdGhl: "wf_harbor_saved",
+        deliveryMode: "shadow",
+        deliveryEnabled: false,
+        clientCutoverApproved: false,
+        internalApprovalStatus: "not_reviewed",
+        updatedAt: "2026-11-11T23:10:37.772Z",
+        sourceAttributeFieldMapJson: {},
+        sa360CustomFieldIdMapJson: {
+          desired_coverage: "harbor_keep_coverage",
+          branch_of_service: "harbor_keep_branch",
+          primary_reason: "harbor_keep_reason",
+        },
+      },
+      connections: [
+        {
+          id: "conn_harbor",
+          locationId: "loc_harbor_local",
+          locationName: "Harbor location",
+          connectionStatus: "connected",
+        },
+      ],
+      snapshot: {
+        locationId: "loc_harbor_local",
+        workflows: [{ id: "wf_harbor_saved", name: "Harbor saved workflow" }],
+        customFields: [{ id: "harbor_keep_coverage", name: "Desired Coverage" }],
+        snapshotVerification: "previously_captured",
+        errors: ["The latest refresh failed: Invalid JWT"],
+      },
+    }),
+  };
+  render(<Guide clientAccountId="harbor_benefits" />);
+  const coverage = await screen.findAllByText(/Saved id harbor_keep_coverage/);
+  assert.equal(coverage.length, 2);
+  assert.match(coverage[0]?.textContent ?? "", /not currently verified/i);
+  assert.equal(screen.getAllByText(/Saved id harbor_keep_branch/).length, 2);
+  assert.equal(screen.getAllByText(/Saved id harbor_keep_reason/).length, 2);
+  assert.equal(screen.getAllByText(/not currently verified/i).length >= 3, true);
+  assert.equal(screen.queryByText(/No SA360 field ids are saved/i), null);
   assert.equal(screen.queryByRole("button", { name: /save gohighlevel/i }), null);
 });
 

@@ -30,6 +30,8 @@ import {
 import { claimStaffGoogleStateReplay } from "./staff-google-state-replay.js";
 import { createRedisStaffSessionRegistry, type StaffSessionRegistry } from "./staff-session-registry.js";
 import { staffGoogleRoutes } from "../routes/staff-google.js";
+import { staffTeamRoutes } from "../routes/staff-team.js";
+import { readGrantedStaffPermissions } from "./staff-team-management.js";
 
 const CLIENT_ID = "staff-test-client.apps.googleusercontent.com";
 const SESSION_SECRET = "staff-session-secret-at-least-32-characters";
@@ -214,6 +216,18 @@ describe("synthetic first staff login rehearsal", { skip: !runIntegration }, () 
     const secondRegistry = createRedisStaffSessionRegistry(secondRedis);
     const firstApp = await staffApp(loginEnv, firstRegistry, finder, getKey);
     const secondApp = await staffApp(loginEnv, secondRegistry, finder, getKey);
+    await firstApp.register(staffTeamRoutes, {
+      env: loginEnv,
+      sessionRegistry: firstRegistry,
+      findById: finder.findById,
+      permissions: (input: { staffPrincipalId: string }) => readGrantedStaffPermissions(input, db),
+    });
+    await secondApp.register(staffTeamRoutes, {
+      env: loginEnv,
+      sessionRegistry: secondRegistry,
+      findById: finder.findById,
+      permissions: (input: { staffPrincipalId: string }) => readGrantedStaffPermissions(input, db),
+    });
     const resolved = await firstApp.inject({
       method: "POST",
       url: "/internal/staff/google/resolve",
@@ -241,6 +255,18 @@ describe("synthetic first staff login rehearsal", { skip: !runIntegration }, () 
       headers: { [STAFF_GOOGLE_SERVICE_HEADER]: SERVICE, [STAFF_SESSION_HEADER]: session.token },
     });
     assert.equal(seenElsewhere.statusCode, 200);
+    const limited = await firstApp.inject({
+      method: "POST",
+      url: "/internal/staff/session/capabilities",
+      headers: { [STAFF_GOOGLE_SERVICE_HEADER]: SERVICE, [STAFF_SESSION_HEADER]: session.token },
+    });
+    assert.equal(limited.statusCode, 200);
+    assert.deepEqual(limited.json(), {
+      ok: true,
+      access: "limited",
+      permissions: [],
+      staffPrincipalId: principal.id,
+    });
 
     const redisDown = createRedisStaffSessionRegistry({
       eval: async () => { throw new Error("redis unavailable"); },
@@ -280,6 +306,13 @@ describe("synthetic first staff login rehearsal", { skip: !runIntegration }, () 
       headers: { [STAFF_GOOGLE_SERVICE_HEADER]: SERVICE, [STAFF_SESSION_HEADER]: session.token },
     });
     assert.equal(copied.statusCode, 401);
+    const revokedCapabilities = await secondApp.inject({
+      method: "POST",
+      url: "/internal/staff/session/capabilities",
+      headers: { [STAFF_GOOGLE_SERVICE_HEADER]: SERVICE, [STAFF_SESSION_HEADER]: session.token },
+    });
+    assert.equal(revokedCapabilities.statusCode, 401);
+    assert.deepEqual(revokedCapabilities.json(), { ok: false });
 
     const replacement = signStaffSession({
       staffPrincipalId: principal.id,
@@ -305,6 +338,13 @@ describe("synthetic first staff login rehearsal", { skip: !runIntegration }, () 
       headers: { [STAFF_GOOGLE_SERVICE_HEADER]: SERVICE, [STAFF_SESSION_HEADER]: replacement.token },
     });
     assert.equal(disabledSession.statusCode, 401);
+    const disabledCapabilities = await secondApp.inject({
+      method: "POST",
+      url: "/internal/staff/session/capabilities",
+      headers: { [STAFF_GOOGLE_SERVICE_HEADER]: SERVICE, [STAFF_SESSION_HEADER]: replacement.token },
+    });
+    assert.equal(disabledCapabilities.statusCode, 401);
+    assert.deepEqual(disabledCapabilities.json(), { ok: false });
     const disabledLogin = await firstApp.inject({
       method: "POST",
       url: "/internal/staff/google/resolve",
@@ -321,9 +361,6 @@ describe("synthetic first staff login rehearsal", { skip: !runIntegration }, () 
     assert.equal(loginSource.includes("sa360_staff_session"), false);
     assert.equal(loginSource.includes("staff-enrollment"), false);
     assert.equal(loginSource.includes("ADMIN_COC_SESSION_COOKIE"), true);
-    const gateSource = readFileSync(new URL("../../../admin-coc/src/lib/admin-coc-route-gate.ts", import.meta.url), "utf8");
-    assert.equal(gateSource.includes('"/team-workspace"'), false);
-    assert.equal(gateSource.includes('"/staff/google/callback"'), true);
 
     await firstRedis.del(staffSessionRegistryKey(session.claims.jti), staffSessionRegistryKey(replacement.claims.jti));
     await firstApp.close();

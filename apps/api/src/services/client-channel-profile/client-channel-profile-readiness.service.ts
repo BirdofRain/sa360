@@ -1,6 +1,6 @@
 import { findGhlLocationConnectionByLocationId } from "../../repositories/ghl-location-connection.repository.js";
-import { findLatestGhlLocationConfigSnapshot } from "../../repositories/ghl-location-config-snapshot.repository.js";
 import type { GhlDiscoveredCustomField } from "../ghl-config-discovery/ghl-config-discovery.types.js";
+import { readInformationalGhlLocationSnapshot } from "../ghl-config-discovery/ghl-operational-snapshot.js";
 import { listGhlCustomValues } from "../ghl-custom-value/ghl-custom-value-adapter.js";
 import {
   CLIENT_CHANNEL_EXPECTED_CUSTOM_FIELDS,
@@ -23,6 +23,8 @@ export type ChannelProfileReadinessReport = {
   unverifiedCustomValues: string[];
   /** True when the app could read real GHL custom values for this location. */
   customValuesVerified: boolean;
+  /** False when field evidence is historical, failed, or missing. READY requires true. */
+  snapshotCurrent: boolean;
   /** Whether the profile can be mirrored to GHL at all (location resolvable). Live still gated. */
   canApplyProfileToGhl: boolean;
   warnings: string[];
@@ -82,6 +84,7 @@ export async function validateClientChannelProfileReadiness(input: {
       missingCustomValues: [],
       unverifiedCustomValues: [...PROFILE_GHL_MIRROR_KEYS],
       customValuesVerified: false,
+      snapshotCurrent: false,
       canApplyProfileToGhl: false,
       warnings: ["No GHL location is linked to this client; readiness is unknown."],
       notes: ["Link a GHL location and run config discovery to evaluate readiness."],
@@ -93,12 +96,23 @@ export async function validateClientChannelProfileReadiness(input: {
     warnings.push("GHL location is not connected (or OAuth revoked); using cached data only.");
   }
 
-  // --- Custom fields (offline snapshot) ---
-  const snapshot = await findLatestGhlLocationConfigSnapshot(locationId).catch(() => null);
-  const discoveredFields =
-    (snapshot?.customFieldsJson as GhlDiscoveredCustomField[] | null) ?? [];
+  // Field evidence comes from a complete snapshot for this location.
+  // A failed row is not a list of missing fields. An older complete snapshot
+  // can be shown as historical, and it is not a READY claim.
+  const snapshotView = await readInformationalGhlLocationSnapshot(locationId).catch(() => null);
+  const currentSnapshot = snapshotView?.current === true ? snapshotView.snapshot : null;
+  const historicalSnapshot =
+    snapshotView?.evidence === "historical" ? snapshotView.snapshot : null;
+  const fieldSource = currentSnapshot ?? historicalSnapshot;
+  const discoveredFields = (fieldSource?.customFieldsJson as GhlDiscoveredCustomField[] | null) ?? [];
   const fieldHaystacks = discoveredFields.map(discoveredFieldHaystack);
-  const fields = detectInstalled(CLIENT_CHANNEL_EXPECTED_CUSTOM_FIELDS, fieldHaystacks);
+  const fields = fieldSource
+    ? detectInstalled(CLIENT_CHANNEL_EXPECTED_CUSTOM_FIELDS, fieldHaystacks)
+    : { installed: [] as string[], missing: [] as string[] };
+  if (snapshotView?.note) notes.push(snapshotView.note);
+  if (snapshotView?.evidence === "historical") {
+    notes.push("Listed custom fields are from an earlier discovery and are not verified.");
+  }
 
   // --- Custom values (best-effort live list) ---
   let installedCustomValues: string[] = [];
@@ -129,24 +143,29 @@ export async function validateClientChannelProfileReadiness(input: {
   }
 
   // --- Overall status ---
+  // READY is only a current complete discovery plus verified custom values.
   let status: ClientChannelReadinessStatus;
-  if (!customValuesVerified && fieldHaystacks.length === 0) {
+  if (!snapshotView || snapshotView.evidence === "unavailable") {
+    status = snapshotView?.reconnect ? "BLOCKED" : "UNKNOWN";
+  } else if (!snapshotView.current) {
+    status = snapshotView.reconnect ? "BLOCKED" : "STALE";
+  } else if (!customValuesVerified && fieldHaystacks.length === 0) {
     status = "UNKNOWN";
   } else if (customValuesVerified) {
     if (installedCustomValues.length === 0) status = "MISSING_CONFIG";
     else if (missingCustomValues.length === 0 && fields.missing.length === 0) status = "READY";
     else status = "PARTIAL";
+  } else if (fields.installed.length === 0) {
+    status = "MISSING_CONFIG";
   } else {
-    // Fields known from snapshot but custom values unverified.
-    if (fields.installed.length === 0) status = "MISSING_CONFIG";
-    else if (fields.missing.length === 0) status = "PARTIAL";
-    else status = "PARTIAL";
+    status = "PARTIAL";
   }
 
   return {
     status,
     locationId,
-    snapshotFetchedAt: snapshot?.fetchedAt?.toISOString() ?? null,
+    snapshotFetchedAt: fieldSource?.fetchedAt?.toISOString() ?? null,
+    snapshotCurrent: snapshotView?.current === true,
     installedFields: fields.installed,
     missingFields: fields.missing,
     installedCustomValues,

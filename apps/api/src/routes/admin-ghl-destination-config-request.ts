@@ -21,6 +21,7 @@ import { CLIENT_PORTAL_ASSERTION_HEADER } from "@sa360/shared/client-portal-asse
 
 import { verifyAdminApiKey } from "../lib/admin-auth.js";
 import { CLIENT_PORTAL_KEY_HEADER } from "../lib/client-portal-auth.js";
+import { resolveOnboardingStaffActor } from "../lib/onboarding-staff-actor.js";
 import { isGhlDestinationConfigRequestEnabled } from "../lib/ghl-destination-config-request-env.js";
 import { WORKSPACE_KEY_HEADER } from "../lib/workspace-auth.js";
 import { prisma } from "../lib/db.js";
@@ -79,7 +80,14 @@ export const adminGhlDestinationConfigRequestRoutes: FastifyPluginAsync<GhlDesti
     if (!clientAccountId) return reply.status(404).send({ ok: false, error: "client_not_found" });
     const parsed = bodySchema.safeParse(request.body ?? {});
     if (!parsed.success) return reply.status(400).send({ ok: false, error: "invalid_body" });
-    const saved = await recordGhlDestinationConfigRequest(db, { ...parsed.data, clientAccountId }, env);
+    const actor = await resolveOnboardingStaffActor(request.headers, db, env);
+    if (!actor.ok) return reply.status(actor.statusCode).send({ ok: false, error: actor.error });
+    const saved = await recordGhlDestinationConfigRequest(
+      db,
+      { ...parsed.data, clientAccountId },
+      env,
+      { actor: actor.actor }
+    );
     if (!saved.ok) return sendFailure(reply, saved);
     return reply.send(saved);
   });

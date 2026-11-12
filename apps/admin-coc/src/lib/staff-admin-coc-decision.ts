@@ -27,6 +27,74 @@ export function staffAdminCocLandingPath(decision: StaffAdminCocDecision): "/" |
   return decision === "admin" ? "/" : "/staff";
 }
 
+export const STAFF_CAPABILITIES_PATH = "/internal/staff/session/capabilities";
+
+export type StaffCapability = "admin_coc" | "team_workspace" | "team_manager" | "team_operations";
+
+export type StaffCapabilities = {
+  access: "admin" | "workspace" | "limited" | "anonymous";
+  permissions: StaffCapability[];
+  staffPrincipalId: string | null;
+};
+
+const CAPABILITIES = new Set<StaffCapability>(["admin_coc", "team_workspace", "team_manager", "team_operations"]);
+
+export function classifyStaffCapabilitiesResponse(status: number, body: unknown): StaffCapabilities {
+  const anonymous: StaffCapabilities = { access: "anonymous", permissions: [], staffPrincipalId: null };
+  if (status !== 200 || !body || typeof body !== "object" || Array.isArray(body)) return anonymous;
+  const record = body as Record<string, unknown>;
+  if (record.ok !== true || typeof record.staffPrincipalId !== "string" || !PRINCIPAL_ID_PATTERN.test(record.staffPrincipalId)) {
+    return anonymous;
+  }
+  if (!Array.isArray(record.permissions)) return anonymous;
+  const permissions = record.permissions.filter((permission): permission is StaffCapability =>
+    typeof permission === "string" && CAPABILITIES.has(permission as StaffCapability)
+  );
+  if (record.access === "admin" && permissions.includes("admin_coc")) {
+    return { access: "admin", permissions, staffPrincipalId: record.staffPrincipalId };
+  }
+  if (record.access === "workspace" && permissions.includes("team_workspace") && !permissions.includes("admin_coc")) {
+    return { access: "workspace", permissions, staffPrincipalId: record.staffPrincipalId };
+  }
+  if (record.access === "limited") {
+    return { access: "limited", permissions: [], staffPrincipalId: record.staffPrincipalId };
+  }
+  return anonymous;
+}
+
+export function staffCapabilitiesLandingPath(access: StaffCapabilities["access"]): "/" | "/team-workspace" | "/staff" {
+  if (access === "admin") return "/";
+  if (access === "workspace") return "/team-workspace";
+  return "/staff";
+}
+
+export async function fetchStaffCapabilities(input: {
+  origin: string;
+  serviceSecret: string;
+  sessionToken: string;
+  fetchImpl?: typeof fetch;
+}): Promise<StaffCapabilities> {
+  const anonymous: StaffCapabilities = { access: "anonymous", permissions: [], staffPrincipalId: null };
+  if (!input.origin || !input.serviceSecret || !input.sessionToken) return anonymous;
+  try {
+    const response = await (input.fetchImpl ?? fetch)(`${input.origin}${STAFF_CAPABILITIES_PATH}`, {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        [STAFF_ADMIN_COC_SERVICE_HEADER]: input.serviceSecret,
+        [STAFF_ADMIN_COC_SESSION_HEADER]: input.sessionToken,
+      },
+      redirect: "error",
+      cache: "no-store",
+      signal: AbortSignal.timeout(1_500),
+    });
+    const body = response.status === 200 ? await response.json().catch(() => null) : null;
+    return classifyStaffCapabilitiesResponse(response.status, body);
+  } catch {
+    return anonymous;
+  }
+}
+
 export function readStaffAdminCocOrigin(value: unknown): string | null {
   if (typeof value !== "string" || value.length === 0 || value.length > 300 || value.trim() !== value) return null;
   let url: URL;

@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { verifyAdminApiKey } from "../lib/admin-auth.js";
+import { prisma } from "../lib/db.js";
 import {
   adminDeleteConfirmQuerySchema,
   clientAccountCreateBodySchema,
@@ -61,6 +62,7 @@ import {
   saveClientOnboardingSetup,
 } from "../services/client-onboarding-setup.service.js";
 import { isClientOnboardingSetupEnabled } from "../lib/client-onboarding-setup-env.js";
+import { resolveOnboardingStaffActor } from "../lib/onboarding-staff-actor.js";
 
 async function requireAdmin(
   request: FastifyRequest,
@@ -228,7 +230,9 @@ export async function adminClientsRoutes(
         details: parsed.error.flatten(),
       });
     }
-    const result = await saveClientOnboardingSetup(clientAccountId, parsed.data);
+    const actor = await resolveOnboardingStaffActor(request.headers, prisma);
+    if (!actor.ok) return reply.status(actor.statusCode).send({ ok: false, error: actor.error });
+    const result = await saveClientOnboardingSetup(clientAccountId, parsed.data, prisma, actor.actor);
     if (!result.ok) {
       const status =
         result.code === "NOT_FOUND"
@@ -387,7 +391,7 @@ export async function adminClientsRoutes(
       return reply.status(404).send({ ok: false, error: "Client not found" });
     }
     if ("error" in result) {
-      const status = result.code === "LOCATION_MISMATCH" ? 409 : 400;
+      const status = result.code === "LOCATION_MISMATCH" || result.code.startsWith("SNAPSHOT_") ? 409 : 400;
       return reply.status(status).send({
         ok: false,
         error: result.error,

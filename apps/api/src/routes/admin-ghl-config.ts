@@ -39,8 +39,15 @@ export async function adminGhlConfigRoutes(app: FastifyInstance) {
     });
 
     if (!result.ok) {
-      const status = result.code === "NOT_CONNECTED" ? 400 : 404;
-      return reply.status(status).send({ ok: false, error: result.error, code: result.code });
+      const status = result.code === "NOT_CONNECTED" ? 400 : result.code === "NOT_FOUND" ? 404 : 409;
+      const body = {
+        ok: false as const,
+        error: result.error,
+        code: result.code,
+        preservedSnapshot: result.preservedSnapshot,
+      };
+      assertNoTokensInGhlConfigPayload(body as unknown as Record<string, unknown>);
+      return reply.status(status).send(body);
     }
 
     const payload = { ok: true as const, ...result.discovery };
@@ -106,7 +113,7 @@ export async function adminGhlConfigRoutes(app: FastifyInstance) {
       return reply.status(404).send({ ok: false, error: "Routing rule not found" });
     }
     if ("error" in result) {
-      const status = result.code === "LOCATION_MISMATCH" ? 409 : 400;
+      const status = result.code === "LOCATION_MISMATCH" || result.code.startsWith("SNAPSHOT_") ? 409 : 400;
       return reply.status(status).send({
         ok: false,
         error: result.error,

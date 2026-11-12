@@ -74,6 +74,7 @@ test("reads stay on the delivery summary and location snapshot, and a save write
     if (!loaded.ok || !loaded.view) return calls;
     assert.equal(loaded.view.configured, true);
     assert.equal(loaded.view.active, false);
+    assert.equal(loaded.view.stampFields.find((field) => field.key === "sa360_lead_uid")?.savedId, "field_uid");
     const invalid = await actions.readTeamWorkspaceGhlSnapshotAction("phase2g_demo", "loc_unknown", true);
     assert.equal(invalid.code, "INVALID_LOCATION");
     const snapshot = await actions.readTeamWorkspaceGhlSnapshotAction("phase2g_demo", "loc_saved", false);
@@ -156,6 +157,62 @@ test("an uncertain credential check does not claim the destination changed", asy
   );
   assert.equal(seen, "2026-11-10T12:00:00.000Z");
   restoreEnv(previous);
+});
+
+test("a manager can read saved field ids, and a portal session cannot", async () => {
+  const previous = snapshotEnv();
+  enableFlags();
+  const guard = await import("../../lib/admin-coc-session-guard.ts");
+  const actions = await import("./team-workspace-ghl-destination.ts");
+  const calls: string[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push(`${init?.method ?? "GET"} ${String(input)}`);
+    return json({
+      ...deliveryBody(),
+      clientAccountId: "harbor_benefits",
+      ghlDestination: {
+        ...deliveryBody().ghlDestination,
+        destinationSubaccountIdGhl: "loc_harbor_local",
+        destinationWorkflowIdGhl: "wf_harbor_saved",
+        deliveryEnabled: false,
+        deliveryMode: "shadow",
+        sourceAttributeFieldMapJson: {},
+        sa360CustomFieldIdMapJson: {
+          desired_coverage: "harbor_keep_coverage",
+          branch_of_service: "harbor_keep_branch",
+          primary_reason: "harbor_keep_reason",
+        },
+      },
+    });
+  }) as typeof fetch;
+  try {
+    guard.useAdminCocTestSessionCookie(undefined);
+    guard.useStaffAdminCocTestDecision("workspace");
+    const loaded = await actions.loadTeamWorkspaceGhlDestinationAction("harbor_benefits");
+    assert.equal(loaded.ok, true);
+    if (!loaded.ok || !loaded.view) return;
+    assert.equal(loaded.view.deliveryEnabled, false);
+    assert.equal(loaded.view.fields.find((field) => field.key === "desired_coverage")?.savedId, "harbor_keep_coverage");
+    assert.equal(loaded.view.fields.find((field) => field.key === "branch_of_service")?.savedId, "harbor_keep_branch");
+    assert.equal(loaded.view.fields.find((field) => field.key === "primary_reason")?.savedId, "harbor_keep_reason");
+    assert.equal(loaded.view.fields.every((field) => field.status === "unverified"), true);
+    await assert.rejects(() => actions.saveTeamWorkspaceGhlDestinationAction("harbor_benefits"));
+    assert.equal(calls.some((call) => call.startsWith("POST")), false);
+    assert.equal(calls.some((call) => call.includes("/ghl-config")), false);
+    assert.equal(calls.some((call) => call.includes("/delivery-config")), true);
+
+    guard.useStaffAdminCocTestDecision(undefined);
+    guard.useAdminCocTestSessionCookie("portal-session");
+    const beforePortal = calls.length;
+    await assert.rejects(() => actions.loadTeamWorkspaceGhlDestinationAction("harbor_benefits"));
+    assert.equal(calls.length, beforePortal);
+  } finally {
+    globalThis.fetch = original;
+    guard.useAdminCocTestSessionCookie(undefined);
+    guard.useStaffAdminCocTestDecision(undefined);
+    restoreEnv(previous);
+  }
 });
 
 function enableFlags() {

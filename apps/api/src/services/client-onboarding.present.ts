@@ -46,6 +46,12 @@ export type ClientGhlDestinationDto = {
   sourceAttributeFieldMapJson?: unknown;
   sourceEnrichmentPolicyJson?: unknown;
   sourceFieldAliasOverridesJson?: unknown;
+  /**
+   * Saved SA360 logical key → GoHighLevel custom-field id.
+   * This is the stored JSON value. It is not a discovery result and it is not
+   * proof that the id is present in a current location snapshot.
+   */
+  sa360CustomFieldIdMapJson: unknown;
   updatedAt: string;
 };
 
@@ -131,6 +137,7 @@ export function presentClientGhlDestination(
     sourceAttributeFieldMapJson: dest.sourceAttributeFieldMapJson,
     sourceEnrichmentPolicyJson: dest.sourceEnrichmentPolicyJson,
     sourceFieldAliasOverridesJson: dest.sourceFieldAliasOverridesJson,
+    sa360CustomFieldIdMapJson: dest.sa360CustomFieldIdMapJson,
     updatedAt: dest.updatedAt.toISOString(),
   };
 }

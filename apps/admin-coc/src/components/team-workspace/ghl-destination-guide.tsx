@@ -329,7 +329,7 @@ function Progress({ view }: { view: GuidedGhlDestinationView }) {
     {
       label: "Field ids",
       state: view.fields.length > 0 && view.fields.every((field) => field.status === "verified") ? "complete" : "current",
-      detail: "A saved field id is verified only when it equals a field id in the snapshot.",
+      detail: "A saved field id is shown on its own. It is currently verified only when a current snapshot contains that same id.",
     },
     {
       label: "Delivery",

@@ -180,8 +180,10 @@ test("unresolved, duplicate, and mismatched workflow issues stay visible", async
         ],
         fetchedAt: "2026-11-10T12:00:00.000Z",
         fromCache: true,
+        snapshotVerification: "live",
         errors: [],
       },
+      now: new Date("2026-11-10T12:00:00.000Z"),
     }),
   };
   render(<Guide clientAccountId="phase2g_demo" />);

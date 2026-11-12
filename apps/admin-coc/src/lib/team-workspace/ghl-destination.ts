@@ -8,6 +8,7 @@ import {
   savedMappingEntries,
   type DiscoveredDestinationField,
 } from "@/lib/clients/onboarding/ghl-vet-setup-display";
+import { assessGhlConfigSnapshotFreshness } from "@/lib/team-workspace/ghl-snapshot-freshness";
 
 export const GUIDED_GHL_SURVEY_KEYS = ["desired_coverage", "branch_of_service", "primary_reason"] as const;
 
@@ -111,6 +112,8 @@ export type GuidedGhlPresentInput = {
   snapshot?: GuidedGhlSnapshot | null;
   snapshotError?: string | null;
   extraIssues?: string[];
+  /** Clock for the 24-hour / five-minute snapshot window. Defaults to the current time. */
+  now?: Date;
 };
 
 type DestinationShape = {
@@ -177,7 +180,7 @@ export function presentGuidedGhlDestination(input: GuidedGhlPresentInput): Guide
   const destination = readDestination(input.destination);
   const locations = readLocations(input.connections, input.connection, destination?.locationId ?? null);
   const savedLocation = locations.find((location) => location.saved) ?? null;
-  const snapshot = readSnapshot(input.snapshot);
+  const snapshot = readSnapshot(input.snapshot, input.now ?? new Date());
   const snapshotForSaved = Boolean(snapshot && destination?.locationId && snapshot.locationId === destination.locationId);
   const fieldsForReview = snapshotForSaved ? snapshot?.fields ?? [] : [];
   const discoveryLoaded = snapshotForSaved;
@@ -540,7 +543,7 @@ function readLocation(value: unknown): GuidedGhlLocationChoice | null {
   };
 }
 
-function readSnapshot(snapshot: GuidedGhlSnapshot | null | undefined): {
+function readSnapshot(snapshot: GuidedGhlSnapshot | null | undefined, now: Date): {
   locationId: string;
   workflows: Array<{ id: string; name: string }>;
   fields: DiscoveredDestinationField[];
@@ -574,9 +577,9 @@ function readSnapshot(snapshot: GuidedGhlSnapshot | null | undefined): {
   const previouslyCaptured =
     verification === "previously_captured" ||
     errors.some((error) => /not current GoHighLevel verification/i.test(error));
-  const failedRefresh = errors.some((error) =>
-    /invalid jwt|refresh failed|authentication|credentials|not current gohighlevel verification/i.test(error)
-  );
+  const failedRefresh = errors.length > 0;
+  const successfulDiscovery = verification === "live" || verification === "cached";
+  const freshness = assessGhlConfigSnapshotFreshness(snapshot.fetchedAt, now);
   return {
     locationId,
     workflows,
@@ -584,7 +587,7 @@ function readSnapshot(snapshot: GuidedGhlSnapshot | null | undefined): {
     fetchedAt: text(snapshot.fetchedAt),
     fromCache: snapshot.fromCache === true,
     previouslyCaptured,
-    verificationCurrent: !previouslyCaptured && !failedRefresh,
+    verificationCurrent: successfulDiscovery && !previouslyCaptured && !failedRefresh && freshness === "fresh",
     errors,
   };
 }

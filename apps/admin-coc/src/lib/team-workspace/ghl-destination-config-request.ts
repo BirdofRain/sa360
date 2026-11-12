@@ -6,6 +6,17 @@
 
 import { fieldSuggestions, type DiscoveredDestinationField } from "@/lib/clients/onboarding/ghl-vet-setup-display";
 import { GUIDED_GHL_SURVEY_KEYS, GUIDED_GHL_SURVEY_LABELS } from "@/lib/team-workspace/ghl-destination";
+import {
+  assessGhlConfigSnapshotFreshness,
+  type GhlSnapshotFreshness,
+} from "@/lib/team-workspace/ghl-snapshot-freshness";
+
+export {
+  assessGhlConfigSnapshotFreshness,
+  GHL_CONFIG_SNAPSHOT_FUTURE_SKEW_MS,
+  GHL_CONFIG_SNAPSHOT_MAX_AGE_MS,
+  type GhlSnapshotFreshness,
+} from "@/lib/team-workspace/ghl-snapshot-freshness";
 
 /** Keep aligned with apps/api/src/lib/sa360-custom-field-keys.ts */
 export const GHL_CONFIG_LOGICAL_FIELD_KEYS = [
@@ -30,9 +41,6 @@ export const GHL_CONFIG_LOGICAL_FIELD_KEYS = [
   "sa360_delivery_idempotency_key",
   "sa360_delivery_mode",
 ] as const;
-
-export const GHL_CONFIG_SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-export const GHL_CONFIG_SNAPSHOT_FUTURE_SKEW_MS = 5 * 60 * 1000;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ERROR_CODE = /^[a-z0-9_]{1,80}$/;
@@ -86,8 +94,6 @@ export type GhlLocationPreview = {
   fields: Array<{ id: string; name: string; key: string | null; fieldKey: string | null }>;
   errors: string[];
 };
-
-export type GhlSnapshotFreshness = "fresh" | "expired" | "future" | "malformed";
 
 export type GhlConfigMappingStatus = "ready" | "missing" | "omitted" | "unresolved" | "duplicate" | "name_only";
 
@@ -146,14 +152,6 @@ export function draftFromStoredRequest(stored: GhlConfigStoredRequest | null): G
   const mappings: Record<string, string> = {};
   for (const row of stored.fieldMappings) mappings[row.key] = row.fieldId;
   return { locationId: stored.locationId, workflowId: stored.workflowId, mappings };
-}
-
-export function assessGhlConfigSnapshotFreshness(fetchedAt: unknown, now: Date): GhlSnapshotFreshness {
-  const parsed = parseTimestamp(fetchedAt);
-  if (!parsed) return "malformed";
-  if (now.getTime() - parsed.getTime() > GHL_CONFIG_SNAPSHOT_MAX_AGE_MS) return "expired";
-  if (parsed.getTime() - now.getTime() > GHL_CONFIG_SNAPSHOT_FUTURE_SKEW_MS) return "future";
-  return "fresh";
 }
 
 export function presentGhlLocationPreview(input: {
@@ -668,15 +666,6 @@ function boundaryClear(record: Record<string, unknown>): boolean {
 
 function revisionOf(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
-}
-
-function parseTimestamp(value: unknown): Date | null {
-  if (value instanceof Date) return Number.isFinite(value.getTime()) ? value : null;
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  const parsed = Date.parse(trimmed);
-  return Number.isFinite(parsed) ? new Date(parsed) : null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

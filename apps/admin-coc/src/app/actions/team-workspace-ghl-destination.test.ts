@@ -215,6 +215,72 @@ test("a manager can read saved field ids, and a portal session cannot", async ()
   }
 });
 
+test("operations can read saved ids, and a failed discovery does not verify them", async () => {
+  const previous = snapshotEnv();
+  enableFlags();
+  const guard = await import("../../lib/admin-coc-session-guard.ts");
+  const staff = await import("../../lib/staff-admin-coc-access.ts");
+  const actions = await import("./team-workspace-ghl-destination.ts");
+  const calls: string[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    calls.push(`${init?.method ?? "GET"} ${url}`);
+    if (url.includes("/ghl/locations/")) return json({ ok: false, error: "discovery unavailable" }, 503);
+    return json({
+      ...deliveryBody(),
+      clientAccountId: "harbor_benefits",
+      ghlDestination: {
+        ...deliveryBody().ghlDestination,
+        destinationSubaccountIdGhl: "loc_harbor_local",
+        destinationWorkflowIdGhl: "wf_harbor_saved",
+        deliveryEnabled: false,
+        deliveryMode: "shadow",
+        sourceAttributeFieldMapJson: {},
+        sa360CustomFieldIdMapJson: {
+          desired_coverage: "harbor_keep_coverage",
+          branch_of_service: "harbor_keep_branch",
+          primary_reason: "harbor_keep_reason",
+        },
+      },
+      connection: {
+        ...deliveryBody().connection,
+        locationId: "loc_harbor_local",
+      },
+    });
+  }) as typeof fetch;
+  try {
+    guard.useAdminCocTestSessionCookie(undefined);
+    staff.useStaffCapabilitiesTestResult({
+      access: "workspace",
+      permissions: ["team_workspace", "team_operations"],
+      staffPrincipalId: "c123456789012345678901234",
+    });
+    const loaded = await actions.loadTeamWorkspaceGhlDestinationAction("harbor_benefits");
+    assert.equal(loaded.ok, true);
+    assert.ok(loaded.view);
+    if (!loaded.view) return;
+    assert.equal(loaded.view.fields.find((field) => field.key === "desired_coverage")?.savedId, "harbor_keep_coverage");
+    assert.equal(loaded.view.verified, false);
+    assert.equal(loaded.view.fields.every((field) => field.status === "unverified"), true);
+    const failed = await actions.readTeamWorkspaceGhlSnapshotAction("harbor_benefits", "loc_harbor_local", false);
+    assert.equal(failed.ok, false);
+    assert.ok(failed.view);
+    if (!failed.view) return;
+    assert.equal(failed.view.verified, false);
+    assert.equal(failed.view.fields.find((field) => field.key === "branch_of_service")?.savedId, "harbor_keep_branch");
+    assert.equal(failed.view.fields.find((field) => field.key === "primary_reason")?.savedId, "harbor_keep_reason");
+    assert.equal(failed.view.fields.some((field) => field.status === "verified"), false);
+    assert.equal(failed.view.deliveryEnabled, false);
+    assert.equal(calls.some((call) => call.startsWith("POST")), false);
+  } finally {
+    globalThis.fetch = original;
+    guard.useAdminCocTestSessionCookie(undefined);
+    staff.useStaffCapabilitiesTestResult(undefined);
+    restoreEnv(previous);
+  }
+});
+
 function enableFlags() {
   process.env.ADMIN_COC_PASSWORD = "operator-password";
   process.env.ADMIN_COC_SESSION_SECRET = SECRET;

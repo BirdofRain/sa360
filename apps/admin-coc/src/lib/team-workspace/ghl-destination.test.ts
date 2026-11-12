@@ -57,7 +57,8 @@ function snapshot(overrides: Record<string, unknown> = {}) {
       { id: "field_uid", name: "SA360 Lead UID", fieldKey: "contact.sa360_lead_uid" },
     ],
     fetchedAt: savedAt,
-    fromCache: true,
+    fromCache: false,
+    snapshotVerification: "live",
     errors: [],
     ...overrides,
   };
@@ -69,6 +70,7 @@ function present(overrides: Parameters<typeof presentGuidedGhlDestination>[0] = 
     destination: destination(),
     connections: [connection()],
     snapshot: snapshot(),
+    now: new Date(savedAt),
     ...overrides,
   });
 }
@@ -358,8 +360,10 @@ test("Summit keeps an active destination and saved ids without treating an old s
         { id: "summit_live_uid", name: "SA360 Lead UID" },
       ],
       snapshotVerification: "live",
+      fetchedAt: acceptanceSavedAt,
       errors: [],
     },
+    now: new Date(acceptanceSavedAt),
   });
   assert.equal(current.active, true);
   assert.equal(current.deliveryEnabled, true);
@@ -401,6 +405,103 @@ test("null, missing, malformed, and legacy field maps do not invent saved ids", 
     assert.equal(view.fields.every((field) => field.savedId === null), true);
     assert.equal(JSON.stringify(view).includes("legacy_id"), false);
   }
+});
+
+test("field verification follows the 24-hour snapshot window and does not change delivery", () => {
+  const now = new Date("2026-11-12T15:00:00.000Z");
+  const fresh = new Date(now.getTime() - 60_000).toISOString();
+  const withinSkew = new Date(now.getTime() + 4 * 60 * 1000).toISOString();
+  const expired = new Date(now.getTime() - 24 * 60 * 60 * 1000 - 1000).toISOString();
+  const future = new Date(now.getTime() + 6 * 60 * 1000).toISOString();
+  const savedMap = {
+    desired_coverage: "summit_live_coverage",
+    branch_of_service: "summit_live_branch",
+    primary_reason: "summit_live_reason",
+  };
+  const viewFor = (snapshotOverrides: Record<string, unknown>, locationId = "loc_summit_local") =>
+    presentGuidedGhlDestination({
+      clientAccountId: "summit_agency",
+      now,
+      destination: acceptanceDestination({
+        destinationSubaccountIdGhl: "loc_summit_local",
+        locationName: "Summit location",
+        destinationWorkflowIdGhl: "wf_summit_live",
+        deliveryMode: "live",
+        deliveryEnabled: true,
+        clientCutoverApproved: true,
+        internalApprovalStatus: "approved",
+        sa360CustomFieldIdMapJson: savedMap,
+      }),
+      connections: [
+        {
+          id: "conn_summit",
+          locationId: "loc_summit_local",
+          locationName: "Summit location",
+          connectionStatus: "connected",
+        },
+      ],
+      snapshot: {
+        locationId,
+        workflows: [{ id: "wf_summit_live", name: "Summit live workflow" }],
+        customFields: [
+          { id: "summit_live_coverage", name: "Desired Coverage" },
+          { id: "summit_live_branch", name: "Branch of Service" },
+          { id: "summit_live_reason", name: "Primary Reason" },
+        ],
+        fetchedAt: fresh,
+        snapshotVerification: "live",
+        errors: [],
+        ...snapshotOverrides,
+      },
+    });
+
+  const live = viewFor({});
+  assert.equal(live.fields.find((field) => field.key === "desired_coverage")?.status, "verified");
+  assert.equal(live.fields.every((field) => field.savedId), true);
+  assert.equal(live.deliveryEnabled, true);
+  assert.equal(live.active, true);
+
+  const cached = viewFor({ snapshotVerification: "cached", fromCache: true, fetchedAt: withinSkew });
+  assert.equal(cached.fields.find((field) => field.key === "branch_of_service")?.status, "verified");
+  assert.equal(cached.active, true);
+
+  const captured = viewFor({ snapshotVerification: "previously_captured" });
+  assert.equal(captured.fields.every((field) => field.status === "unverified" && field.savedId), true);
+  assert.equal(captured.verified, false);
+  assert.equal(captured.deliveryEnabled, true);
+
+  const stale = viewFor({ snapshotVerification: "cached", fromCache: true, fetchedAt: expired });
+  assert.equal(stale.fields.every((field) => field.status === "unverified"), true);
+  assert.equal(stale.fields.find((field) => field.key === "primary_reason")?.savedId, "summit_live_reason");
+  assert.equal(stale.active, true);
+  assert.equal(stale.deliveryEnabled, true);
+  assert.equal(stale.deliveryMode, "live");
+
+  const ahead = viewFor({ fetchedAt: future });
+  assert.equal(ahead.fields.every((field) => field.status === "unverified" && field.savedId), true);
+  assert.equal(ahead.verified, false);
+
+  const missingTime = viewFor({ fetchedAt: undefined });
+  assert.equal(missingTime.fields.every((field) => field.status === "unverified"), true);
+  assert.equal(missingTime.verified, false);
+
+  const missingStatus = viewFor({ snapshotVerification: undefined });
+  assert.equal(missingStatus.fields.every((field) => field.status === "unverified" && field.savedId), true);
+
+  const unknownStatus = viewFor({ snapshotVerification: "complete" });
+  assert.equal(unknownStatus.fields.every((field) => field.status === "unverified"), true);
+
+  const failed = viewFor({ errors: ["Invalid JWT"] });
+  assert.equal(failed.fields.every((field) => field.status === "unverified" && field.savedId), true);
+  assert.equal(failed.verified, false);
+  assert.equal(failed.deliveryEnabled, true);
+
+  const mismatch = viewFor({}, "loc_other");
+  assert.equal(mismatch.snapshotLoaded, false);
+  assert.equal(mismatch.verified, false);
+  assert.equal(mismatch.fields.every((field) => field.status === "unverified" && field.savedId), true);
+  assert.equal(mismatch.active, true);
+  assert.equal(mismatch.deliveryEnabled, true);
 });
 
 test("a changed saved timestamp is stale and an unread snapshot is not verified", () => {

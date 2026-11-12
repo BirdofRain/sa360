@@ -16,7 +16,8 @@ import {
 export { staffAdminCocLandingPath };
 export type { StaffAdminCocDecision, StaffCapabilities, StaffCapability };
 
-const TEST_PRINCIPAL_ID = "c123456789012345678901234";
+export const STAFF_CAPABILITIES_TEST_PRINCIPAL_ID = "c123456789012345678901234";
+const TEST_PRINCIPAL_ID = STAFF_CAPABILITIES_TEST_PRINCIPAL_ID;
 let testCapabilities: StaffCapabilities | undefined;
 
 /** Test-only capabilities. Production requests leave this unset and call the API. */

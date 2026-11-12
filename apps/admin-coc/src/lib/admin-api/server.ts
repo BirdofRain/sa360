@@ -101,6 +101,11 @@ import {
 } from "../admin-coc-session-guard.ts";
 import { ADMIN_COC_SIGN_IN_REQUIRED } from "../admin-coc-session.ts";
 import { staffWorkspaceAdminApiAllowed } from "../staff-workspace-api-allowlist.ts";
+import {
+  mintNamedStaffOnboardingHeader,
+  namedStaffPrincipalId,
+  onboardingWriteAttributesStaff,
+} from "./onboarding-actor.ts";
 import { getSa360PublicApiBaseUrl } from "../sa360-public-api-base-url";
 import { formatAdminApiError, readAdminApiErrorCode } from "./admin-api-error";
 
@@ -149,7 +154,7 @@ export async function executeAuthorizedAdminApiRequest<T>(
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
   path: string,
   body?: unknown,
-  init?: { signal?: AbortSignal }
+  init?: { signal?: AbortSignal; headers?: Record<string, string> }
 ): Promise<AdminFetchResult<T>> {
   const baseUrl = getAdminApiBaseUrl();
   const apiKey = getAdminApiKey();
@@ -167,6 +172,10 @@ export async function executeAuthorizedAdminApiRequest<T>(
     [ADMIN_KEY_HEADER]: apiKey,
     Accept: "application/json",
   };
+  for (const [name, value] of Object.entries(init?.headers ?? {})) {
+    if (name.toLowerCase() === ADMIN_KEY_HEADER) continue;
+    headers[name] = value;
+  }
   if (body !== undefined) headers["Content-Type"] = "application/json";
 
   try {
@@ -211,14 +220,38 @@ export async function adminRequestJson<T>(
     if (!staffWorkspaceAdminApiAllowed(access.permissions, method, path)) {
       return { ok: false, status: 403, body: ADMIN_COC_FORBIDDEN };
     }
-    return executeAuthorizedAdminApiRequest<T>(method, path, body, init);
+    return executeAttributedAdminApiRequest<T>(access, method, path, body, init);
   }
   if (access.kind !== "admin" && access.kind !== "observer") {
     return { ok: false, status: 401, body: ADMIN_COC_SIGN_IN_REQUIRED };
   }
   const observerDenied = access.kind === "observer" ? await observerAdminApiKeyDenied(method, path) : null;
   if (observerDenied) return observerDenied;
-  return executeAuthorizedAdminApiRequest<T>(method, path, body, init);
+  return executeAttributedAdminApiRequest<T>(access, method, path, body, init);
+}
+
+/**
+ * A named staff session must present a server-minted assertion on onboarding
+ * writes. Minting failure does not call the API, so the actor cannot fall back
+ * to ADMIN. Shared-password admin sends no assertion.
+ */
+async function executeAttributedAdminApiRequest<T>(
+  access: Awaited<ReturnType<typeof readAdminCocAccess>>,
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
+  path: string,
+  body?: unknown,
+  init?: { signal?: AbortSignal; headers?: Record<string, string> }
+): Promise<AdminFetchResult<T>> {
+  const principalId = namedStaffPrincipalId(access);
+  if (!principalId || !onboardingWriteAttributesStaff(method, path)) {
+    return executeAuthorizedAdminApiRequest<T>(method, path, body, init);
+  }
+  const minted = mintNamedStaffOnboardingHeader(principalId);
+  if (!minted.ok) return { ok: false, status: 403, body: ADMIN_COC_FORBIDDEN };
+  return executeAuthorizedAdminApiRequest<T>(method, path, body, {
+    ...init,
+    headers: { ...init?.headers, [minted.name]: minted.value },
+  });
 }
 
 function formatError(err: AdminFetchFailure): string {

@@ -1,10 +1,10 @@
 # Staff assertion
 
-Status: **signing contract only**. No login, no OAuth client, no staff session,
-no route, no permission grant, and no production secret.
+Status: **identity evidence**. Onboarding writes read it. It is not a
+permission grant, and this change does not provision a production secret.
 
-This assertion is how a future Admin C.O.C. server can tell the SA360 API
-which `StaffPrincipal` it has already authenticated. It is identity evidence.
+This assertion is how the Admin C.O.C. server tells the SA360 API which
+`StaffPrincipal` it has already authenticated. It is identity evidence.
 It is not a permission, and possessing it does not make a principal active.
 
 The module is `packages/shared/src/staff-assertion.ts`, exported as
@@ -70,7 +70,9 @@ out of the token. It does not look up a row and it does not grant a permission.
 assertion for a different principal is `principal_mismatch`. Changing `sub`
 inside an already signed token is `invalid_signature`.
 
-The future header name is `x-sa360-staff-assertion`. No route reads it.
+The header name is `x-sa360-staff-assertion`. Onboarding writes read it
+only as identity evidence. A missing header stays the shared admin actor.
+A present header that does not verify is refused. It is not a permission.
 
 ## Authorization boundary
 
@@ -94,6 +96,26 @@ The future handler must not record it as the actor. The actor is the
 The association-correction snapshot remains a separate signature over the
 cohort. A staff assertion does not replace that snapshot, and that snapshot
 does not authenticate a person.
+
+## Onboarding attribution
+
+Client setup audits, source and campaign requests, GoHighLevel destination
+requests, and Company Sheets destination requests store an actor. The shared
+admin key, with no assertion, stores `ADMIN`. A named staff session stores
+`StaffPrincipal.id` after all of the following:
+
+1. The admin API key still authenticates the Admin C.O.C. server.
+2. The assertion verifies for this issuer, audience, and purpose.
+3. `sub` is loaded from `StaffPrincipal` at request time.
+4. That row is `active`, with `disabledAt` null, `provider` `google`, and `providerSubject` bound.
+5. A live granted permission is `team_manager` or `admin_coc`. `team_operations` is not a write.
+
+The Admin C.O.C. mints the assertion from the staff principal id already
+returned for the verified session cookie. The browser does not supply the
+actor. `x-sa360-admin-actor` is not read. An assertion that fails, or a
+principal that is missing, disabled, unbound, or not allowed to write, does
+not store `ADMIN`. The same request id still returns the original row and
+does not replace its actor. The raw token is not stored.
 
 ## Replay
 
@@ -129,26 +151,12 @@ have expired within 60 seconds anyway. Do not bridge the rotation with
 A later version can add a key id if an overlap window is required. Until
 then, do not accept two secrets.
 
-## Remaining Google OIDC work
+## Still separate
 
-This contract assumes some later server has already authenticated the
-principal. That server does not exist yet. Still required, each under its
-own approval:
+Staff Google sign-in and team permissions already exist. Onboarding
+attribution mints this assertion from that session. Still not part of this
+contract:
 
-- A Google OAuth client used only for staff sign-in, distinct from Drive and Sheets.
-- Authorization-code routes, redirect URI, state, and CSRF protection.
-- ID token checks: issuer, audience, JWKS, nonce, and `email_verified`.
-- Binding `providerSubject` from Google's `sub` onto an already provisioned principal. A login must not insert a principal.
-- A staff session cookie with its own name, secret, and lifetime. Do not reuse `ADMIN_COC_SESSION_SECRET` or this assertion as the browser session.
-- Minting this assertion from that server session, with `sub` set to the session's principal id.
-- Provisioning `SA360_STAFF_ASSERTION_SECRET` on the minting runtime and the API. This document does not provision it.
-- Invitation and permission administration.
-- The correction POST and its audit row.
-
-## Merge recommendation
-
-GO to merge this library. Nothing calls it, the secret is unset, and there
-is no migration or route.
-
-NO-GO to provision the secret, add a login, or treat a verified assertion as
-permission to correct a lead.
+- Provisioning `SA360_STAFF_ASSERTION_SECRET` on the Admin C.O.C. runtime and the API. This document does not provision it.
+- The association-correction POST and its assertion-id audit row.
+- Treating a verified assertion as permission to correct a lead.

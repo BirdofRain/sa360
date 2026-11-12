@@ -21,6 +21,7 @@ import { CLIENT_PORTAL_ASSERTION_HEADER } from "@sa360/shared/client-portal-asse
 
 import { verifyAdminApiKey } from "../lib/admin-auth.js";
 import { CLIENT_PORTAL_KEY_HEADER } from "../lib/client-portal-auth.js";
+import { resolveOnboardingStaffActor } from "../lib/onboarding-staff-actor.js";
 import { isCompanySheetsConfigRequestEnabled } from "../lib/company-sheets-config-request-env.js";
 import { WORKSPACE_KEY_HEADER } from "../lib/workspace-auth.js";
 import { prisma } from "../lib/db.js";
@@ -73,7 +74,12 @@ export const adminCompanySheetsConfigRequestRoutes: FastifyPluginAsync<CompanySh
     if (!clientAccountId) return reply.status(404).send({ ok: false, error: "client_not_found" });
     const parsed = bodySchema.safeParse(request.body ?? {});
     if (!parsed.success) return reply.status(400).send({ ok: false, error: "invalid_body" });
-    const saved = await recordCompanySheetsConfigRequest(db, { ...parsed.data, clientAccountId }, env, deps);
+    const actor = await resolveOnboardingStaffActor(request.headers, db, env);
+    if (!actor.ok) return reply.status(actor.statusCode).send({ ok: false, error: actor.error });
+    const saved = await recordCompanySheetsConfigRequest(db, { ...parsed.data, clientAccountId }, env, {
+      ...deps,
+      actor: actor.actor,
+    });
     if (!saved.ok) return sendFailure(reply, saved);
     return reply.send(saved);
   });

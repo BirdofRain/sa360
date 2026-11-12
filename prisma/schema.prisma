@@ -1119,6 +1119,7 @@ model ClientOnboardingSetupAuditEvent {
   /// Immutable response from the original request, used for unambiguous retries.
   resultJson                Json?
   action                    String
+  /// ADMIN for the shared admin key. A named staff write stores StaffPrincipal.id.
   actor                     String?
   changesJson               Json                   @default("{}")
   createdAt                 DateTime               @default(now())
@@ -4202,7 +4203,8 @@ model SourceCampaignAssociationRequest {
   payloadHash               String
   /// Immutable result of the record command.
   recordResultJson          Json
-  /// ADMIN. This table does not record a staff role or a new sign-in path.
+  /// ADMIN for the shared admin key. A named staff write stores StaffPrincipal.id.
+  /// Set from a verified staff assertion. Not a role, email, or browser label.
   actor                     String
   dispositionReason         String?
   /// Idempotency key for a later operator rejection. Null until that command.
@@ -4253,7 +4255,8 @@ model GhlDestinationConfigurationRequest {
   payloadHash                  String
   /// Immutable result of the save command.
   recordResultJson             Json
-  /// ADMIN. This table does not record a staff role or a new sign-in path.
+  /// ADMIN for the shared admin key. A named staff write stores StaffPrincipal.id.
+  /// Set from a verified staff assertion. Not a role, email, or browser label.
   actor                        String
   supersededByRequestId        String?
   supersededAt                 DateTime?
@@ -4305,7 +4308,8 @@ model CompanySheetsDestinationConfigurationRequest {
   payloadHash               String
   /// Immutable result of the save command.
   recordResultJson          Json
-  /// ADMIN. This table does not record a staff role or a new sign-in path.
+  /// ADMIN for the shared admin key. A named staff write stores StaffPrincipal.id.
+  /// Set from a verified staff assertion. Not a role, email, or browser label.
   actor                     String
   supersededByRequestId     String?
   supersededAt              DateTime?

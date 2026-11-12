@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { ClientAccount, ClientOnboardingSetup, Prisma, PrismaClient } from "@prisma/client";
 
 import { prisma } from "../lib/db.js";
+import { acceptedOnboardingActor } from "../lib/onboarding-staff-actor.js";
 import {
   clientOnboardingSetupDataSchema,
   type ClientOnboardingSetupData,
@@ -158,8 +159,17 @@ function replaySnapshot(value: Prisma.JsonValue | null): ClientOnboardingSetupDt
 export async function saveClientOnboardingSetup(
   clientAccountId: string,
   patch: ClientOnboardingSetupPatch,
-  db: PrismaClient = prisma
+  db: PrismaClient = prisma,
+  actor?: string
 ): Promise<SaveClientSetupResult> {
+  const recordedActor = acceptedOnboardingActor(actor);
+  if (!recordedActor) {
+    return {
+      ok: false as const,
+      code: "VALIDATION" as const,
+      error: "The staff actor could not be recorded.",
+    };
+  }
   const id = clientAccountId.trim();
   return db.$transaction(async (tx) => {
     await tx.$queryRaw`
@@ -371,7 +381,7 @@ export async function saveClientOnboardingSetup(
         requestExpectedRevision: patch.expectedRevision,
         resultJson: { version: 1, item } as Prisma.InputJsonValue,
         action: patch.intent,
-        actor: "ADMIN",
+        actor: recordedActor,
         changesJson: {
           changedFields,
           previousStatus: client.onboardingSetup?.status ?? null,

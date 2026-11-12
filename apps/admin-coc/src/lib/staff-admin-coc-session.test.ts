@@ -26,14 +26,19 @@ test("a staff admin grant authorizes BFF and admin API use without an ac1 cookie
   access.useAdminCocTestSessionCookie(undefined);
   access.useStaffAdminCocTestDecision("admin");
   try {
-    assert.deepEqual(await access.readAdminCocAccess(), { kind: "admin", source: "staff" });
+    const staffAdmin = {
+      kind: "admin" as const,
+      source: "staff" as const,
+      staffPrincipalId: "c123456789012345678901234",
+    };
+    assert.deepEqual(await access.readAdminCocAccess(), staffAdmin);
     assert.equal(await access.readAdminCocSessionRole(), "ADMIN");
     assert.equal(await access.adminCocAdminApiUnauthorized(), null);
     assert.equal(await access.unauthorizedAdminCocBffResponse(new Request("https://admin.example/api/coc/orders")), null);
     assert.equal(await access.observerAdminApiKeyDenied("POST", "/admin/v1/clients"), null);
     const observer = session.createAdminCocSessionToken(undefined, SECRET, "SA360_OBSERVER");
     access.useAdminCocTestSessionCookie(observer ?? undefined);
-    assert.deepEqual(await access.readAdminCocAccess(), { kind: "admin", source: "staff" });
+    assert.deepEqual(await access.readAdminCocAccess(), staffAdmin);
   } finally {
     access.useStaffAdminCocTestDecision(undefined);
     access.useAdminCocTestSessionCookie(undefined);

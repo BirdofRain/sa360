@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import module from "node:module";
 import test from "node:test";
 
-import { verifyStaffAssertion } from "@sa360/shared/staff-assertion";
+import { signStaffAssertion, verifyStaffAssertion } from "@sa360/shared/staff-assertion";
 
 const moduleLoader = module as unknown as {
   _load: (request: string, parent: NodeModule, isMain: boolean) => unknown;
@@ -133,6 +133,31 @@ test("a named staff write fails closed when the assertion cannot be minted", asy
     guard.useAdminCocTestSessionCookie(undefined);
     restoreEnv(previous);
   }
+});
+
+test("a browser assertion header cannot replace the server-minted token", async () => {
+  const actor = await import("./onboarding-actor.ts");
+  const browser = signStaffAssertion({
+    staffPrincipalId: "cabcdefghijklmnopqrstuvwx",
+    secret: ASSERTION_SECRET,
+  }).token;
+  const minted = actor.mintNamedStaffOnboardingHeader(PRINCIPAL, {
+    SA360_STAFF_ASSERTION_SECRET: ASSERTION_SECRET,
+  });
+  assert.equal(minted.ok, true);
+  if (!minted.ok) return;
+  const headers = actor.applyNamedStaffAssertionHeader(
+    {
+      "X-Sa360-Staff-Assertion": browser,
+      Accept: "application/json",
+    },
+    minted
+  );
+  assert.equal(headers[minted.name], minted.value);
+  assert.equal(Object.keys(headers).some((name) => name !== minted.name && name.toLowerCase() === minted.name), false);
+  const verified = verifyStaffAssertion(headers[minted.name] ?? "", { secret: ASSERTION_SECRET });
+  assert.equal(verified.ok, true);
+  if (verified.ok) assert.equal(verified.claims.sub, PRINCIPAL);
 });
 
 function snapshotEnv(): NodeJS.ProcessEnv {

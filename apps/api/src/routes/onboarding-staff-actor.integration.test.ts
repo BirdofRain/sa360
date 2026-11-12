@@ -330,6 +330,73 @@ describe("named staff onboarding attribution", { concurrency: 1 }, () => {
     assert.deepEqual(await operational(adaWorld.clientAccountId), beforeAda);
   });
 
+  test("one unexpired assertion can attribute a second distinct write", async () => {
+    const token = signStaffAssertion({ staffPrincipalId: ada.id, secret: SECRET }).token;
+    const headers = adminHeaders({ [STAFF_ASSERTION_HEADER]: token });
+    const firstClient = await createClient();
+    const secondClient = await createClient();
+    const first = await patchSetup(firstClient, headers, {
+      requestId: randomUUID(),
+      expectedRevision: 0,
+      data: { trafficSourceName: "First write" },
+    });
+    const second = await patchSetup(secondClient, headers, {
+      requestId: randomUUID(),
+      expectedRevision: 0,
+      data: { trafficSourceName: "Second write" },
+    });
+    assert.equal(first.statusCode, 200, first.body);
+    assert.equal(second.statusCode, 200, second.body);
+    const actors = await prisma.clientOnboardingSetupAuditEvent.findMany({
+      where: { clientAccountId: { in: [firstClient, secondClient] } },
+      select: { actor: true },
+    });
+    assert.deepEqual(actors.map((row) => row.actor), [ada.id, ada.id]);
+  });
+
+  test("the widened actor check accepts old ADMIN rows and rejects a principal id under the old rule", async () => {
+    const defs = await prisma.$queryRaw<Array<{ name: string; def: string }>>`
+      SELECT conname AS name, pg_get_constraintdef(oid) AS def
+      FROM pg_constraint
+      WHERE conname IN (
+        'SourceCampaignAssociationRequest_actor_chk',
+        'GhlDestinationConfigurationRequest_actor_chk',
+        'CompanySheetsDestConfigRequest_actor_chk'
+      )
+    `;
+    assert.equal(defs.length, 3);
+    for (const row of defs) {
+      assert.match(row.def, /'ADMIN'/);
+      assert.match(row.def, /c\[a-z0-9\]\{24\}/);
+    }
+    const setupChecks = await prisma.$queryRaw<Array<{ name: string }>>`
+      SELECT conname AS name
+      FROM pg_constraint
+      WHERE conrelid = '"ClientOnboardingSetupAuditEvent"'::regclass
+        AND pg_get_constraintdef(oid) ILIKE '%actor%'
+    `;
+    assert.deepEqual(setupChecks, []);
+    const principalId = "c0123456789abcdefghijklmn";
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`
+        CREATE TEMP TABLE old_actor_probe (
+          actor text,
+          CONSTRAINT old_actor_probe_chk CHECK (actor = 'ADMIN')
+        ) ON COMMIT DROP
+      `;
+      await tx.$executeRaw`
+        CREATE TEMP TABLE new_actor_probe (
+          actor text,
+          CONSTRAINT new_actor_probe_chk CHECK (actor = 'ADMIN' OR actor ~ '^c[a-z0-9]{24}$')
+        ) ON COMMIT DROP
+      `;
+      await tx.$executeRaw`INSERT INTO old_actor_probe (actor) VALUES ('ADMIN')`;
+      await tx.$executeRaw`INSERT INTO new_actor_probe (actor) VALUES ('ADMIN'), (${principalId})`;
+      await assert.rejects(() => tx.$executeRaw`INSERT INTO old_actor_probe (actor) VALUES (${principalId})`);
+      await assert.rejects(() => tx.$executeRaw`INSERT INTO new_actor_probe (actor) VALUES ('ada@lifeagentlaunch.com')`);
+    });
+  });
+
   test("Company Sheets configuration requests record the verified principal", async () => {
     const adaClient = await createClient();
     const graceClient = await createClient();

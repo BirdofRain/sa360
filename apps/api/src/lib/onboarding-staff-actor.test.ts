@@ -25,6 +25,12 @@ test("shared admin attribution ignores browser actor labels", async () => {
   assert.equal(acceptedOnboardingActor(ADA), ADA);
 });
 
+test("a missing assertion secret fails closed for a presented token", async () => {
+  const token = signStaffAssertion({ staffPrincipalId: ADA, secret: SECRET }).token;
+  const missing = await resolveOnboardingStaffActor({ [STAFF_ASSERTION_HEADER]: token }, prisma, {});
+  assert.deepEqual(missing, { ok: false, statusCode: 401, error: "staff_unauthenticated" });
+});
+
 test("a present assertion that does not verify fails closed", async () => {
   const empty = await resolveOnboardingStaffActor({ [STAFF_ASSERTION_HEADER]: "" }, prisma, {
     SA360_STAFF_ASSERTION_SECRET: SECRET,

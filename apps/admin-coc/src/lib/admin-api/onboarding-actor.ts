@@ -29,6 +29,23 @@ export function namedStaffPrincipalId(access: AdminCocAccess): string | null {
   return null;
 }
 
+/**
+ * The server-minted assertion replaces any same-name header, in any letter case.
+ * A browser-supplied token cannot remain beside it or take its place.
+ */
+export function applyNamedStaffAssertionHeader(
+  headers: Record<string, string> | undefined,
+  minted: { name: string; value: string }
+): Record<string, string> {
+  const next: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers ?? {})) {
+    if (name.toLowerCase() === minted.name.toLowerCase()) continue;
+    next[name] = value;
+  }
+  next[minted.name] = minted.value;
+  return next;
+}
+
 export function mintNamedStaffOnboardingHeader(
   staffPrincipalId: string,
   env: NodeJS.ProcessEnv = process.env

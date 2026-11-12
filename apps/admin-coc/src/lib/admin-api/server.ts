@@ -102,6 +102,7 @@ import {
 import { ADMIN_COC_SIGN_IN_REQUIRED } from "../admin-coc-session.ts";
 import { staffWorkspaceAdminApiAllowed } from "../staff-workspace-api-allowlist.ts";
 import {
+  applyNamedStaffAssertionHeader,
   mintNamedStaffOnboardingHeader,
   namedStaffPrincipalId,
   onboardingWriteAttributesStaff,
@@ -250,7 +251,7 @@ async function executeAttributedAdminApiRequest<T>(
   if (!minted.ok) return { ok: false, status: 403, body: ADMIN_COC_FORBIDDEN };
   return executeAuthorizedAdminApiRequest<T>(method, path, body, {
     ...init,
-    headers: { ...init?.headers, [minted.name]: minted.value },
+    headers: applyNamedStaffAssertionHeader(init?.headers, minted),
   });
 }
 

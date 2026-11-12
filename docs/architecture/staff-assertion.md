@@ -117,6 +117,21 @@ principal that is missing, disabled, unbound, or not allowed to write, does
 not store `ADMIN`. The same request id still returns the original row and
 does not replace its actor. The raw token is not stored.
 
+The assertion is sent only on the Admin C.O.C. server's request to the
+configured SA360 API origin, and only for the four onboarding writes. It is
+not placed on the browser response, not copied from an incoming browser
+header, and not written to the API request log. The request serializer keeps
+method and URL.
+
+Verification stays stateless. A captured token can be presented with the
+admin API key for a different onboarding write until `exp`, at most 60
+seconds, and that write is attributed to the same live principal. There is
+no `jti` consumption on these routes. The admin key is what makes that
+replay possible; the token alone is not accepted. Disabling the principal
+or revoking `team_manager` and `admin_coc` rejects the next request even
+while the token is unexpired. An expired token is `staff_unauthenticated`
+and stores nothing.
+
 ## Replay
 
 Verification is stateless. The same token verifies on every call until `exp`.

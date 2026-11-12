@@ -112,6 +112,43 @@ test("runtime mode mismatch does not strand a source lead in delivery_failed (no
   assert.equal(updates.some((u) => u.data.status === "delivery_failed"), false);
 });
 
+test("delivery_failed cannot be approved until requeue, and a later write is delivered", async () => {
+  const stuck = fakeEvent({ status: "delivery_failed" });
+  const stuckUpdates: UpdateCall[] = [];
+  const refused = await approveSourceLeadDelivery(
+    {
+      sourceLeadEventId: stuck.id,
+      mode: "live_canary",
+      operatorConfirmationText: SOURCE_LEAD_APPROVE_DELIVERY_CONFIRMATION,
+      confirmLiveDeliveryRisk: true,
+    },
+    buildDeps(stuck, null, stuckUpdates)
+  );
+  assert.equal(refused.ok, false);
+  assert.equal(stuckUpdates.length, 0);
+
+  const requeued = fakeEvent({ status: "routing_matched" });
+  const updates: UpdateCall[] = [];
+  const succeeded = {
+    ok: true,
+    mode: "live_canary",
+    externalCallExecuted: true,
+  } as DirectDemoDeliveryResult;
+  const result = await approveSourceLeadDelivery(
+    {
+      sourceLeadEventId: requeued.id,
+      mode: "live_canary",
+      operatorConfirmationText: SOURCE_LEAD_APPROVE_DELIVERY_CONFIRMATION,
+      confirmLiveDeliveryRisk: true,
+    },
+    buildDeps(requeued, succeeded, updates)
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(updates.at(-1)?.data.status, "delivered");
+  assert.equal(updates.some((update) => update.data.status === "delivery_failed"), false);
+});
+
 test("live delivery failure after external write marks the lead delivery_failed", async () => {
   const event = fakeEvent();
   const updates: UpdateCall[] = [];

@@ -2,6 +2,19 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { buildSourceLeadEventWhere } from "./source-lead-event.repository.js";
 
+test("buildSourceLeadEventWhere cannot bound receivedAt to an Eastern day", () => {
+  const all = buildSourceLeadEventWhere({});
+  assert.equal(Object.prototype.hasOwnProperty.call(all, "receivedAt"), false);
+
+  const failures = buildSourceLeadEventWhere({ status: "delivery_failed" });
+  assert.equal(failures.status, "delivery_failed");
+  assert.equal(Object.prototype.hasOwnProperty.call(failures, "receivedAt"), false);
+
+  const duplicates = buildSourceLeadEventWhere({ status: "duplicate_blocked" });
+  assert.equal(duplicates.status, "duplicate_blocked");
+  assert.notEqual(duplicates.status, failures.status);
+});
+
 test("buildSourceLeadEventWhere excludes cleanup rows by default", () => {
   const where = buildSourceLeadEventWhere({});
   assert.equal(where.cleanupStatus, null);

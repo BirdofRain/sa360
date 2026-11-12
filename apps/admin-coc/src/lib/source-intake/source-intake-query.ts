@@ -3,6 +3,14 @@ export const SOURCE_INTAKE_AWAITING_REVIEW_STATUS = "needs_review";
 
 export const SOURCE_INTAKE_AWAITING_REVIEW_HREF = `/source-intake?status=${SOURCE_INTAKE_AWAITING_REVIEW_STATUS}`;
 
+/**
+ * Current source-lead status after an external delivery write failed.
+ * Source Intake opens this exact filter, and requeue is the operator action.
+ */
+export const SOURCE_INTAKE_DELIVERY_FAILED_STATUS = "delivery_failed";
+
+export const SOURCE_INTAKE_DELIVERY_FAILED_HREF = `/source-intake?status=${SOURCE_INTAKE_DELIVERY_FAILED_STATUS}`;
+
 export type SourceIntakeQuery = {
   status?: string;
   sourceProvider?: string;

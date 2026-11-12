@@ -8,7 +8,11 @@ import type { AdminCocAccess } from "@/lib/admin-coc-session-guard";
 import { readAdminCocAccess } from "@/lib/admin-coc-session-guard";
 import { loadCocLeadOrders, type CocLeadOrdersLoad } from "@/lib/coc-orders/load-coc-lead-orders";
 import { orderAwaitsOperatorAction } from "@/lib/front-office/order-review";
-import { SOURCE_INTAKE_AWAITING_REVIEW_STATUS } from "@/lib/source-intake/source-intake-query";
+import type { DeliveryFailureRead } from "@/lib/command-center/activity-snapshot-read";
+import {
+  SOURCE_INTAKE_AWAITING_REVIEW_STATUS,
+  SOURCE_INTAKE_DELIVERY_FAILED_STATUS,
+} from "@/lib/source-intake/source-intake-query";
 import type { AttentionRead } from "@/lib/command-center/attention-read";
 
 export type { AttentionRead };
@@ -30,6 +34,8 @@ const ORDERS_INCOMPLETE =
   "The orders list stopped before the end, so this count would be incomplete.";
 const SOURCE_INCOMPLETE =
   "The source intake list stopped before the end, so this count would be incomplete.";
+const DELIVERY_INCOMPLETE =
+  "The source intake list stopped before the end, so the delivery failure count would be incomplete.";
 const API_UNCONFIGURED =
   "Admin API is not configured. Set NEXT_PUBLIC_SA360_API_BASE_URL (or NEXT_PUBLIC_API_BASE_URL) and SA360_ADMIN_API_KEY.";
 
@@ -80,12 +86,16 @@ export async function loadOrdersAwaitingOperatorAction(
   };
 }
 
-export async function loadSourceIntakeAwaitingReview(
-  deps: {
-    readAccess?: () => Promise<AdminCocAccess>;
-    fetchPage?: (params: Record<string, string>) => Promise<SourceLeadPage>;
-    configured?: () => boolean;
-  } = {}
+type SourceLeadCountDeps = {
+  readAccess?: () => Promise<AdminCocAccess>;
+  fetchPage?: (params: Record<string, string>) => Promise<SourceLeadPage>;
+  configured?: () => boolean;
+};
+
+async function countSourceLeadsByStatus(
+  status: string,
+  incompleteReason: string,
+  deps: SourceLeadCountDeps
 ): Promise<AttentionRead> {
   const readAccess = deps.readAccess ?? readAdminCocAccess;
   const fetchPage = deps.fetchPage ?? fetchAdminSourceLeads;
@@ -103,7 +113,7 @@ export async function loadSourceIntakeAwaitingReview(
   let count = 0;
   for (let page = 0; page < SOURCE_MAX_PAGES; page += 1) {
     const params: Record<string, string> = {
-      status: SOURCE_INTAKE_AWAITING_REVIEW_STATUS,
+      status,
       limit: SOURCE_PAGE_LIMIT,
     };
     if (cursor) params.cursor = cursor;
@@ -116,11 +126,34 @@ export async function loadSourceIntakeAwaitingReview(
       return { state: "ready", count };
     }
     if (seenCursors.has(result.nextCursor)) {
-      return { state: "unavailable", reason: SOURCE_INCOMPLETE };
+      return { state: "unavailable", reason: incompleteReason };
     }
     seenCursors.add(result.nextCursor);
     cursor = result.nextCursor;
   }
 
-  return { state: "unavailable", reason: SOURCE_INCOMPLETE };
+  return { state: "unavailable", reason: incompleteReason };
+}
+
+export async function loadSourceIntakeAwaitingReview(
+  deps: SourceLeadCountDeps = {}
+): Promise<AttentionRead> {
+  return countSourceLeadsByStatus(SOURCE_INTAKE_AWAITING_REVIEW_STATUS, SOURCE_INCOMPLETE, deps);
+}
+
+/**
+ * Current `delivery_failed` source leads. Recovered retries and skips are other
+ * statuses, so this filter leaves them out. The timestamp is when the read finished.
+ */
+export async function loadDeliveryFailuresRequiringAction(
+  deps: SourceLeadCountDeps & { now?: () => Date } = {}
+): Promise<DeliveryFailureRead> {
+  const now = deps.now ?? (() => new Date());
+  const read = await countSourceLeadsByStatus(
+    SOURCE_INTAKE_DELIVERY_FAILED_STATUS,
+    DELIVERY_INCOMPLETE,
+    deps
+  );
+  if (read.state === "unavailable") return read;
+  return { state: "ready", count: read.count, refreshedAt: now().toISOString() };
 }

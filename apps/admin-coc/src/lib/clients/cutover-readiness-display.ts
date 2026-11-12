@@ -129,3 +129,46 @@ export function countSectionProgress(section: CutoverReadinessSection): {
     total: section.items.length,
   };
 }
+
+/**
+ * Whether the legacy routing-rule checklist applies to this client.
+ * An active rule whose master source is mapped is legacy master-source routing.
+ * Zero rules, inactive-only rules, or an unreadable checklist are unknown.
+ * Unknown does not mean routing is unnecessary.
+ */
+export type LegacyRoutingApplicability = "legacy_master_source" | "unknown";
+
+const ACTIVE_RULE_DETAIL = /^(\d+) active of (\d+) total$/;
+
+export function legacyMasterRoutingApplicability(
+  report: Pick<ClientCutoverReadinessReport, "sections">
+): LegacyRoutingApplicability {
+  const section = report.sections.find((item) => item.key === "routing_rules");
+  if (!section) return "unknown";
+  const active = section.items.find((item) => item.key === "active_rule_exists");
+  const master = section.items.find((item) => item.key === "rule_master_source");
+  if (!active || !master || typeof active.detail !== "string" || typeof master.detail !== "string") {
+    return "unknown";
+  }
+  const match = ACTIVE_RULE_DETAIL.exec(active.detail.trim());
+  if (!match) return "unknown";
+  const total = Number(match[2]);
+  if (!Number.isInteger(total) || total <= 0) return "unknown";
+  const masterDetail = master.detail.trim();
+  if (master.complete && masterDetail.length > 0 && masterDetail !== "no master source") {
+    return "legacy_master_source";
+  }
+  return "unknown";
+}
+
+export function legacyRoutingApplicabilityLabel(applicability: LegacyRoutingApplicability): string {
+  return applicability === "legacy_master_source" ? "Applies to legacy master-source routing" : "Unknown";
+}
+
+export function isGhlDestinationBlocker(blocker: string): boolean {
+  return blocker.startsWith("GHL destination is not configured") || blocker.startsWith("Destination:");
+}
+
+export function isLegacyRoutingRuleBlocker(blocker: string): boolean {
+  return blocker.startsWith("No active routing rule");
+}

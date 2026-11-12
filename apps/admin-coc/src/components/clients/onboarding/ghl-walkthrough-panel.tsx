@@ -428,8 +428,8 @@ export function GhlWalkthroughPanel({
       <div>
         <h2 className="text-base font-semibold text-slate-900">GHL location and workflow</h2>
         <p className="mt-1 text-sm text-slate-600">
-          Pick the connected location and the workflow id from that location. The workflow does not have to be named
-          Select Time Zone. Saving it does not turn on ongoing delivery.
+          Pick the connected location and the workflow id from that location. Saving it does not turn on ongoing
+          delivery. Timezone handling can already live inside that workflow.
         </p>
       </div>
       <ol className="list-decimal space-y-1 pl-5 text-sm text-slate-700">

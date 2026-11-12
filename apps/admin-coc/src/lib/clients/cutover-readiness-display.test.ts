@@ -2,11 +2,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   countSectionProgress,
+  isGhlDestinationBlocker,
+  isLegacyRoutingRuleBlocker,
+  legacyMasterRoutingApplicability,
+  legacyRoutingApplicabilityLabel,
   normalizeCutoverReadinessReport,
   overallStatusBadgeClass,
   overallStatusLabel,
 } from "./cutover-readiness-display.ts";
-import type { CutoverReadinessSection } from "./cutover-readiness-types.ts";
+import type { ClientCutoverReadinessReport, CutoverReadinessSection } from "./cutover-readiness-types.ts";
 
 test("overallStatusLabel maps known statuses and falls back", () => {
   assert.equal(overallStatusLabel("ready_for_live_review"), "Ready for live review");
@@ -98,4 +102,77 @@ test("normalizeCutoverReadinessReport defends against malformed parts", () => {
   assert.equal(rules?.items.length, 1);
   assert.deepEqual(report?.blockers, ["ok"]);
   assert.deepEqual(report?.warnings, []);
+});
+
+function routingReport(detail: {
+  activeDetail: string;
+  masterComplete: boolean;
+  masterDetail: string;
+}): ClientCutoverReadinessReport {
+  return {
+    clientAccountId: "client",
+    clientDisplayName: "Client",
+    status: "active",
+    generatedAt: "2026-11-12T00:00:00.000Z",
+    overallStatus: "not_ready",
+    sections: [
+      {
+        key: "routing_rules",
+        label: "Routing rules",
+        complete: false,
+        items: [
+          {
+            key: "active_rule_exists",
+            label: "At least one active routing rule",
+            complete: detail.activeDetail.startsWith("0 ") === false,
+            detail: detail.activeDetail,
+          },
+          {
+            key: "rule_master_source",
+            label: "Master lead source mapped",
+            complete: detail.masterComplete,
+            detail: detail.masterDetail,
+          },
+        ],
+      },
+    ],
+    blockers: [],
+    warnings: [],
+    manualNextSteps: [],
+  };
+}
+
+test("legacy routing applicability is the master-source model only when an active rule maps a master", () => {
+  assert.equal(
+    legacyMasterRoutingApplicability(
+      routingReport({ activeDetail: "1 active of 1 total", masterComplete: true, masterDetail: "lal_master_vet" })
+    ),
+    "legacy_master_source"
+  );
+  assert.equal(
+    legacyMasterRoutingApplicability(
+      routingReport({ activeDetail: "0 active of 0 total", masterComplete: false, masterDetail: "no master source" })
+    ),
+    "unknown"
+  );
+  assert.equal(
+    legacyMasterRoutingApplicability(
+      routingReport({ activeDetail: "0 active of 2 total", masterComplete: false, masterDetail: "no master source" })
+    ),
+    "unknown"
+  );
+  assert.equal(
+    legacyMasterRoutingApplicability(routingReport({ activeDetail: "unclear", masterComplete: true, masterDetail: "lal_master_vet" })),
+    "unknown"
+  );
+  assert.equal(legacyRoutingApplicabilityLabel("legacy_master_source"), "Applies to legacy master-source routing");
+  assert.equal(legacyRoutingApplicabilityLabel("unknown"), "Unknown");
+});
+
+test("destination blockers stay distinct from the legacy routing-rule blocker", () => {
+  assert.equal(isGhlDestinationBlocker("GHL destination is not configured for this client."), true);
+  assert.equal(isGhlDestinationBlocker("Destination: pipeline missing"), true);
+  assert.equal(isGhlDestinationBlocker("No active routing rule maps a master source to this client."), false);
+  assert.equal(isLegacyRoutingRuleBlocker("No active routing rule maps a master source to this client."), true);
+  assert.equal(isLegacyRoutingRuleBlocker("Portal is enabled but no portalLoginEmail is set."), false);
 });

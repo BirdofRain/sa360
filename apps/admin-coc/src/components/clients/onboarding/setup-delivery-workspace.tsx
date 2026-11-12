@@ -178,11 +178,10 @@ export function SetupDeliveryWorkspace({
           }
         />
         <GhlCard
-          clientAccountId={clientAccountId}
           summary={summary}
-          actions={bound}
           attempts={attempts}
-          profileRevision={revision}
+          savedWorkflowId={ghlLocation?.workflowId ?? null}
+          savedTriggerMode={ghlLocation?.workflowTriggerMode ?? summary?.ghl.workflowTriggerMode ?? null}
         />
       </div>
       <TestConsole

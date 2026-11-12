@@ -324,6 +324,10 @@ export function buildClientCutoverReadinessReport(
     }
   }
 
+  // Legacy master-source gate. Zero active rules stay a blocker in this report.
+  // Callers label whether that gate applies. This function does not infer that
+  // source-based onboarding makes a routing rule unnecessary, and it does not
+  // create a rule or change approval or delivery switches.
   if (activeRules.length === 0) {
     blockers.push("No active routing rule maps a master source to this client.");
     manualNextSteps.push("Create an active routing rule for this client.");

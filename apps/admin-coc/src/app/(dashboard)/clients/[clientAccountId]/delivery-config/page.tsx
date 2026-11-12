@@ -63,11 +63,16 @@ export default async function ClientDeliveryConfigPage({
         </Link>
         <h1 className="mt-1 text-2xl font-semibold tracking-tight">GHL destination configuration</h1>
         <p className="font-mono text-sm text-muted-foreground">{data.clientAccountId}</p>
+        <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
+          GHL destination configuration readiness is the checklist in the configuration panel. The report below it is
+          legacy master-source cutover readiness. Its routing-rule check applies to that delivery model and is not a
+          GHL connection, workflow mapping, or Company Sheets requirement.
+        </p>
       </div>
+      <ClientDeliveryConfigPanel initialSummary={data} />
       {cutoverReport ? (
         <ClientCutoverReadinessPanel report={cutoverReport} quickLinks={false} />
       ) : null}
-      <ClientDeliveryConfigPanel initialSummary={data} />
     </div>
   );
 }

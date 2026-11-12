@@ -16,6 +16,7 @@ import { createHash } from "node:crypto";
 
 import type { Prisma, PrismaClient } from "@prisma/client";
 
+import { acceptedOnboardingActor } from "../lib/onboarding-staff-actor.js";
 import { SA360_ALL_LOGICAL_FIELD_KEYS } from "../lib/sa360-custom-field-keys.js";
 import { isUsableGhlLocationConfigSnapshot } from "../lib/ghl-config-snapshot-validity.js";
 import { isGhlDestinationConfigRequestEnabled } from "../lib/ghl-destination-config-request-env.js";
@@ -102,7 +103,7 @@ export type GhlDestinationConfigSuccess = {
 
 export type GhlDestinationConfigFailure = {
   ok: false;
-  statusCode: 400 | 404 | 409;
+  statusCode: 400 | 403 | 404 | 409;
   error: string;
   replayed: false;
   requestId: string | null;
@@ -130,6 +131,8 @@ export type GhlDestinationConfigHead = {
 
 export type GhlDestinationConfigDeps = {
   now?: Date;
+  /** Omitted means the shared admin actor. An unrecognized value is refused. */
+  actor?: string;
   /**
    * Test-only hook. It runs after the destination lock and before the live
    * re-read. Production routes do not pass it. A live result aborts the
@@ -200,9 +203,11 @@ export async function recordGhlDestinationConfigRequest(
   const normalized = normalize(command, clientAccountId);
   const shape = validateShape(normalized);
   if (shape) return shape;
+  const actor = acceptedOnboardingActor(deps.actor);
+  if (!actor) return failure(403, "actor_rejected", command.requestId);
   try {
     return await db.$transaction(
-      (tx) => applyCommand(tx, normalized, deps),
+      (tx) => applyCommand(tx, normalized, deps, actor),
       TRANSACTION
     );
   } catch (error) {
@@ -216,7 +221,8 @@ export async function recordGhlDestinationConfigRequest(
 async function applyCommand(
   tx: Prisma.TransactionClient,
   command: GhlDestinationConfigCommand,
-  deps: GhlDestinationConfigDeps
+  deps: GhlDestinationConfigDeps,
+  actor: string
 ): Promise<GhlDestinationConfigSuccess> {
   await tx.$executeRaw`SELECT set_config('lock_timeout', '3s', true)`;
   await tx.$queryRaw`
@@ -357,7 +363,7 @@ async function applyCommand(
       status: "stored",
       payloadHash: commandHash(command),
       recordResultJson: success,
-      actor: "ADMIN",
+      actor,
     },
   });
   return success;
@@ -467,7 +473,7 @@ function sameInstant(left: Date | null, right: string | null): boolean {
 }
 
 function failure(
-  statusCode: 400 | 404 | 409,
+  statusCode: 400 | 403 | 404 | 409,
   error: string,
   requestId: string | null = null
 ): GhlDestinationConfigFailure {

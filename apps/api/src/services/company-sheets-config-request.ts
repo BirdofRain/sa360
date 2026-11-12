@@ -26,6 +26,7 @@ import { createHash } from "node:crypto";
 import type { Prisma, PrismaClient } from "@prisma/client";
 
 import { parseGoogleSpreadsheetRef } from "../lib/google-spreadsheet-ref.js";
+import { acceptedOnboardingActor } from "../lib/onboarding-staff-actor.js";
 import { isCompanySheetsConfigRequestEnabled } from "../lib/company-sheets-config-request-env.js";
 import type { CompanySheetsControlBasis } from "../lib/company-google-sheets-env.js";
 import { getSpreadsheetMetadata } from "./google-sheets/google-sheets-http-client.js";
@@ -115,6 +116,8 @@ export type CompanySheetsConfigHead = {
 
 export type CompanySheetsConfigDeps = {
   now?: Date;
+  /** Omitted means the shared admin actor. An unrecognized value is refused. */
+  actor?: string;
   sheets?: CompanySheetsDeps;
   /**
    * Test-only hook. It runs after the request-chain check and before the
@@ -205,6 +208,8 @@ export async function recordCompanySheetsConfigRequest(
   const normalized = normalize(command, clientAccountId);
   const shape = validateShape(normalized);
   if (shape) return shape;
+  const actor = acceptedOnboardingActor(deps.actor);
+  if (!actor) return failure(403, "actor_rejected", command.requestId);
 
   const earlyReplay = await db.companySheetsDestinationConfigurationRequest.findUnique({
     where: { requestId: normalized.requestId },
@@ -218,7 +223,7 @@ export async function recordCompanySheetsConfigRequest(
 
   try {
     return await db.$transaction(
-      (tx) => applyCommand(tx, normalized, verified.sheet, deps),
+      (tx) => applyCommand(tx, normalized, verified.sheet, deps, actor),
       TRANSACTION
     );
   } catch (error) {
@@ -233,7 +238,8 @@ async function applyCommand(
   tx: Prisma.TransactionClient,
   command: CompanySheetsConfigCommand,
   verified: VerifiedSheet,
-  deps: CompanySheetsConfigDeps
+  deps: CompanySheetsConfigDeps,
+  actor: string
 ): Promise<CompanySheetsConfigSuccess> {
   await tx.$executeRaw`SELECT set_config('lock_timeout', '3s', true)`;
   await tx.$queryRaw`
@@ -345,7 +351,7 @@ async function applyCommand(
       status: "stored",
       payloadHash: commandHash(command),
       recordResultJson: stored,
-      actor: "ADMIN",
+      actor,
     },
   });
   return {

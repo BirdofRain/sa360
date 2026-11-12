@@ -19,6 +19,7 @@ import { CLIENT_PORTAL_ASSERTION_HEADER } from "@sa360/shared/client-portal-asse
 
 import { verifyAdminApiKey } from "../lib/admin-auth.js";
 import { CLIENT_PORTAL_KEY_HEADER } from "../lib/client-portal-auth.js";
+import { resolveOnboardingStaffActor } from "../lib/onboarding-staff-actor.js";
 import { isSourceCampaignRequestEnabled } from "../lib/source-campaign-request-env.js";
 import { WORKSPACE_KEY_HEADER } from "../lib/workspace-auth.js";
 import { prisma } from "../lib/db.js";
@@ -83,10 +84,13 @@ export const adminSourceCampaignRequestRoutes: FastifyPluginAsync<SourceCampaign
     if (!clientAccountId) return reply.status(404).send({ ok: false, error: "client_not_found" });
     const parsed = bodySchema.safeParse(request.body ?? {});
     if (!parsed.success) return reply.status(400).send({ ok: false, error: "invalid_body" });
+    const actor = await resolveOnboardingStaffActor(request.headers, db, env);
+    if (!actor.ok) return reply.status(actor.statusCode).send({ ok: false, error: actor.error });
     const saved = await recordSourceCampaignAssociationRequest(
       db,
       { ...parsed.data, clientAccountId },
-      env
+      env,
+      actor.actor
     );
     if (!saved.ok) return sendFailure(reply, saved);
     return reply.send(saved);

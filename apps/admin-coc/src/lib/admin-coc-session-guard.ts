@@ -51,9 +51,10 @@ export function useStaffAdminCocTestDecision(value: StaffAdminCocDecision | "wor
 export type StaffWorkspacePermission = Exclude<StaffCapability, "admin_coc">;
 
 export type AdminCocAccess =
-  | { kind: "admin"; source: "shared_password" | "staff" }
+  | { kind: "admin"; source: "shared_password" }
+  | { kind: "admin"; source: "staff"; staffPrincipalId: string }
   | { kind: "observer" }
-  | { kind: "staff_workspace"; permissions: readonly StaffWorkspacePermission[] }
+  | { kind: "staff_workspace"; permissions: readonly StaffWorkspacePermission[]; staffPrincipalId: string }
   | { kind: "staff_limited" }
   | { kind: "anonymous" };
 
@@ -67,11 +68,14 @@ export async function readAdminCocAccess(): Promise<AdminCocAccess> {
   const role = parseAdminCocSessionToken(cookie)?.role ?? null;
   if (role === ADMIN_COC_ROLE_ADMIN) return { kind: "admin", source: "shared_password" };
   const staff = await readStaffCapabilities();
-  if (staff.access === "admin") return { kind: "admin", source: "staff" };
-  if (staff.access === "workspace") {
+  if (staff.access === "admin" && staff.staffPrincipalId) {
+    return { kind: "admin", source: "staff", staffPrincipalId: staff.staffPrincipalId };
+  }
+  if (staff.access === "workspace" && staff.staffPrincipalId) {
     return {
       kind: "staff_workspace",
       permissions: staff.permissions.filter((permission): permission is StaffWorkspacePermission => permission !== "admin_coc"),
+      staffPrincipalId: staff.staffPrincipalId,
     };
   }
   if (role === ADMIN_COC_ROLE_OBSERVER) return { kind: "observer" };

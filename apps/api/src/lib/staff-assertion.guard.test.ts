@@ -8,8 +8,16 @@ const secretName = "SA360_STAFF_ASSERTION_SECRET";
 const allowed = new Set([
   "packages/shared/src/staff-assertion.ts",
   "packages/shared/src/staff-assertion.test.ts",
+  "packages/shared/src/staff-enrollment.ts",
+  "packages/shared/src/staff-google-service.ts",
   "apps/api/src/lib/staff-assertion.guard.test.ts",
+  "apps/api/src/lib/onboarding-staff-actor.ts",
+  "apps/api/src/lib/onboarding-staff-actor.test.ts",
+  "apps/api/src/routes/onboarding-staff-actor.integration.test.ts",
+  "apps/admin-coc/src/lib/admin-api/onboarding-actor.ts",
+  "apps/admin-coc/src/lib/admin-api/onboarding-actor.test.ts",
   "docs/architecture/staff-assertion.md",
+  "docs/operations/staff-first-login-activation.md",
 ]);
 
 function filesUnder(dir: string): string[] {
@@ -27,7 +35,7 @@ function filesUnder(dir: string): string[] {
   return found;
 }
 
-test("staff assertion signing is not provisioned or registered", () => {
+test("staff assertion secret is unprovisioned and stays off the client bundle", () => {
   const roots = [
     join(repoRoot, "apps/api/src"),
     join(repoRoot, "apps/admin-coc/src"),

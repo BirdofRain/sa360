@@ -217,6 +217,58 @@ test("successful submitted + payment pending UX", async () => {
   cleanup();
 });
 
+test("legacy and new profile products can be submitted from the buyer order form", async () => {
+  const cases = [
+    { value: "final_expense", label: "Final expense" },
+    { value: "life_insurance", label: "Life Insurance" },
+    { value: "health_insurance", label: "Health Insurance" },
+    { value: "other", label: "Other" },
+  ];
+  for (const product of cases) {
+    let submitted: Record<string, unknown> | null = null;
+    render(
+      <PortalOrderRequestForm
+        eligible
+        catalogs={buildPortalOrderRequestCatalogs({
+          primaryNicheKeys: ["VET"],
+          primaryProductTypes: [product.value],
+          displayName: "Valley Vet",
+        })}
+        submitOrder={async (body) => {
+          submitted = body;
+          return {
+            ok: true,
+            item: {
+              id: `ord_${product.value}`,
+              orderNumber: "LO-1100",
+              status: "submitted",
+              paymentConfirmationStatus: "pending_confirmation",
+            },
+          };
+        }}
+      />
+    );
+    const productSelect = screen.getByLabelText("Product") as HTMLSelectElement;
+    assert.deepEqual(
+      [...productSelect.options].map((option) => option.value),
+      [product.value]
+    );
+    assert.deepEqual(
+      [...productSelect.options].map((option) => option.text),
+      [product.label]
+    );
+    fillMinimumAgedOrder();
+    fireEvent.click(screen.getByRole("button", { name: "Review request" }));
+    assert.ok(screen.getByText(product.label));
+    fireEvent.click(screen.getByRole("button", { name: "Submit order request" }));
+    await waitFor(() => {
+      assert.equal(submitted?.productType, product.value);
+    });
+    assert.equal(submitted?.nicheKey, "vet");
+    cleanup();
+  }
+});
+
 test("preview mode shows a not-connected error instead of submitting", async () => {
   render(
     <PortalOrderRequestForm

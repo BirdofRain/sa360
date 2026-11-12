@@ -380,6 +380,19 @@ test("a rejected create keeps the same client id and does not send a second crea
   assert.deepEqual(creates, ["cedar_ridge", "cedar_ridge"]);
 });
 
+test("technical setup details are collapsed and step badges have a vertical layout", () => {
+  render(<GuidedOnboarding model={guide()} step="information" clients={[]} />);
+  const disclosure = screen.getByText("Technical setup details").closest("details");
+  assert.ok(disclosure);
+  assert.equal(disclosure.open, false);
+  assert.ok(disclosure.querySelector("[data-progress-summary]"));
+  const steps = screen.getByRole("list", { name: "Guided setup steps" });
+  for (const button of steps.querySelectorAll("button")) {
+    assert.equal(button.classList.contains("flex-col"), true);
+    assert.equal(button.classList.contains("items-start"), true);
+  }
+});
+
 test("partial setup keeps the notification words distinct on the summary", () => {
   render(<GuidedOnboarding model={guide()} step="summary" clients={[]} />);
   const summary = document.querySelector("[data-progress-summary]")?.textContent ?? "";

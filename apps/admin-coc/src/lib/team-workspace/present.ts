@@ -15,7 +15,7 @@ import type {
 } from "./types";
 
 const STEP_TITLES = {
-  client_information: "Client information",
+  client_information: "Client account",
   lead_source: "Lead source / campaigns",
   delivery_destination: "Lead delivery destination",
   delivery_notifications: "Delivery notifications",

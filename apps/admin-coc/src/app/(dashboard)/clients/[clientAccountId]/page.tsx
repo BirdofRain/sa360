@@ -24,6 +24,8 @@ import {
 import { fetchAdminClientSourceFunnels } from "@/lib/admin-api/source-funnels-server";
 import { formatClientAccountStatusLabel } from "@/lib/clients/client-account-status-label";
 import {
+  legacyMasterRoutingApplicability,
+  legacyRoutingApplicabilityLabel,
   normalizeCutoverReadinessReport,
   overallStatusBadgeClass,
   overallStatusLabel,
@@ -117,7 +119,7 @@ export default async function ClientDetailPage({
       {cutoverReport ? (
         <div className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-950">
           <span className="text-sm font-medium text-slate-900 dark:text-slate-100">
-            Cutover readiness
+            Legacy / master-routed cutover readiness
           </span>
           <Badge
             variant="outline"
@@ -127,6 +129,11 @@ export default async function ClientDetailPage({
           </Badge>
           <span className="text-xs text-muted-foreground">
             {cutoverReport.blockers.length} blocker(s), {cutoverReport.warnings.length} warning(s)
+          </span>
+          <span className="w-full text-xs text-muted-foreground">
+            This status is the legacy master-source report. Routing-rule applicability:{" "}
+            {legacyRoutingApplicabilityLabel(legacyMasterRoutingApplicability(cutoverReport))}. GHL destination
+            readiness is on the destination configuration page.
           </span>
           <Link
             href={`/clients/${encodeURIComponent(id)}/delivery-config`}

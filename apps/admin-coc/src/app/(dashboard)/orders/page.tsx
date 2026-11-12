@@ -3,10 +3,20 @@ import { FoOrdersContent } from "@/components/front-office/orders/fo-orders-cont
 import { AdminCocForbiddenError, requireAdminCocAdminSession } from "@/lib/admin-coc-session-guard";
 import { loadCocLeadOrders } from "@/lib/coc-orders/load-coc-lead-orders";
 import { COC_ORDERS_API } from "@/lib/front-office/api/lead-order-review-client";
+import { parseReviewQueueFilter } from "@/lib/front-office/order-review";
 
 export const dynamic = "force-dynamic";
 
-export default async function CocOrdersPage() {
+function firstParam(value: string | string[] | undefined): string | undefined {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return typeof raw === "string" && raw.trim() !== "" ? raw : undefined;
+}
+
+export default async function CocOrdersPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   try {
     await requireAdminCocAdminSession();
   } catch (error) {
@@ -20,6 +30,8 @@ export default async function CocOrdersPage() {
     throw error;
   }
 
+  const sp = await searchParams;
+  const reviewFilter = parseReviewQueueFilter(firstParam(sp.review));
   const loaded = await loadCocLeadOrders();
 
   return (
@@ -44,6 +56,7 @@ export default async function CocOrdersPage() {
         role="admin"
         ordersApiBase={COC_ORDERS_API}
         initialError={loaded.error}
+        initialReviewFilter={reviewFilter}
       />
     </div>
   );

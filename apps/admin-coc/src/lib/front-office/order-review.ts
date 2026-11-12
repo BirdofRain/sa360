@@ -21,7 +21,27 @@ export type ReviewQueueKey =
   | "submitted_payment_not_required"
   | "approved_ready";
 
-export type ReviewQueueFilter = "all" | "review" | ReviewQueueKey;
+export type ReviewQueueFilter = "all" | "review" | "awaiting_action" | ReviewQueueKey;
+
+/**
+ * Submitted orders the Orders queue can still act on.
+ * Approved / ready stays in the broader "review" filter and moves to Fulfillment Ops.
+ */
+export const OPERATOR_ACTION_REVIEW_KEYS: readonly ReviewQueueKey[] = [
+  "submitted_payment_pending",
+  "submitted_payment_confirmed",
+  "submitted_payment_not_required",
+];
+
+export const ORDERS_AWAITING_ACTION_HREF = "/orders?review=awaiting_action";
+
+const REVIEW_QUEUE_FILTERS = new Set<string>([
+  "all",
+  "review",
+  "awaiting_action",
+  ...OPERATOR_ACTION_REVIEW_KEYS,
+  "approved_ready",
+]);
 
 export type ReviewAction =
   | "confirm-payment"
@@ -119,7 +139,20 @@ export function matchesReviewQueueFilter(order: LeadOrder, filter: ReviewQueueFi
   if (filter === "all") return true;
   const key = resolveReviewQueueKey(order);
   if (filter === "review") return key != null;
+  if (filter === "awaiting_action") {
+    return key != null && OPERATOR_ACTION_REVIEW_KEYS.includes(key);
+  }
   return key === filter;
+}
+
+export function orderAwaitsOperatorAction(order: LeadOrder): boolean {
+  return matchesReviewQueueFilter(order, "awaiting_action");
+}
+
+/** Unknown values keep the Orders page default, which is the review queue. */
+export function parseReviewQueueFilter(value: string | undefined): ReviewQueueFilter {
+  if (value && REVIEW_QUEUE_FILTERS.has(value)) return value as ReviewQueueFilter;
+  return "review";
 }
 
 export function fulfillmentOpsHref(orderId?: string): string {

@@ -1,5 +1,7 @@
+import { Suspense } from "react";
 import Link from "next/link";
 
+import { NeedsAttentionSection } from "@/components/dashboard/needs-attention";
 import {
   RecentInvalidWebhooks,
   RecentInvalidWebhooksFooter,
@@ -25,10 +27,8 @@ function mergeInvalidWebhookSamples(
   );
 }
 
-/** Command Center diagnostics. Operator work lives in the queues linked from this page. */
-export default async function CommandCenterPage() {
+async function CommandCenterDiagnostics() {
   const configured = isAdminApiConfigured();
-
   const [metricsRes, validationFailedRes, unauthorizedRes] = await Promise.all([
     fetchAdminMetricsSummary(),
     configured
@@ -44,7 +44,6 @@ export default async function CommandCenterPage() {
     validationFailedRes.items,
     unauthorizedRes.items
   ).slice(0, 10);
-
   const invalidSampleError =
     validationFailedRes.error || unauthorizedRes.error
       ? [validationFailedRes.error, unauthorizedRes.error].filter(Boolean).join(" · ")
@@ -52,14 +51,6 @@ export default async function CommandCenterPage() {
 
   return (
     <div className="space-y-5">
-      {!configured ? (
-        <WarningBanner tone="warn" title="Admin API not configured">
-          Set NEXT_PUBLIC_API_BASE_URL to your Fastify origin (for example http://localhost:3000) and a server-only key:
-          SA360_ADMIN_API_KEY or ADMIN_API_KEY (same value as the API’s ADMIN_API_KEY). Restart the Next dev server after
-          editing apps/admin-coc/.env.local. Keys are never sent to the browser.
-        </WarningBanner>
-      ) : null}
-
       {configured && error ? (
         <WarningBanner tone="warn" title="Could not load admin metrics">
           {error}
@@ -76,6 +67,7 @@ export default async function CommandCenterPage() {
         <Link
           href="/webhooks"
           className="text-sm font-medium text-slate-800 underline underline-offset-4 hover:underline"
+          data-testid="webhook-monitor-link"
         >
           Webhook Monitor
         </Link>
@@ -131,6 +123,34 @@ export default async function CommandCenterPage() {
         <RecentInvalidWebhooks items={invalidRecent} />
         <RecentInvalidWebhooksFooter />
       </SectionPanel>
+    </div>
+  );
+}
+
+/** Command Center — operator queues first, webhook diagnostics behind Webhook Monitor. */
+export default function CommandCenterPage() {
+  const configured = isAdminApiConfigured();
+  return (
+    <div className="space-y-5">
+      {!configured ? (
+        <WarningBanner tone="warn" title="Admin API not configured">
+          Set NEXT_PUBLIC_API_BASE_URL to your Fastify origin (for example http://localhost:3000) and a server-only key:
+          SA360_ADMIN_API_KEY or ADMIN_API_KEY (same value as the API’s ADMIN_API_KEY). Restart the Next dev server after
+          editing apps/admin-coc/.env.local. Keys are never sent to the browser.
+        </WarningBanner>
+      ) : null}
+
+      <NeedsAttentionSection />
+
+      <Suspense
+        fallback={
+          <p className="text-sm text-slate-500" role="status">
+            Loading diagnostics…
+          </p>
+        }
+      >
+        <CommandCenterDiagnostics />
+      </Suspense>
     </div>
   );
 }

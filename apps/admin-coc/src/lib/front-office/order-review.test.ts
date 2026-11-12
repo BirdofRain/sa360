@@ -9,6 +9,7 @@ import {
   hasActivateShortcut,
   mapReviewApiError,
   matchesReviewQueueFilter,
+  parseReviewQueueFilter,
   resolveReviewQueueKey,
   reviewQueueLabel,
   runConfirmAndApprove,
@@ -65,6 +66,39 @@ describe("Front Office order review queue", () => {
     });
     assert.equal(resolveReviewQueueKey(row), "approved_ready");
     assert.equal(reviewQueueLabel(row), "Approved / Ready");
+  });
+
+  it("awaiting operator action is the three submitted review states", () => {
+    assert.equal(matchesReviewQueueFilter(order(), "awaiting_action"), true);
+    assert.equal(
+      matchesReviewQueueFilter(order({ paymentConfirmationStatus: "confirmed" }), "awaiting_action"),
+      true
+    );
+    assert.equal(
+      matchesReviewQueueFilter(
+        order({ paymentConfirmationStatus: "not_required" }),
+        "awaiting_action"
+      ),
+      true
+    );
+    assert.equal(
+      matchesReviewQueueFilter(
+        order({ status: "ready", adminStatus: "ready", paymentConfirmationStatus: "confirmed" }),
+        "awaiting_action"
+      ),
+      false
+    );
+    assert.equal(
+      matchesReviewQueueFilter(order({ status: "active", adminStatus: "active" }), "awaiting_action"),
+      false
+    );
+    const interest = order({
+      availabilityInterest: { requestedOffering: "fresh_leads", notifyWhenAvailable: true },
+    });
+    assert.equal(matchesReviewQueueFilter(interest, "awaiting_action"), false);
+    assert.equal(parseReviewQueueFilter("awaiting_action"), "awaiting_action");
+    assert.equal(parseReviewQueueFilter("not-a-filter"), "review");
+    assert.equal(parseReviewQueueFilter(undefined), "review");
   });
 
   it("review filter includes the four Alex states only", () => {

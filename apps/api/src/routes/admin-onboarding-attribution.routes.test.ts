@@ -197,6 +197,7 @@ describe("onboarding attribution readback", { concurrency: 1 }, () => {
     const clientAccountId = await createClient();
     const ghlId = randomUUID();
     const sheetsId = randomUUID();
+    const setupId = randomUUID();
     const sharedId = randomUUID();
     const ghl = await prisma.ghlDestinationConfigurationRequest.create({
       data: {
@@ -214,6 +215,15 @@ describe("onboarding attribution readback", { concurrency: 1 }, () => {
         payloadHash: PAYLOAD_HASH,
         recordResultJson: { version: 1 },
         actor: NAMED_ACTOR,
+      },
+    });
+    await prisma.clientOnboardingSetupAuditEvent.create({
+      data: {
+        clientAccountId,
+        historicalClientAccountId: clientAccountId,
+        requestId: setupId,
+        action: "save_draft",
+        actor: "ADMIN",
       },
     });
     const sheets = await prisma.companySheetsDestinationConfigurationRequest.create({
@@ -261,7 +271,7 @@ describe("onboarding attribution readback", { concurrency: 1 }, () => {
         clientAccountId,
         historicalClientAccountId: clientAccountId,
         expectedRevision: 0,
-        revision: 2,
+        revision: 1,
         setupRevision: 1,
         providerFunnelId: "form-acceptance",
         providerCampaignId: "acceptance-campaign",
@@ -279,6 +289,18 @@ describe("onboarding attribution readback", { concurrency: 1 }, () => {
     const missing = await read(clientAccountId, randomUUID());
     assert.equal(missing.statusCode, 404);
     assert.equal(missing.json().error, "attribution_not_found");
+
+    const otherClientAccountId = await createClient();
+    for (const requestId of [setupId, ghlId, sheetsId, sharedId]) {
+      const isolated = await read(otherClientAccountId, requestId);
+      assert.equal(isolated.statusCode, 404, requestId);
+      assert.equal(isolated.json().error, "attribution_not_found");
+    }
+    assert.deepEqual(await counts(otherClientAccountId), { setup: 0, source: 0, ghl: 0, sheets: 0 });
+    const owner = await read(clientAccountId, ghlId);
+    assert.equal(owner.statusCode, 200);
+    assert.equal(owner.json().recordId, ghl.id);
+    assert.equal(owner.json().clientAccountId, clientAccountId);
     const invalid = await read(clientAccountId, "not-a-request-id");
     assert.equal(invalid.statusCode, 400);
     assert.equal(invalid.json().error, "invalid_request_id");

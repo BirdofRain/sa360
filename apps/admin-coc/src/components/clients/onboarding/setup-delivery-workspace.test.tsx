@@ -5,7 +5,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import React from "react";
 
 import type { OnboardingSummary, OnboardingWorkspaceActions, StoredTestRunView } from "@/lib/clients/onboarding/types";
-import { FOLDER_RESOLVED_NOT_LINKED, FULL_HISTORY_UNAVAILABLE, MISSING_PROFILE_REVISION_READ, SPREADSHEET_SAVED_CHOOSE_WORKSHEET, UNCERTAIN_OUTCOME_LABEL } from "@/lib/clients/onboarding/view";
+import { FOLDER_RESOLVED_NOT_LINKED, FULL_HISTORY_UNAVAILABLE, SPREADSHEET_SAVED_CHOOSE_WORKSHEET, UNCERTAIN_OUTCOME_LABEL } from "@/lib/clients/onboarding/view";
 
 const moduleLoader = module as unknown as {
   _load: (request: string, parent: NodeModule, isMain: boolean) => unknown;
@@ -540,10 +540,14 @@ test("Alex Gross mocked walkthrough keeps delivery and activation closed", async
   assert.equal(calls.includes("bind-sheet"), false);
   assert.equal(calls.includes("resolve") && calls.includes("preview-sheet"), true);
 
-  fireEvent.click(screen.getByRole("button", { name: "Discover Select Time Zone" }));
-  fireEvent.click(await screen.findByRole("button", { name: "Save Select Time Zone" }));
-  assert.ok(await screen.findByText(/Delivery enabled: false/));
-  assert.equal(calls.includes("save-workflow:0"), true);
+  const ghlCard = screen.getByTestId("card-ghl");
+  assert.equal(within(ghlCard).queryByRole("button", { name: "Discover Select Time Zone" }), null);
+  assert.equal(within(ghlCard).queryByRole("button", { name: "Save Select Time Zone" }), null);
+  assert.match(ghlCard.textContent ?? "", /Saved workflow id/);
+  assert.match(ghlCard.textContent ?? "", /not stored/);
+  assert.match(ghlCard.textContent ?? "", /tag_trigger/);
+  assert.equal(calls.includes("workflows"), false);
+  assert.equal(calls.some((call) => call.startsWith("save-workflow")), false);
 
   fireEvent.click(screen.getByRole("button", { name: "Preview stored lead" }));
   assert.ok(await screen.findByText(/Q&A evidence complete/));
@@ -655,10 +659,6 @@ test("an existing client keeps the current switch and does not treat a linked so
 
 test("a known nonzero profile revision is sent, and a conflict keeps the selection", async () => {
   const { api, calls } = actions();
-  api.saveWorkflow = async (input) => {
-    calls.push(`save-workflow:${input.expectedRevision}`);
-    return { ok: false, error: "revision_conflict", status: 409 };
-  };
   api.saveDestination = async (input) => {
     calls.push(`save-destination:${input.expectedRevision}:${input.sheetsSelected}`);
     return { ok: false, error: "revision_conflict", status: 409 };
@@ -676,14 +676,9 @@ test("a known nonzero profile revision is sent, and a conflict keeps the selecti
       actions={api}
     />
   );
-  fireEvent.click(screen.getByRole("button", { name: "Discover Select Time Zone" }));
-  fireEvent.click(await screen.findByRole("button", { name: "Save Select Time Zone" }));
-  assert.ok(await screen.findByTestId("revision-conflict"));
-  assert.ok(screen.getByRole("link", { name: "Review stored configuration" }));
-  const workflowSave = screen.getByRole("button", { name: "Save Select Time Zone" }) as HTMLButtonElement;
-  assert.equal(workflowSave.disabled, true);
-  fireEvent.click(workflowSave);
-  assert.deepEqual(calls.filter((call) => call.startsWith("save-workflow")), ["save-workflow:4"]);
+  assert.equal(screen.queryByRole("button", { name: "Discover Select Time Zone" }), null);
+  assert.equal(screen.queryByRole("button", { name: "Save Select Time Zone" }), null);
+  assert.equal(calls.some((call) => call === "workflows" || call.startsWith("save-workflow")), false);
   const sheets = screen.getByRole("checkbox", { name: "Sheets selected" }) as HTMLInputElement;
   fireEvent.click(sheets);
   fireEvent.click(screen.getByRole("button", { name: "Save destination profile" }));
@@ -692,7 +687,7 @@ test("a known nonzero profile revision is sent, and a conflict keeps the selecti
   assert.deepEqual(calls.filter((call) => call.startsWith("save-destination")), ["save-destination:4:true"]);
 });
 
-test("a missing profile revision leaves Select Time Zone unsaved", async () => {
+test("a missing profile revision does not discover or save a workflow", async () => {
   const { api, calls } = actions();
   render(
     <SetupDeliveryWorkspace
@@ -708,12 +703,64 @@ test("a missing profile revision leaves Select Time Zone unsaved", async () => {
   );
   assert.ok(screen.getByText(/Client campaign switch: no/));
   assert.ok(screen.getByText(/Global infrastructure: unknown/));
-  fireEvent.click(screen.getByRole("button", { name: "Discover Select Time Zone" }));
-  const save = await screen.findByRole("button", { name: "Save Select Time Zone" });
-  assert.equal((save as HTMLButtonElement).disabled, true);
-  assert.ok(screen.getByTestId("profile-revision-unavailable").textContent?.includes(MISSING_PROFILE_REVISION_READ));
+  assert.equal(screen.queryByRole("button", { name: "Discover Select Time Zone" }), null);
+  assert.equal(screen.queryByRole("button", { name: "Save Select Time Zone" }), null);
   assert.equal((screen.getByRole("button", { name: "Save destination profile" }) as HTMLButtonElement).disabled, true);
-  fireEvent.click(save);
+  assert.equal(calls.some((call) => call === "workflows" || call.startsWith("save-workflow")), false);
+});
+
+test("saved workflow id and trigger mode stay read-only", () => {
+  const { api, calls } = actions();
+  render(
+    <SetupDeliveryWorkspace
+      clientAccountId="morgan"
+      summary={summary({
+        client: {
+          clientAccountId: "morgan",
+          clientDisplayName: "Morgan",
+          status: "active",
+          primaryNicheKeys: ["vet"],
+          primaryProductTypes: [],
+        },
+        ghl: {
+          mode: "location_api",
+          locationIdPresent: true,
+          workflowTriggerMode: "direct_api",
+          workflowIdPresent: true,
+          inboundWebhookArmed: false,
+          notesEnabled: true,
+          notesContractVersion: "sa360_lead_note_v2",
+        },
+      })}
+      summaryError={null}
+      connection={null}
+      connectionError={null}
+      dispatch={{ dispatchFlagEnabled: false, campaignDispatchEnabled: false, agedDispatchEnabled: false }}
+      dispatchError={null}
+      ghlLocation={{
+        locationId: "loc_morgan",
+        locationName: "Morgan",
+        workflowId: "wf_bot1_vet",
+        workflowTriggerMode: "direct_api",
+        deliveryEnabled: false,
+        opportunityCreationEnabled: false,
+        pipelineId: null,
+        stageId: null,
+      }}
+      actions={api}
+    />
+  );
+  const saved = screen.getByTestId("saved-ghl-workflow");
+  assert.match(saved.textContent ?? "", /wf_bot1_vet/);
+  assert.match(saved.textContent ?? "", /direct_api/);
+  assert.match(screen.getByTestId("card-ghl").textContent ?? "", /separate Select Time Zone enrollment is not required/);
+  assert.equal(screen.queryByRole("button", { name: "Discover Select Time Zone" }), null);
+  assert.equal(screen.queryByRole("button", { name: /Save Select Time Zone/ }), null);
+  assert.ok(screen.getByText("Contact upserted"));
+  assert.ok(screen.getByText("Note persisted"));
+  assert.ok(screen.getByText("Workflow enrolled"));
+  assert.ok(screen.getByText("Downstream executed"));
+  assert.equal(calls.includes("workflows"), false);
   assert.equal(calls.some((call) => call.startsWith("save-workflow")), false);
 });
 

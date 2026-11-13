@@ -21,6 +21,8 @@ import {
   recordGhlAssociationDispatchOutbox,
   settleGhlAssociationDispatchFromResult,
 } from "../ghl-association-dispatch/ghl-association-dispatch.js";
+import { enqueueExternalWebhookAttempt } from "../external-webhook/external-webhook-queue.js";
+import { recordExternalWebhookAttempt } from "../external-webhook/external-webhook-schedule.js";
 
 /**
  * Shared source-intake routing + duplicate-risk + enrichment persistence.
@@ -138,6 +140,7 @@ export async function persistRoutingAndDuplicate(
     enrichmentMetadata.unmappedSourceFields
   );
 
+  let scheduledWebhookAttemptId: string | null = null;
   await prisma.$transaction(async (tx) => {
     await updateSourceLeadEvent(
       sourceEventId,
@@ -179,7 +182,32 @@ export async function persistRoutingAndDuplicate(
       },
       tx
     );
+    const scheduledWebhook = await recordExternalWebhookAttempt(
+      {
+        sourceLeadEventId: sourceEventId,
+        status,
+        clientAccountId: dryRun.destinationClientAccountId ?? null,
+        sourceLeadId,
+        receivedAt,
+        normalizedPayload: normalizedWithEnrichment,
+        sourceFunnelId: options?.sourceFunnelId ?? routing.sourceAssociation?.sourceFunnelId ?? null,
+        resolvedAt: now,
+      },
+      tx
+    );
+    scheduledWebhookAttemptId = scheduledWebhook?.attemptId ?? null;
   });
+
+  if (scheduledWebhookAttemptId) {
+    try {
+      await enqueueExternalWebhookAttempt(scheduledWebhookAttemptId);
+    } catch (err) {
+      logger.warn("external_webhook.enqueue_failed", {
+        sourceLeadEventId: sourceEventId,
+        errorName: err instanceof Error ? err.name : "Error",
+      });
+    }
+  }
 
   let outboxClaim: "absent" | "claimed" | "owned" = "absent";
   try {

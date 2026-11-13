@@ -115,6 +115,30 @@ Not implemented. A later admin route may be:
 
 Admin key only. It would return the frozen `payloadCanonicalJson` and the receipt. It would not return the endpoint URL, would not re-project the lead, and would not POST. It is not a public lead-data route. Portal, observer, and workspace keys are not this path.
 
+## Sender and acceptance event
+
+A recorded attempt is claimed to `sending` before the socket opens. The POST connects only to one address returned by a fresh `validateExternalWebhookUrl` call. `lookup` returns that address and `autoSelectFamily` is off, so a later DNS answer cannot move the connection. TLS still uses the original hostname. Redirects are destroyed and stored as `uncertain`.
+
+If `destination.revision`, `endpointUrlFingerprint`, `endpointHost`, or `kind` no longer matches the attempt, the sender stores `failed` and does not decrypt or POST. A crashed `sending` row older than 120 seconds is promoted to `uncertain` and is not POSTed again.
+
+`SA360_EXTERNAL_WEBHOOK_DELIVERY_ENABLED` must be the exact string `true` before scheduling and again before any resolver or socket call. The queue is `external-webhook-delivery`, separate from Sheets and GHL.
+
+Lane B reads a persisted `http_accepted` attempt through `externalWebhookAcceptanceEvent`:
+
+```ts
+{
+  acceptanceId: string; // the attempt id
+  clientAccountId: string;
+  sourceLeadEventId: string;
+  destinationId: string;
+  attemptId: string;
+  httpStatus: number;
+  acceptedAt: string; // ISO time of the accepted-state write
+}
+```
+
+This path does not send email or SMS.
+
 ## Lane B dependencies
 
 Pure modules, no sender:

@@ -1065,6 +1065,11 @@ model ClientAccount {
   historicalAliasNextOriginEvents HistoricalCampaignAliasEvent[] @relation("HistoricalCampaignAliasEventNextOrigin")
   /// Outbound custom webhook configuration. enabled defaults false and does not arm delivery.
   customWebhookDestination ClientCustomWebhookDestination?
+  /// Fresh-lead external webhook. One primary CRM destination per client.
+  /// enabled defaults false. Creating the row does not arm GHL, Sheets, or the legacy webhook.
+  externalWebhookDestination ClientExternalWebhookDestination?
+  /// Frozen external-webhook receipts. Restrict so account deletion cannot erase them.
+  externalWebhookDeliveryAttempts ExternalWebhookDeliveryAttempt[]
   /// Per-client notification on/off choice. Defaults disabled and cascades without sending.
   deliveryNotificationPreference ClientDeliveryNotificationPreference?
   /// Accepted recipient and on/off writes. Cascade with the client. These rows do not send.
@@ -4083,9 +4088,48 @@ model MetaFormCandidate {
   @@index([pageId])
 }
 
-/// v1 notification channel. SMS is not a value until a later assignment implements it.
+/// v1 notification channel. `sms` is not a value until a sender exists.
+/// The preference row can store an optional verified E.164 and `smsEnabled`
+/// without adding that value. Those columns do not send.
 enum ClientDeliveryNotificationChannel {
   email
+}
+
+/// Which external webhook the client pasted. Both kinds are the primary CRM
+/// delivery for that client. Company Sheets is a separate table and stays parallel.
+enum ExternalWebhookDestinationKind {
+  ghl_inbound
+  external_https
+}
+
+/// Optional request signing. `none` is the GHL inbound default: the unguessable
+/// path is the credential and is stored only as URL ciphertext.
+enum ExternalWebhookAuthMode {
+  none
+  hmac_sha256
+}
+
+/// `recorded` means the frozen payload is stored and the request has not left SA360.
+/// `attempted` means a later sender classified the HTTP result. This foundation does not send.
+enum ExternalWebhookAttemptState {
+  recorded
+  attempted
+}
+
+/// Terminal or retry classification for one external webhook POST.
+/// `http_accepted` is a 2xx only. It is not a GHL contact, workflow, or note receipt.
+enum ExternalWebhookDeliveryOutcome {
+  http_accepted
+  retryable
+  failed
+  uncertain
+}
+
+/// `v3_canonical` uses the company Sheets v3 source fields.
+/// `published_column_map` freezes one already-published funnel or shared map.
+enum ExternalWebhookMappingMode {
+  v3_canonical
+  published_column_map
 }
 
 /// Same words as the customer release notifier. Do not add synonyms.
@@ -4120,11 +4164,104 @@ model ClientCustomWebhookDestination {
   updatedAt                DateTime        @updatedAt
 }
 
+/// One fresh-lead external webhook per client. This is the third delivery
+/// destination: a client-owned GHL inbound webhook URL, or a Make/custom HTTPS
+/// endpoint. It is not ClientCustomWebhookDestination and it has no DeliveryTarget.
+///
+/// The endpoint URL and the optional HMAC secret are AES-256-GCM ciphertext
+/// under SA360_EXTERNAL_WEBHOOK_CREDENTIAL_KEY. That key is not the Meta, GHL,
+/// Google, or legacy custom-webhook key. Plaintext and ciphertext never belong
+/// in logs, tickets, or DeliveryTarget.configMetadataJson. endpointHost is the
+/// hostname only.
+///
+/// enabled defaults to false. crmRole is always primary_crm. SQL rejects
+/// enabled=true while ClientGhlDestination is armed for live location delivery
+/// on the same client, and rejects arming that GHL row while this row is
+/// enabled. Company Sheets is not part of that check. Creating this row does
+/// not set DeliveryTarget.enabled, ClientGhlDestination.deliveryEnabled, or
+/// CompanySheetsDestination.campaignDispatchEnabled.
+model ClientExternalWebhookDestination {
+  id                          String                         @id @default(cuid())
+  clientAccountId             String                         @unique
+  clientAccount               ClientAccount                  @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Cascade)
+  kind                        ExternalWebhookDestinationKind
+  /// Always primary_crm. Sheets is not stored here.
+  crmRole                     String                         @default("primary_crm")
+  authMode                    ExternalWebhookAuthMode        @default(none)
+  /// AES-256-GCM ciphertext of the canonical HTTPS URL (`iv.tag.ciphertext`, base64url).
+  endpointUrlCiphertext       String
+  /// SHA-256 prefix of the canonical URL. Not reversible to the path or query.
+  endpointUrlFingerprint      String
+  /// Hostname only. No userinfo, port, path, or query.
+  endpointHost                String
+  /// AES-256-GCM ciphertext of the optional HMAC secret. Null when authMode is none.
+  signingSecretCiphertext     String?
+  /// SHA-256 prefix of the HMAC secret. Null when authMode is none. Not itself a secret.
+  signingSecretFingerprint    String?
+  enabled                     Boolean                        @default(false)
+  /// Optimistic token. A URL or secret change must advance it. Open attempts keep the old revision.
+  revision                    Int                            @default(1)
+  createdAt                   DateTime                       @default(now())
+  updatedAt                   DateTime                       @updatedAt
+  attempts                    ExternalWebhookDeliveryAttempt[]
+
+  @@index([enabled])
+}
+
+/// Frozen outbound receipt for one client and one source lead.
+/// idempotencyKey is external-webhook:{clientAccountId}:{sourceLeadEventId}.
+/// payloadCanonicalJson and the mapping columns are immutable after insert.
+/// A later sender may set state, outcome, httpStatus, and requestLeftSa360 only.
+/// This row does not write GhlLiveDeliveryRun, a Sheets job, or an onboarding-test key.
+/// ON DELETE RESTRICT: client or destination deletion must not erase the receipt.
+/// sourceLeadEventId is not a foreign key.
+model ExternalWebhookDeliveryAttempt {
+  id                      String                           @id @default(cuid())
+  idempotencyKey          String                           @unique
+  clientAccountId         String
+  clientAccount           ClientAccount                    @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Restrict)
+  destinationId           String
+  destination             ClientExternalWebhookDestination @relation(fields: [destinationId], references: [id], onDelete: Restrict)
+  sourceLeadEventId       String
+  kind                    ExternalWebhookDestinationKind
+  /// Destination.revision copied at insert. A later URL revision does not retarget this row.
+  destinationRevision     Int
+  endpointHost            String
+  endpointUrlFingerprint  String
+  mappingMode             ExternalWebhookMappingMode
+  columnMapId             String?
+  columnMapVersion        Int?
+  /// column-map:{id}:v{version} when a published map is frozen. Null for v3.
+  columnMapContentKey     String?
+  columnMapSourceScope    String?
+  /// Exact UTF-8 JSON the later sender must POST. Retries send these bytes.
+  payloadCanonicalJson    String
+  /// Lowercase hex SHA-256 of payloadCanonicalJson.
+  payloadSha256           String
+  state                   ExternalWebhookAttemptState      @default(recorded)
+  outcome                 ExternalWebhookDeliveryOutcome?
+  httpStatus              Int?
+  /// True only after the request bytes left this process. Timeout and 3xx stay true and are not retried.
+  requestLeftSa360        Boolean                          @default(false)
+  proves                  Json                             @default("[]")
+  doesNotProve            Json                             @default("[\"ghl_contact\",\"ghl_workflow\",\"ghl_note\",\"ghl_location_api_success\",\"sheets_row_appended\",\"sms_sent\",\"email_sent\"]")
+  createdAt               DateTime                         @default(now())
+  updatedAt               DateTime                         @updatedAt
+
+  @@unique([clientAccountId, sourceLeadEventId], map: "ExternalWebhookDeliveryAttempt_client_event_key")
+  @@index([state, createdAt])
+  @@index([destinationId])
+}
+
 /// Per-client on/off choice for a successful-delivery email.
 /// enabled defaults false. SQL check ClientDeliveryNotifyPref_enabled_verified_chk
 /// rejects enabled=true unless recipientEmail, recipientEmailVerifiedAt, and
-/// enabledAt are present and channel is email. Deleting the client cascades
-/// this configuration and does not send. This row does not arm GHL, Sheets, or webhooks.
+/// enabledAt are present and channel is email.
+/// ClientDeliveryNotifyPref_sms_verified_chk rejects smsEnabled=true unless
+/// recipientPhoneE164 and recipientPhoneVerifiedAt are present.
+/// ClientDeliveryNotifyPref_phone_e164_chk requires E.164 when a phone is stored.
+/// Channel stays email. Deleting the client cascades this configuration and does
+/// not send. This row does not arm GHL, Sheets, or webhooks.
 model ClientDeliveryNotificationPreference {
   id                        String                            @id @default(cuid())
   clientAccountId           String                            @unique
@@ -4135,6 +4272,13 @@ model ClientDeliveryNotificationPreference {
   recipientEmail            String?
   /// Set in the same admin save that records the address. Not a verification message.
   recipientEmailVerifiedAt  DateTime?
+  /// Optional verified mobile for a later SMS sender. Null until an admin records it.
+  /// This is the operator's phone, not the consumer's. Storing it does not send.
+  recipientPhoneE164        String?
+  /// Set in the same admin save that records the E.164. Not an SMS.
+  recipientPhoneVerifiedAt  DateTime?
+  /// Stored on/off for that later sender. Default off. Channel stays email.
+  smsEnabled                Boolean                           @default(false)
   /// Transaction time of the latest off-to-on transition. Never moves backward.
   /// Receipts at or before this instant are not notified. Null while never enabled.
   enabledAt                 DateTime?

@@ -36,6 +36,11 @@
       "import": "./dist/staff-google-oidc.js",
       "default": "./dist/staff-google-oidc.js"
     },
+    "./staff-sign-in-url": {
+      "types": "./dist/staff-sign-in-url.d.ts",
+      "import": "./dist/staff-sign-in-url.js",
+      "default": "./dist/staff-sign-in-url.js"
+    },
     "./staff-google-service": {
       "types": "./dist/staff-google-service.d.ts",
       "import": "./dist/staff-google-service.js",

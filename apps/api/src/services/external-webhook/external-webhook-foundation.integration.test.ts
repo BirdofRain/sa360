@@ -65,7 +65,7 @@ test("external webhook rows stay independent of GHL, Sheets, and the legacy webh
           where: { clientAccountId },
           data: { smsEnabled: true },
         }),
-      "ClientDeliveryNotifyPref_sms_verified_chk"
+      "ClientDeliveryNotifyPref_sms_"
     );
     await expectMessage(
       () =>
@@ -80,12 +80,20 @@ test("external webhook rows stay independent of GHL, Sheets, and the legacy webh
       data: {
         recipientPhoneE164: "+15551234567",
         recipientPhoneVerifiedAt: new Date("2026-11-13T16:05:00.000Z"),
-        smsEnabled: true,
       },
     });
     assert.equal(sms.channel, "email");
     assert.equal(sms.enabled, true);
-    assert.equal(sms.smsEnabled, true);
+    assert.equal(sms.smsEnabled, false);
+    assert.equal(sms.smsSuppressionState, "unknown");
+    await expectMessage(
+      () =>
+        prisma.clientDeliveryNotificationPreference.update({
+          where: { clientAccountId },
+          data: { smsEnabled: true },
+        }),
+      "ClientDeliveryNotifyPref_sms_consent_chk"
+    );
     await expectMessage(
       () => prisma.$executeRaw`UPDATE "ClientDeliveryNotificationPreference" SET "channel" = 'sms' WHERE "clientAccountId" = ${clientAccountId}`,
       "invalid input value for enum"

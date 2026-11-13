@@ -1070,6 +1070,8 @@ model ClientAccount {
   externalWebhookDestination ClientExternalWebhookDestination?
   /// Frozen external-webhook receipts. Restrict so account deletion cannot erase them.
   externalWebhookDeliveryAttempts ExternalWebhookDeliveryAttempt[]
+  /// Channel-specific external-webhook notices. Restrict so account deletion cannot erase them.
+  externalWebhookNotificationReceipts ExternalWebhookNotificationReceipt[]
   /// Per-client notification on/off choice. Defaults disabled and cascades without sending.
   deliveryNotificationPreference ClientDeliveryNotificationPreference?
   /// Accepted recipient and on/off writes. Cascade with the client. These rows do not send.
@@ -4132,6 +4134,31 @@ enum ExternalWebhookMappingMode {
   published_column_map
 }
 
+/// SMS suppression for the notification preference. `unknown` is the fail-closed default.
+enum ExternalWebhookSmsSuppression {
+  unknown
+  clear
+  suppressed
+}
+
+/// Channel of one external-webhook notice. This is not ClientDeliveryNotificationChannel.
+enum ExternalWebhookNoticeChannel {
+  email
+  sms
+}
+
+/// Provider acceptance is `provider_accepted`. `sent` requires delivery evidence.
+/// `uncertain` is not claimed again.
+enum ExternalWebhookNoticeStatus {
+  pending
+  sending
+  provider_accepted
+  sent
+  failed
+  uncertain
+  suppressed
+}
+
 /// Same words as the customer release notifier. Do not add synonyms.
 enum DeliverySuccessNotificationStatus {
   pending
@@ -4243,7 +4270,11 @@ model ExternalWebhookDeliveryAttempt {
   httpStatus              Int?
   /// True only after the request bytes left this process. Timeout and 3xx stay true and are not retried.
   requestLeftSa360        Boolean                          @default(false)
+  /// Stamped once, by database trigger, when outcome first becomes http_accepted.
+  /// The sender does not write this column. Null until that acceptance. It does not move.
+  httpAcceptedAt          DateTime?
   proves                  Json                             @default("[]")
+  notices                 ExternalWebhookNotificationReceipt[]
   doesNotProve            Json                             @default("[\"ghl_contact\",\"ghl_workflow\",\"ghl_note\",\"ghl_location_api_success\",\"sheets_row_appended\",\"sms_sent\",\"email_sent\"]")
   createdAt               DateTime                         @default(now())
   updatedAt               DateTime                         @updatedAt
@@ -4259,6 +4290,9 @@ model ExternalWebhookDeliveryAttempt {
 /// enabledAt are present and channel is email.
 /// ClientDeliveryNotifyPref_sms_verified_chk rejects smsEnabled=true unless
 /// recipientPhoneE164 and recipientPhoneVerifiedAt are present.
+/// ClientDeliveryNotifyPref_sms_consent_chk also rejects smsEnabled=true unless
+/// the canonical consent, smsEnabledAt, and suppression clear are present.
+/// A verified phone is not consent. Email `enabled` is not SMS consent.
 /// ClientDeliveryNotifyPref_phone_e164_chk requires E.164 when a phone is stored.
 /// Channel stays email. Deleting the client cascades this configuration and does
 /// not send. This row does not arm GHL, Sheets, or webhooks.
@@ -4273,12 +4307,27 @@ model ClientDeliveryNotificationPreference {
   /// Set in the same admin save that records the address. Not a verification message.
   recipientEmailVerifiedAt  DateTime?
   /// Optional verified mobile for a later SMS sender. Null until an admin records it.
-  /// This is the operator's phone, not the consumer's. Storing it does not send.
+  /// This is the operator's phone, not the consumer's. Storing it does not send
+  /// and is not SMS consent.
   recipientPhoneE164        String?
-  /// Set in the same admin save that records the E.164. Not an SMS.
+  /// Set in the same admin save that records the E.164. Not an SMS and not consent.
   recipientPhoneVerifiedAt  DateTime?
-  /// Stored on/off for that later sender. Default off. Channel stays email.
+  /// SMS on/off. Independent of `enabled`. Default off. Channel stays email.
+  /// SQL rejects true unless consent, a verified E.164, smsEnabledAt, and
+  /// suppression `clear` are all present.
   smsEnabled                Boolean                           @default(false)
+  /// Exact consent copy for SMS_CONSENT_VERSION. Null until that consent is recorded.
+  smsConsentVersion         String?
+  smsConsentText            String?
+  /// Transaction time of the consent record. Not a phone verification time.
+  smsConsentRecordedAt      DateTime?
+  /// Transaction time of the latest SMS off-to-on. Never moves backward.
+  /// Null while SMS has never been enabled. Independent of email `enabledAt`.
+  smsEnabledAt              DateTime?
+  smsDisabledAt             DateTime?
+  /// `unknown` fails closed. `clear` is explicit consent. `suppressed` is STOP or Twilio 21610.
+  smsSuppressionState       ExternalWebhookSmsSuppression     @default(unknown)
+  smsSuppressedAt           DateTime?
   /// Transaction time of the latest off-to-on transition. Never moves backward.
   /// Receipts at or before this instant are not notified. Null while never enabled.
   enabledAt                 DateTime?
@@ -4287,6 +4336,50 @@ model ClientDeliveryNotificationPreference {
   revision                  Int                               @default(1)
   createdAt                 DateTime                          @default(now())
   updatedAt                 DateTime                          @updatedAt
+}
+
+/// One external-webhook notice per accepted attempt, channel, and recipient.
+/// idempotencyKey is external_webhook:{acceptanceId}:{channel}:{recipient}.
+/// acceptanceId is ExternalWebhookDeliveryAttempt.id. A Sheets job is not part of the key.
+/// provider_accepted means the provider API accepted the create call. It is not handset delivery.
+/// sent requires deliveryEvidence. The row stores no lead payload and no raw provider body.
+/// ON DELETE RESTRICT: client or attempt deletion must not erase the notice.
+model ExternalWebhookNotificationReceipt {
+  id                 String                         @id @default(cuid())
+  idempotencyKey     String                         @unique
+  /// Same value as attemptId. Named so the B1 key can be checked in SQL.
+  acceptanceId       String
+  attemptId          String
+  attempt            ExternalWebhookDeliveryAttempt @relation(fields: [attemptId], references: [id], onDelete: Restrict)
+  clientAccountId    String
+  clientAccount      ClientAccount                  @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Restrict)
+  sourceLeadEventId  String
+  destinationId      String
+  channel            ExternalWebhookNoticeChannel
+  /// Normalized mailbox or E.164. The operator recipient, not a lead field.
+  recipient          String
+  status             ExternalWebhookNoticeStatus    @default(pending)
+  /// Copied from the attempt's httpAcceptedAt. Frozen.
+  acceptedAt         DateTime
+  templateId         String
+  claimCount         Int                            @default(0)
+  claimedAt          DateTime?
+  provider           String?
+  providerMessageId  String?
+  /// Allowlisted provider status word. Not a response body.
+  providerStatus     String?
+  providerCode       Int?
+  /// True only after a delivery-status callback proves handset or inbox delivery.
+  deliveryEvidence   Boolean                        @default(false)
+  /// Safe reason code. No address, phone, or provider body.
+  skipReason         String?
+  lastError          String?
+  createdAt          DateTime                       @default(now())
+  updatedAt          DateTime                       @updatedAt
+
+  @@index([status, claimedAt])
+  @@index([attemptId])
+  @@index([clientAccountId, channel])
 }
 
 /// One accepted Admin C.O.C. write of a notification recipient or on/off choice.

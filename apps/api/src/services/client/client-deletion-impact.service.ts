@@ -46,6 +46,7 @@ export type ClientDeletionImpact = {
     inconsistentAssociationNormalizedSnapshots: number;
     inconsistentAssociationSnapshotRows: number;
     deliverySuccessNotifications: number;
+    externalWebhookNotificationReceipts: number;
   };
   /** SourceFunnel rows that name this client. A row using both fields appears once. */
   affectedRows: ClientDeletionAffectedRow[];
@@ -115,6 +116,7 @@ export async function getClientDeletionImpact(
     sourceFunnels,
     inconsistentSnapshots,
     deliverySuccessNotifications,
+    externalWebhookNotificationReceipts,
   ] = await Promise.all([
     countRoutingRulesForClient(id),
     prisma.ghlLocationConnection.count({ where: { clientAccountId: id } }),
@@ -137,6 +139,7 @@ export async function getClientDeletionImpact(
     }),
     listInconsistentCurrentAssociationSnapshots(id, prisma),
     prisma.deliverySuccessNotification.count({ where: { clientAccountId: id } }),
+    prisma.externalWebhookNotificationReceipt.count({ where: { clientAccountId: id } }),
   ]);
   const funnelReferences = summarizeSourceFunnelClientReferences(id, sourceFunnels);
   const associationSnapshotRows = inconsistentSnapshots.rows.map((row) => ({
@@ -185,6 +188,11 @@ export async function getClientDeletionImpact(
       `${deliverySuccessNotifications} delivery success notification record(s) retain this client's send history and block deletion.`
     );
   }
+  if (externalWebhookNotificationReceipts > 0) {
+    blockers.push(
+      `${externalWebhookNotificationReceipts} external webhook notification receipt(s) retain this client's notice history and block deletion.`
+    );
+  }
 
   return {
     clientAccountId: id,
@@ -207,6 +215,7 @@ export async function getClientDeletionImpact(
       inconsistentAssociationNormalizedSnapshots: inconsistentSnapshots.normalizedReferences,
       inconsistentAssociationSnapshotRows: associationSnapshotRows.length,
       deliverySuccessNotifications,
+      externalWebhookNotificationReceipts,
     },
     affectedRows: funnelReferences.affectedRows,
     associationSnapshotRows,
@@ -221,6 +230,9 @@ export async function getClientDeletionImpact(
       deliverySuccessNotifications > 0
         ? `${deliverySuccessNotifications} delivery success notification record(s) block deletion and are not removed.`
         : "No delivery success notification history blocks deletion.",
+      externalWebhookNotificationReceipts > 0
+        ? `${externalWebhookNotificationReceipts} external webhook notification receipt(s) block deletion and are not removed.`
+        : "No external webhook notification receipt blocks deletion.",
     ].join(" "),
   };
 }

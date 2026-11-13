@@ -11,7 +11,7 @@ export const LEADS_RECEIVED_TODAY_GAP = {
   summary:
     "Leads received today is omitted. Source Intake cannot filter receivedAt to an America/New_York day, and GHL lifecycle webhook traffic is not the intake count.",
   gaps: [
-    "GET /admin/v1/source-leads accepts status, sourceProvider, sourceSystem, matched, clientAccountIdResolved, includeCleanup, cleanupStatus, limit, and cursor. sourceLeadListQuerySchema is strict, so receivedFrom, receivedTo, from, and to are rejected.",
+    "GET /admin/v1/source-leads accepts status, sourceProvider, sourceSystem, matched, clientAccountIdResolved, includeCleanup, cleanupStatus, liveFailure, limit, and cursor. sourceLeadListQuerySchema is strict, so receivedFrom, receivedTo, from, and to are rejected.",
     "buildSourceLeadEventWhere does not set receivedAt. Walking every page and dropping rows outside the Eastern day stops at the page cap and does not match a queue an operator can open.",
     "Source Intake search params have no received-day field, so /source-intake cannot show that set.",
     "Duplicates: duplicate_blocked is its own status. The list accepts one status, so a day total cannot include ordinary intake and exclude duplicates.",
@@ -23,14 +23,15 @@ export const LEADS_RECEIVED_TODAY_GAP = {
 
 /**
  * What the delivery-failure card counts, and the failure records it leaves out.
- * The count matches Source Intake `?status=delivery_failed`.
+ * The count matches Source Intake `?status=delivery_failed&liveFailure=true`.
  */
 export const DELIVERY_FAILURE_SCOPE = {
   status: "delivery_failed",
-  queue: "/source-intake?status=delivery_failed",
+  queue: "/source-intake?status=delivery_failed&liveFailure=true",
   included:
-    "SourceLeadEvent rows whose current status is delivery_failed. That status is written after an external delivery write was attempted and failed. Source Intake requires an operator to requeue before another attempt.",
+    "SourceLeadEvent rows whose current status is delivery_failed and whose stored deliveryResultJson.externalCallExecuted is true. That is the live external write that still needs an operator requeue.",
   excluded: [
+    "Simulate-only results, including mode simulate or externalCallExecuted false, and delivery_failed rows with no stored result.",
     "Requeue replaces delivery_failed with routing_matched or routing_unmatched.",
     "A later successful external write sets status delivered.",
     "Pre-write blocks, duplicate live-delivery blocks, and company-sheets pilot blocks do not set delivery_failed.",

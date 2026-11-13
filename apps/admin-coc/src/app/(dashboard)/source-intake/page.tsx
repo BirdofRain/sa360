@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import { SourceIntakeView } from "@/components/source-intake/source-intake-view";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { Badge } from "@/components/ui/badge";
@@ -8,6 +10,7 @@ import {
 } from "@/lib/admin-api/server";
 import {
   parseSourceIntakeSearchParams,
+  sourceIntakePageHref,
   sourceIntakeToApiParams,
 } from "@/lib/source-intake/source-intake-query";
 
@@ -20,7 +23,8 @@ export default async function SourceIntakePage({
   const query = parseSourceIntakeSearchParams(sp);
   const configured = isAdminApiConfigured();
   const apiParams = sourceIntakeToApiParams(query);
-  const { items, error } = await fetchAdminSourceLeads(apiParams);
+  const { items, nextCursor, error } = await fetchAdminSourceLeads(apiParams);
+  const nextHref = nextCursor ? sourceIntakePageHref(query, { cursor: nextCursor }) : null;
   const { data: runtimeMode } = configured
     ? await fetchAdminDeliveryRuntimeMode()
     : { data: null };
@@ -63,6 +67,18 @@ export default async function SourceIntakePage({
       ) : null}
 
       <SourceIntakeView items={items} emptyHint={emptyHint} runtimeMode={runtimeMode} />
+
+      {nextHref ? (
+        <div className="flex justify-end">
+          <Link
+            href={nextHref}
+            className="text-sm font-medium text-slate-800 underline underline-offset-4 hover:underline"
+            data-testid="source-intake-next"
+          >
+            Next
+          </Link>
+        </div>
+      ) : null}
     </div>
   );
 }

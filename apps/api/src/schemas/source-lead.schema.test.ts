@@ -15,6 +15,13 @@ test("sourceLeadListQuerySchema rejects an America/New_York receivedAt window", 
   });
   assert.equal(fromTo.success, false);
 
+  const live = sourceLeadListQuerySchema.safeParse({ status: "delivery_failed", liveFailure: "true" });
+  assert.equal(live.success, true);
+  if (live.success) {
+    assert.equal(live.data.liveFailure, true);
+    assert.equal(live.data.status, "delivery_failed");
+  }
+
   const status = sourceLeadListQuerySchema.safeParse({ status: "delivery_failed" });
   assert.equal(status.success, true);
   if (status.success) {

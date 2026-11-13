@@ -15,6 +15,15 @@ test("buildSourceLeadEventWhere cannot bound receivedAt to an Eastern day", () =
   assert.notEqual(duplicates.status, failures.status);
 });
 
+test("live external failure keeps delivery_failed rows with externalCallExecuted true", () => {
+  const where = buildSourceLeadEventWhere({ liveExternalFailure: true });
+  assert.equal(where.status, "delivery_failed");
+  assert.deepEqual(where.deliveryResultJson, {
+    path: ["externalCallExecuted"],
+    equals: true,
+  });
+});
+
 test("buildSourceLeadEventWhere excludes cleanup rows by default", () => {
   const where = buildSourceLeadEventWhere({});
   assert.equal(where.cleanupStatus, null);

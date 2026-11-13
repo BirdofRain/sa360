@@ -288,6 +288,7 @@ test("delivery failures count only the current delivery_failed pages", async () 
     },
   });
   assert.equal(calls.every((params) => params.status === "delivery_failed"), true);
+  assert.equal(calls.every((params) => params.liveFailure === "true"), true);
   assert.equal(calls.every((params) => params.limit === "200"), true);
   assert.equal(
     calls.some((params) => "receivedFrom" in params || "from" in params || "to" in params || "includeCleanup" in params),

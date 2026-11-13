@@ -48,8 +48,9 @@ test("leads received today stays unsupported because no Eastern day read exists"
 
 test("delivery failure scope is the current delivery_failed queue", () => {
   assert.equal(DELIVERY_FAILURE_SCOPE.status, "delivery_failed");
-  assert.equal(DELIVERY_FAILURE_SCOPE.queue, "/source-intake?status=delivery_failed");
+  assert.equal(DELIVERY_FAILURE_SCOPE.queue, "/source-intake?status=delivery_failed&liveFailure=true");
   const excluded = DELIVERY_FAILURE_SCOPE.excluded.join("\n");
+  assert.match(excluded, /externalCallExecuted false/);
   assert.match(excluded, /routing_matched/);
   assert.match(excluded, /delivered/);
   assert.match(excluded, /skipped/);

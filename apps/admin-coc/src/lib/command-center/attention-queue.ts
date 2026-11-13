@@ -95,7 +95,8 @@ type SourceLeadCountDeps = {
 async function countSourceLeadsByStatus(
   status: string,
   incompleteReason: string,
-  deps: SourceLeadCountDeps
+  deps: SourceLeadCountDeps,
+  extraParams: Record<string, string> = {}
 ): Promise<AttentionRead> {
   const readAccess = deps.readAccess ?? readAdminCocAccess;
   const fetchPage = deps.fetchPage ?? fetchAdminSourceLeads;
@@ -115,6 +116,7 @@ async function countSourceLeadsByStatus(
     const params: Record<string, string> = {
       status,
       limit: SOURCE_PAGE_LIMIT,
+      ...extraParams,
     };
     if (cursor) params.cursor = cursor;
     const result = await fetchPage(params);
@@ -142,8 +144,10 @@ export async function loadSourceIntakeAwaitingReview(
 }
 
 /**
- * Current `delivery_failed` source leads. Recovered retries and skips are other
- * statuses, so this filter leaves them out. The timestamp is when the read finished.
+ * Current live delivery failures. The list keeps delivery_failed rows whose
+ * stored result has externalCallExecuted true, matching the Source Intake link.
+ * Simulate-only results and rows with no stored result are not included.
+ * The timestamp is when the read finished.
  */
 export async function loadDeliveryFailuresRequiringAction(
   deps: SourceLeadCountDeps & { now?: () => Date } = {}
@@ -152,7 +156,8 @@ export async function loadDeliveryFailuresRequiringAction(
   const read = await countSourceLeadsByStatus(
     SOURCE_INTAKE_DELIVERY_FAILED_STATUS,
     DELIVERY_INCOMPLETE,
-    deps
+    deps,
+    { liveFailure: "true" }
   );
   if (read.state === "unavailable") return read;
   return { state: "ready", count: read.count, refreshedAt: now().toISOString() };

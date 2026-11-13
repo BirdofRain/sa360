@@ -6,7 +6,7 @@ import { deliveryFailureRefreshedLabel } from "@/lib/command-center/activity-sna
 import { loadDeliveryFailuresRequiringAction } from "@/lib/command-center/attention-queue";
 import { SOURCE_INTAKE_DELIVERY_FAILED_HREF } from "@/lib/source-intake/source-intake-query";
 
-const DELIVERY_TITLE = "Delivery failures requiring action";
+const DELIVERY_TITLE = "Source Intake delivery failures";
 
 const DELIVERY_HINT =
   "Source leads in delivery_failed after an external write failed. Requeue is required before another attempt. Recovered retries and skips are other statuses.";

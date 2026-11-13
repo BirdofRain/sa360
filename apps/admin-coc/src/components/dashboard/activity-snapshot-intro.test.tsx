@@ -9,12 +9,12 @@ test.afterEach(() => {
   cleanup();
 });
 
-test("activity snapshot omits a leads-received-today card", () => {
+test("activity snapshot does not mention the omitted leads-received-today count", () => {
   render(<ActivitySnapshotIntro />);
-  const gap = screen.getByTestId("activity-leads-today-gap").textContent ?? "";
-  assert.match(gap, /Leads received today is omitted/);
-  assert.match(gap, /America\/New_York/);
-  assert.match(gap, /GHL lifecycle/);
+  assert.equal(screen.getByRole("heading", { name: "Activity" }).textContent, "Activity");
+  assert.match(screen.getByText(/Refresh times use America\/New_York/).textContent ?? "", /America\/New_York/);
+  assert.equal(screen.queryByText(/Leads received today/), null);
+  assert.equal(screen.queryByTestId("activity-leads-today-gap"), null);
   assert.equal(screen.queryByTestId("activity-leads-today"), null);
   assert.equal(screen.queryByTestId("activity-leads-today-count"), null);
 });
@@ -22,7 +22,7 @@ test("activity snapshot omits a leads-received-today card", () => {
 test("a delivery failure card shows the count, queue, and Eastern refresh time", () => {
   render(
     <AttentionCard
-      title="Delivery failures requiring action"
+      title="Source Intake delivery failures"
       hint="Source leads in delivery_failed."
       emptyHint="No source leads are waiting in delivery_failed."
       href="/source-intake?status=delivery_failed"
@@ -45,7 +45,7 @@ test("a delivery failure card shows the count, queue, and Eastern refresh time",
 test("an unavailable delivery failure card has no count, link, or refresh time", () => {
   render(
     <AttentionCard
-      title="Delivery failures requiring action"
+      title="Source Intake delivery failures"
       hint="Source leads in delivery_failed."
       emptyHint="No source leads are waiting in delivery_failed."
       href="/source-intake?status=delivery_failed"

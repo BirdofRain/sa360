@@ -4,6 +4,8 @@ import { test } from "node:test";
 import type { Prisma } from "@prisma/client";
 import { PPL_AGED_PRICING_VERSION } from "@sa360/shared";
 
+import { leadOrderClientCreateBodySchema } from "../../schemas/lead-order.schema.js";
+
 import {
   CLIENT_LEAD_ORDER_AGED_OPTIONS_REQUIRED,
   CLIENT_LEAD_ORDER_PRICED_LINE_UNAVAILABLE,
@@ -1029,6 +1031,49 @@ test("serializable write conflicts retry once then fail closed without throwing"
   assert.equal(attempts, 2);
   assert.equal(result.eligible, true);
   assert.equal(result.wrote, true);
+});
+
+test("legacy and new profile products pass request validation and stay on the persisted order", async () => {
+  const productTypes = [
+    "final_expense",
+    "term_life",
+    "aged",
+    "exclusive",
+    "shared",
+    "life_insurance",
+    "health_insurance",
+    "other",
+  ];
+  for (const productType of productTypes) {
+    const parsed = leadOrderClientCreateBodySchema.safeParse({ ...agedBody, productType });
+    assert.equal(parsed.success, true, productType);
+    if (!parsed.success) continue;
+    assert.equal(parsed.data.productType, productType);
+    let stored: string | null | undefined;
+    const created = await createClientLeadOrder(parsed.data, "acct_hebda", {
+      findClientAccountByIdImpl: readyAccount as never,
+      nextLeadOrderNumberImpl: (async () => `LO-${productType}`) as never,
+      createLeadOrderRecordImpl: (async (input: Prisma.LeadOrderCreateInput) => {
+        stored = typeof input.productType === "string" ? input.productType : null;
+        return {
+          id: `ord_${productType}`,
+          orderNumber: `LO-${productType}`,
+          notes: input.notes,
+          campaignType: input.campaignType,
+          nicheKey: input.nicheKey,
+          productType: stored,
+          leadVolume: input.leadVolume,
+          states: input.statesJson,
+          status: "submitted",
+          orderKind: input.orderKind,
+          pricedPpl: null,
+        };
+      }) as never,
+    });
+    assert.equal(created.ok, true, productType);
+    assert.equal(stored, productType);
+    if (created.ok) assert.equal(created.row.productType, productType);
+  }
 });
 
 test("production apply is blocked without the matching authorization ticket", async () => {

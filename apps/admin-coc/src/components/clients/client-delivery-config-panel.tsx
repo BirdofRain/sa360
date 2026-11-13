@@ -194,6 +194,10 @@ export function ClientDeliveryConfigPanel({
               {readinessStatusLabel(readiness.readinessStatus)}
             </Badge>
           </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            GHL destination configuration only. Legacy master-source routing rules are a separate cutover check and
+            are not part of this checklist.
+          </p>
           <p className="mt-1 text-xs text-muted-foreground">{readiness.recommendedNextAction}</p>
           <ul className="mt-3 space-y-1 text-sm">
             {readiness.checklist.map((item) => (

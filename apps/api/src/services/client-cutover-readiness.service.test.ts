@@ -79,6 +79,39 @@ test("destination configured but no active routing rules is a blocker", () => {
   assert.equal(rulesSection?.complete, false);
 });
 
+test("a configured GHL destination with zero routing rules keeps destination readiness separate from the routing blocker", () => {
+  const report = buildClientCutoverReadinessReport(
+    makeInput({
+      client: {
+        clientAccountId: "morgan",
+        clientDisplayName: "Morgan",
+        status: "active",
+        portalEnabled: false,
+        portalLoginEmail: null,
+      },
+      routingRules: [],
+    })
+  );
+  const ghl = report.sections.find((section) => section.key === "ghl_destination");
+  const rules = report.sections.find((section) => section.key === "routing_rules");
+  assert.equal(ghl?.complete, true);
+  assert.equal(rules?.items.find((item) => item.key === "active_rule_exists")?.detail, "0 active of 0 total");
+  assert.equal(rules?.items.find((item) => item.key === "rule_master_source")?.detail, "no master source");
+  assert.equal(report.overallStatus, "not_ready");
+  assert.ok(report.blockers.includes("No active routing rule maps a master source to this client."));
+  assert.equal(report.blockers.some((blocker) => blocker.startsWith("Destination:")), false);
+  assert.equal(report.blockers.some((blocker) => blocker.includes("GHL destination is not configured")), false);
+});
+
+test("an active master-source rule stays on the existing routing checklist", () => {
+  const report = buildClientCutoverReadinessReport(makeInput());
+  const rules = report.sections.find((section) => section.key === "routing_rules");
+  assert.equal(rules?.items.find((item) => item.key === "active_rule_exists")?.detail, "1 active of 1 total");
+  assert.equal(rules?.items.find((item) => item.key === "rule_master_source")?.complete, true);
+  assert.equal(rules?.items.find((item) => item.key === "rule_master_source")?.detail, "lal_master_vet");
+  assert.equal(report.blockers.some((blocker) => blocker.includes("No active routing rule")), false);
+});
+
 test("portal not enabled surfaces a warning (not a hard blocker)", () => {
   const report = buildClientCutoverReadinessReport(makeInput());
   assert.ok(report.warnings.some((w) => w.includes("Portal access is not enabled")));

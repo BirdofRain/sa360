@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import module from "node:module";
 import test from "node:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import React from "react";
 
 import type { GuidedOnboardingModel } from "@/lib/team-workspace/onboarding-guide";
@@ -12,6 +12,12 @@ type UpdateInput = { clientAccountId: string; clientDisplayName: string; status:
 const saves: SaveInput[] = [];
 const updates: UpdateInput[] = [];
 const creates: string[] = [];
+const createPayloads: Array<{
+  clientAccountId: string;
+  clientDisplayName: string;
+  primaryNicheKeys: string[];
+  primaryProductTypes: string[];
+}> = [];
 let saveGate: Promise<void> | null = null;
 let saveRejects = false;
 let updateRejects = false;
@@ -146,8 +152,14 @@ moduleLoader._load = function (request: string, parent: NodeModule, isMain: bool
   }
   if (request === "@/app/actions/team-workspace-onboarding") {
     return {
-      createGuidedClientAction: async (input: { clientAccountId: string }) => {
+      createGuidedClientAction: async (input: {
+        clientAccountId: string;
+        clientDisplayName: string;
+        primaryNicheKeys: string[];
+        primaryProductTypes: string[];
+      }) => {
         creates.push(input.clientAccountId);
+        createPayloads.push(input);
         if (createRejects) throw new Error("create rejected");
         return { ok: true, clientAccountId: "new_client", clientDisplayName: "New Client" };
       },
@@ -178,6 +190,7 @@ test.afterEach(() => {
   saves.length = 0;
   updates.length = 0;
   creates.length = 0;
+  createPayloads.length = 0;
   refreshCalls.length = 0;
   saveGate = null;
   saveRejects = false;
@@ -407,9 +420,67 @@ test("partial setup keeps the notification words distinct on the summary", () =>
   assert.equal(screen.getByRole("heading", { name: "Remaining actions" }).textContent, "Remaining actions");
 });
 
+test("existing client keeps saved legacy products visible until the operator removes them", async () => {
+  render(
+    <GuidedOnboarding
+      model={guide({
+        account: {
+          clientDisplayName: "Northshore Mutual",
+          status: "onboarding",
+          primaryNicheKeys: ["VET", "MTG"],
+          primaryProductTypes: ["final_expense", "exclusive"],
+        },
+      })}
+      step="information"
+      clients={[]}
+    />
+  );
+  const legacy = screen.getByRole("button", { name: "final_expense" }) as HTMLButtonElement;
+  const exclusive = screen.getByRole("button", { name: "exclusive" }) as HTMLButtonElement;
+  assert.equal(legacy.getAttribute("aria-pressed"), "true");
+  assert.equal(exclusive.getAttribute("aria-pressed"), "true");
+  assert.equal((screen.getByRole("button", { name: "Life Insurance" }) as HTMLButtonElement).getAttribute("aria-pressed"), "false");
+  assert.equal(screen.queryByRole("button", { name: "Term life" }), null);
+
+  fireEvent.change(screen.getByLabelText("Email"), { target: { value: "ops@northshore.example" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save client information" }));
+  await waitFor(() => assert.equal(updates.length, 1));
+  assert.deepEqual(updates[0]?.primaryProductTypes, ["final_expense", "exclusive"]);
+  assert.deepEqual(updates[0]?.primaryNicheKeys, ["VET", "MTG"]);
+  assert.equal(updates[0]?.clientDisplayName, "Northshore Mutual");
+
+  fireEvent.click(legacy);
+  fireEvent.click(screen.getByRole("button", { name: "Life Insurance" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save client information" }));
+  await waitFor(() => assert.equal(updates.length, 2));
+  assert.deepEqual(updates[1]?.primaryProductTypes, ["exclusive", "life_insurance"]);
+  assert.equal(screen.queryByRole("button", { name: "final_expense" }), null);
+});
+
+test("new client picker offers only the current product and niche choices", async () => {
+  render(<GuidedOnboarding model={null} step="client" clients={[]} />);
+  assert.deepEqual(
+    ["Life Insurance", "Health Insurance", "Other"].map((name) =>
+      Boolean(screen.getByRole("button", { name }))
+    ),
+    [true, true, true]
+  );
+  for (const retired of ["final_expense", "Term life", "Aged leads", "Exclusive", "Shared"]) {
+    assert.equal(screen.queryByRole("button", { name: retired }), null);
+  }
+  assert.equal(screen.queryByRole("button", { name: "Veteran (VET)" }), null);
+  fireEvent.click(screen.getByRole("button", { name: "MORTGAGE" }));
+  fireEvent.click(screen.getByRole("button", { name: "Health Insurance" }));
+  fireEvent.change(screen.getByLabelText("Client name"), { target: { value: "Cedar Ridge" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create client" }));
+  await screen.findByText(/Client saved. Delivery is not on/);
+  assert.deepEqual(createPayloads[0]?.primaryNicheKeys, ["MTG"]);
+  assert.deepEqual(createPayloads[0]?.primaryProductTypes, ["health_insurance"]);
+});
+
 test("a niche selection on screen does not mark client information saved", () => {
   render(<GuidedOnboarding model={guide()} step="information" clients={[]} />);
-  fireEvent.click(screen.getByRole("button", { name: "Term life" }));
+  fireEvent.click(screen.getByRole("button", { name: "Life Insurance" }));
   const information = screen.getAllByText("Pending").length;
   assert.equal(information > 0, true);
   assert.equal(screen.queryByText("5 of 5 steps saved"), null);

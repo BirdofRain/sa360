@@ -77,6 +77,7 @@ import { adminTeamWorkspaceRoutes } from "./routes/admin-team-workspace.js";
 import { adminSourceCampaignRequestRoutes } from "./routes/admin-source-campaign-request.js";
 import { adminGhlDestinationConfigRequestRoutes } from "./routes/admin-ghl-destination-config-request.js";
 import { adminCompanySheetsConfigRequestRoutes } from "./routes/admin-company-sheets-config-request.js";
+import { adminOnboardingAttributionRoutes } from "./routes/admin-onboarding-attribution.js";
 import { adminClientOnboardingV2GhlRoutes } from "./routes/admin-client-onboarding-v2-ghl.js";
 import { adminClientOnboardingV2TestRoutes } from "./routes/admin-client-onboarding-v2-test.js";
 import { adminClientOnboardingGoogleOnlyPreflightRoutes } from "./routes/admin-client-onboarding-google-only-preflight.js";
@@ -185,6 +186,8 @@ export async function buildApp() {
   await app.register(adminGhlDestinationConfigRequestRoutes, { prefix: "/admin/v1" });
   // Configuration request only. This route does not write CompanySheetsDestination or arm delivery.
   await app.register(adminCompanySheetsConfigRequestRoutes, { prefix: "/admin/v1" });
+  // Actor readback only. This route does not insert a request or an audit row.
+  await app.register(adminOnboardingAttributionRoutes, { prefix: "/admin/v1" });
   await app.register(adminClientOnboardingV2GhlRoutes, {
     prefix: "/admin/v1",
     deps: onboardingGhlRouteDeps(),

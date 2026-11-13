@@ -20,6 +20,26 @@ test("workspace reads stay on the client and configuration-request list", () => 
     true
   );
   assert.equal(
+    staffWorkspaceAdminApiAllowed(
+      WORKSPACE,
+      "GET",
+      `/admin/v1/clients/${CLIENT}/onboarding-attribution/6f1e2d3c-4b5a-4678-89ab-cdef01234567`
+    ),
+    true
+  );
+  assert.equal(
+    staffWorkspaceAdminApiAllowed(OPERATIONS, "GET", `/admin/v1/clients/${CLIENT}/onboarding-attribution/6f1e2d3c-4b5a-4678-89ab-cdef01234567`),
+    true
+  );
+  assert.equal(
+    staffWorkspaceAdminApiAllowed(MANAGER, "POST", `/admin/v1/clients/${CLIENT}/onboarding-attribution/6f1e2d3c-4b5a-4678-89ab-cdef01234567`),
+    false
+  );
+  assert.equal(
+    staffWorkspaceAdminApiAllowed([], "GET", `/admin/v1/clients/${CLIENT}/onboarding-attribution/6f1e2d3c-4b5a-4678-89ab-cdef01234567`),
+    false
+  );
+  assert.equal(
     staffWorkspaceAdminApiAllowed(WORKSPACE, "GET", `/admin/v1/team-workspace/clients/${CLIENT}/source-campaign-review`),
     true
   );

@@ -5,6 +5,7 @@
  */
 
 const CLIENT_ID = "[A-Za-z0-9][A-Za-z0-9_-]{0,127}";
+const REQUEST_ID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
 
 const WORKSPACE_READS = [
   /^\/admin\/v1\/clients$/,
@@ -16,6 +17,7 @@ const WORKSPACE_READS = [
   new RegExp(`^/admin/v1/clients/${CLIENT_ID}/source-campaign-requests$`),
   new RegExp(`^/admin/v1/clients/${CLIENT_ID}/ghl-destination-configuration$`),
   new RegExp(`^/admin/v1/clients/${CLIENT_ID}/company-sheets-destination-configuration$`),
+  new RegExp(`^/admin/v1/clients/${CLIENT_ID}/onboarding-attribution/${REQUEST_ID}$`),
   new RegExp(`^/admin/v1/team-workspace/clients/${CLIENT_ID}$`),
   new RegExp(`^/admin/v1/team-workspace/clients/${CLIENT_ID}/source-campaign-review$`),
 ];

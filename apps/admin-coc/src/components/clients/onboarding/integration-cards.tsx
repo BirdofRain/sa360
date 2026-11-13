@@ -11,8 +11,6 @@ import {
   classificationCopy,
   FOLDER_RESOLVED_NOT_LINKED,
   ghlProofFromAttempts,
-  knownProfileRevision,
-  MISSING_PROFILE_REVISION_READ,
   MISSING_RESOLVED_FOLDER_BROWSE,
   schemaForClassification,
   SPREADSHEET_SAVED_CHOOSE_WORKSHEET,
@@ -32,8 +30,6 @@ import type {
   OnboardingSpreadsheetListItem,
   OnboardingSummary,
   OnboardingTestAttempt,
-  OnboardingWorkflowMatch,
-  OnboardingWorkflowSave,
   OnboardingWorkspaceActions,
   OnboardingWorksheetPreview,
 } from "@/lib/clients/onboarding/types";
@@ -780,59 +776,52 @@ function WorksheetPreview({
   );
 }
 
-export function GhlCard({
-  clientAccountId,
-  summary,
-  actions,
-  attempts,
-  profileRevision,
-}: {
-  clientAccountId: string;
-  summary: OnboardingSummary | null;
-  actions: OnboardingWorkspaceActions;
-  attempts: OnboardingTestAttempt[];
-  profileRevision: number | null;
-}) {
-  const [match, setMatch] = useState<OnboardingWorkflowMatch | null>(null);
-  const [saved, setSaved] = useState<OnboardingWorkflowSave | null>(null);
-  const [revision, setRevision] = useState<number | null>(knownProfileRevision(profileRevision));
-  const [conflict, setConflict] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
+function savedWorkflowIdCopy(workflowId: string | null, workflowIdPresent: boolean): string {
+  const id = workflowId?.trim() ?? "";
+  if (id) return id;
+  if (workflowIdPresent) return "stored, id not loaded on this screen";
+  return "not stored";
+}
 
-  function saveSelection(workflowId: string, workflowName: string) {
-    if (revision == null) return;
-    setPending(true);
-    setConflict(false);
-    setError(null);
-    void actions
-      .saveWorkflow({
-        expectedRevision: revision,
-        discoveredWorkflowId: workflowId,
-        discoveredName: workflowName,
-      })
-      .then((result) => {
-        setPending(false);
-        if (!result.ok) {
-          if (result.error === "revision_conflict") setConflict(true);
-          else setError(result.error);
-          return;
-        }
-        setSaved(result.data);
-        setRevision(typeof result.data.revision === "number" ? result.data.revision : null);
-      });
-  }
+export function GhlCard({
+  summary,
+  attempts,
+  savedWorkflowId,
+  savedTriggerMode,
+}: {
+  summary: OnboardingSummary | null;
+  attempts: OnboardingTestAttempt[];
+  /** Already saved ClientGhlDestination workflow id. Null when that read did not supply it. */
+  savedWorkflowId: string | null;
+  /** Already saved trigger mode. Falls back to the onboarding summary when this read is empty. */
+  savedTriggerMode: string | null;
+}) {
   const ghl = summary?.ghl;
   const proofs = ghlProofFromAttempts(attempts);
+  const triggerMode = savedTriggerMode?.trim() || ghl?.workflowTriggerMode || null;
+  const workflowIdCopy = savedWorkflowIdCopy(savedWorkflowId, ghl?.workflowIdPresent === true);
 
   return (
     <CardShell title="GoHighLevel" testId="card-ghl">
       <p className="text-sm text-slate-700">
         {ghl
-          ? `Mode ${ghl.mode}. Location ${ghl.locationIdPresent ? "is stored" : "is not stored"}. Workflow id ${
-              ghl.workflowIdPresent ? "is stored" : "is not stored"
-            }. Trigger ${ghl.workflowTriggerMode ?? "unset"}.`
+          ? `Mode ${ghl.mode}. Location ${ghl.locationIdPresent ? "is stored" : "is not stored"}.`
           : "GHL destination was not loaded."}
+      </p>
+      <div className="space-y-1 text-sm text-slate-700" data-testid="saved-ghl-workflow">
+        <p>
+          <span className="font-medium">Saved workflow id. </span>
+          <span className="font-mono text-xs">{workflowIdCopy}</span>
+        </p>
+        <p>
+          <span className="font-medium">Saved trigger mode. </span>
+          {triggerMode ?? "unset"}
+        </p>
+      </div>
+      <p className="text-xs text-slate-600">
+        This card shows the workflow already saved for this client. It does not search for, select, or replace a
+        workflow. A separate Select Time Zone enrollment is not required. Timezone handling can already be inside the
+        saved workflow.
       </p>
       <p className="text-xs text-slate-500">
         {ghl
@@ -844,94 +833,9 @@ export function GhlCard({
         <StatusMark label="HTTP accepted" state={proofs.http_accepted === "proven" ? "proven" : "unproven"} detail="Separate from contact, note, and enrollment." />
         <StatusMark label="Contact upserted" state={proofs.contact_upserted === "proven" ? "proven" : "unproven"} detail="HTTP acceptance does not upsert a contact." />
         <StatusMark label="Note persisted" state={proofs.note_persisted === "proven" ? "proven" : "unproven"} />
-        <StatusMark label="Workflow enrolled" state={proofs.workflow_enrolled === "proven" ? "proven" : "unproven"} detail="Select Time Zone enrollment is its own proof." />
+        <StatusMark label="Workflow enrolled" state={proofs.workflow_enrolled === "proven" ? "proven" : "unproven"} detail="Enrollment is its own proof, separate from contact upsert and note persistence." />
         <StatusMark label="Downstream executed" state={proofs.downstream_executed === "proven" ? "proven" : "unproven"} detail="Enrollment does not prove later workflow actions." />
       </div>
-      {revision == null ? (
-        <p className="text-xs text-amber-900" data-testid="profile-revision-unavailable">
-          Select Time Zone save is unavailable. {MISSING_PROFILE_REVISION_READ}
-        </p>
-      ) : (
-        <p className="text-xs text-slate-600">Select Time Zone save will send profile revision {revision}.</p>
-      )}
-      <Button
-        type="button"
-        variant="outline"
-        disabled={pending}
-        onClick={() => {
-          setPending(true);
-          setError(null);
-          void actions.loadWorkflows().then((result) => {
-            setPending(false);
-            if (!result.ok) {
-              setError(result.error);
-              return;
-            }
-            setMatch(result.data);
-          });
-        }}
-      >
-        {pending ? "Reading snapshot…" : "Discover Select Time Zone"}
-      </Button>
-      {match ? (
-        <div className="space-y-2 text-sm">
-          <p>
-            Discovery {match.discoveryWired ? "read a stored snapshot" : "is not wired"}. Created workflow: no. Created custom field: no.
-          </p>
-          <p>Match: {match.workflowMatch}{match.workflowName ? ` · ${match.workflowName}` : ""}</p>
-          {match.matches.length > 0 ? (
-            <ul className="space-y-1">
-              {match.matches.map((item) => (
-                <li key={item.id}>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    disabled={revision == null || conflict || match.workflowMatch !== "unique" || item.id !== match.workflowId || pending}
-                    onClick={() => saveSelection(item.id, item.name)}
-                  >
-                    Save {item.name}
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-          {match.workflowMatch === "unique" && match.workflowId && match.workflowName && match.matches.length === 0 ? (
-            <Button
-              type="button"
-              size="sm"
-              disabled={revision == null || conflict || pending}
-              onClick={() => saveSelection(match.workflowId!, match.workflowName!)}
-            >
-              Save Select Time Zone
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
-      {saved ? (
-        <p className="text-sm text-slate-700">
-          Workflow save persisted: {saved.persisted ? "yes" : "no"}. Delivery enabled: {String(saved.deliveryEnabled)}. Cutover:{" "}
-          {String(saved.clientCutoverApproved)}. Trigger: {saved.workflowTriggerMode ?? "unchanged"}. The save response does
-          not include the new profile revision, so another save is unavailable until that read exists.
-        </p>
-      ) : null}
-      {conflict ? (
-        <div className="space-y-2 text-sm" data-testid="revision-conflict" role="status">
-          <p>{actionErrorCopy("revision_conflict")}</p>
-          <p>Refresh and review the stored workflow. This screen will not send the save again.</p>
-          <Link
-            href={`/clients/${encodeURIComponent(clientAccountId)}/onboarding`}
-            className="text-sky-700 hover:underline"
-          >
-            Review stored configuration
-          </Link>
-        </div>
-      ) : null}
-      {error ? (
-        <p className="text-sm text-amber-800" role="status">
-          {actionErrorCopy(error)}
-        </p>
-      ) : null}
     </CardShell>
   );
 }

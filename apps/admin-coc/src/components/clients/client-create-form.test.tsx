@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import module from "node:module";
 import test from "node:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import React from "react";
 
 const createCalls: Array<Record<string, unknown>> = [];
@@ -60,4 +60,19 @@ test("one-character suggestion blocks creation until a valid manual ID replaces 
   await waitFor(() => assert.equal(createCalls.length, 1));
   assert.equal(createCalls[0]?.clientAccountId, "agent_a");
   assert.equal(createCalls[0]?.clientDisplayName, "A");
+});
+
+test("new client product picker stays on the current catalog", () => {
+  render(<ClientCreateForm />);
+  const products = screen.getByLabelText("Primary products");
+  const productField = products.parentElement!.parentElement!;
+  fireEvent.change(products, { target: { value: "final_expense" } });
+  fireEvent.click(within(productField).getByRole("button", { name: "Add" }));
+  assert.ok(screen.getByText("Choose a value from the catalog."));
+  assert.equal(screen.queryByRole("button", { name: "Remove final_expense" }), null);
+
+  fireEvent.change(products, { target: { value: "Life" } });
+  fireEvent.click(within(productField).getByRole("option", { name: "Life Insurance" }));
+  assert.ok(screen.getByRole("button", { name: "Remove Life Insurance" }));
+  assert.equal(screen.queryByRole("button", { name: "Remove final_expense" }), null);
 });

@@ -4110,9 +4110,12 @@ enum ExternalWebhookAuthMode {
 }
 
 /// `recorded` means the frozen payload is stored and the request has not left SA360.
-/// `attempted` means a later sender classified the HTTP result. This foundation does not send.
+/// `sending` is the single in-flight claim. A crash leaves it sending; recovery
+/// promotes a stale claim to uncertain and does not POST again.
+/// `attempted` means the HTTP result was classified.
 enum ExternalWebhookAttemptState {
   recorded
+  sending
   attempted
 }
 

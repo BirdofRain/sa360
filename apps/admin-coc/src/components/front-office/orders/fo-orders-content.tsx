@@ -20,6 +20,7 @@ export function FoOrdersContent({
   showCreateForm = false,
   ordersApiBase = FRONT_OFFICE_ORDERS_API,
   initialError = null,
+  initialReviewFilter = "review",
 }: {
   initial: LeadOrdersResponse;
   role: FrontOfficeRole;
@@ -27,11 +28,13 @@ export function FoOrdersContent({
   /** Live list and review routes. COC passes the admin-only orders API. */
   ordersApiBase?: string;
   initialError?: string | null;
+  /** Existing review-queue filter, including the operator-action subset. */
+  initialReviewFilter?: ReviewQueueFilter;
 }) {
   const router = useRouter();
   const [orders, setOrders] = useState(initial.orders);
   const [statusFilter, setStatusFilter] = useState("");
-  const [reviewFilter, setReviewFilter] = useState<ReviewQueueFilter>("review");
+  const [reviewFilter, setReviewFilter] = useState<ReviewQueueFilter>(initialReviewFilter);
   const [clientFilter, setClientFilter] = useState("");
   const [nicheFilter, setNicheFilter] = useState("");
   const [selected, setSelected] = useState<LeadOrder | null>(null);
@@ -111,6 +114,7 @@ export function FoOrdersContent({
               onChange={(e) => setReviewFilter(e.target.value as ReviewQueueFilter)}
             >
               <option value="review">Needs review or approved</option>
+              <option value="awaiting_action">Awaiting operator action</option>
               <option value="submitted_payment_pending">Submitted / Payment pending</option>
               <option value="submitted_payment_confirmed">Submitted / Payment confirmed</option>
               <option value="submitted_payment_not_required">

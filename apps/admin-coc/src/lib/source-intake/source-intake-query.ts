@@ -1,3 +1,8 @@
+/** Status the Source Intake queue already filters with `?status=`. */
+export const SOURCE_INTAKE_AWAITING_REVIEW_STATUS = "needs_review";
+
+export const SOURCE_INTAKE_AWAITING_REVIEW_HREF = `/source-intake?status=${SOURCE_INTAKE_AWAITING_REVIEW_STATUS}`;
+
 export type SourceIntakeQuery = {
   status?: string;
   sourceProvider?: string;

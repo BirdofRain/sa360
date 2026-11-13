@@ -61,6 +61,27 @@ describe("FoOrdersContent review queue", () => {
     );
   });
 
+  it("opens on the awaiting-operator-action filter from the command center link", async () => {
+    const { FoOrdersContent } = await import("./fo-orders-content.tsx");
+    render(
+      <FoOrdersContent
+        initial={getMockOrders("admin")}
+        role="admin"
+        initialReviewFilter="awaiting_action"
+      />
+    );
+
+    assert.equal(
+      (screen.getByLabelText("Review queue") as HTMLSelectElement).value,
+      "awaiting_action"
+    );
+    assert.ok(screen.getByText("LO-1044"));
+    assert.ok(screen.getByText("LO-1043"));
+    assert.ok(screen.getByText("LO-1042"));
+    assert.equal(screen.queryByText("LO-1040"), null);
+    assert.equal(screen.queryByText("LO-1041"), null);
+  });
+
   it("uses a responsive admin filter layout", async () => {
     const { FoOrdersContent } = await import("./fo-orders-content.tsx");
     const { container } = render(

@@ -2,6 +2,8 @@
 
 import { useState, useTransition } from "react";
 
+import { STAFF_SIGN_IN_URL } from "@sa360/shared/staff-sign-in-url";
+
 import {
   changeTeamAccessAction,
   disableTeamMemberAction,
@@ -12,7 +14,7 @@ import {
 } from "@/app/actions/team-management";
 import type { TeamAccessLevel, TeamActivityEntry, TeamMember } from "@/lib/team-management/types";
 
-const APPROVED_SIGN_IN = "https://sa360-api-staging-coo57.ondigitalocean.app/staff/google/start";
+const APPROVED_SIGN_IN = STAFF_SIGN_IN_URL;
 
 const ROLES: Array<{ value: TeamAccessLevel; label: string; detail: string }> = [
   { value: "manager", label: "Manager", detail: "Team Workspace, client setup, and configuration requests." },

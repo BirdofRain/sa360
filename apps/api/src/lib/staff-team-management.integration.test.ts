@@ -23,7 +23,7 @@ import type { SendTransactionalEmailResult } from "./transactional-email.js";
 
 const integrationUrlRaw = process.env.SA360_TEST_DATABASE_URL?.trim() || "";
 const runIntegration = Boolean(integrationUrlRaw);
-const SIGN_IN = "https://sa360-api-staging-coo57.ondigitalocean.app/staff/google/start";
+const SIGN_IN = "https://portal.lifeagentlaunch.com/staff/google/start";
 const DOMAIN = "lifeagentlaunch.com";
 
 function mailbox(label: string): string {

@@ -1,5 +1,7 @@
 import { redirect } from "next/navigation";
 
+import { STAFF_SIGN_IN_URL } from "@sa360/shared/staff-sign-in-url";
+
 import { LoginForm } from "@/components/auth/login-form";
 import {
   isAdminCocObserverLoginAvailable,
@@ -37,15 +39,18 @@ export default async function LoginPage({
           </div>
         </div>
         <h1 className="text-base font-semibold text-slate-900">Sign in</h1>
-        <p className="mt-0.5 text-xs text-slate-500">
+        <a
+          href={STAFF_SIGN_IN_URL}
+          className="mt-4 flex h-9 w-full items-center justify-center rounded-lg bg-slate-900 text-sm font-medium text-white"
+        >
+          Continue with Google
+        </a>
+        <p className="mt-4 text-xs text-slate-500">
           {isAdminCocObserverLoginAvailable()
-            ? "Enter the admin password, or the read-only observer password when it is configured on the server."
-            : "Enter the admin password to access the internal dashboard."}
+            ? "Password fallback: enter the admin password, or the read-only observer password when it is configured on the server."
+            : "Password fallback: enter the admin password to access the internal dashboard."}
         </p>
         <LoginForm next={next} />
-        <p className="mt-4 text-[11px] text-slate-400">
-          Temporary password gate. Replaced when Google sign-in lands.
-        </p>
       </div>
     </main>
   );

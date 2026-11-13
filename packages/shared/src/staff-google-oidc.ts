@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 
 import { staffEnrollmentEnabled } from "./staff-enrollment.js";
+import { STAFF_SIGN_IN_ORIGIN, STAFF_SIGN_IN_PATH } from "./staff-sign-in-url.js";
+
+export { STAFF_SIGN_IN_ORIGIN, STAFF_SIGN_IN_PATH, STAFF_SIGN_IN_URL } from "./staff-sign-in-url.js";
 
 /**
  * Dedicated Google staff OAuth client settings and the authorization-code
@@ -180,13 +183,9 @@ export async function exchangeStaffGoogleCode(input: {
   return { ok: true, idToken: record.id_token };
 }
 
-/** Canonical staff sign-in origin. Invitation links cannot use any other public host. */
-export const STAFF_SIGN_IN_ORIGIN = "https://sa360-api-staging-coo57.ondigitalocean.app";
-export const STAFF_SIGN_IN_PATH = "/staff/google/start";
-
 /**
  * Invitation sign-in link. The path is fixed. Query strings, fragments, and
- * public hosts other than the canonical origin are rejected. Localhost is
+ * public hosts other than the branded origin are rejected. Localhost is
  * accepted only for local tests.
  */
 export function parseStaffSignInUrl(value: unknown): string | null {

@@ -3,6 +3,7 @@ import { notFound, redirect } from "next/navigation";
 
 import { STAFF_SESSION_COOKIE } from "@sa360/shared/staff-google-session";
 import { staffGoogleSignInEnabled } from "@sa360/shared/staff-google-oidc";
+import { STAFF_SIGN_IN_URL } from "@sa360/shared/staff-sign-in-url";
 
 import { readStaffCapabilities } from "@/lib/staff-admin-coc-access";
 import { staffCapabilitiesLandingPath } from "@/lib/staff-admin-coc-decision";
@@ -58,7 +59,7 @@ export default async function StaffHomePage({
               {denied ? "Sign-in was denied." : "A provisioned staff identity is required."}
             </p>
             {startAvailable ? (
-              <a href="/staff/google/start" className="mt-4 inline-block text-sm text-slate-900 underline">
+              <a href={STAFF_SIGN_IN_URL} className="mt-4 inline-block text-sm text-slate-900 underline">
                 Continue with Google
               </a>
             ) : null}

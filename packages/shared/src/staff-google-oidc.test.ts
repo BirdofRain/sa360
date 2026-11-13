@@ -37,13 +37,17 @@ test("staff google configuration fails closed", () => {
   assert.equal(parseStaffGoogleRedirectUri(REDIRECT), REDIRECT);
 });
 
-test("invitation sign-in links accept only the canonical origin or localhost", () => {
-  const approved = "https://sa360-api-staging-coo57.ondigitalocean.app/staff/google/start";
+test("invitation sign-in links accept only the branded origin or localhost", () => {
+  const approved = "https://portal.lifeagentlaunch.com/staff/google/start";
+  const previousIngress = "https://sa360-api-staging-coo57.ondigitalocean.app/staff/google/start";
   assert.equal(parseStaffSignInUrl(approved), approved);
+  assert.equal(parseStaffSignInUrl(previousIngress), null);
   assert.equal(parseStaffSignInUrl("http://localhost:3000/staff/google/start"), "http://localhost:3000/staff/google/start");
   assert.equal(parseStaffSignInUrl("https://evil.example/staff/google/start"), null);
   assert.equal(parseStaffSignInUrl("https://admin.example/staff/google/start"), null);
+  assert.equal(parseStaffSignInUrl("https://portal.lifeagentlaunch.com.evil.com/staff/google/start"), null);
   assert.equal(parseStaffSignInUrl(`${approved}#fragment`), null);
+  assert.equal(parseStaffSignInUrl(`${approved}?code=secret`), null);
 });
 
 test("the authorize request is a dedicated code flow with PKCE and no offline access", () => {

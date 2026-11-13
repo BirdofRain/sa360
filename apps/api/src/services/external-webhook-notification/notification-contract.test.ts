@@ -181,7 +181,7 @@ test("SMS planning stays skipped and does not call the provider while the flag i
 });
 
 test("an enabled SMS plan keeps the provider message id and refuses unsafe recipients", async () => {
-  const cases: Array<[Partial<PrepareExternalWebhookNotificationInput>, string]> = [
+  const cases: Array<[PrepareExternalWebhookNotificationInput, string]> = [
     [smsInput({ recipient: "5555550100" }), "invalid_e164"],
     [smsInput({ sms: { optIn: { optedIn: false, recordedAt: ENABLED_AT }, stopState: "clear" } }), "not_opted_in"],
     [smsInput({ sms: { optIn: { optedIn: true, recordedAt: null }, stopState: "clear" } }), "not_opted_in"],

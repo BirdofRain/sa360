@@ -4,6 +4,8 @@
  * Database names passed here contain "test". This file is not a test suite.
  */
 import { spawnSync } from "node:child_process";
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
@@ -111,6 +113,50 @@ export function migrate(databaseUrl: string): void {
   });
   if (result.status !== 0) {
     throw new Error(`${result.stderr ?? ""}\n${result.stdout ?? ""}`.trim() || "migrate failed");
+  }
+}
+
+/** Migrations that create relations Boundary A's 106-relation inventory rejects. */
+export const postBoundaryAMigrations = [
+  "20261023220000_company_sheets_setup_links",
+  "20261026200000_company_sheets_setup_grants",
+  "20261026233000_client_onboarding_v2_persistence",
+] as const;
+
+/**
+ * Apply every Prisma migration except the named directories.
+ * The copied files keep the checksums Prisma records, so a later
+ * `migrate()` applies only the excluded directories.
+ */
+export function migrateExcluding(databaseUrl: string, excluded: readonly string[]): void {
+  const source = join(repoRoot, "prisma");
+  const dir = mkdtempSync(join(tmpdir(), "sa360-migrate-baseline-"));
+  try {
+    cpSync(join(source, "schema.prisma"), join(dir, "schema.prisma"));
+    const migrations = join(dir, "migrations");
+    mkdirSync(migrations);
+    cpSync(join(source, "migrations", "migration_lock.toml"), join(migrations, "migration_lock.toml"));
+    const skipped = new Set(excluded);
+    for (const name of readdirSync(join(source, "migrations"))) {
+      if (skipped.has(name)) continue;
+      const from = join(source, "migrations", name);
+      if (!statSync(from).isDirectory()) continue;
+      cpSync(from, join(migrations, name), { recursive: true });
+    }
+    const result = spawnSync(
+      "pnpm",
+      ["exec", "prisma", "migrate", "deploy", "--schema", join(dir, "schema.prisma")],
+      {
+        cwd: repoRoot,
+        env: { ...process.env, DATABASE_URL: databaseUrl },
+        encoding: "utf8",
+      },
+    );
+    if (result.status !== 0) {
+      throw new Error(`${result.stderr ?? ""}\n${result.stdout ?? ""}`.trim() || "baseline migrate failed");
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 }
 

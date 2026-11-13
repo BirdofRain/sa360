@@ -6,6 +6,7 @@ import { PPL_AGED_PRICING_VERSION, type CanonicalUsStateCode } from "@sa360/shar
 
 import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
 import { createLeadOrderRecord } from "../../repositories/lead-order.repository.js";
+import { presentLeadOrderListRow } from "./lead-order-present.service.js";
 import { createClientLeadOrder } from "./lead-order.service.js";
 import {
   applyAuthorizedPortalAgedOrderLineRepair,
@@ -292,5 +293,46 @@ describe("portal aged line repair (local sa360_test)", { skip: !runIntegration }
     if (!result.eligible) assert.equal(result.code, "order_status_changed");
     const lines = await db.leadOrderLine.findMany({ where: { leadOrderId: order.id } });
     assert.equal(lines.length, 0);
+  });
+
+  it("persists legacy and new buyer product types without rewriting other orders", async () => {
+    const productTypes = ["final_expense", "life_insurance", "health_insurance", "other"] as const;
+    const before = await db.leadOrder.count();
+    for (const productType of productTypes) {
+      const created = await createClientLeadOrder(
+        {
+          nicheKey: "vet",
+          productType,
+          states: STATES,
+          leadVolume: 3,
+          campaignType: "Aged leads",
+          crmPackage: "lead_delivery",
+          aiVoiceAddon: false,
+          deliveryDestinationLabel: "Sam Hebda test client",
+          notes: NOTES,
+        },
+        "acct_hebda_repair",
+        {
+          findClientAccountByIdImpl: (async () => ({
+            id: "acct_hebda_repair",
+            status: "active",
+            clientDisplayName: "Sam Hebda test client",
+          })) as never,
+          nextLeadOrderNumberImpl: (async () => `LO-PRODUCT-${productType}-${suffix}`) as never,
+          createLeadOrderRecordImpl: (async (data: Prisma.LeadOrderCreateInput) =>
+            createLeadOrderRecord(data, db)) as never,
+        }
+      );
+      assert.equal(created.ok, true, productType);
+      if (!created.ok) continue;
+      createdOrderIds.push(created.row.id);
+      const stored = await db.leadOrder.findUnique({ where: { id: created.row.id } });
+      assert.equal(stored?.productType, productType);
+      assert.equal(stored?.nicheKey, "vet");
+      const operator = presentLeadOrderListRow(created.row, "admin");
+      assert.equal(operator.productType, productType);
+    }
+    const after = await db.leadOrder.count();
+    assert.equal(after, before + productTypes.length);
   });
 });

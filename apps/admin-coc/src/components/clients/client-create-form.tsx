@@ -131,8 +131,8 @@ export function ClientCreateForm({ onCancel }: { onCancel?: () => void }) {
           {idHelp}
         </p>
       </div>
-      <ClientProfileMultiSelect label="Primary niches" options={CLIENT_NICHE_OPTIONS} value={nicheKeys} onChange={setNicheKeys} disabled={pending} />
-      <ClientProfileMultiSelect label="Primary products" options={CLIENT_PRODUCT_OPTIONS} value={productTypes} onChange={setProductTypes} disabled={pending} />
+      <ClientProfileMultiSelect label="Primary niches" options={CLIENT_NICHE_OPTIONS} value={nicheKeys} onChange={setNicheKeys} allowCustom={false} disabled={pending} />
+      <ClientProfileMultiSelect label="Primary products" options={CLIENT_PRODUCT_OPTIONS} value={productTypes} onChange={setProductTypes} allowCustom={false} disabled={pending} />
       {error ? <p role="alert" className="text-sm text-red-600">{error}</p> : null}
       <div className="flex gap-2">
         <Button type="submit" disabled={pending || !idValidation.valid}>

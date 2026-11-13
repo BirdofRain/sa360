@@ -63,6 +63,30 @@ test("mock orders empty filter for unknown client role still safe", () => {
   assert.ok(Array.isArray(mock.orders));
 });
 
+test("operator order mapping keeps legacy and new product types", () => {
+  for (const productType of ["final_expense", "life_insurance", "health_insurance", "other"]) {
+    const mapped = mapApiLeadOrderToFrontOffice({
+      id: `ord_${productType}`,
+      orderNumber: "LO-1100",
+      clientAccountId: "acct_vet",
+      clientDisplayName: "Valley Vet",
+      status: "submitted",
+      nicheKey: "vet",
+      productType,
+      states: ["TX"],
+      leadVolume: 25,
+      campaignType: "Aged leads",
+      crmPackage: "lead_delivery",
+      aiVoiceAddon: false,
+      deliveryDestinationLabel: "Valley Vet",
+      createdAt: "2026-11-12T15:00:00.000Z",
+      paymentConfirmationStatus: "pending_confirmation",
+    });
+    assert.equal(mapped.niche, "Veteran");
+    assert.equal(mapped.productType, productType);
+  }
+});
+
 test("maps admin payment confirmation fields from the PR #90 presenter", () => {
   const mapped = mapApiLeadOrderToFrontOffice({
     id: "ord_1",

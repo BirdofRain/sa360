@@ -24,7 +24,11 @@ import {
   suggestClientAccountId,
   validateClientAccountId,
 } from "@/lib/clients/client-account-id-suggestion";
-import { CLIENT_NICHE_OPTIONS, CLIENT_PRODUCT_OPTIONS } from "@/lib/clients/client-profile-options";
+import {
+  CLIENT_NICHE_OPTIONS,
+  CLIENT_PRODUCT_OPTIONS,
+  profileChoicesIncludingSavedValues,
+} from "@/lib/clients/client-profile-options";
 import { clientSetupSaveAttempt, type ClientSetupSaveAttempt } from "@/lib/clients/client-setup-save-attempt";
 import {
   GUIDE_STEP_EXPLANATIONS,
@@ -686,7 +690,13 @@ function InformationStep({
         </div>
       </div>
       <ChoiceToggles label="Niches" options={CLIENT_NICHE_OPTIONS} value={draft.primaryNicheKeys} onChange={(primaryNicheKeys) => onDraft({ primaryNicheKeys })} disabled={busy || !model.account} />
-      <ChoiceToggles label="Products" options={CLIENT_PRODUCT_OPTIONS} value={draft.primaryProductTypes} onChange={(primaryProductTypes) => onDraft({ primaryProductTypes })} disabled={busy || !model.account} />
+      <ChoiceToggles
+        label="Products"
+        options={profileChoicesIncludingSavedValues(CLIENT_PRODUCT_OPTIONS, draft.primaryProductTypes)}
+        value={draft.primaryProductTypes}
+        onChange={(primaryProductTypes) => onDraft({ primaryProductTypes })}
+        disabled={busy || !model.account}
+      />
       {!model.setupWritable && model.setupUnavailableReason ? <p className="text-sm text-slate-600">{model.setupUnavailableReason}</p> : null}
       <div>
         <Button type="submit" disabled={busy || !model.account}>

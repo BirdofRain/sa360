@@ -3,6 +3,7 @@ import { afterEach, describe, it } from "node:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 import type { LeadOrder } from "@/lib/front-office/types";
+import { mapApiLeadOrderToFrontOffice } from "@/lib/front-office/live/orders-bridge";
 
 import { FoOrderDetailDrawer } from "./fo-order-detail-drawer";
 import { FoOrderList } from "./fo-order-list";
@@ -35,6 +36,34 @@ function pendingOrder(): LeadOrder {
 }
 
 describe("FoOrderDetailDrawer review", () => {
+  it("shows the stored product type for legacy and new buyer orders", () => {
+    for (const productType of ["final_expense", "life_insurance", "health_insurance", "other"]) {
+      const order = mapApiLeadOrderToFrontOffice({
+        id: `ord_${productType}`,
+        orderNumber: "LO-1100",
+        clientAccountId: "acct_vet",
+        clientDisplayName: "Valley Vet",
+        status: "submitted",
+        nicheKey: "vet",
+        productType,
+        states: ["TX"],
+        leadVolume: 25,
+        campaignType: "Aged leads",
+        crmPackage: "lead_delivery",
+        aiVoiceAddon: false,
+        deliveryDestinationLabel: "Valley Vet",
+        createdAt: "2026-11-12T15:00:00.000Z",
+        paymentConfirmationStatus: "pending_confirmation",
+      });
+      render(
+        <FoOrderDetailDrawer order={order} open onOpenChange={() => undefined} isAdmin={false} />
+      );
+      const fields = screen.getByTestId("fo-order-review-fields");
+      assert.match(fields.textContent ?? "", new RegExp(`Veteran · ${productType}`));
+      cleanup();
+    }
+  });
+
   it("shows the fields Alex needs to validate a pending order", () => {
     render(
       <FoOrderDetailDrawer

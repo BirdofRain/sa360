@@ -4,6 +4,7 @@
 #
 # Runs once after checkout to produce durable, reusable state:
 #   - local Postgres + Redis system packages (best effort, guarded)
+#   - doctl 2.0.0 on /usr/local/bin (no auth init; token stays in the environment)
 #   - workspace dependencies from the pinned pnpm lockfile
 #   - Prisma client generation (source-derived)
 #   - the @sa360/shared build that other apps compile against
@@ -35,22 +36,45 @@ else
   log "apt-get/sudo unavailable; skipping DB/Redis install (DB-backed API tests will be unavailable)"
 fi
 
-# 2) Ensure the repository-pinned pnpm (packageManager) is active.
+# 2) doctl for read-only DigitalOcean checks. Auth comes from
+#    DIGITALOCEAN_ACCESS_TOKEN in the agent environment. Do not run
+#    `doctl auth init` here — that can write the token to disk.
+DOCTL_VERSION=2.0.0
+DOCTL_SHA256=c9aca9dfb307e7070e2a4ca3944c1e4df5c2ebb6c311b2fa3f0dde5369a51c02
+if command -v doctl >/dev/null 2>&1 && doctl version 2>/dev/null | grep -q "doctl version ${DOCTL_VERSION}"; then
+  log "doctl ${DOCTL_VERSION} already installed"
+elif command -v sudo >/dev/null 2>&1; then
+  log "installing doctl ${DOCTL_VERSION}"
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' EXIT
+  curl -fsSL "https://github.com/digitalocean/doctl/releases/download/v${DOCTL_VERSION}/doctl-${DOCTL_VERSION}-linux-amd64.tar.gz" \
+    -o "$tmp/doctl.tar.gz"
+  echo "${DOCTL_SHA256}  $tmp/doctl.tar.gz" | sha256sum -c -
+  tar -xzf "$tmp/doctl.tar.gz" -C "$tmp" doctl
+  sudo install -m 0755 "$tmp/doctl" /usr/local/bin/doctl
+  rm -rf "$tmp"
+  trap - EXIT
+  doctl version
+else
+  log "sudo unavailable; skipping doctl install"
+fi
+
+# 3) Ensure the repository-pinned pnpm (packageManager) is active.
 corepack enable >/dev/null 2>&1 || true
 
-# 3) Workspace dependencies, strictly from the committed lockfile.
+# 4) Workspace dependencies, strictly from the committed lockfile.
 log "pnpm install --frozen-lockfile"
 pnpm install --frozen-lockfile
 
-# 4) Prisma client generation (source-derived, reusable).
+# 5) Prisma client generation (source-derived, reusable).
 log "pnpm prisma:generate"
 pnpm prisma:generate
 
-# 5) Build the shared package that the API, worker, and admin-coc depend on.
+# 6) Build the shared package that the API, worker, and admin-coc depend on.
 log "building @sa360/shared"
 pnpm --filter @sa360/shared build
 
-# 6) Localhost-only dev/test env file. Created once; an existing .env is left
+# 7) Localhost-only dev/test env file. Created once; an existing .env is left
 #    untouched. These values only ever point at 127.0.0.1 services.
 if [ ! -f .env ]; then
   log "writing default .env (localhost dev/test config)"

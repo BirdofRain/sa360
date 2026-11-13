@@ -200,6 +200,16 @@ test("writer stays out of intake, release, inventory, and sharing paths", () => 
       assert.equal(source.includes("markSpreadsheetDelivered"), false, path);
       continue;
     }
+    if (path.endsWith(`${join("services", "external-webhook", "external-webhook-payload.ts")}`)) {
+      assert.match(source, /company-sheets-campaign-row/);
+      assert.match(source, /company-sheets-custom-row/);
+      assert.equal(source.includes("company-sheets-delivery.service"), false, path);
+      assert.equal(source.includes("appendSheetValues"), false, path);
+      assert.equal(source.includes("updateSheetValues"), false, path);
+      assert.equal(source.includes("permissions.create"), false, path);
+      assert.equal(source.includes("markSpreadsheetDelivered"), false, path);
+      continue;
+    }
     assert.equal(source.includes("company-sheets-delivery"), false, path);
   }
 });

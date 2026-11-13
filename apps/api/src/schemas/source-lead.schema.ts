@@ -15,6 +15,14 @@ export const sourceLeadListQuerySchema = z
       .optional()
       .transform((v) => (v === undefined ? undefined : v === "true")),
     cleanupStatus: z.string().trim().min(1).optional(),
+    /**
+     * When true, keep only current delivery_failed rows whose stored result
+     * records externalCallExecuted true. Simulate-only and unproven rows drop out.
+     */
+    liveFailure: z
+      .enum(["true", "false"])
+      .optional()
+      .transform((v) => (v === undefined ? undefined : v === "true")),
     limit: z.coerce.number().int().min(1).max(200).optional().default(50),
     cursor: z.string().optional(),
   })

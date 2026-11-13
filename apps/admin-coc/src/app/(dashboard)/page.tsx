@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import Link from "next/link";
 
+import { ActivitySnapshotSection } from "@/components/dashboard/activity-snapshot";
 import { NeedsAttentionSection } from "@/components/dashboard/needs-attention";
 import {
   RecentInvalidWebhooks,
@@ -141,6 +142,8 @@ export default function CommandCenterPage() {
       ) : null}
 
       <NeedsAttentionSection />
+
+      <ActivitySnapshotSection />
 
       <Suspense
         fallback={

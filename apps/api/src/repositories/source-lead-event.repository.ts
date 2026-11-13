@@ -73,6 +73,12 @@ export type SourceLeadEventListFilters = {
   clientAccountIdResolved?: string;
   includeCleanup?: boolean;
   cleanupStatus?: string;
+  /**
+   * Current delivery_failed rows with deliveryResultJson.externalCallExecuted true.
+   * This is the stored proof of a live external write. Simulate-only results and
+   * rows with no stored result are excluded.
+   */
+  liveExternalFailure?: boolean;
   limit?: number;
   cursor?: string;
 };
@@ -100,6 +106,13 @@ export function buildSourceLeadEventWhere(
     where.status = { in: ["routing_matched", "needs_review", "approved", "delivered"] };
   } else if (filters.matched === false) {
     where.status = { in: ["routing_unmatched", "received", "normalized"] };
+  }
+  if (filters.liveExternalFailure) {
+    where.status = "delivery_failed";
+    where.deliveryResultJson = {
+      path: ["externalCallExecuted"],
+      equals: true,
+    };
   }
   return where;
 }

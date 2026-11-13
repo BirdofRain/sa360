@@ -25,6 +25,7 @@ export function AttentionCard({
   emptyHint,
   read,
   testId,
+  detail,
 }: {
   title: string;
   hint: string;
@@ -32,6 +33,8 @@ export function AttentionCard({
   emptyHint: string;
   read: AttentionRead;
   testId: string;
+  /** Shown only after a successful read, for example when the count was refreshed. */
+  detail?: string;
 }) {
   const ready = read.state === "ready";
   const count = ready ? read.count : null;
@@ -50,6 +53,11 @@ export function AttentionCard({
             {count}
           </p>
           <p className="mt-1 text-xs text-slate-500">{count === 0 ? emptyHint : hint}</p>
+          {detail ? (
+            <p className="mt-2 text-xs text-slate-400" data-testid={`${testId}-refreshed`}>
+              {detail}
+            </p>
+          ) : null}
         </>
       ) : (
         <>

@@ -50,6 +50,8 @@ test("capture_only persists received event without routing", async () => {
 
 test("idempotent replay returns existing event", async () => {
   let created = 0;
+  let updated = 0;
+  const receivedAt = new Date("2026-01-14T22:30:00.000Z");
   const result = await processLeadCaptureNextGenLeadCreated({
     rawPayload: loadFixture("leadcaptureio-webhook-sample-nextgen.json"),
     stageOverride: "capture_only",
@@ -59,6 +61,7 @@ test("idempotent replay returns existing event", async () => {
         ({
           id: "evt_existing",
           status: "received",
+          receivedAt,
           sourceRouteKey: "LC_VET_FEX_TEST",
           sourceLeadId: "11111111-2222-4333-8444-555555555555",
           sourceLeadUid:
@@ -72,11 +75,17 @@ test("idempotent replay returns existing event", async () => {
         created += 1;
         throw new Error("should_not_create");
       },
+      updateSourceLeadEventImpl: async () => {
+        updated += 1;
+        throw new Error("replay_must_not_rewrite_received_at");
+      },
     },
   });
   assert.equal(result.duplicate, true);
   assert.equal(result.sourceEventId, "evt_existing");
   assert.equal(created, 0);
+  assert.equal(updated, 0);
+  assert.equal(receivedAt.toISOString(), "2026-01-14T22:30:00.000Z");
 });
 
 test("association-only routed replay presents a persisted match without a rule id", async () => {

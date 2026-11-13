@@ -270,3 +270,134 @@ test("administrator can read both queues and workspace or observer follow existi
     restoreEnv(previous);
   }
 });
+
+test("delivery failures count only the current delivery_failed pages", async () => {
+  const { loadDeliveryFailuresRequiringAction } = await import("./attention-queue.ts");
+  const calls: Record<string, string>[] = [];
+  const refreshedAt = "2026-01-15T15:30:00.000Z";
+  const read = await loadDeliveryFailuresRequiringAction({
+    readAccess: async () => ({ kind: "admin", source: "shared_password" }),
+    configured: () => true,
+    now: () => new Date(refreshedAt),
+    fetchPage: async (params) => {
+      calls.push(params);
+      if (!params.cursor) {
+        return { items: [{ id: "fail-1" }, { id: "fail-2" }], nextCursor: "c2", error: null };
+      }
+      return { items: [{ id: "fail-3" }], nextCursor: null, error: null };
+    },
+  });
+  assert.equal(calls.every((params) => params.status === "delivery_failed"), true);
+  assert.equal(calls.every((params) => params.liveFailure === "true"), true);
+  assert.equal(calls.every((params) => params.limit === "200"), true);
+  assert.equal(
+    calls.some((params) => "receivedFrom" in params || "from" in params || "to" in params || "includeCleanup" in params),
+    false
+  );
+  assert.deepEqual(
+    calls.map((params) => params.cursor ?? null),
+    [null, "c2"]
+  );
+  assert.deepEqual(read, { state: "ready", count: 3, refreshedAt });
+});
+
+test("delivery failures are zero only after a complete empty read", async () => {
+  const { loadDeliveryFailuresRequiringAction } = await import("./attention-queue.ts");
+  const admin = async () => ({ kind: "admin", source: "shared_password" }) as const;
+  const refreshedAt = "2026-07-15T16:00:00.000Z";
+  let unconfiguredCalls = 0;
+  const unconfigured = await loadDeliveryFailuresRequiringAction({
+    readAccess: admin,
+    configured: () => false,
+    now: () => new Date(refreshedAt),
+    fetchPage: async () => {
+      unconfiguredCalls += 1;
+      return { items: [], nextCursor: null, error: null };
+    },
+  });
+  assert.equal(unconfigured.state, "unavailable");
+  assert.equal("refreshedAt" in unconfigured, false);
+  assert.equal(unconfiguredCalls, 0);
+
+  const empty = await loadDeliveryFailuresRequiringAction({
+    readAccess: admin,
+    configured: () => true,
+    now: () => new Date(refreshedAt),
+    fetchPage: async () => ({ items: [], nextCursor: null, error: null }),
+  });
+  assert.deepEqual(empty, { state: "ready", count: 0, refreshedAt });
+
+  const failed = await loadDeliveryFailuresRequiringAction({
+    readAccess: admin,
+    configured: () => true,
+    now: () => new Date(refreshedAt),
+    fetchPage: async () => ({ items: [{ id: "fail-1" }], nextCursor: null, error: "Admin API error (503): unavailable" }),
+  });
+  assert.equal(failed.state, "unavailable");
+  assert.equal("refreshedAt" in failed, false);
+  if (failed.state === "unavailable") assert.match(failed.reason, /unavailable/);
+
+  const repeated = await loadDeliveryFailuresRequiringAction({
+    readAccess: admin,
+    configured: () => true,
+    fetchPage: async () => ({ items: [{ id: "fail-1" }], nextCursor: "same", error: null }),
+  });
+  assert.equal(repeated.state, "unavailable");
+  if (repeated.state === "unavailable") assert.match(repeated.reason, /delivery failure count/);
+});
+
+test("delivery failures follow the source intake permission gate", async () => {
+  const previous = snapshotEnv();
+  process.env.ADMIN_COC_PASSWORD = "operator-password";
+  process.env.ADMIN_COC_SESSION_SECRET = SESSION_SECRET;
+  const session = await import("../admin-coc-session.ts");
+  const guard = await import("../admin-coc-session-guard.ts");
+  const staff = await import("../staff-admin-coc-access.ts");
+  const { loadDeliveryFailuresRequiringAction } = await import("./attention-queue.ts");
+  let fetches = 0;
+  const fetchPage = async () => {
+    fetches += 1;
+    return { items: [], nextCursor: null, error: null };
+  };
+  try {
+    guard.useAdminCocTestSessionCookie(undefined);
+    guard.useStaffAdminCocTestDecision("admin");
+    const staffRead = await loadDeliveryFailuresRequiringAction({
+      fetchPage,
+      configured: () => true,
+      now: () => new Date("2026-11-12T22:58:00.000Z"),
+    });
+    assert.equal(staffRead.state, "ready");
+    assert.equal(fetches, 1);
+
+    fetches = 0;
+    guard.useStaffAdminCocTestDecision(undefined);
+    staff.useStaffCapabilitiesTestResult({
+      access: "workspace",
+      permissions: ["team_workspace", "team_manager"],
+      staffPrincipalId: "c123456789012345678901234",
+    });
+    const managerRead = await loadDeliveryFailuresRequiringAction({
+      fetchPage,
+      configured: () => true,
+    });
+    assert.equal(managerRead.state, "unavailable");
+    assert.equal(fetches, 0);
+
+    staff.useStaffCapabilitiesTestResult(undefined);
+    const observerCookie = session.createAdminCocSessionToken(undefined, SESSION_SECRET, "SA360_OBSERVER");
+    guard.useAdminCocTestSessionCookie(observerCookie ?? undefined);
+    const observerRead = await loadDeliveryFailuresRequiringAction({
+      fetchPage,
+      configured: () => true,
+      now: () => new Date("2026-11-12T22:58:00.000Z"),
+    });
+    assert.equal(observerRead.state, "ready");
+    assert.equal(fetches, 1);
+  } finally {
+    guard.useAdminCocTestSessionCookie(undefined);
+    guard.useStaffAdminCocTestDecision(undefined);
+    staff.useStaffCapabilitiesTestResult(undefined);
+    restoreEnv(previous);
+  }
+});

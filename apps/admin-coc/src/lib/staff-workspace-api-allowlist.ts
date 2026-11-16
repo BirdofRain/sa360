@@ -17,6 +17,7 @@ const WORKSPACE_READS = [
   new RegExp(`^/admin/v1/clients/${CLIENT_ID}/source-campaign-requests$`),
   new RegExp(`^/admin/v1/clients/${CLIENT_ID}/ghl-destination-configuration$`),
   new RegExp(`^/admin/v1/clients/${CLIENT_ID}/company-sheets-destination-configuration$`),
+  new RegExp(`^/admin/v1/clients/${CLIENT_ID}/external-webhook$`),
   new RegExp(`^/admin/v1/clients/${CLIENT_ID}/onboarding-attribution/${REQUEST_ID}$`),
   new RegExp(`^/admin/v1/team-workspace/clients/${CLIENT_ID}$`),
   new RegExp(`^/admin/v1/team-workspace/clients/${CLIENT_ID}/source-campaign-review$`),
@@ -29,6 +30,8 @@ const MANAGER_WRITES: Array<{ method: string; pattern: RegExp }> = [
   { method: "POST", pattern: new RegExp(`^/admin/v1/clients/${CLIENT_ID}/source-campaign-requests$`) },
   { method: "POST", pattern: new RegExp(`^/admin/v1/clients/${CLIENT_ID}/ghl-destination-configuration$`) },
   { method: "POST", pattern: new RegExp(`^/admin/v1/clients/${CLIENT_ID}/company-sheets-destination-configuration$`) },
+  { method: "PUT", pattern: new RegExp(`^/admin/v1/clients/${CLIENT_ID}/external-webhook$`) },
+  { method: "POST", pattern: new RegExp(`^/admin/v1/clients/${CLIENT_ID}/external-webhook/preflight$`) },
 ];
 
 export type WorkspaceApiPermission = "team_workspace" | "team_manager" | "team_operations";

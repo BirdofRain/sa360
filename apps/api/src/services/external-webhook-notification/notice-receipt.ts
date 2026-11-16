@@ -297,7 +297,16 @@ async function loadEligibility(
   deps: PlannerDeps
 ): Promise<Eligibility> {
   const attempt = await db.externalWebhookDeliveryAttempt.findUnique({ where: { id: attemptId } });
-  if (!attempt || attempt.outcome !== "http_accepted" || !attempt.httpAcceptedAt || attempt.httpStatus == null) {
+  if (
+    !attempt ||
+    attempt.state !== "attempted" ||
+    attempt.outcome !== "http_accepted" ||
+    attempt.requestLeftSa360 !== true ||
+    !attempt.httpAcceptedAt ||
+    attempt.httpStatus == null ||
+    attempt.httpStatus < 200 ||
+    attempt.httpStatus > 299
+  ) {
     return { ok: false, reason: "not_accepted" };
   }
   const preference = await db.clientDeliveryNotificationPreference.findUnique({

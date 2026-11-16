@@ -135,7 +135,7 @@ Lane B reads a persisted `http_accepted` attempt through `externalWebhookAccepta
   destinationId: string;
   attemptId: string;
   httpStatus: number;
-  acceptedAt: string; // ISO time of the accepted-state write
+  acceptedAt: string; // ISO httpAcceptedAt, stamped once when outcome first becomes http_accepted
 }
 ```
 

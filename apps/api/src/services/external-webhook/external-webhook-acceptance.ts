@@ -1,7 +1,8 @@
 /**
  * Lane B reads this after a persisted http_accepted attempt.
- * acceptanceId is the attempt id. acceptedAt is the row update that stored
- * that outcome, not the intake timestamp.
+ * acceptanceId is the attempt id. acceptedAt is httpAcceptedAt, the database
+ * timestamp written once when outcome first became http_accepted.
+ * updatedAt is not that clock. This function does not send email or SMS.
  */
 
 export type ExternalWebhookAcceptanceEvent = {
@@ -22,10 +23,13 @@ export function externalWebhookAcceptanceEvent(row: {
   state: string;
   outcome: string | null;
   httpStatus: number | null;
-  updatedAt: Date;
+  requestLeftSa360: boolean;
+  httpAcceptedAt: Date | null;
 }): ExternalWebhookAcceptanceEvent | null {
   if (row.state !== "attempted" || row.outcome !== "http_accepted") return null;
+  if (row.requestLeftSa360 !== true) return null;
   if (row.httpStatus === null || row.httpStatus < 200 || row.httpStatus > 299) return null;
+  if (row.httpAcceptedAt == null) return null;
   return {
     acceptanceId: row.id,
     attemptId: row.id,
@@ -33,6 +37,6 @@ export function externalWebhookAcceptanceEvent(row: {
     sourceLeadEventId: row.sourceLeadEventId,
     destinationId: row.destinationId,
     httpStatus: row.httpStatus,
-    acceptedAt: row.updatedAt.toISOString(),
+    acceptedAt: row.httpAcceptedAt.toISOString(),
   };
 }

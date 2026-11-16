@@ -173,8 +173,19 @@ test("external webhook delivery freezes the target, pins a public address, and d
     assert.equal(event?.acceptanceId, accepted.id);
     assert.equal(event?.attemptId, accepted.id);
     assert.equal(event?.httpStatus, 204);
-    assert.equal(event?.acceptedAt, accepted.updatedAt.toISOString());
-    assert.notEqual(event?.acceptedAt, "2020-01-01T00:00:00.000Z");
+    assert.ok(accepted.httpAcceptedAt);
+    assert.equal(event?.acceptedAt, accepted.httpAcceptedAt.toISOString());
+    const stamped = accepted.httpAcceptedAt.toISOString();
+    await prisma.$executeRaw`
+      UPDATE "ExternalWebhookDeliveryAttempt"
+      SET "updatedAt" = '2001-01-01T00:00:00.000Z',
+          "httpAcceptedAt" = '1999-01-01T00:00:00.000Z'
+      WHERE "id" = ${accepted.id}
+    `;
+    const reread = await prisma.externalWebhookDeliveryAttempt.findUniqueOrThrow({ where: { id: accepted.id } });
+    assert.equal(reread.httpAcceptedAt?.toISOString(), stamped);
+    assert.equal(externalWebhookAcceptanceEvent(reread)?.acceptedAt, stamped);
+    assert.notEqual(reread.updatedAt.toISOString(), stamped);
     assert.deepEqual(accepted.proves, ["http_2xx"]);
 
     const privateEvent = `evt_private_${stamp}`;

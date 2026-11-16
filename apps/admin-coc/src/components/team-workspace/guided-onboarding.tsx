@@ -870,9 +870,9 @@ function DestinationStep({
   const locked = busy || !model.setupWritable;
   const selected = draft.destinationChoice === "" || draft.destinationChoice === "undecided" ? "unset" : draft.destinationChoice;
   const options = [
-    { value: "ghl", label: "GoHighLevel" },
+    { value: "ghl", label: "Native GoHighLevel" },
     { value: "google_sheets", label: "Company Sheets" },
-    { value: "both", label: "Both" },
+    { value: "both", label: "Native GoHighLevel and Company Sheets" },
     ...(draft.destinationChoice === "intake_only" ? [{ value: "intake_only", label: "Intake only, already saved" }] : []),
     { value: "unset", label: "Not chosen yet" },
   ];
@@ -887,7 +887,12 @@ function DestinationStep({
       }}
     >
       <fieldset className="grid gap-2" disabled={locked}>
-        <legend className="text-sm font-medium text-slate-950">Intended destination</legend>
+        <legend className="text-sm font-medium text-slate-950">Onboarding intention</legend>
+        <p className="text-sm text-slate-600">
+          Saving this choice records an intention only. It does not activate delivery. Native GoHighLevel is a different
+          path from an external GoHighLevel inbound webhook. Company Sheets is independent. The external webhook below is
+          a separate operational configuration and is not one of these saved choices.
+        </p>
         {options.map((option) => (
           <label key={option.value} className="flex items-center gap-2 text-sm text-slate-800">
             <input
@@ -932,7 +937,7 @@ function DestinationReadout({ model }: { model: GuidedOnboardingModel }) {
   const sheets = model.destinations.companySheets;
   return (
     <ul className="space-y-1 text-sm text-slate-700">
-      <li>GoHighLevel row: {ghl.configured ? "Configured" : "Not configured"}. Delivery flag: {ghl.deliveryEnabled ? "on" : "off"}. The guide below separates configured, verified, and active.</li>
+      <li>Native GoHighLevel row: {ghl.configured ? "Configured" : "Not configured"}. Delivery flag: {ghl.deliveryEnabled ? "on" : "off"}. That row is not an external inbound webhook. The guide below separates configured, verified, and active.</li>
       <li>
         Company Sheets row: {sheets.configured ? "Configured" : "Not configured"}. Dispatch: {sheets.campaignDispatchEnabled || sheets.agedDispatchEnabled ? "Active" : "Off"}.
       </li>

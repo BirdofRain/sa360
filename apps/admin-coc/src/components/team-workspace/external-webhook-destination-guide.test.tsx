@@ -10,7 +10,9 @@ import type { ExternalWebhookBridgeResult } from "@/lib/team-workspace/external-
 const calls: string[] = [];
 const saveIds: string[] = [];
 const activateIds: string[] = [];
+const preflightRevisions: number[] = [];
 let readGate: Promise<void> = Promise.resolve();
+let readThrows = false;
 let readResult: ExternalWebhookBridgeResult = disabled();
 let preflightResult: ExternalWebhookBridgeResult = disabled();
 let saveResult: ExternalWebhookBridgeResult = disabled();
@@ -28,10 +30,12 @@ moduleLoader._load = function (request: string, parent: NodeModule, isMain: bool
       readExternalWebhookDestinationAction: async () => {
         calls.push("read");
         await readGate;
+        if (readThrows) throw new Error("socket hang up");
         return readResult;
       },
-      preflightExternalWebhookDestinationAction: async () => {
+      preflightExternalWebhookDestinationAction: async (input: { expectedRevision: number }) => {
         calls.push("preflight");
+        preflightRevisions.push(input.expectedRevision);
         return preflightResult;
       },
       saveExternalWebhookDestinationAction: async (input: { requestId: string }) => {
@@ -66,7 +70,9 @@ test.afterEach(() => {
   calls.length = 0;
   saveIds.length = 0;
   activateIds.length = 0;
+  preflightRevisions.length = 0;
   readGate = Promise.resolve();
+  readThrows = false;
   saveThrows = false;
   readResult = disabled();
   preflightResult = disabled();
@@ -97,7 +103,7 @@ test("a missing destination offers a choice and does not save", async () => {
 test("a read-only session cannot check or activate", async () => {
   readResult = savedStatus({ enabled: false });
   render(<Guide clientAccountId="client_a" access={{ canPrepare: false, canActivate: false }} />);
-  assert.equal(await screen.findByText("Configured, disabled"), await screen.findByText("Configured, disabled"));
+  assert.equal(await screen.findByText("Configured, destination row disabled"), await screen.findByText("Configured, destination row disabled"));
   assert.equal(screen.queryByRole("button", { name: "Replace saved URL" }), null);
   assert.equal(screen.queryByRole("button", { name: "Review activation" }), null);
   assert.equal(screen.queryByRole("button", { name: "Check this endpoint" }), null);
@@ -119,7 +125,7 @@ test("a manager can preflight and save disabled without activation", async () =>
   fireEvent.click(screen.getByRole("button", { name: "Check this endpoint" }));
   assert.equal(await screen.findByText(/This check does not send a lead/), await screen.findByText(/This check does not send a lead/));
   fireEvent.click(screen.getByRole("button", { name: "Save disabled configuration" }));
-  assert.equal((await screen.findByRole("status")).textContent, "Configuration saved. Lead delivery is OFF.");
+  assert.equal((await screen.findByRole("status")).textContent, "External webhook destination saved and disabled.");
   assert.equal(document.body.textContent?.includes("secret-path"), false);
   assert.equal(document.body.textContent?.includes("super-secret-value"), false);
   assert.equal(screen.queryByRole("button", { name: "Review activation" }), null);
@@ -132,13 +138,13 @@ test("an administrator activates only after confirmation and a refusal does not 
   activateResult = savedStatusResult({ enabled: true, hostname: "hooks.example.com" });
   render(<Guide clientAccountId="client_a" access={{ canPrepare: true, canActivate: true }} />);
   fireEvent.click(await screen.findByRole("button", { name: "Review activation" }));
-  assert.match(document.body.textContent ?? "", /global webhook delivery feature is not changed/i);
+  assert.match(document.body.textContent ?? "", /does not read or change the global delivery switch/i);
   const enable = screen.getByRole("button", { name: "Enable this destination" });
   fireEvent.click(enable);
   assert.equal(calls.includes("activate"), false);
   fireEvent.click(screen.getByRole("checkbox"));
   fireEvent.click(enable);
-  assert.equal(await screen.findByText(/global delivery switch is separate/), await screen.findByText(/global delivery switch is separate/));
+  assert.equal((await screen.findByRole("status")).textContent, "The destination row is enabled. This screen does not show whether the global delivery switch is on.");
   assert.equal(calls.filter((call) => call === "activate").length, 1);
   activateResult = denied();
   fireEvent.click(screen.getByRole("button", { name: "Review turning this off" }));
@@ -160,7 +166,7 @@ test("a revision conflict stops the save and reload does not restore a secret", 
   assert.equal(await screen.findByText(/Reload it before trying again/), await screen.findByText(/Reload it before trying again/));
   readResult = savedStatus({ enabled: false, hostname: "hooks.example.com", revision: 4 });
   fireEvent.click(screen.getByRole("button", { name: "Reload saved configuration" }));
-  assert.equal(await screen.findByText("Configured, disabled"), await screen.findByText("Configured, disabled"));
+  assert.equal(await screen.findByText("Configured, destination row disabled"), await screen.findByText("Configured, destination row disabled"));
   assert.equal(document.body.textContent?.includes("https://hooks.example.com/inbound"), false);
   assert.equal(document.getElementById("external-webhook-secret"), null);
 });
@@ -186,7 +192,7 @@ test("an uncertain save can be retried and a changed URL is not the same request
   await screen.findByRole("button", { name: "Retry" });
   saveResult = savedStatusResult({ enabled: false });
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-  assert.equal(await screen.findByText("Configuration saved. Lead delivery is OFF."), await screen.findByText("Configuration saved. Lead delivery is OFF."));
+  assert.equal(await screen.findByText("External webhook destination saved and disabled."), await screen.findByText("External webhook destination saved and disabled."));
   assert.equal(calls.filter((call) => call === "save").length, 2);
   assert.equal(saveIds[0], saveIds[1]);
 });
@@ -233,6 +239,9 @@ test("a request id conflict waits for the operator before another request", asyn
   assert.equal(saveIds.length, 1);
   fireEvent.click(screen.getByRole("button", { name: "Start a new request" }));
   assert.equal(saveIds.length, 1);
+  assert.equal(screen.queryByRole("button", { name: "Save disabled configuration" }), null);
+  assert.equal(screen.getByRole("button", { name: "Check this endpoint" }).getAttribute("type"), "submit");
+  assert.equal(calls.filter((call) => call === "preflight").length, 1);
 });
 
 test("Enter on the URL form runs the check and does not send a lead", async () => {
@@ -324,7 +333,7 @@ test("a primary CRM conflict does not offer a silent overwrite", async () => {
   readResult = savedStatus({ primaryCrmConflict: true, configurationValid: false });
   render(<Guide clientAccountId="client_a" access={{ canPrepare: true, canActivate: true }} />);
   assert.equal(await screen.findByText("Conflict or invalid"), await screen.findByText("Conflict or invalid"));
-  assert.match(document.body.textContent ?? "", /does not replace a saved native GoHighLevel/i);
+  assert.match(document.body.textContent ?? "", /does not turn native GoHighLevel or Company Sheets off/i);
 });
 
 test("a dropped save can be retried with the same request id", async () => {
@@ -341,7 +350,7 @@ test("a dropped save can be retried with the same request id", async () => {
   saveThrows = false;
   saveResult = savedStatusResult({ enabled: false });
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-  assert.equal(await screen.findByText("Configuration saved. Lead delivery is OFF."), await screen.findByText("Configuration saved. Lead delivery is OFF."));
+  assert.equal(await screen.findByText("External webhook destination saved and disabled."), await screen.findByText("External webhook destination saved and disabled."));
   assert.equal(saveIds[0], saveIds[1]);
 });
 
@@ -366,6 +375,97 @@ function signingSecret(): HTMLInputElement {
   const label = document.querySelector("label[for='external-webhook-secret']");
   assert.equal(label?.textContent?.trim(), "Signing secret");
   return element;
+}
+
+test("a rejected read stays closed until a retry returns the saved revision", async () => {
+  readResult = {
+    ok: false,
+    code: "unavailable",
+    message: "The configuration service did not finish. Nothing on this page was marked saved.",
+    replayed: false,
+    needsReload: false,
+    status: null,
+    preflight: null,
+  };
+  render(<Guide clientAccountId="client_a" access={{ canPrepare: true, canActivate: true }} />);
+  assert.equal((await screen.findByRole("button", { name: "Retry" })).textContent, "Retry");
+  assert.equal(screen.queryByRole("button", { name: "Continue" }), null);
+  assert.equal(screen.queryByRole("button", { name: "Save disabled configuration" }), null);
+  assert.equal(screen.queryByRole("button", { name: "Enable this destination" }), null);
+  assert.deepEqual(calls.filter((call) => call !== "read"), []);
+  readResult = savedStatus({ revision: 7, enabled: false });
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  assert.equal(await screen.findByText("Configured, destination row disabled"), await screen.findByText("Configured, destination row disabled"));
+  assert.match(document.body.textContent ?? "", /revision 7/);
+  assert.deepEqual(calls.filter((call) => call !== "read"), []);
+  fireEvent.click(screen.getByRole("button", { name: "Replace saved URL" }));
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  fireEvent.change(webhookUrl(), { target: { value: "https://hooks.example.com/inbound" } });
+  preflightResult = preflightOk();
+  fireEvent.click(screen.getByRole("button", { name: "Check this endpoint" }));
+  assert.equal(await screen.findByText(/This check does not send a lead/), await screen.findByText(/This check does not send a lead/));
+  assert.deepEqual(preflightRevisions, [7]);
+});
+
+test("a thrown read does not open configuration changes", async () => {
+  readThrows = true;
+  render(<Guide clientAccountId="client_a" access={{ canPrepare: true, canActivate: true }} />);
+  assert.match((await screen.findByRole("status")).textContent ?? "", /could not be read/);
+  assert.equal(screen.queryByRole("button", { name: "Continue" }), null);
+  assert.equal(screen.queryByRole("button", { name: "Check this endpoint" }), null);
+  assert.deepEqual(calls.filter((call) => call !== "read"), []);
+});
+
+test("a read that times out does not open configuration changes", async () => {
+  readGate = new Promise(() => undefined);
+  render(<Guide clientAccountId="client_a" access={{ canPrepare: true, canActivate: true }} readTimeoutMs={30} />);
+  assert.match((await screen.findByRole("status")).textContent ?? "", /could not be read in time/);
+  assert.equal(screen.queryByRole("button", { name: "Continue" }), null);
+  assert.equal(screen.queryByRole("button", { name: "Save disabled configuration" }), null);
+  assert.deepEqual(calls.filter((call) => call !== "read"), []);
+});
+
+test("save stays off until endpoint, authentication, credentials, and revision all pass", async () => {
+  readResult = emptyStatus();
+  preflightResult = preflightReport({ authValid: false, credentialsReady: false, revisionMatches: false });
+  render(<Guide clientAccountId="client_a" access={{ canPrepare: true, canActivate: true }} />);
+  await screen.findByText("Not configured");
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  fireEvent.change(webhookUrl(), { target: { value: "https://hooks.example.com/inbound" } });
+  fireEvent.click(screen.getByRole("button", { name: "Check this endpoint" }));
+  const save = await screen.findByRole("button", { name: "Save disabled configuration" });
+  assert.equal((save as HTMLButtonElement).disabled, true);
+  fireEvent.click(save);
+  assert.equal(calls.includes("save"), false);
+  preflightResult = preflightReport({ primaryCrmConflict: true });
+  fireEvent.click(screen.getByRole("button", { name: "Edit URL" }));
+  fireEvent.click(screen.getByRole("button", { name: "Check this endpoint" }));
+  assert.equal((await screen.findByRole("button", { name: "Save disabled configuration" }) as HTMLButtonElement).disabled, true);
+  assert.match(document.body.textContent ?? "", /Native GoHighLevel and Company Sheets were not changed/);
+});
+
+test("changing the URL or starting a new request requires a fresh check", async () => {
+  readResult = emptyStatus();
+  preflightResult = preflightOk();
+  render(<Guide clientAccountId="client_a" access={{ canPrepare: true, canActivate: false }} />);
+  await screen.findByText("Not configured");
+  fireEvent.click(screen.getByRole("radio", { name: "Make or custom HTTPS webhook" }));
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  fireEvent.change(webhookUrl(), { target: { value: "https://hooks.example.com/inbound" } });
+  fireEvent.click(screen.getByRole("button", { name: "Check this endpoint" }));
+  assert.equal((await screen.findByRole("button", { name: "Save disabled configuration" }) as HTMLButtonElement).disabled, false);
+  fireEvent.click(screen.getByRole("button", { name: "Edit URL" }));
+  fireEvent.change(webhookUrl(), { target: { value: "https://hooks.example.com/other" } });
+  assert.equal(screen.queryByRole("button", { name: "Save disabled configuration" }), null);
+  fireEvent.click(screen.getByRole("radio", { name: "HMAC signature" }));
+  assert.equal(screen.queryByRole("button", { name: "Save disabled configuration" }), null);
+  assert.equal(calls.includes("save"), false);
+});
+
+function preflightReport(patch: Partial<Extract<ExternalWebhookBridgeResult, { ok: true }>["preflight"]>): ExternalWebhookBridgeResult {
+  const base = preflightOk();
+  if (!base.ok || !base.preflight || !patch) return base;
+  return { ...base, preflight: { ...base.preflight, ...patch } };
 }
 
 function disabled(): ExternalWebhookBridgeResult {

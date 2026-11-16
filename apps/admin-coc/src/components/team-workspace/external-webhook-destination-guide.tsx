@@ -12,6 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import type {
   ExternalWebhookAuthMode,
+  ExternalWebhookBridgePreflightReport,
   ExternalWebhookBridgeResult,
   ExternalWebhookBridgeStatus,
   ExternalWebhookDestinationKind,
@@ -24,27 +25,32 @@ export type ExternalWebhookGuideAccess = {
 
 const EMPTY_ACCESS: ExternalWebhookGuideAccess = { canPrepare: false, canActivate: false };
 const inputClass = "h-10 w-full rounded-md border border-slate-200 px-3 text-sm text-slate-900";
+const DEFAULT_READ_TIMEOUT_MS = 10_000;
 
 type Stage = "select" | "enter" | "checked" | "saved" | "activate";
+type ReadState = "loading" | "ready" | "unavailable" | "feature_disabled";
 
 export function ExternalWebhookDestinationGuide({
   clientAccountId,
   access = EMPTY_ACCESS,
+  readTimeoutMs = DEFAULT_READ_TIMEOUT_MS,
 }: {
   clientAccountId: string;
   access?: ExternalWebhookGuideAccess;
+  readTimeoutMs?: number;
 }) {
   const [status, setStatus] = useState<ExternalWebhookBridgeStatus | null>(null);
+  const [readState, setReadState] = useState<ReadState>("loading");
   const [stage, setStage] = useState<Stage>("select");
   const [kind, setKind] = useState<ExternalWebhookDestinationKind>("ghl_inbound");
   const [authMode, setAuthMode] = useState<ExternalWebhookAuthMode>("none");
   const [endpointUrl, setEndpointUrl] = useState("");
   const [signingSecret, setSigningSecret] = useState("");
-  const [preflight, setPreflight] = useState<Extract<ExternalWebhookBridgeResult, { ok: true }>["preflight"]>(null);
+  const [preflight, setPreflight] = useState<ExternalWebhookBridgePreflightReport | null>(null);
+  const [checkedKey, setCheckedKey] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [code, setCode] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>("Loading the saved webhook…");
-  const [featureOff, setFeatureOff] = useState(false);
   const [needsReload, setNeedsReload] = useState(false);
   const [requestBlocked, setRequestBlocked] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
@@ -57,7 +63,7 @@ export function ExternalWebhookDestinationGuide({
       authMode: kind === "external_https" ? authMode : "none",
       endpointUrl: endpointUrl.trim(),
       signingSecret,
-      revision: status?.revision ?? 0,
+      revision: status?.revision,
     });
   }
 
@@ -69,65 +75,108 @@ export function ExternalWebhookDestinationGuide({
     return id;
   }
 
-  function applyFailure(result: Extract<ExternalWebhookBridgeResult, { ok: false }>, retainRequest: boolean) {
-    setCode(result.code);
-    setMessage(result.message);
-    setNeedsReload(result.needsReload || result.code === "revision_conflict");
-    setRequestBlocked(result.code === "request_id_conflict");
-    setFeatureOff(result.code === "FEATURE_DISABLED");
-    if (retainRequest && result.code !== "request_id_conflict") requestId(true);
-    if (result.code !== "request_id_conflict" && result.code !== "revision_conflict" && result.code !== "unavailable") {
-      intent.current = { key: "", id: "" };
+  function invalidateCheck() {
+    setPreflight(null);
+    setCheckedKey("");
+    intent.current = { key: "", id: "" };
+    setStage((current) => (current === "checked" ? "enter" : current));
+  }
+
+  function markUnavailable(nextMessage: string) {
+    setReadState("unavailable");
+    setStatus(null);
+    setPreflight(null);
+    setCheckedKey("");
+    setCode("unavailable");
+    setMessage(nextMessage);
+    setNeedsReload(false);
+    setRequestBlocked(false);
+  }
+
+  function applyRead(result: ExternalWebhookBridgeResult) {
+    if (!result.ok || !result.status) {
+      if (!result.ok && result.code === "FEATURE_DISABLED") {
+        setReadState("feature_disabled");
+        setStatus(null);
+        setPreflight(null);
+        setCheckedKey("");
+        setCode("FEATURE_DISABLED");
+        setMessage(result.message);
+        return;
+      }
+      markUnavailable(result.ok ? "The saved webhook could not be read. Nothing was changed." : result.message);
+      return;
     }
+    setReadState("ready");
+    setStatus(result.status);
+    setNeedsReload(false);
+    setCode(null);
+    setMessage(null);
+    if (result.status.kind) setKind(result.status.kind);
+    if (result.status.kind === "external_https" && result.status.authMode) setAuthMode(result.status.authMode);
+    setEndpointUrl("");
+    setSigningSecret("");
+    setPreflight(null);
+    setCheckedKey("");
+    setStage(result.status.present ? "saved" : "select");
+  }
+
+  function readSaved(isCancelled: () => boolean) {
+    return new Promise<ExternalWebhookBridgeResult | "timeout" | "throw" | "cancelled">((resolve) => {
+      let settled = false;
+      const finish = (value: ExternalWebhookBridgeResult | "timeout" | "throw" | "cancelled") => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      };
+      const timer = setTimeout(() => finish(isCancelled() ? "cancelled" : "timeout"), readTimeoutMs);
+      readExternalWebhookDestinationAction(clientAccountId)
+        .then((result) => finish(isCancelled() ? "cancelled" : result))
+        .catch(() => finish(isCancelled() ? "cancelled" : "throw"));
+    });
+  }
+
+  function applyReadOutcome(outcome: ExternalWebhookBridgeResult | "timeout" | "throw" | "cancelled") {
+    if (outcome === "cancelled") return;
+    if (outcome === "timeout") {
+      markUnavailable("The saved webhook could not be read in time. Nothing was changed.");
+      return;
+    }
+    if (outcome === "throw") {
+      markUnavailable("The saved webhook could not be read. Nothing was changed.");
+      return;
+    }
+    applyRead(outcome);
   }
 
   async function load() {
+    setReadState("loading");
     setPending("Loading the saved webhook…");
+    setStatus(null);
+    setPreflight(null);
+    setCheckedKey("");
     setMessage(null);
+    setCode(null);
+    let cancelled = false;
     try {
-      const result = await readExternalWebhookDestinationAction(clientAccountId);
-      if (!result.ok || !result.status) {
-        applyFailure(result.ok ? { ok: false, code: "unavailable", message: "The saved webhook could not be read.", replayed: false, needsReload: false, status: null, preflight: null } : result, false);
-        return;
-      }
-      setStatus(result.status);
-      setFeatureOff(false);
-      setNeedsReload(false);
-      setCode(null);
-      if (result.status.kind) setKind(result.status.kind);
-      if (result.status.kind === "external_https" && result.status.authMode) setAuthMode(result.status.authMode);
-      setEndpointUrl("");
-      setSigningSecret("");
-      setStage(result.status.present ? "saved" : "select");
-    } catch {
-      setMessage("The saved webhook could not be read. Nothing was changed.");
-      setCode("unavailable");
+      applyReadOutcome(await readSaved(() => cancelled));
     } finally {
+      cancelled = true;
       setPending(null);
     }
   }
 
   useEffect(() => {
     let cancelled = false;
-    void readExternalWebhookDestinationAction(clientAccountId)
-      .then((result) => {
-        if (cancelled) return;
-        if (!result.ok || !result.status) {
-          setFeatureOff(!result.ok && result.code === "FEATURE_DISABLED");
-          setMessage(result.ok ? "The saved webhook could not be read." : result.message);
-          setCode(result.ok ? "unavailable" : result.code);
-          return;
-        }
-        setStatus(result.status);
-        if (result.status.kind) setKind(result.status.kind);
-        if (result.status.kind === "external_https" && result.status.authMode) setAuthMode(result.status.authMode);
-        setStage(result.status.present ? "saved" : "select");
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setMessage("The saved webhook could not be read. Nothing was changed.");
-          setCode("unavailable");
-        }
+    setReadState("loading");
+    setStatus(null);
+    setPending("Loading the saved webhook…");
+    setPreflight(null);
+    setCheckedKey("");
+    void readSaved(() => cancelled)
+      .then((outcome) => {
+        if (!cancelled) applyReadOutcome(outcome);
       })
       .finally(() => {
         if (!cancelled) setPending(null);
@@ -135,27 +184,56 @@ export function ExternalWebhookDestinationGuide({
     return () => {
       cancelled = true;
     };
-  }, [clientAccountId]);
+    // applyReadOutcome closes over the latest setters and is recreated each render.
+    // The read is keyed only by the client and the deadline.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clientAccountId, readTimeoutMs]);
+
+  function applyFailure(result: Extract<ExternalWebhookBridgeResult, { ok: false }>, retainRequest: boolean) {
+    setCode(result.code);
+    setMessage(result.message);
+    setNeedsReload(result.needsReload || result.code === "revision_conflict");
+    setRequestBlocked(result.code === "request_id_conflict");
+    if (result.code === "FEATURE_DISABLED") {
+      setReadState("feature_disabled");
+      setStatus(null);
+      setPreflight(null);
+      setCheckedKey("");
+    }
+    if (retainRequest && result.code !== "request_id_conflict") requestId(true);
+    if (result.code !== "request_id_conflict" && result.code !== "revision_conflict" && result.code !== "unavailable") {
+      intent.current = { key: "", id: "" };
+    }
+  }
 
   async function runPreflight() {
-    if (!access.canPrepare || featureOff) return;
+    if (readState !== "ready" || !status || !access.canPrepare) return;
     setPending("Checking the endpoint…");
     setMessage(null);
     const mode = kind === "external_https" ? authMode : "none";
+    const key = payloadKey();
     try {
       const result = await preflightExternalWebhookDestinationAction({
         clientAccountId,
-        expectedRevision: status?.revision ?? 0,
+        expectedRevision: status.revision,
         kind,
         authMode: mode,
         endpointUrl: endpointUrl.trim(),
         ...(mode === "hmac_sha256" && signingSecret ? { signingSecret } : {}),
       });
+      if (payloadKey() !== key) {
+        setPreflight(null);
+        setCheckedKey("");
+        setStage("enter");
+        setMessage("The endpoint changed during the check. Check it again. Nothing was saved.");
+        return;
+      }
       if (!result.ok || !result.preflight) {
         applyFailure(result.ok ? { ok: false, code: "unavailable", message: "The check did not finish. Nothing was saved.", replayed: false, needsReload: false, status: null, preflight: null } : result, result.ok ? false : result.code === "unavailable");
         return;
       }
       setPreflight(result.preflight);
+      setCheckedKey(key);
       setCode(null);
       setStage("checked");
     } catch {
@@ -167,16 +245,31 @@ export function ExternalWebhookDestinationGuide({
     }
   }
 
+  const checkIsCurrent = checkedKey !== "" && checkedKey === payloadKey();
+  const saveAllowed = Boolean(
+    readState === "ready" &&
+      status &&
+      access.canPrepare &&
+      checkIsCurrent &&
+      preflight?.endpointValid &&
+      preflight.authValid &&
+      preflight.credentialsReady &&
+      preflight.revisionMatches &&
+      !preflight.primaryCrmConflict &&
+      !needsReload &&
+      !requestBlocked,
+  );
+
   async function saveDisabled() {
-    if (!access.canPrepare || featureOff || needsReload || requestBlocked) return;
+    if (!saveAllowed || !status) return;
     setPending("Saving the disabled destination…");
     const mode = kind === "external_https" ? authMode : "none";
-    const id = requestId(code === "unavailable" || code === "request_id_conflict");
+    const id = requestId(code === "unavailable");
     try {
       const result = await saveExternalWebhookDestinationAction({
         clientAccountId,
         requestId: id,
-        expectedRevision: status?.revision ?? 0,
+        expectedRevision: status.revision,
         kind,
         authMode: mode,
         endpointUrl: endpointUrl.trim(),
@@ -186,16 +279,19 @@ export function ExternalWebhookDestinationGuide({
         applyFailure(result.ok ? { ok: false, code: "unavailable", message: "The save did not finish.", replayed: false, needsReload: false, status: null, preflight: null } : result, !result.ok && result.code === "unavailable");
         return;
       }
+      setReadState("ready");
       setStatus(result.status);
       setEndpointUrl("");
       setSigningSecret("");
       setPreflight(null);
+      setCheckedKey("");
       setCode(null);
-      setMessage("Configuration saved. Lead delivery is OFF.");
+      setRequestBlocked(false);
+      setMessage("External webhook destination saved and disabled.");
       setStage("saved");
       intent.current = { key: "", id: "" };
     } catch {
-      setMessage("The save did not finish. Lead delivery was not turned on.");
+      setMessage("The save did not finish. The external webhook was not saved.");
       setCode("unavailable");
       requestId(true);
     } finally {
@@ -204,7 +300,7 @@ export function ExternalWebhookDestinationGuide({
   }
 
   async function changeActivation(enabled: boolean) {
-    if (!access.canActivate || !status || featureOff || !confirmed) return;
+    if (readState !== "ready" || !access.canActivate || !status || !confirmed) return;
     setPending(enabled ? "Enabling the saved destination…" : "Turning the saved destination off…");
     if (!activationIntent.current) activationIntent.current = crypto.randomUUID();
     const id = activationIntent.current;
@@ -219,7 +315,11 @@ export function ExternalWebhookDestinationGuide({
       activationIntent.current = "";
       setConfirmed(false);
       setStatus(result.status);
-      setMessage(enabled ? "The destination row is enabled. The global delivery switch was not changed." : "The destination row is off. Lead delivery was not started.");
+      setMessage(
+        enabled
+          ? "The destination row is enabled. This screen does not show whether the global delivery switch is on."
+          : "The destination row is off. Native GoHighLevel and Company Sheets were not changed.",
+      );
       setCode(null);
       setStage("saved");
     } catch {
@@ -231,33 +331,37 @@ export function ExternalWebhookDestinationGuide({
   }
 
   const busy = Boolean(pending);
+  const ready = readState === "ready";
 
   return (
     <section className="grid gap-4 rounded-md border border-slate-200 p-4" aria-label="External webhook destination">
       <div className="grid gap-1">
         <h3 className="text-sm font-medium text-slate-950">External webhook</h3>
         <p className="text-sm text-slate-600">
-          GoHighLevel inbound webhook and Make or custom HTTPS are alternative primary CRM methods. Company Sheets can
-          stay on beside either one. Choosing a webhook here does not replace a saved native GoHighLevel destination.
-          Email and SMS notification delivery is managed separately and is not enabled by saving this webhook.
+          This is a separate operational configuration. It is not the onboarding intention above, and it is not native
+          GoHighLevel. An external GoHighLevel inbound webhook and Make or custom HTTPS are alternative primary CRM
+          methods. Company Sheets can stay on beside either one. Saving here does not turn native GoHighLevel or Company
+          Sheets off. Email and SMS notification delivery is managed separately and is not enabled by saving this webhook.
         </p>
       </div>
       {pending ? <p className="text-sm text-slate-600">{pending}</p> : null}
-      {status ? <StatusLine status={status} /> : null}
-      {featureOff ? <p className="text-sm text-slate-700">External webhook configuration is turned off. Nothing can be saved or enabled from this screen.</p> : null}
+      {readState === "ready" && status ? <StatusLine status={status} /> : null}
+      {readState === "feature_disabled" ? (
+        <p className="text-sm text-slate-700">External webhook configuration is turned off. Nothing can be saved or enabled from this screen.</p>
+      ) : null}
       {message ? (
         <p className="text-sm text-amber-900" role="status">
           {message}
         </p>
       ) : null}
-      {needsReload ? (
+      {needsReload && ready ? (
         <div>
           <Button type="button" variant="outline" disabled={busy} onClick={() => void load()}>
             Reload saved configuration
           </Button>
         </div>
       ) : null}
-      {requestBlocked ? (
+      {requestBlocked && ready ? (
         <div>
           <Button
             type="button"
@@ -266,6 +370,9 @@ export function ExternalWebhookDestinationGuide({
             onClick={() => {
               intent.current = { key: "", id: "" };
               setRequestBlocked(false);
+              setPreflight(null);
+              setCheckedKey("");
+              setStage("enter");
               setMessage("The previous request id was cleared. Check the endpoint again before saving.");
             }}
           >
@@ -276,12 +383,18 @@ export function ExternalWebhookDestinationGuide({
       {code === "primary_crm_conflict" ? (
         <p className="text-sm text-slate-700">Another primary CRM is already active. Native GoHighLevel and Company Sheets were not changed.</p>
       ) : null}
-      {code === "unavailable" && !pending ? (
+      {readState === "unavailable" && !pending ? (
+        <div>
+          <Button type="button" variant="outline" onClick={() => void load()}>
+            Retry
+          </Button>
+        </div>
+      ) : null}
+      {ready && code === "unavailable" && !pending ? (
         <div>
           <Button
             type="button"
             variant="outline"
-            disabled={busy}
             onClick={() => void (stage === "checked" ? saveDisabled() : stage === "activate" && status ? changeActivation(!status.enabled) : load())}
           >
             Retry
@@ -289,17 +402,36 @@ export function ExternalWebhookDestinationGuide({
         </div>
       ) : null}
 
-      {!featureOff && stage === "select" && !(pending && !status) ? (
+      {ready && stage === "select" ? (
         <fieldset className="grid gap-2" disabled={busy}>
-          <legend className="text-sm font-medium text-slate-950">Primary CRM method</legend>
+          <legend className="text-sm font-medium text-slate-950">External webhook type</legend>
           <label className="flex items-center gap-2 text-sm text-slate-800">
-            <input type="radio" name="external-webhook-kind" checked={kind === "ghl_inbound"} onChange={() => { setKind("ghl_inbound"); setAuthMode("none"); intent.current = { key: "", id: "" }; }} />
+            <input
+              type="radio"
+              name="external-webhook-kind"
+              checked={kind === "ghl_inbound"}
+              onChange={() => {
+                setKind("ghl_inbound");
+                setAuthMode("none");
+                setSigningSecret("");
+                invalidateCheck();
+              }}
+            />
             GoHighLevel inbound webhook
           </label>
           <label className="flex items-center gap-2 text-sm text-slate-800">
-            <input type="radio" name="external-webhook-kind" checked={kind === "external_https"} onChange={() => { setKind("external_https"); intent.current = { key: "", id: "" }; }} />
+            <input
+              type="radio"
+              name="external-webhook-kind"
+              checked={kind === "external_https"}
+              onChange={() => {
+                setKind("external_https");
+                invalidateCheck();
+              }}
+            />
             Make or custom HTTPS webhook
           </label>
+          <p className="text-sm text-slate-600">Neither choice is native GoHighLevel, and neither one is selected by the onboarding intention.</p>
           <div>
             <Button type="button" disabled={busy} onClick={() => setStage("enter")}>
               Continue
@@ -308,7 +440,7 @@ export function ExternalWebhookDestinationGuide({
         </fieldset>
       ) : null}
 
-      {!featureOff && stage === "enter" ? (
+      {ready && stage === "enter" ? (
         <form
           className="grid gap-3"
           onSubmit={(event) => {
@@ -331,7 +463,7 @@ export function ExternalWebhookDestinationGuide({
               disabled={busy || !access.canPrepare}
               onChange={(event) => {
                 setEndpointUrl(event.target.value);
-                intent.current = { key: "", id: "" };
+                invalidateCheck();
               }}
             />
           </div>
@@ -339,11 +471,28 @@ export function ExternalWebhookDestinationGuide({
             <fieldset className="grid gap-2" disabled={busy || !access.canPrepare}>
               <legend className="text-sm font-medium text-slate-950">Authentication</legend>
               <label className="flex items-center gap-2 text-sm">
-                <input type="radio" name="external-webhook-auth" checked={authMode === "none"} onChange={() => { setAuthMode("none"); setSigningSecret(""); intent.current = { key: "", id: "" }; }} />
+                <input
+                  type="radio"
+                  name="external-webhook-auth"
+                  checked={authMode === "none"}
+                  onChange={() => {
+                    setAuthMode("none");
+                    setSigningSecret("");
+                    invalidateCheck();
+                  }}
+                />
                 None
               </label>
               <label className="flex items-center gap-2 text-sm">
-                <input type="radio" name="external-webhook-auth" checked={authMode === "hmac_sha256"} onChange={() => { setAuthMode("hmac_sha256"); intent.current = { key: "", id: "" }; }} />
+                <input
+                  type="radio"
+                  name="external-webhook-auth"
+                  checked={authMode === "hmac_sha256"}
+                  onChange={() => {
+                    setAuthMode("hmac_sha256");
+                    invalidateCheck();
+                  }}
+                />
                 HMAC signature
               </label>
             </fieldset>
@@ -363,7 +512,7 @@ export function ExternalWebhookDestinationGuide({
                 disabled={busy || !access.canPrepare}
                 onChange={(event) => {
                   setSigningSecret(event.target.value);
-                  intent.current = { key: "", id: "" };
+                  invalidateCheck();
                 }}
               />
             </div>
@@ -380,7 +529,7 @@ export function ExternalWebhookDestinationGuide({
         </form>
       ) : null}
 
-      {!featureOff && stage === "checked" && preflight ? (
+      {ready && stage === "checked" && preflight ? (
         <div className="grid gap-3">
           <ul className="grid gap-1 text-sm text-slate-700">
             <li>Endpoint: {preflight.endpointValid ? "Valid HTTPS" : "Not valid"}{preflight.hostname ? ` · ${preflight.hostname}` : ""}</li>
@@ -393,32 +542,46 @@ export function ExternalWebhookDestinationGuide({
           {preflight.primaryCrmConflict ? (
             <p className="text-sm text-slate-700">Another primary CRM is already active. Native GoHighLevel and Company Sheets were not changed.</p>
           ) : null}
+          {!saveAllowed ? (
+            <p className="text-sm text-slate-700">Save stays off until this check matches the current URL, authentication, credentials, and saved revision, with no primary CRM conflict.</p>
+          ) : null}
           <div className="flex flex-col gap-2 sm:flex-row">
-            <Button type="button" disabled={busy || !access.canPrepare || needsReload || requestBlocked || !preflight.endpointValid || preflight.primaryCrmConflict} onClick={() => void saveDisabled()}>
+            <Button type="button" disabled={busy || !saveAllowed} onClick={() => void saveDisabled()}>
               {busy ? "Saving…" : "Save disabled configuration"}
             </Button>
-            <Button type="button" variant="outline" disabled={busy} onClick={() => setStage("enter")}>
+            <Button type="button" variant="outline" disabled={busy} onClick={() => { setStage("enter"); }}>
               Edit URL
             </Button>
           </div>
         </div>
       ) : null}
 
-      {!featureOff && stage === "saved" && status?.present ? (
+      {ready && stage === "saved" && status?.present ? (
         <div className="grid gap-3">
           <p className="text-sm text-slate-800">
             {status.enabled
-              ? "This row is enabled. That does not prove leads are being delivered. The global delivery switch is separate and was not changed by this screen."
-              : "Configuration saved. Lead delivery is OFF until an administrator enables this row. The global delivery switch is still separate."}
+              ? "This destination row is enabled. That is separate from the global delivery switch, which this screen does not read. Enabling the row does not prove delivery."
+              : "External webhook destination saved and disabled. Native GoHighLevel and Company Sheets were not changed. This screen does not show whether the global delivery switch is on."}
           </p>
           <p className="text-sm text-slate-600">
             {kindLabel(status.kind)} · {status.hostname ?? "Hostname unavailable"} · revision {status.revision}.{" "}
-            {status.enabled ? "This row is enabled." : "This row is disabled."} Enabling the row does not prove leads are being delivered.
+            {status.enabled ? "Destination row enabled." : "Destination row disabled."}
           </p>
           <AttemptNote attempt={status.latestAttempt} />
           <div className="flex flex-col gap-2 sm:flex-row">
             {access.canPrepare ? (
-              <Button type="button" variant="outline" disabled={busy} onClick={() => { setStage("select"); setEndpointUrl(""); setSigningSecret(""); }}>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={busy}
+                onClick={() => {
+                  setStage("select");
+                  setEndpointUrl("");
+                  setSigningSecret("");
+                  setPreflight(null);
+                  setCheckedKey("");
+                }}
+              >
                 Replace saved URL
               </Button>
             ) : null}
@@ -431,7 +594,7 @@ export function ExternalWebhookDestinationGuide({
         </div>
       ) : null}
 
-      {!featureOff && stage === "activate" && status && access.canActivate ? (
+      {ready && stage === "activate" && status && access.canActivate ? (
         <form
           className="grid gap-3"
           onSubmit={(event) => {
@@ -444,11 +607,11 @@ export function ExternalWebhookDestinationGuide({
             <li>Hostname: {status.hostname ?? "Unavailable"}</li>
             <li>Revision: {status.revision}</li>
             <li>{status.primaryCrmConflict ? "A native GoHighLevel destination already owns primary CRM delivery." : "No native GoHighLevel primary-CRM conflict was reported."}</li>
-            <li>The global webhook delivery feature is not changed by this confirmation. A row can be enabled while that feature is still off.</li>
+            <li>This confirmation does not read or change the global delivery switch. Enabling this row is not the same as that switch being on.</li>
           </ul>
           <label className="flex items-start gap-2 text-sm text-slate-800">
             <input type="checkbox" name="confirmActivation" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />
-            I understand this {status.enabled ? "turns the saved row off" : "enables the saved row"} and does not by itself prove delivery.
+            I understand this {status.enabled ? "turns the saved row off" : "enables the saved row"} and does not by itself prove a contact was created.
           </label>
           <div className="flex flex-col gap-2 sm:flex-row">
             <Button type="submit" disabled={busy || !confirmed}>
@@ -470,8 +633,8 @@ function StatusLine({ status }: { status: ExternalWebhookBridgeStatus }) {
     : status.primaryCrmConflict || !status.configurationValid
       ? "Conflict or invalid"
       : status.enabled
-        ? "Configured, enabled"
-        : "Configured, disabled";
+        ? "Configured, destination row enabled"
+        : "Configured, destination row disabled";
   return (
     <p className="text-sm font-medium text-slate-950" data-webhook-state={label}>
       {label}

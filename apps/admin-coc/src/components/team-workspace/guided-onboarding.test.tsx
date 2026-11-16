@@ -287,12 +287,14 @@ function guide(overrides: Partial<GuidedOnboardingModel> = {}): GuidedOnboarding
 
 test("a successful save stores the request and does not activate delivery", async () => {
   render(<GuidedOnboarding model={guide()} step="destination" clients={[]} />);
-  fireEvent.click(screen.getByRole("radio", { name: "Both" }));
+  fireEvent.click(screen.getByRole("radio", { name: "Native GoHighLevel and Company Sheets" }));
   fireEvent.click(screen.getByRole("button", { name: "Save destination choice" }));
   await screen.findByText(/destination choice was saved/i);
   assert.equal(await screen.findByText("External webhook configuration is turned off. Nothing can be saved or enabled from this screen."), await screen.findByText("External webhook configuration is turned off. Nothing can be saved or enabled from this screen."));
   assert.ok(screen.getAllByText("Company Sheets").length >= 2);
   assert.equal(screen.getByText("Native GoHighLevel destination").textContent, "Native GoHighLevel destination");
+  assert.match(document.body.textContent ?? "", /separate operational configuration/i);
+  assert.equal(screen.queryByRole("radio", { name: "External webhook" }), null);
   assert.equal(screen.queryByRole("button", { name: "Save disabled configuration" }), null);
   assert.equal(saves.length, 1);
   assert.equal(saves[0]?.expectedRevision, 2);
@@ -578,7 +580,7 @@ test("leaving and returning keeps Northshore requests awaiting application", () 
   assert.equal(document.querySelector("[data-fact='activation']")?.getAttribute("data-state"), "pending");
   assert.equal(screen.getAllByText("Request saved — awaiting application").length >= 2, true);
   fireEvent.click(screen.getByRole("button", { name: /Delivery destination/ }));
-  fireEvent.click(screen.getByRole("radio", { name: "GoHighLevel" }));
+  fireEvent.click(screen.getByRole("radio", { name: "Native GoHighLevel", exact: true }));
   assert.equal(document.querySelector("[data-progress-summary]")?.textContent, before);
   view.rerender(<GuidedOnboarding model={northshore} step="destination" clients={[]} />);
   assert.equal(document.querySelector("[data-progress-summary]")?.textContent, before);

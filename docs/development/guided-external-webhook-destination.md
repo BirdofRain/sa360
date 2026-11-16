@@ -22,9 +22,28 @@ webhook delivery switch. An enabled row is not proof that leads are flowing.
 3. Check the endpoint. The check reports hostname, authentication, credential
    readiness, a primary CRM conflict, and whether the revision still matches.
    It does not send a lead.
-4. Save the disabled configuration. The screen then says lead delivery is off.
+4. Save the disabled configuration. The screen then says the external webhook
+   destination was saved and disabled. That does not turn off native
+   GoHighLevel or Company Sheets, and it does not read the global delivery
+   switch.
 5. An administrator reviews the hostname, type, revision, and any native
    GoHighLevel conflict, then confirms before enabling or turning off the row.
+   Enabling the row is not the same as the global delivery switch being on.
+   This screen does not know that switch's live value.
+
+The onboarding intention choices stay `ghl`, `google_sheets`, `both`,
+`intake_only`, and `undecided`. `ghl` means native GoHighLevel. It is not an
+external GoHighLevel inbound webhook. Persisting an external-webhook intention
+would need a setup-schema change. This screen does not add that value. The
+webhook configuration is stored only through the external webhook actions.
+
+A failed read, including a timeout, leaves check, save, and activation
+unavailable. The screen does not assume revision 0 when the read did not
+succeed. Save stays off until the latest check matches the current URL,
+authentication, secret, and saved revision, with a valid endpoint, valid
+authentication, credentials ready, a matching revision, and no primary CRM
+conflict. Editing any of those, or starting over after a request-id conflict,
+requires a new check.
 
 ## Who can do what
 

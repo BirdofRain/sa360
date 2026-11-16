@@ -1070,6 +1070,8 @@ model ClientAccount {
   externalWebhookDestination ClientExternalWebhookDestination?
   /// Frozen external-webhook receipts. Restrict so account deletion cannot erase them.
   externalWebhookDeliveryAttempts ExternalWebhookDeliveryAttempt[]
+  /// Idempotent admin writes for the external webhook destination. Cascade with the client. These rows do not send.
+  externalWebhookDestinationConfigRequests ExternalWebhookDestinationConfigRequest[]
   /// Channel-specific external-webhook notices. Restrict so account deletion cannot erase them.
   externalWebhookNotificationReceipts ExternalWebhookNotificationReceipt[]
   /// Per-client notification on/off choice. Defaults disabled and cascades without sending.
@@ -4287,6 +4289,25 @@ model ExternalWebhookDeliveryAttempt {
   @@unique([clientAccountId, sourceLeadEventId], map: "ExternalWebhookDeliveryAttempt_client_event_key")
   @@index([state, createdAt])
   @@index([destinationId])
+}
+
+/// One accepted admin write of an external webhook URL, HMAC secret, or on/off choice.
+/// requestId is the idempotency key. A repeat of the same id and payload returns the stored
+/// result. A different payload for that id conflicts. The stored result has no URL or secret.
+/// Deleting the client cascades these rows and does not send.
+model ExternalWebhookDestinationConfigRequest {
+  id              String        @id @default(cuid())
+  requestId       String        @unique
+  clientAccountId String
+  clientAccount   ClientAccount @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Cascade)
+  /// save | activation
+  action          String
+  payloadHash     String
+  /// Stored response for an exact replay. Hostname, kind, auth mode, enabled, and revision only.
+  resultJson      Json
+  createdAt       DateTime      @default(now())
+
+  @@index([clientAccountId, createdAt])
 }
 
 /// Per-client on/off choice for a successful-delivery email.

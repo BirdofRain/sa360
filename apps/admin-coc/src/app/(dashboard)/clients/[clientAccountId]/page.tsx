@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { Suspense } from "react";
 
 import {
   associateClientSourceFunnelAction,
@@ -12,7 +13,7 @@ import { ClientDetailPanel } from "@/components/clients/client-detail-panel";
 import { ClientDetailSetupLink } from "@/components/clients/onboarding/client-detail-setup-link";
 import { ClientSetupPanel } from "@/components/clients/client-setup-panel";
 import { LeadCaptureSourcesSection } from "@/components/clients/leadcapture-sources-section";
-import { OnboardingDiscoveryPanel } from "@/components/clients/onboarding-discovery-panel";
+import { ClientFolderEvidence, OnboardingDiscoveryPanel } from "@/components/clients/onboarding-discovery-panel";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { Badge } from "@/components/ui/badge";
 import { fetchOnboardingSummary } from "@/lib/admin-api/client-onboarding-v2";
@@ -81,18 +82,17 @@ export default async function ClientDetailPage({
   if (!data?.item) notFound();
 
   const setupEnabled = isNativeClientSetupEnabled();
-  const [readiness, sources, setup, sheetsDestination, sheetsFolder, googleConnection, sheetsDispatch, onboardingSummary] =
+  const [readiness, sources, setup, sheetsDestination, googleConnection, sheetsDispatch, onboardingSummary] =
     await Promise.all([
       fetchAdminClientCutoverReadiness(id),
       fetchAdminClientSourceFunnels(id),
       setupEnabled
         ? fetchAdminClientSetup(id)
         : Promise.resolve({ data: null, error: null as string | null }),
-      fetchCompanySheetsDestination(id),
-      listCompanyClientSpreadsheets(id),
-      fetchCompanyGoogleConnection(),
-      fetchCompanySheetsDispatch(id),
-      fetchOnboardingSummary(id),
+      readStored(fetchCompanySheetsDestination(id)),
+      readStored(fetchCompanyGoogleConnection()),
+      readStored(fetchCompanySheetsDispatch(id)),
+      readStored(fetchOnboardingSummary(id)),
     ]);
   const readinessData = readiness.data;
   const cutoverReport = normalizeCutoverReadinessReport(readinessData?.report);
@@ -172,12 +172,16 @@ export default async function ClientDetailPage({
             setupEnabled,
             setup,
             sheetsDestination,
-            sheetsFolder,
             googleConnection,
             sheetsDispatch,
             onboardingSummary,
           })
         )}
+        folderRead={
+          <Suspense fallback={<FolderListingFallback />}>
+            <ClientFolderListing clientAccountId={id} />
+          </Suspense>
+        }
       />
       {setupEnabled && setup.data?.item ? (
         <ClientSetupPanel client={data.item} initialSetup={setup.data.item} />
@@ -222,23 +226,72 @@ export default async function ClientDetailPage({
   );
 }
 
+function FolderListingFallback() {
+  return (
+    <p className="mt-2 text-xs text-slate-600" role="status">
+      Loading spreadsheets in the client folder…
+    </p>
+  );
+}
+
+async function ClientFolderListing({ clientAccountId }: { clientAccountId: string }) {
+  const listed = await readStored(listCompanyClientSpreadsheets(clientAccountId));
+  if (!listed?.ok) {
+    return (
+      <ClientFolderEvidence
+        availability="unavailable"
+        title={null}
+        spreadsheets={null}
+        currentSpreadsheetId={null}
+        superseded={[]}
+      />
+    );
+  }
+  const currentId = listed.data.currentDestination?.spreadsheetId ?? null;
+  return (
+    <ClientFolderEvidence
+      availability="ready"
+      title={listed.data.folder?.title ?? null}
+      spreadsheets={(listed.data.spreadsheets ?? []).map((sheet) => ({
+        spreadsheetId: sheet.spreadsheetId,
+        title: sheet.title,
+        url: sheet.url,
+      }))}
+      currentSpreadsheetId={currentId}
+      superseded={(listed.data.links ?? [])
+        .filter((link) => link.supersededAt && link.spreadsheetId !== currentId)
+        .map((link) => ({
+          spreadsheetId: link.spreadsheetId,
+          title: link.spreadsheetTitle,
+          supersededAt: link.supersededAt,
+        }))}
+    />
+  );
+}
+
+async function readStored<T>(promise: Promise<T>): Promise<T | null> {
+  try {
+    return await promise;
+  } catch {
+    return null;
+  }
+}
+
 function discoveryInput(input: {
   client: ClientAccountDetail;
   sources: Awaited<ReturnType<typeof fetchAdminClientSourceFunnels>>;
   setupEnabled: boolean;
   setup: { data: { item: ClientSetup } | null; error: string | null };
-  sheetsDestination: Awaited<ReturnType<typeof fetchCompanySheetsDestination>>;
-  sheetsFolder: Awaited<ReturnType<typeof listCompanyClientSpreadsheets>>;
-  googleConnection: Awaited<ReturnType<typeof fetchCompanyGoogleConnection>>;
-  sheetsDispatch: Awaited<ReturnType<typeof fetchCompanySheetsDispatch>>;
-  onboardingSummary: Awaited<ReturnType<typeof fetchOnboardingSummary>>;
+  sheetsDestination: Awaited<ReturnType<typeof fetchCompanySheetsDestination>> | null;
+  googleConnection: Awaited<ReturnType<typeof fetchCompanyGoogleConnection>> | null;
+  sheetsDispatch: Awaited<ReturnType<typeof fetchCompanySheetsDispatch>> | null;
+  onboardingSummary: Awaited<ReturnType<typeof fetchOnboardingSummary>> | null;
 }): OnboardingDiscoveryInput {
   const ghl = input.client.ghlDestination;
   const fieldMapping = input.client.destinationReadiness?.fieldMapping;
-  const savedDestination = input.sheetsDestination.ok ? input.sheetsDestination.data.destination : null;
-  const folder = input.sheetsFolder.ok ? input.sheetsFolder.data : null;
-  const connection = input.googleConnection.ok ? input.googleConnection.data.connection : null;
-  const summary = input.onboardingSummary.ok ? input.onboardingSummary.data : null;
+  const savedDestination = input.sheetsDestination?.ok ? input.sheetsDestination.data.destination : null;
+  const connection = input.googleConnection?.ok ? input.googleConnection.data.connection : null;
+  const summary = input.onboardingSummary?.ok ? input.onboardingSummary.data : null;
   return {
     client: {
       clientDisplayName: input.client.clientDisplayName,
@@ -265,7 +318,7 @@ function discoveryInput(input: {
       ? { availability: "ready", items: input.sources.data.items }
       : { availability: "unavailable", items: [] },
     setup: setupRead(input.setupEnabled, input.setup.data?.item ?? null),
-    sheetsDestination: input.sheetsDestination.ok
+    sheetsDestination: input.sheetsDestination?.ok
       ? {
           availability: "ready",
           destination: savedDestination
@@ -291,25 +344,8 @@ function discoveryInput(input: {
           rootFolderTitle: connection.destinationFolder?.title ?? null,
         }
       : { availability: "unavailable", email: null, connectionStatus: null, rootFolderTitle: null },
-    clientFolder: folder
-      ? {
-          availability: "ready",
-          title: folder.folder?.title ?? null,
-          url: folder.folder?.url ?? null,
-          spreadsheets: (folder.spreadsheets ?? []).map((sheet) => ({
-            spreadsheetId: sheet.spreadsheetId,
-            title: sheet.title,
-            url: sheet.url,
-          })),
-          links: (folder.links ?? []).map((link) => ({
-            spreadsheetId: link.spreadsheetId,
-            title: link.spreadsheetTitle,
-            url: link.spreadsheetUrl,
-            supersededAt: link.supersededAt,
-          })),
-        }
-      : { availability: "unavailable", title: null, url: null, spreadsheets: [], links: [] },
-    sheetsDispatch: input.sheetsDispatch.ok
+    clientFolder: { availability: "deferred", title: null, url: null, spreadsheets: [], links: [] },
+    sheetsDispatch: input.sheetsDispatch?.ok
       ? {
           availability: "ready",
           campaignDispatchEnabled: input.sheetsDispatch.data.campaignDispatchEnabled,
@@ -357,9 +393,9 @@ function proofFromSummary(summary: OnboardingSummary): OnboardingDiscoveryInput[
 }
 
 function disabledOrUnavailable(
-  summary: Awaited<ReturnType<typeof fetchOnboardingSummary>>
+  summary: Awaited<ReturnType<typeof fetchOnboardingSummary>> | null
 ): OnboardingDiscoveryInput["sourceProof"] {
-  const disabled = !summary.ok && summary.error === "onboarding_read_disabled";
+  const disabled = Boolean(summary && !summary.ok && summary.error === "onboarding_read_disabled");
   return {
     availability: disabled ? "disabled" : "unavailable",
     evidenceTruncated: false,

@@ -134,6 +134,31 @@ test("the summary shows stored sources and destinations and has no write control
   assert.equal(screen.queryByRole("textbox"), null);
   assert.ok(screen.getByRole("link", { name: "Open advanced configuration" }));
   assert.match(view.textContent ?? "", /only reads/i);
+  assert.match(view.textContent ?? "", /1 of 2 stored sources have a first lead time/);
+  assert.match(view.textContent ?? "", /Controlled test recorded/);
+  assert.match(view.textContent ?? "", /Field-value validation/);
+  assert.match(view.textContent ?? "", /Stored delivery flag/);
+  assert.match(view.textContent ?? "", /does not show that delivery ran/);
+  assert.equal(view.textContent?.includes("Test delivery verified"), false);
+  assert.equal(view.textContent?.includes("Field mapping verified"), false);
+  assert.equal(view.textContent?.includes("Live delivery enabled"), false);
+});
+
+test("the folder listing can arrive after the stored destination", () => {
+  render(
+    <OnboardingDiscoveryPanel
+      clientAccountId="ray_rodriguez"
+      model={buildOnboardingDiscovery(
+        input({
+          clientFolder: { availability: "deferred", title: null, url: null, spreadsheets: [], links: [] },
+        })
+      )}
+      folderRead={<p>Loading spreadsheets in the client folder…</p>}
+    />
+  );
+  assert.ok(screen.getByText("Ray Rodriguez Leads"));
+  assert.ok(screen.getByText("Loading spreadsheets in the client folder…"));
+  assert.equal(screen.queryByText(/stored destination above is unchanged/), null);
 });
 
 test("empty and unavailable reads explain what is missing", () => {

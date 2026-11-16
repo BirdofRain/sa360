@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import type { DiscoverySource, DiscoveryTriState, OnboardingDiscoveryModel } from "@/lib/clients/onboarding-discovery";
@@ -11,9 +12,12 @@ import {
 export function OnboardingDiscoveryPanel({
   clientAccountId,
   model,
+  folderRead = null,
 }: {
   clientAccountId: string;
   model: OnboardingDiscoveryModel;
+  /** Drive folder listing, rendered by the page outside the main client read. */
+  folderRead?: ReactNode;
 }) {
   return (
     <section
@@ -71,7 +75,7 @@ export function OnboardingDiscoveryPanel({
           <CampaignList model={model} />
         </div>
 
-        <DestinationSection clientAccountId={clientAccountId} model={model} />
+        <DestinationSection clientAccountId={clientAccountId} model={model} folderRead={folderRead} />
 
         <p className="text-sm text-slate-700">
           Advanced configuration remains available for source association and client edits during
@@ -172,9 +176,11 @@ function CampaignList({ model }: { model: OnboardingDiscoveryModel }) {
 function DestinationSection({
   clientAccountId,
   model,
+  folderRead,
 }: {
   clientAccountId: string;
   model: OnboardingDiscoveryModel;
+  folderRead: ReactNode;
 }) {
   const requested = model.requestedDestination;
   return (
@@ -203,7 +209,7 @@ function DestinationSection({
         </article>
         <article className="rounded-md border border-slate-200 p-3">
           <h4 className="text-sm font-medium">Operational Google Sheets</h4>
-          <SheetsBody model={model} />
+          <SheetsBody model={model} folderRead={folderRead} />
         </article>
         <article className="rounded-md border border-slate-200 p-3">
           <h4 className="text-sm font-medium">Operational GoHighLevel</h4>
@@ -241,7 +247,7 @@ function DestinationSection({
   );
 }
 
-function SheetsBody({ model }: { model: OnboardingDiscoveryModel }) {
+function SheetsBody({ model, folderRead }: { model: OnboardingDiscoveryModel; folderRead: ReactNode }) {
   return (
     <>
       {model.sheets.availability !== "ready" ? (
@@ -270,14 +276,66 @@ function SheetsBody({ model }: { model: OnboardingDiscoveryModel }) {
           label="Client Folders root"
           value={model.google.availability === "ready" ? model.google.rootFolderTitle ?? "Unknown" : "Unknown"}
         />
-        <Fact label="Client folder" value={folderLabel(model)} />
+        {model.clientFolder.availability === "deferred" ? null : <Fact label="Client folder" value={folderLabel(model)} />}
       </dl>
-      <FolderSpreadsheets model={model} />
-      {model.sheets.superseded.length > 0 ? (
+      {model.clientFolder.availability === "deferred" ? (
+        folderRead
+      ) : (
+        <ClientFolderEvidence
+          availability={model.clientFolder.availability}
+          title={model.clientFolder.title}
+          spreadsheets={model.clientFolder.spreadsheets}
+          currentSpreadsheetId={model.sheets.spreadsheetId}
+          superseded={model.sheets.superseded}
+        />
+      )}
+    </>
+  );
+}
+
+export function ClientFolderEvidence({
+  availability,
+  title,
+  spreadsheets,
+  currentSpreadsheetId,
+  superseded,
+}: {
+  availability: "ready" | "unavailable";
+  title: string | null;
+  spreadsheets: Array<{ spreadsheetId: string; title: string; url: string }> | null;
+  currentSpreadsheetId: string | null;
+  superseded: Array<{ spreadsheetId: string; title: string | null; supersededAt: string | null }>;
+}) {
+  return (
+    <div data-testid="client-folder-evidence">
+      {availability !== "ready" ? (
+        <p className="mt-2 text-xs text-amber-900" role="status">
+          Spreadsheets in the client folder could not be loaded. The stored destination above is unchanged.
+        </p>
+      ) : !title ? (
+        <p className="mt-2 text-xs text-muted-foreground">
+          No client folder is associated. The company Client Folders root is not used as this client&apos;s folder.
+        </p>
+      ) : !spreadsheets || spreadsheets.length === 0 ? (
+        <p className="mt-2 text-xs text-muted-foreground">The associated folder has no spreadsheets in the stored list.</p>
+      ) : (
+        <div className="mt-2">
+          <p className="text-xs font-medium text-slate-700">Spreadsheets in {title}</p>
+          <ul className="mt-1 grid gap-1">
+            {spreadsheets.map((sheet) => (
+              <li key={sheet.spreadsheetId} className="text-xs">
+                <span className="font-medium">{sheet.title}</span>
+                {currentSpreadsheetId === sheet.spreadsheetId ? " — current destination" : ""}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {superseded.length > 0 ? (
         <div className="mt-2">
           <p className="text-xs font-medium text-slate-700">Superseded spreadsheet links</p>
           <ul className="mt-1 grid gap-1">
-            {model.sheets.superseded.map((link) => (
+            {superseded.map((link) => (
               <li key={`${link.spreadsheetId}-${link.supersededAt}`} className="text-xs text-slate-600">
                 {link.title ?? link.spreadsheetId} superseded {link.supersededAt}. This is not the current destination.
               </li>
@@ -285,39 +343,6 @@ function SheetsBody({ model }: { model: OnboardingDiscoveryModel }) {
           </ul>
         </div>
       ) : null}
-    </>
-  );
-}
-
-function FolderSpreadsheets({ model }: { model: OnboardingDiscoveryModel }) {
-  if (model.clientFolder.availability !== "ready") {
-    return (
-      <p className="mt-2 text-xs text-amber-900" role="status">
-        Spreadsheets in the client folder could not be loaded.
-      </p>
-    );
-  }
-  if (!model.clientFolder.title) {
-    return (
-      <p className="mt-2 text-xs text-muted-foreground">
-        No client folder is associated. The company Client Folders root is not used as this client&apos;s folder.
-      </p>
-    );
-  }
-  if (!model.clientFolder.spreadsheets || model.clientFolder.spreadsheets.length === 0) {
-    return <p className="mt-2 text-xs text-muted-foreground">The associated folder has no spreadsheets in the stored list.</p>;
-  }
-  return (
-    <div className="mt-2">
-      <p className="text-xs font-medium text-slate-700">Spreadsheets in the associated folder</p>
-      <ul className="mt-1 grid gap-1">
-        {model.clientFolder.spreadsheets.map((sheet) => (
-          <li key={sheet.spreadsheetId} className="text-xs">
-            <span className="font-medium">{sheet.title}</span>
-            {model.sheets.spreadsheetId === sheet.spreadsheetId ? " — current destination" : ""}
-          </li>
-        ))}
-      </ul>
     </div>
   );
 }

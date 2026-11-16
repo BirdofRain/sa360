@@ -93,7 +93,7 @@ export type OnboardingDiscoveryModel = {
     rootFolderTitle: string | null;
   };
   clientFolder: {
-    availability: "ready" | "unavailable";
+    availability: "ready" | "unavailable" | "deferred";
     title: string | null;
     url: string | null;
     spreadsheets: Array<{ spreadsheetId: string; title: string; url: string }> | null;
@@ -168,7 +168,8 @@ export type OnboardingDiscoveryInput = {
     rootFolderTitle: string | null;
   };
   clientFolder: {
-    availability: "ready" | "unavailable";
+    /** Deferred means the Drive listing is loaded outside the main page read. */
+    availability: "ready" | "unavailable" | "deferred";
     title: string | null;
     url: string | null;
     spreadsheets: Array<{ spreadsheetId: string; title: string; url: string }>;
@@ -216,10 +217,13 @@ export function buildOnboardingDiscovery(input: OnboardingDiscoveryInput): Onboa
     sourceIdentifiedCheck(input, sources),
     leadObservedCheck(input, sources),
     associationCheck(input, sources),
+    sourceEventCheck(input, sources),
     destinationCheck(input, sheets.configured, ghl.configured),
     permissionsCheck(input, sheets),
-    fieldMappingCheck(input, ghl, sheets.configured),
-    testDeliveryCheck(input),
+    publishedColumnMapCheck(input, ghl, sheets.configured),
+    fieldValueValidationCheck(),
+    deliveryReceiptCheck(input),
+    controlledTestCheck(input),
     liveDeliveryCheck(input, ghl.deliveryEnabled),
   ];
 
@@ -373,37 +377,29 @@ function clientRecordCheck(input: OnboardingDiscoveryInput): DiscoveryCheck {
 }
 
 function sourceIdentifiedCheck(input: OnboardingDiscoveryInput, sources: DiscoverySource[]): DiscoveryCheck {
-  if (input.sources.availability !== "ready") {
-    return check("source_identified", "Source page identified", "unknown", "recorded", "Source records could not be loaded.");
-  }
-  const identified = sources.filter((source) => source.identified === "yes");
-  if (identified.length === 0) {
-    return check("source_identified", "Source page identified", "no", "recorded", "No stored source has a page URL, slug, or provider funnel id.");
-  }
-  return check(
-    "source_identified",
-    "Source page identified",
-    "yes",
-    "recorded",
-    `${identified.length} stored source ${identified.length === 1 ? "page is" : "pages are"} identified.`
-  );
+  return sourceEvidenceCheck({
+    id: "source_identified",
+    label: "Source page identified",
+    availability: input.sources.availability,
+    matched: sources.filter((source) => source.identified === "yes").length,
+    total: sources.length,
+    evidence: "a page identity",
+    none: "No stored source has a page URL, slug, or provider funnel id.",
+    unavailable: "Source records could not be loaded.",
+  });
 }
 
 function leadObservedCheck(input: OnboardingDiscoveryInput, sources: DiscoverySource[]): DiscoveryCheck {
-  if (input.sources.availability !== "ready") {
-    return check("lead_observed", "Real lead observed", "unknown", "recorded", "Source records could not be loaded.");
-  }
-  const observed = sources.filter((source) => source.observed === "yes");
-  if (observed.length === 0) {
-    return check("lead_observed", "Real lead observed", "no", "recorded", "No stored source has a first lead time.");
-  }
-  return check(
-    "lead_observed",
-    "Real lead observed",
-    "yes",
-    "recorded",
-    `${observed.length} stored source ${observed.length === 1 ? "has" : "have"} a first lead time.`
-  );
+  return sourceEvidenceCheck({
+    id: "lead_observed",
+    label: "Real lead observed",
+    availability: input.sources.availability,
+    matched: sources.filter((source) => source.observed === "yes").length,
+    total: sources.length,
+    evidence: "a first lead time",
+    none: "No stored source has a first lead time.",
+    unavailable: "Source records could not be loaded.",
+  });
 }
 
 function associationCheck(input: OnboardingDiscoveryInput, sources: DiscoverySource[]): DiscoveryCheck {
@@ -416,22 +412,92 @@ function associationCheck(input: OnboardingDiscoveryInput, sources: DiscoverySou
       "Source records could not be loaded."
     );
   }
-  const confirmed = sources.filter((source) => source.associated === "yes");
-  if (confirmed.length === 0) {
+  return sourceEvidenceCheck({
+    id: "association_confirmed",
+    label: "Source association confirmed",
+    availability: "ready",
+    matched: sources.filter((source) => source.associated === "yes").length,
+    total: sources.length,
+    evidence: "a confirmed association",
+    none: "No source association is confirmed. A suggestion is not ownership.",
+    unavailable: "Source records could not be loaded.",
+  });
+}
+
+function sourceEventCheck(input: OnboardingDiscoveryInput, sources: DiscoverySource[]): DiscoveryCheck {
+  if (input.sources.availability !== "ready") {
+    return check("source_event_recorded", "Source event recorded", "unknown", "recorded", "Source records could not be loaded.");
+  }
+  if (input.sourceProof.availability !== "ready") {
     return check(
-      "association_confirmed",
-      "Source association confirmed",
-      "no",
+      "source_event_recorded",
+      "Source event recorded",
+      "unknown",
       "recorded",
-      "No source association is confirmed. A suggestion is not ownership."
+      "Source event evidence could not be loaded. A confirmed association is not a source event."
     );
   }
+  const unresolved = sources.some((source) => source.verified === "unknown");
+  const matched = sources.filter((source) => source.verified === "yes").length;
+  if (unresolved && matched === 0) {
+    return check(
+      "source_event_recorded",
+      "Source event recorded",
+      "unknown",
+      "recorded",
+      "Source event evidence is incomplete. A source missing from that read is not treated as unverified."
+    );
+  }
+  if (unresolved) {
+    return check(
+      "source_event_recorded",
+      "Source event recorded",
+      "yes",
+      "recorded",
+      `${matched} of ${sources.length} stored sources have a source event id. The event read did not include the others.`,
+      "Partial"
+    );
+  }
+  return sourceEvidenceCheck({
+    id: "source_event_recorded",
+    label: "Source event recorded",
+    availability: "ready",
+    matched,
+    total: sources.length,
+    evidence: "a source event id",
+    none: "No stored source has a source event id. Association is not event evidence.",
+    unavailable: "Source event evidence could not be loaded.",
+  });
+}
+
+function sourceEvidenceCheck(input: {
+  id: string;
+  label: string;
+  availability: "ready" | "unavailable";
+  matched: number;
+  total: number;
+  evidence: string;
+  none: string;
+  unavailable: string;
+}): DiscoveryCheck {
+  if (input.availability !== "ready") {
+    return check(input.id, input.label, "unknown", "recorded", input.unavailable);
+  }
+  if (input.matched === 0) {
+    return check(input.id, input.label, "no", "recorded", input.none);
+  }
+  if (input.matched === input.total) {
+    const noun = input.total === 1 ? "source has" : "sources have";
+    return check(input.id, input.label, "yes", "recorded", `All ${input.total} stored ${noun} ${input.evidence}.`);
+  }
+  const others = input.total - input.matched;
   return check(
-    "association_confirmed",
-    "Source association confirmed",
+    input.id,
+    input.label,
     "yes",
     "recorded",
-    `${confirmed.length} source ${confirmed.length === 1 ? "association is" : "associations are"} confirmed.`
+    `${input.matched} of ${input.total} stored sources have ${input.evidence}. ${others === 1 ? "The other source does not." : "The others do not."}`,
+    "Partial"
   );
 }
 
@@ -516,136 +582,150 @@ function permissionPhrase(leg: PermissionLeg): string {
   return "unknown";
 }
 
-function fieldMappingCheck(
+function publishedColumnMapCheck(
   input: OnboardingDiscoveryInput,
   ghl: OnboardingDiscoveryModel["ghl"],
   sheetsConfigured: boolean | null
 ): DiscoveryCheck {
   const published = input.sourceProof.availability === "ready" ? input.sourceProof.fieldMapVerified : null;
+  const ghlNote =
+    ghl.fieldMappingComplete === true
+      ? " The GoHighLevel readiness assessment reports core fields mapped. That assessment is not a published column map and does not validate delivered values."
+      : "";
   if (published === true) {
     return check(
-      "field_mapping_verified",
-      "Field mapping verified",
+      "published_column_map",
+      "Published column map",
       "yes",
-      "verified",
-      "The onboarding read reports a published column map or a bound header that matches it."
+      "recorded",
+      `A published column map or a bound header match is stored. This is not an end-to-end check of delivered field values.${ghlNote}`
     );
   }
   if (published === false && sheetsConfigured === true) {
     return check(
-      "field_mapping_verified",
-      "Field mapping verified",
+      "published_column_map",
+      "Published column map",
       "no",
-      "verified",
-      "A Company Sheets destination is stored and the onboarding read does not report a verified published column map."
+      "recorded",
+      `A Company Sheets destination is stored and this read does not report a published column map or a matching bound header. Delivered field values were not validated.${ghlNote}`
     );
   }
-  if (published === null && sheetsConfigured === true) {
+  if (published === null || sheetsConfigured === null || input.sourceProof.availability !== "ready") {
     return check(
-      "field_mapping_verified",
-      "Field mapping verified",
+      "published_column_map",
+      "Published column map",
       "unknown",
-      "verified",
-      "A Company Sheets destination is stored, and the published column map was not included in the read."
-    );
-  }
-  if (sheetsConfigured !== true && ghl.fieldMappingComplete === true) {
-    return check(
-      "field_mapping_verified",
-      "Field mapping verified",
-      "yes",
-      "verified",
-      "The GoHighLevel readiness assessment reports every core field mapped. This is not a Google column map."
-    );
-  }
-  if (sheetsConfigured !== true && ghl.fieldMappingComplete === false) {
-    return check(
-      "field_mapping_verified",
-      "Field mapping verified",
-      "no",
-      "verified",
-      "The GoHighLevel readiness assessment still has unmapped core fields."
-    );
-  }
-  if (input.sourceProof.availability !== "ready" || sheetsConfigured === null || published === null) {
-    return check(
-      "field_mapping_verified",
-      "Field mapping verified",
-      "unknown",
-      "verified",
-      "Field-mapping evidence could not be loaded. A setup note is not verification."
+      "recorded",
+      "The published column map could not be loaded. A missing map is not treated as unpublished, and delivered field values were not validated."
     );
   }
   return check(
-    "field_mapping_verified",
-    "Field mapping verified",
+    "published_column_map",
+    "Published column map",
     "no",
-    "verified",
-    "No published column map or completed GoHighLevel core field map is recorded."
+    "recorded",
+    `No published column map is recorded. Delivered field values were not validated.${ghlNote}`
   );
 }
 
-function testDeliveryCheck(input: OnboardingDiscoveryInput): DiscoveryCheck {
+function fieldValueValidationCheck(): DiscoveryCheck {
+  return check(
+    "field_value_validation",
+    "Field-value validation",
+    "unknown",
+    "recorded",
+    "This read does not validate delivered field values. A published column map, a bound header, or a GoHighLevel core-field assessment is not that check."
+  );
+}
+
+function deliveryReceiptCheck(input: OnboardingDiscoveryInput): DiscoveryCheck {
   if (input.sourceProof.availability !== "ready") {
     return check(
-      "test_delivery_verified",
-      "Test delivery verified",
+      "delivery_receipt",
+      "Delivery receipt recorded",
       "unknown",
-      "verified",
-      "Delivery evidence could not be loaded. A setup checkbox or review mark is not a test delivery."
+      "recorded",
+      "Delivery receipts could not be loaded. A setup checkbox or review mark is not a receipt, and a receipt is not a controlled test."
     );
   }
   const delivered = input.sourceProof.sources.some((source) => source.deliverySatisfied);
-  if (delivered || input.sourceProof.writerReceiptVerified === true) {
+  const writer = input.sourceProof.writerReceiptVerified === true;
+  if (delivered || writer) {
+    const parts = [
+      delivered ? "A source proof records a past Sheets or GoHighLevel delivery." : null,
+      writer ? "A Sheets writer receipt is stored." : null,
+    ].filter((part): part is string => Boolean(part));
     return check(
-      "test_delivery_verified",
-      "Test delivery verified",
+      "delivery_receipt",
+      "Delivery receipt recorded",
       "yes",
-      "verified",
-      "A stored source proof or Sheets writer receipt records a delivery."
+      "recorded",
+      `${parts.join(" ")} This is historical delivery evidence, not a controlled test.`
     );
   }
   return check(
-    "test_delivery_verified",
-    "Test delivery verified",
+    "delivery_receipt",
+    "Delivery receipt recorded",
     "no",
-    "verified",
-    "No stored source proof records a delivery, and no Sheets writer receipt is recorded. A setup checkbox or review mark is not a test delivery."
+    "recorded",
+    "No past Sheets or GoHighLevel delivery receipt is stored in this read. That is not a statement about a controlled test."
+  );
+}
+
+function controlledTestCheck(input: OnboardingDiscoveryInput): DiscoveryCheck {
+  if (input.sourceProof.availability !== "ready") {
+    return check(
+      "controlled_test",
+      "Controlled test recorded",
+      "unknown",
+      "recorded",
+      "A controlled test was not included in this read. A historical delivery receipt is not a controlled test."
+    );
+  }
+  return check(
+    "controlled_test",
+    "Controlled test recorded",
+    "unknown",
+    "recorded",
+    "This read does not identify a controlled test. A past delivery receipt or a Sheets writer receipt is not a controlled test."
   );
 }
 
 function liveDeliveryCheck(input: OnboardingDiscoveryInput, ghlDeliveryEnabled: boolean): DiscoveryCheck {
-  const known = [
-    ghlDeliveryEnabled,
-    ...input.client.routingRules.map((rule) => rule.deliveryEnabled),
-  ];
-  if (input.sheetsDispatch.availability === "ready") {
-    known.push(input.sheetsDispatch.campaignDispatchEnabled, input.sheetsDispatch.agedDispatchEnabled);
-  }
-  if (known.some(Boolean)) {
+  const ruleOn = input.client.routingRules.some((rule) => rule.deliveryEnabled);
+  const sheetsKnown = input.sheetsDispatch.availability === "ready";
+  const campaignOn = sheetsKnown && input.sheetsDispatch.campaignDispatchEnabled;
+  const agedOn = sheetsKnown && input.sheetsDispatch.agedDispatchEnabled;
+  const enabled = [
+    ghlDeliveryEnabled ? "the GoHighLevel delivery flag" : null,
+    ruleOn ? "a routing-rule delivery flag" : null,
+    campaignOn ? "the Sheets campaign dispatch flag" : null,
+    agedOn ? "the Sheets aged dispatch flag" : null,
+  ].filter((item): item is string => Boolean(item));
+  if (enabled.length > 0) {
     return check(
-      "live_delivery_enabled",
-      "Live delivery enabled",
+      "stored_delivery_flag",
+      "Stored delivery flag",
       "yes",
-      "recorded",
-      "At least one stored destination or routing rule has delivery enabled. This page did not change it."
+      "flag",
+      `${enabled.join(", ")} ${enabled.length === 1 ? "is" : "are"} on in stored configuration. A stored flag does not show that delivery ran or that a lead was delivered. This page did not change the flag.`
     );
   }
-  if (input.sheetsDispatch.availability !== "ready") {
+  if (!sheetsKnown) {
     return check(
-      "live_delivery_enabled",
-      "Live delivery enabled",
+      "stored_delivery_flag",
+      "Stored delivery flag",
       "unknown",
-      "recorded",
-      "Sheets dispatch could not be loaded. GoHighLevel and routing-rule delivery flags that did load are off."
+      "flag",
+      "Sheets dispatch flags could not be loaded. GoHighLevel and routing-rule flags that did load are off. This does not report whether an earlier delivery succeeded."
     );
   }
   return check(
-    "live_delivery_enabled",
-    "Live delivery enabled",
+    "stored_delivery_flag",
+    "Stored delivery flag",
     "no",
-    "recorded",
-    "Stored GoHighLevel, routing-rule, and Sheets dispatch flags are off."
+    "flag",
+    "The stored GoHighLevel, routing-rule, and Sheets dispatch flags that loaded are off. This does not report whether an earlier delivery succeeded."
   );
 }
 
@@ -653,22 +733,29 @@ function check(
   id: string,
   label: string,
   state: DiscoveryTriState,
-  kind: "recorded" | "verified",
-  detail: string
+  kind: "recorded" | "verified" | "flag",
+  detail: string,
+  statusLabel?: string
 ): DiscoveryCheck {
-  const statusLabel =
-    kind === "verified"
+  const derived =
+    kind === "flag"
       ? state === "yes"
-        ? "Verified"
+        ? "On"
         : state === "no"
-          ? "Not verified"
+          ? "Off"
           : "Unknown"
-      : state === "yes"
-        ? "Recorded"
-        : state === "no"
-          ? "Not recorded"
-          : "Unknown";
-  return { id, label, state, statusLabel, detail };
+      : kind === "verified"
+        ? state === "yes"
+          ? "Verified"
+          : state === "no"
+            ? "Not verified"
+            : "Unknown"
+        : state === "yes"
+          ? "Recorded"
+          : state === "no"
+            ? "Not recorded"
+            : "Unknown";
+  return { id, label, state, statusLabel: statusLabel ?? derived, detail };
 }
 
 function blankToNull(value: string | null | undefined): string | null {

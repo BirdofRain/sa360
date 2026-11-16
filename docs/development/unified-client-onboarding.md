@@ -45,12 +45,20 @@ The client detail page now shows a read-only summary before the setup request:
   Folders root, the associated client folder, spreadsheets in that folder,
   access status, write readiness, destination revision, and superseded links.
 - Sharing email is labeled "Share spreadsheet with (email)" and is not applied.
-- The nine setup lines are derived from stored records. A failed read stays
-  unknown instead of looking empty.
+- Progress lines name the record they use. A published column map is not
+  field-value validation. A past delivery receipt or Sheets writer receipt is
+  not a controlled test. A stored delivery flag is not proof that delivery ran.
+  When only some sources have a page, a lead, an association, or a source
+  event, the line says how many of the total. A failed read stays unknown.
 - Advanced configuration stays on the page and says that it can write.
 
 This page does not associate a source, save a destination, share a file,
 publish a map, send a test, or change a delivery flag.
+
+The Company Sheets destination, Google connection, and dispatch status are
+stored records and load with the client. The Drive folder listing streams in
+its own section. If that listing fails, the client and the stored destination
+still render.
 
 ## Later changes
 
@@ -93,8 +101,9 @@ publish a map, send a test, or change a delivery flag.
   or verified.
 - A Sheets destination, an absent client folder, a permission failure, a
   superseded spreadsheet, and an unavailable read each have their own state.
-- Setup review and the webhook or test checkboxes do not flip verification,
-  field mapping, test delivery, or live delivery.
-- Live delivery is shown from stored flags only. Ray Rodriguez, and every other
-  client, is not updated by opening the page.
+- Setup review and the webhook or test checkboxes do not create a delivery
+  receipt, a controlled test, a published column map, or a delivery flag.
+- A stored delivery flag is labeled as configuration. It does not claim that a
+  lead was delivered. Ray Rodriguez, and every other client, is not updated by
+  opening the page.
 - No feature flag, webhook, intake path, routing rule, or delivery writer changes.

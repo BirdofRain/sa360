@@ -187,8 +187,9 @@ test("a form vendor and a review checkbox do not verify or assign a traffic plat
 
   assert.equal(model.sources[0]?.trafficPlatform, null);
   assert.equal(model.sources[0]?.verified, "no");
-  assert.equal(state(model, "test_delivery_verified").state, "no");
-  assert.match(state(model, "test_delivery_verified").detail, /checkbox|review/i);
+  assert.equal(state(model, "delivery_receipt").state, "no");
+  assert.equal(state(model, "controlled_test").state, "unknown");
+  assert.match(state(model, "controlled_test").detail, /not a controlled test/i);
   assert.equal(state(model, "association_confirmed").state, "yes");
   assert.equal(state(model, "lead_observed").state, "yes");
 });
@@ -209,7 +210,8 @@ test("an unavailable source read and a truncated proof stay unknown", () => {
   assert.equal(state(unavailable, "source_identified").state, "unknown");
   assert.equal(state(unavailable, "lead_observed").state, "unknown");
   assert.equal(state(unavailable, "association_confirmed").state, "unknown");
-  assert.equal(state(unavailable, "test_delivery_verified").state, "unknown");
+  assert.equal(state(unavailable, "delivery_receipt").state, "unknown");
+  assert.equal(state(unavailable, "controlled_test").state, "unknown");
 
   const truncated = buildOnboardingDiscovery(
     input({
@@ -227,7 +229,9 @@ test("an unavailable source read and a truncated proof stay unknown", () => {
     })
   );
   assert.equal(truncated.sources[0]?.verified, "unknown");
-  assert.equal(state(truncated, "field_mapping_verified").state, "unknown");
+  assert.equal(state(truncated, "published_column_map").state, "unknown");
+  assert.equal(state(truncated, "field_value_validation").state, "unknown");
+  assert.equal(state(truncated, "source_event_recorded").state, "unknown");
 });
 
 test("a requested spreadsheet is not an operational destination", () => {
@@ -303,7 +307,8 @@ test("sheets access, a published map, and a superseded link stay separate", () =
   assert.equal(denied.sheets.accessStatus, "permission_denied");
   assert.equal(denied.sheets.superseded[0]?.spreadsheetId, "sheet_old");
   assert.equal(state(denied, "permissions_verified").state, "no");
-  assert.equal(state(denied, "field_mapping_verified").state, "no");
+  assert.equal(state(denied, "published_column_map").state, "no");
+  assert.match(state(denied, "published_column_map").detail, /field values were not validated/i);
   assert.equal(denied.sheets.sharingPermission, "not_granted");
 
   const verified = buildOnboardingDiscovery(
@@ -332,8 +337,12 @@ test("sheets access, a published map, and a superseded link stay separate", () =
     })
   );
   assert.equal(state(verified, "permissions_verified").state, "yes");
-  assert.equal(state(verified, "field_mapping_verified").state, "yes");
-  assert.equal(state(verified, "test_delivery_verified").state, "yes");
+  assert.equal(state(verified, "published_column_map").state, "yes");
+  assert.match(state(verified, "published_column_map").detail, /not an end-to-end check/i);
+  assert.equal(state(verified, "field_value_validation").state, "unknown");
+  assert.equal(state(verified, "delivery_receipt").state, "yes");
+  assert.match(state(verified, "delivery_receipt").detail, /not a controlled test/i);
+  assert.equal(state(verified, "controlled_test").state, "unknown");
 });
 
 test("a connected GoHighLevel status is not permission verification, and live delivery is read from stored flags", () => {
@@ -358,7 +367,8 @@ test("a connected GoHighLevel status is not permission verification, and live de
   assert.equal(state(connected, "destination_configured").state, "yes");
   assert.equal(state(connected, "permissions_verified").state, "unknown");
   assert.match(state(connected, "permissions_verified").detail, /not a permission verification/);
-  assert.equal(state(connected, "live_delivery_enabled").state, "unknown");
+  assert.equal(state(connected, "stored_delivery_flag").state, "unknown");
+  assert.match(state(connected, "stored_delivery_flag").detail, /does not report whether an earlier delivery succeeded/);
 
   const live = buildOnboardingDiscovery(
     input({
@@ -376,9 +386,79 @@ test("a connected GoHighLevel status is not permission verification, and live de
       },
     })
   );
-  assert.equal(state(live, "live_delivery_enabled").state, "yes");
-  assert.match(state(live, "live_delivery_enabled").detail, /did not change/);
+  assert.equal(state(live, "stored_delivery_flag").state, "yes");
+  assert.equal(state(live, "stored_delivery_flag").statusLabel, "On");
+  assert.match(state(live, "stored_delivery_flag").detail, /stored flag does not show that delivery ran/);
+  assert.doesNotMatch(state(live, "stored_delivery_flag").detail, /succeeded|executed/);
   assert.equal(live.ghl.deliveryEnabled, true);
+});
+
+test("a delivery receipt, a column map, a stored flag, and partial sources stay distinct", () => {
+  const model = buildOnboardingDiscovery(
+    input({
+      client: {
+        clientDisplayName: "Ray Rodriguez",
+        createdAt: "2026-01-04T15:00:00.000Z",
+        ghlDestination: {
+          destinationSubaccountIdGhl: "loc_ray",
+          locationName: "Ray Rodriguez",
+          ghlConnectionStatus: "connected",
+          deliveryEnabled: true,
+          fieldMappingComplete: true,
+        },
+        routingRules: [],
+      },
+      sources: {
+        availability: "ready",
+        items: [
+          source({
+            id: "seen",
+            parentUrlKey: "example.com/seen",
+            providerFunnelId: "form_seen",
+            firstSeenAt: "2026-02-01T00:00:00.000Z",
+            lastSeenAt: "2026-02-02T00:00:00.000Z",
+            associationStatus: "confirmed",
+          }),
+          source({ id: "quiet", associationStatus: "suggested" }),
+        ],
+      },
+      sourceProof: {
+        availability: "ready",
+        evidenceTruncated: false,
+        fieldMapVerified: false,
+        writerReceiptVerified: true,
+        sources: [
+          {
+            sourceFunnelId: "seen",
+            sourceKind: "leadcapture",
+            observedEventId: "evt_seen",
+            observedAt: "2026-02-02T00:00:00.000Z",
+            matchedRuleId: null,
+            deliverySatisfied: true,
+          },
+        ],
+      },
+      sheetsDestination: { availability: "ready", destination: null },
+    })
+  );
+
+  assert.equal(state(model, "delivery_receipt").state, "yes");
+  assert.equal(state(model, "delivery_receipt").statusLabel, "Recorded");
+  assert.match(state(model, "delivery_receipt").detail, /historical delivery evidence, not a controlled test/);
+  assert.match(state(model, "delivery_receipt").detail, /Sheets writer receipt/);
+  assert.equal(state(model, "controlled_test").state, "unknown");
+  assert.equal(state(model, "controlled_test").statusLabel, "Unknown");
+  assert.equal(state(model, "published_column_map").state, "no");
+  assert.match(state(model, "published_column_map").detail, /not a published column map/);
+  assert.match(state(model, "published_column_map").detail, /does not validate delivered values/);
+  assert.equal(state(model, "field_value_validation").state, "unknown");
+  assert.equal(state(model, "stored_delivery_flag").statusLabel, "On");
+  assert.match(state(model, "stored_delivery_flag").detail, /does not show that delivery ran or that a lead was delivered/);
+  assert.equal(state(model, "source_identified").statusLabel, "Partial");
+  assert.match(state(model, "source_identified").detail, /1 of 2 stored sources have a page identity\. The other source does not/);
+  assert.match(state(model, "lead_observed").detail, /1 of 2 stored sources have a first lead time/);
+  assert.match(state(model, "association_confirmed").detail, /1 of 2 stored sources have a confirmed association/);
+  assert.match(state(model, "source_event_recorded").detail, /1 of 2 stored sources have a source event id/);
 });
 
 test("a failed sheets read is not reported as an empty destination", () => {

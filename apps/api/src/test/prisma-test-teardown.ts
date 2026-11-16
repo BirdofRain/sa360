@@ -21,6 +21,10 @@ import {
   closeExternalWebhookQueue,
   wasExternalWebhookQueueOpened,
 } from "../services/external-webhook/external-webhook-queue.js";
+import {
+  closeExternalWebhookNoticeQueue,
+  wasExternalWebhookNoticeQueueOpened,
+} from "../services/external-webhook-notification/notice-queue.js";
 
 const TEARDOWN_TIMEOUT_MS = 5_000;
 
@@ -59,6 +63,9 @@ after(async () => {
   }
   if (wasExternalWebhookQueueOpened()) {
     await withTeardownTimeout("closeExternalWebhookQueue", () => closeExternalWebhookQueue());
+  }
+  if (wasExternalWebhookNoticeQueueOpened()) {
+    await withTeardownTimeout("closeExternalWebhookNoticeQueue", () => closeExternalWebhookNoticeQueue());
   }
   await disconnectRedisForTests(TEARDOWN_TIMEOUT_MS);
   await withTeardownTimeout("prisma.$disconnect", () => prisma.$disconnect());

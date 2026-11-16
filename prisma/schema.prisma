@@ -4289,6 +4289,8 @@ model ExternalWebhookDeliveryAttempt {
   @@unique([clientAccountId, sourceLeadEventId], map: "ExternalWebhookDeliveryAttempt_client_event_key")
   @@index([state, createdAt])
   @@index([destinationId])
+  /// Pages persisted acceptances without scanning every attempt.
+  @@index([httpAcceptedAt, id], map: "ExternalWebhookDeliveryAttempt_accepted_page_idx")
 }
 
 /// One accepted admin write of an external webhook URL, HMAC secret, or on/off choice.
@@ -4406,6 +4408,15 @@ model ExternalWebhookNotificationReceipt {
   @@index([status, claimedAt])
   @@index([attemptId])
   @@index([clientAccountId, channel])
+}
+
+/// One row. The discovery pass moves it forward only through acceptances
+/// older than the lag window. Replays of the same attempt do not move it backward.
+model ExternalWebhookNoticeDiscoveryCursor {
+  id                 String    @id
+  lastHttpAcceptedAt DateTime?
+  lastAttemptId      String?
+  updatedAt          DateTime  @updatedAt
 }
 
 /// One accepted Admin C.O.C. write of a notification recipient or on/off choice.

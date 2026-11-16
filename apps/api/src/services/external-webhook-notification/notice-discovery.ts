@@ -61,7 +61,13 @@ export async function discoverExternalWebhookNotices(
     env?: NodeJS.ProcessEnv;
     now?: Date;
     limit?: number;
-    enqueue?: (receiptId: string) => Promise<void>;
+    enqueue?: (receiptId: string) => Promise<unknown>;
+    /**
+     * Production leaves this unset, which is unproven. `proven` is only valid
+     * after externalWebhookNoticeTransactionVisibility saw another role's
+     * open transaction. It is not inferred from pg_roles.
+     */
+    transactionVisibility?: "proven" | "unproven";
     emailConfigured?: boolean;
     twilioConfig?: TwilioConfigResult;
   } = {}
@@ -77,10 +83,15 @@ export async function discoverExternalWebhookNotices(
   let enqueued = 0;
   let scanned = 0;
 
-  const revisitAfter = await oldestOtherTransactionStart(db);
-  if (stored?.lastHttpAcceptedAt && stored.lastAttemptId != null) {
+  const visibility = input.transactionVisibility ?? "unproven";
+  if (visibility === "proven" && stored?.lastHttpAcceptedAt && stored.lastAttemptId != null) {
     await releaseSettledDecisions(db, stored.lastHttpAcceptedAt, stored.lastAttemptId);
   }
+  const changed = await recheckRevisitableDecisions(db, now, limit, env, input, (receiptId) => {
+    enqueued += 1;
+    return input.enqueue?.(receiptId) ?? Promise.resolve();
+  });
+  scanned += changed;
   const holes =
     stored?.lastHttpAcceptedAt && stored.lastAttemptId != null
       ? await findUncoveredAcceptances(db, stored.lastHttpAcceptedAt, stored.lastAttemptId, limit)
@@ -88,7 +99,7 @@ export async function discoverExternalWebhookNotices(
   let halted = false;
   for (const attempt of holes) {
     scanned += 1;
-    const settled = await settleAttempt(db, attempt, env, input, revisitAfter, (receiptId) => {
+    const settled = await settleAttempt(db, attempt, env, input, now, (receiptId) => {
       enqueued += 1;
       return input.enqueue?.(receiptId) ?? Promise.resolve();
     });
@@ -121,7 +132,7 @@ export async function discoverExternalWebhookNotices(
   for (const attempt of page) {
     if (!attempt.httpAcceptedAt) continue;
     scanned += 1;
-    const settled = await settleAttempt(db, { id: attempt.id, httpAcceptedAt: attempt.httpAcceptedAt }, env, input, revisitAfter, (receiptId) => {
+    const settled = await settleAttempt(db, { id: attempt.id, httpAcceptedAt: attempt.httpAcceptedAt }, env, input, now, (receiptId) => {
       enqueued += 1;
       return input.enqueue?.(receiptId) ?? Promise.resolve();
     });
@@ -233,18 +244,74 @@ async function findUncoveredAcceptances(
   `;
 }
 
-async function oldestOtherTransactionStart(db: PrismaClient): Promise<Date | null> {
+/**
+ * Proven only when this session can read xact_start for a backend whose
+ * role is different from current_user. Seeing pg_roles, or seeing another
+ * session of the same role, is not complete visibility. Otherwise unproven:
+ * discovery does not drop an ineligible decision. This does not grant
+ * pg_monitor or pg_read_all_stats.
+ */
+export async function externalWebhookNoticeTransactionVisibility(
+  db: PrismaClient,
+  observed: { backendPid: number }
+): Promise<"proven" | "unproven"> {
   try {
-    const rows = await db.$queryRaw<Array<{ oldest: Date | null }>>`
-      SELECT min(xact_start) AS oldest
+    const rows = await db.$queryRaw<Array<{ usename: string | null; xactStart: Date | null }>>`
+      SELECT usename::text AS usename, xact_start AS "xactStart"
       FROM pg_stat_activity
-      WHERE xact_start IS NOT NULL
-        AND pid <> pg_backend_pid()
+      WHERE pid = ${observed.backendPid}
     `;
-    return rows[0]?.oldest ?? null;
+    const row = rows[0];
+    if (!row?.xactStart || !row.usename) return "unproven";
+    const who = await db.$queryRaw<Array<{ currentUser: string }>>`SELECT current_user AS "currentUser"`;
+    if (!who[0] || row.usename === who[0].currentUser) return "unproven";
+    return "proven";
   } catch {
-    return null;
+    return "unproven";
   }
+}
+
+async function recheckRevisitableDecisions(
+  db: PrismaClient,
+  now: Date,
+  limit: number,
+  env: NodeJS.ProcessEnv,
+  input: { emailConfigured?: boolean; twilioConfig?: TwilioConfigResult },
+  onPending: (receiptId: string) => Promise<unknown>
+): Promise<number> {
+  const rows = await db.externalWebhookNoticeChannelDecision.findMany({
+    where: { revisitAfter: { not: null }, reason: { in: [...REVISITABLE] } },
+    orderBy: [{ revisitAfter: "asc" }, { id: "asc" }],
+    take: limit,
+    select: { id: true, attemptId: true, channel: true },
+  });
+  let changed = 0;
+  for (const row of rows) {
+    if (row.channel !== "email" && row.channel !== "sms") continue;
+    const recorded = await recordEligibleExternalWebhookNotice(
+      db,
+      { attemptId: row.attemptId, channel: row.channel },
+      { emailConfigured: input.emailConfigured, twilioConfig: input.twilioConfig, env }
+    );
+    if (recorded.ok) {
+      await db.externalWebhookNoticeChannelDecision.delete({ where: { id: row.id } });
+      if (recorded.receipt.status === "pending") await onPending(recorded.receipt.id);
+      changed += 1;
+      continue;
+    }
+    if (isDurableIneligible(recorded.reason) && !REVISITABLE.has(recorded.reason)) {
+      await db.externalWebhookNoticeChannelDecision.update({
+        where: { id: row.id },
+        data: { reason: recorded.reason, revisitAfter: null },
+      });
+      continue;
+    }
+    await db.externalWebhookNoticeChannelDecision.update({
+      where: { id: row.id },
+      data: { revisitAfter: now },
+    });
+  }
+  return changed;
 }
 
 async function releaseSettledDecisions(db: PrismaClient, cursorAt: Date, cursorId: string): Promise<void> {
@@ -258,12 +325,11 @@ async function releaseSettledDecisions(db: PrismaClient, cursorAt: Date, cursorI
         AND NOT EXISTS (
           SELECT 1 FROM pg_stat_activity s
           WHERE s.xact_start IS NOT NULL
-            AND s.pid <> pg_backend_pid()
-            AND s.xact_start <= d."revisitAfter"
+            AND s.xact_start <= a."httpAcceptedAt"
         )
     `;
   } catch {
-    // Without a transaction snapshot the existing decision stays in place.
+    // Unproven or unreadable activity leaves the decision in the rotation.
   }
 }
 
@@ -273,7 +339,7 @@ async function settleAttempt(
   env: NodeJS.ProcessEnv,
   input: { emailConfigured?: boolean; twilioConfig?: TwilioConfigResult },
   revisitAfter: Date | null,
-  onPending: (receiptId: string) => Promise<void>
+  onPending: (receiptId: string) => Promise<unknown>
 ): Promise<boolean> {
   for (const channel of ["email", "sms"] as const) {
     const recorded = await recordEligibleExternalWebhookNotice(

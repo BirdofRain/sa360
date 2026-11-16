@@ -4428,13 +4428,14 @@ model ExternalWebhookNoticeChannelDecision {
   channel   ExternalWebhookNoticeChannel
   /// Safe reason code. No phone, address, or lead payload.
   reason    String
-  /// When set, another transaction was open at decision time. The row is
-  /// deleted and the channel is evaluated again after that transaction ends.
+  /// When set, this ineligible decision stays in the fair recheck rotation.
+  /// Null means the reason can no longer become eligible under the acceptedAt clock.
   revisitAfter DateTime?
   createdAt DateTime                     @default(now())
 
   @@unique([attemptId, channel], map: "ExternalWebhookNoticeChannelDecision_attempt_channel_key")
   @@index([attemptId])
+  @@index([revisitAfter, id], map: "ExternalWebhookNoticeChannelDecision_revisit_idx")
 }
 
 /// One accepted Admin C.O.C. write of a notification recipient or on/off choice.

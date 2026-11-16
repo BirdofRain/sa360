@@ -14,18 +14,9 @@ SMS uses the B1 Twilio adapter and the fixed SMS template. It runs only when `SA
 
 `SA360_EXTERNAL_WEBHOOK_NOTICE_DISPATCH_ENABLED` must be exact `true` before discovery or dispatch. It is unset. `SA360_SMS_NOTIFICATIONS_ENABLED` stays unset.
 
-## Callbacks are not mounted
+## Mounted, still inactive
 
-`externalWebhookNoticeCallbackRoutes` and `adminExternalWebhookNoticeDispatchRoutes` are not registered in `app.ts`. `processExternalWebhookNoticeJob` is not registered in `worker.ts`. They are not live.
-
-Reviewed follow-up, after A3's route edits have landed:
-
-```ts
-await app.register(externalWebhookNoticeCallbackRoutes);
-await app.register(adminExternalWebhookNoticeDispatchRoutes, { prefix: "/admin/v1" });
-```
-
-And in `apps/worker/src/worker.ts`, a `Worker` on `EXTERNAL_WEBHOOK_NOTICE_QUEUE` that calls `processExternalWebhookNoticeJob`.
+`externalWebhookNoticeCallbackRoutes` and `adminExternalWebhookNoticeDispatchRoutes` are registered. The notice worker and its discovery schedule are registered. `SA360_EXTERNAL_WEBHOOK_NOTICE_DISPATCH_ENABLED` is unset, so discovery, recovery, and provider calls do not run. See `docs/plans/external-webhook-lane-b5-mount.md`.
 
 Status URL: `SA360_TWILIO_STATUS_CALLBACK_URL`. Inbound URL: `SA360_TWILIO_INBOUND_CALLBACK_URL`. Both signatures use `SA360_TWILIO_AUTH_TOKEN` over the public URL plus the sorted form fields. An invalid signature returns 403 and does not write.
 
@@ -35,4 +26,4 @@ Status URL: `SA360_TWILIO_STATUS_CALLBACK_URL`. Inbound URL: `SA360_TWILIO_INBOU
 
 ## Activation blockers
 
-Mount the two plugins and the worker. Set the notice dispatch flag only on the process that should send. Set Resend for email. Set the Twilio account, LAL Messaging Service SID, and exact SMS flag for SMS. Set the two public callback URLs to the mounted routes and enable Advanced Opt-Out in Twilio. Do not treat Resend acceptance as inbox delivery.
+The routes and worker are mounted and the flags stay off. Set the notice dispatch flag only on the process that should send. Set Resend for email. Set the Twilio account, LAL Messaging Service SID, and exact SMS flag for SMS. Set the two public callback URLs to the mounted routes. Do not treat Resend acceptance as inbox delivery. The canary values are in `docs/plans/external-webhook-lane-b5-mount.md`.

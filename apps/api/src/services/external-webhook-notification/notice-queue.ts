@@ -21,10 +21,22 @@ export async function closeExternalWebhookNoticeQueue(): Promise<void> {
 }
 
 /** One job per receipt. A second add with the same id does not call the provider twice. */
-export async function enqueueExternalWebhookNotice(receiptId: string): Promise<void> {
-  await getQueue().add(
-    EXTERNAL_WEBHOOK_NOTICE_DISPATCH_JOB,
-    { receiptId },
-    { jobId: receiptId, attempts: 1, removeOnComplete: true, removeOnFail: 20 }
-  );
+export async function enqueueExternalWebhookNotice(receiptId: string): Promise<"queued" | "already_queued"> {
+  try {
+    await getQueue().add(
+      EXTERNAL_WEBHOOK_NOTICE_DISPATCH_JOB,
+      { receiptId },
+      { jobId: receiptId, attempts: 1, removeOnComplete: true, removeOnFail: 20 }
+    );
+    return "queued";
+  } catch (error) {
+    if (isAlreadyQueued(error)) return "already_queued";
+    throw error;
+  }
+}
+
+function isAlreadyQueued(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const message = "message" in error ? String(error.message) : "";
+  return message.includes("already exists") || message.includes("already waiting") || message.includes("JobIdAlreadyExists");
 }

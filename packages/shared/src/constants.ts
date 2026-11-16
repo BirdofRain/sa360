@@ -103,6 +103,16 @@ export const GHL_ASSOCIATION_DISPATCH_QUEUE = "ghl-association-dispatch";
 export const GHL_ASSOCIATION_DISPATCH_JOB = "process-ghl-association-dispatch";
 export const GHL_ASSOCIATION_DISPATCH_JOB_ID = "ghl-association-dispatch-singleton";
 
+/**
+ * Fresh-lead external webhook POST. Separate from Sheets and GHL association
+ * drains. The processor no-ops unless SA360_EXTERNAL_WEBHOOK_DELIVERY_ENABLED
+ * is the exact string true.
+ */
+export const EXTERNAL_WEBHOOK_DELIVERY_QUEUE = "external-webhook-delivery";
+export const EXTERNAL_WEBHOOK_DELIVERY_JOB = "deliver-external-webhook";
+export const EXTERNAL_WEBHOOK_DELIVERY_RECOVER_JOB = "recover-external-webhook";
+export const EXTERNAL_WEBHOOK_DELIVERY_RECOVER_JOB_ID = "external-webhook-delivery-recover";
+
 /** Guarded lead inventory review & activation (stacked on aged ingestion). */
 export const LEAD_INVENTORY_REVIEW_MAKE_AVAILABLE_CONFIRMATION =
   "MAKE REVIEWED INVENTORY AVAILABLE" as const;

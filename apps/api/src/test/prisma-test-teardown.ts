@@ -17,6 +17,10 @@ import {
   closeMetaLeadgenFetchQueue,
   wasMetaLeadgenFetchQueueOpened,
 } from "../services/source-intake/meta-leadgen-fetch-queue.service.js";
+import {
+  closeExternalWebhookQueue,
+  wasExternalWebhookQueueOpened,
+} from "../services/external-webhook/external-webhook-queue.js";
 
 const TEARDOWN_TIMEOUT_MS = 5_000;
 
@@ -52,6 +56,9 @@ after(async () => {
   }
   if (wasMetaLeadgenFetchQueueOpened()) {
     await withTeardownTimeout("closeMetaLeadgenFetchQueue", () => closeMetaLeadgenFetchQueue());
+  }
+  if (wasExternalWebhookQueueOpened()) {
+    await withTeardownTimeout("closeExternalWebhookQueue", () => closeExternalWebhookQueue());
   }
   await disconnectRedisForTests(TEARDOWN_TIMEOUT_MS);
   await withTeardownTimeout("prisma.$disconnect", () => prisma.$disconnect());

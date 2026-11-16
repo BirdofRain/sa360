@@ -4110,9 +4110,12 @@ enum ExternalWebhookAuthMode {
 }
 
 /// `recorded` means the frozen payload is stored and the request has not left SA360.
-/// `attempted` means a later sender classified the HTTP result. This foundation does not send.
+/// `sending` is the single in-flight claim. A crash leaves it sending; recovery
+/// promotes a stale claim to uncertain and does not POST again.
+/// `attempted` means the HTTP result was classified.
 enum ExternalWebhookAttemptState {
   recorded
+  sending
   attempted
 }
 
@@ -4243,6 +4246,8 @@ model ExternalWebhookDeliveryAttempt {
   httpStatus              Int?
   /// True only after the request bytes left this process. Timeout and 3xx stay true and are not retried.
   requestLeftSa360        Boolean                          @default(false)
+  /// Claims that opened a send. A retryable outcome is claimed again only while this stays below the sender cap.
+  sendCount               Int                              @default(0)
   proves                  Json                             @default("[]")
   doesNotProve            Json                             @default("[\"ghl_contact\",\"ghl_workflow\",\"ghl_note\",\"ghl_location_api_success\",\"sheets_row_appended\",\"sms_sent\",\"email_sent\"]")
   createdAt               DateTime                         @default(now())

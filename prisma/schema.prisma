@@ -4289,6 +4289,8 @@ model ExternalWebhookDeliveryAttempt {
   @@unique([clientAccountId, sourceLeadEventId], map: "ExternalWebhookDeliveryAttempt_client_event_key")
   @@index([state, createdAt])
   @@index([destinationId])
+  /// Pages persisted acceptances without scanning every attempt.
+  @@index([httpAcceptedAt, id], map: "ExternalWebhookDeliveryAttempt_accepted_page_idx")
 }
 
 /// One accepted admin write of an external webhook URL, HMAC secret, or on/off choice.
@@ -4406,6 +4408,33 @@ model ExternalWebhookNotificationReceipt {
   @@index([status, claimedAt])
   @@index([attemptId])
   @@index([clientAccountId, channel])
+}
+
+/// One row. The discovery pass moves it forward only through acceptances
+/// older than the lag window. Replays of the same attempt do not move it backward.
+model ExternalWebhookNoticeDiscoveryCursor {
+  id                 String    @id
+  lastHttpAcceptedAt DateTime?
+  lastAttemptId      String?
+  updatedAt          DateTime  @updatedAt
+}
+
+/// Durable mark that an accepted attempt was considered for one channel and
+/// was not eligible. A missing row is not a decision, so reconciliation can
+/// still create the receipt. This does not send.
+model ExternalWebhookNoticeChannelDecision {
+  id        String                       @id @default(cuid())
+  attemptId String
+  channel   ExternalWebhookNoticeChannel
+  /// Safe reason code. No phone, address, or lead payload.
+  reason    String
+  /// When set, another transaction was open at decision time. The row is
+  /// deleted and the channel is evaluated again after that transaction ends.
+  revisitAfter DateTime?
+  createdAt DateTime                     @default(now())
+
+  @@unique([attemptId, channel], map: "ExternalWebhookNoticeChannelDecision_attempt_channel_key")
+  @@index([attemptId])
 }
 
 /// One accepted Admin C.O.C. write of a notification recipient or on/off choice.

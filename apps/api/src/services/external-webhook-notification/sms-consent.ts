@@ -208,6 +208,27 @@ export async function setSmsNotificationEnabled(
   });
 }
 
+/**
+ * Suppress every client that verified this E.164.
+ * One inbound STOP or provider 21610 must not leave another account texting it.
+ * START is not a function here and does not clear these rows.
+ */
+export async function suppressSmsPhone(
+  db: PreferenceDb,
+  phoneE164: string
+): Promise<{ suppressed: number }> {
+  const phone = phoneE164.trim();
+  if (!E164.test(phone)) return { suppressed: 0 };
+  const rows = await db.clientDeliveryNotificationPreference.findMany({
+    where: { recipientPhoneE164: phone },
+    select: { clientAccountId: true },
+  });
+  for (const row of rows) {
+    await suppressSmsLocally(db, { clientAccountId: row.clientAccountId });
+  }
+  return { suppressed: rows.length };
+}
+
 /** Local STOP. Persists suppression, disables SMS, and suppresses pending SMS notices. */
 export async function suppressSmsLocally(
   db: PreferenceDb,

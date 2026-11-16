@@ -13,6 +13,7 @@ import {
   isSmsNotificationsEnabled,
   mapTwilioMessageStatus,
   postTwilioProgrammableMessage,
+  publicTwilioStatusCallbackUrl,
   readTwilioMessagingConfig,
 } from "./twilio-programmable-messaging.js";
 
@@ -140,6 +141,43 @@ test("a fake client posts the Messaging Service, sender, and message SID", async
   assert.equal(params.get("Body"), "SA360 notice");
   assert.equal(params.has("StatusCallback"), false);
   assert.equal(body.includes(TOKEN), false);
+});
+
+test("StatusCallback is posted only for a validated public HTTPS URL", async () => {
+  const publicUrl = "https://hooks.example.com/integrations/twilio/external-webhook-notice/status";
+  const captured: string[] = [];
+  const fetchImpl: typeof fetch = async (_url, init) => {
+    captured.push(new URLSearchParams(String(init?.body)).get("StatusCallback") ?? "");
+    return new Response(JSON.stringify({ sid: MESSAGE, status: "queued" }), { status: 201 });
+  };
+  const base = {
+    accountSid: ACCOUNT,
+    authToken: TOKEN,
+    messagingServiceSid: SERVICE,
+    to: TO,
+    body: "SA360 notice",
+    from: FROM,
+  };
+  const posted = await postTwilioProgrammableMessage({ ...base, statusCallback: publicUrl }, fetchImpl);
+  assert.equal(posted.ok, true);
+  if (posted.ok) {
+    assert.equal(posted.providerStatus, "queued");
+    assert.equal(posted.statusClass, "pending");
+  }
+  assert.equal(captured[0], publicUrl);
+  for (const blocked of [
+    "http://hooks.example.com/integrations/twilio/external-webhook-notice/status",
+    "https://127.0.0.1/integrations/twilio/external-webhook-notice/status",
+    "https://10.0.0.8/integrations/twilio/external-webhook-notice/status",
+    "https://hooks.example.com/admin/v1/external-webhook-notice/status",
+    "https://user:pass@hooks.example.com/integrations/twilio/external-webhook-notice/status",
+    "https://hooks.example.com/integrations/twilio/external-webhook-notice/status?token=secret",
+  ]) {
+    await postTwilioProgrammableMessage({ ...base, statusCallback: blocked }, fetchImpl);
+  }
+  assert.deepEqual(captured.slice(1), ["", "", "", "", "", ""]);
+  assert.equal(publicTwilioStatusCallbackUrl(publicUrl), publicUrl);
+  assert.equal(publicTwilioStatusCallbackUrl("https://localhost/status"), null);
 });
 
 test("the Messaging Service may omit From, and a STOP error does not echo the number", async () => {

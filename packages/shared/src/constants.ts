@@ -113,6 +113,16 @@ export const EXTERNAL_WEBHOOK_DELIVERY_JOB = "deliver-external-webhook";
 export const EXTERNAL_WEBHOOK_DELIVERY_RECOVER_JOB = "recover-external-webhook";
 export const EXTERNAL_WEBHOOK_DELIVERY_RECOVER_JOB_ID = "external-webhook-delivery-recover";
 
+/**
+ * Email and SMS notices for an already accepted external webhook.
+ * Separate from the webhook POST queue. The processor no-ops unless
+ * SA360_EXTERNAL_WEBHOOK_NOTICE_DISPATCH_ENABLED is the exact string true.
+ */
+export const EXTERNAL_WEBHOOK_NOTICE_QUEUE = "external-webhook-notice";
+export const EXTERNAL_WEBHOOK_NOTICE_DISPATCH_JOB = "dispatch-external-webhook-notice";
+export const EXTERNAL_WEBHOOK_NOTICE_DISCOVER_JOB = "discover-external-webhook-notices";
+export const EXTERNAL_WEBHOOK_NOTICE_DISCOVER_JOB_ID = "external-webhook-notice-discover";
+
 /** Guarded lead inventory review & activation (stacked on aged ingestion). */
 export const LEAD_INVENTORY_REVIEW_MAKE_AVAILABLE_CONFIRMATION =
   "MAKE REVIEWED INVENTORY AVAILABLE" as const;

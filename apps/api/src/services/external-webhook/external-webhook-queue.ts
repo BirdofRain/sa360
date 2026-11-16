@@ -1,10 +1,11 @@
 import { Queue } from "bullmq";
 import { EXTERNAL_WEBHOOK_DELIVERY_JOB, EXTERNAL_WEBHOOK_DELIVERY_QUEUE } from "@sa360/shared";
 
+import { prisma } from "../../lib/db.js";
 import { redis } from "../../lib/redis.js";
 import { isExternalWebhookDeliveryEnabled } from "./external-webhook-contract.js";
 import {
-  listRecordedExternalWebhookAttemptIds,
+  listRecoverableExternalWebhookAttemptIds,
   promoteStaleExternalWebhookSends,
 } from "./external-webhook-send.js";
 
@@ -43,19 +44,26 @@ export async function enqueueExternalWebhookAttempt(attemptId: string): Promise<
 
 /**
  * Promotes crashed in-flight claims to uncertain, then re-enqueues recorded
- * attempts when the flag is exact true. Flag off does not enqueue and does
- * not open a customer socket. Stale claims are still closed.
+ * and backoff-ready retryable attempts when the flag is exact true.
+ * Flag off does not enqueue and does not open a customer socket.
+ * A disabled destination is not selected and is not turned back on.
  */
 export async function recoverExternalWebhookDeliveries(
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  deps: {
+    now?: Date;
+    enqueue?: (attemptId: string) => Promise<void>;
+  } = {}
 ): Promise<{ promoted: number; enqueued: number }> {
-  const { promoted } = await promoteStaleExternalWebhookSends();
+  const now = deps.now ?? new Date();
+  const enqueue = deps.enqueue ?? enqueueExternalWebhookAttempt;
+  const { promoted } = await promoteStaleExternalWebhookSends(now);
   if (!isExternalWebhookDeliveryEnabled(env)) return { promoted, enqueued: 0 };
-  const ids = await listRecordedExternalWebhookAttemptIds();
+  const ids = await listRecoverableExternalWebhookAttemptIds(25, prisma, now);
   let enqueued = 0;
   for (const attemptId of ids) {
     try {
-      await enqueueExternalWebhookAttempt(attemptId);
+      await enqueue(attemptId);
       enqueued += 1;
     } catch (err) {
       const message = err instanceof Error ? err.message : "";

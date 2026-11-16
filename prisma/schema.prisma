@@ -4246,6 +4246,8 @@ model ExternalWebhookDeliveryAttempt {
   httpStatus              Int?
   /// True only after the request bytes left this process. Timeout and 3xx stay true and are not retried.
   requestLeftSa360        Boolean                          @default(false)
+  /// Claims that opened a send. A retryable outcome is claimed again only while this stays below the sender cap.
+  sendCount               Int                              @default(0)
   proves                  Json                             @default("[]")
   doesNotProve            Json                             @default("[\"ghl_contact\",\"ghl_workflow\",\"ghl_note\",\"ghl_location_api_success\",\"sheets_row_appended\",\"sms_sent\",\"email_sent\"]")
   createdAt               DateTime                         @default(now())

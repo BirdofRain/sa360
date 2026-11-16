@@ -162,7 +162,7 @@ test("external webhook delivery freezes the target, pins a public address, and d
     ]);
     const outcomes = [first.outcome, first.skipped, second.outcome, second.skipped];
     assert.equal(outcomes.includes("http_accepted"), true);
-    assert.equal(outcomes.includes("not_recorded"), true);
+    assert.equal(outcomes.includes("not_claimable"), true);
     assert.equal(posts.length, 1);
     assert.equal(posts[0]?.pinnedAddress, "8.8.8.8");
     assert.equal(posts[0]?.hostname, "hooks.example.com");
@@ -246,7 +246,7 @@ test("external webhook delivery freezes the target, pins a public address, and d
       resolve: PUBLIC,
       post: acceptedPost,
     });
-    assert.equal(replay.skipped, "not_recorded");
+    assert.equal(replay.skipped, "not_claimable");
   } finally {
     await prisma.externalWebhookDeliveryAttempt.deleteMany({ where: { clientAccountId } });
     await prisma.companySheetsDispatchIntent.deleteMany({ where: { clientAccountId } });

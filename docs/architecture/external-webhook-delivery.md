@@ -117,6 +117,8 @@ Admin key only. It would return the frozen `payloadCanonicalJson` and the receip
 
 ## Sender and acceptance event
 
+A recorded attempt, or a backoff-ready `retryable` attempt whose request never left, is claimed to `sending` before the socket opens. `sendCount` starts at 0 and increments on each claim. Three never-left failures end as terminal `failed`. Uncertain, redirect, and timeout outcomes are not claimed again. Recovery lists only enabled destinations and only when `SA360_EXTERNAL_WEBHOOK_DELIVERY_ENABLED` is exact `true`. It does not set `enabled`. A `sending` row younger than 120 seconds is left alone, so a live POST is not started a second time.
+
 A recorded attempt is claimed to `sending` before the socket opens. The POST connects only to one address returned by a fresh `validateExternalWebhookUrl` call. `lookup` returns that address and `autoSelectFamily` is off, so a later DNS answer cannot move the connection. TLS still uses the original hostname. Redirects are destroyed and stored as `uncertain`.
 
 If `destination.revision`, `endpointUrlFingerprint`, `endpointHost`, or `kind` no longer matches the attempt, the sender stores `failed` and does not decrypt or POST. A crashed `sending` row older than 120 seconds is promoted to `uncertain` and is not POSTed again.

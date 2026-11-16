@@ -154,4 +154,44 @@ Tables: `ClientExternalWebhookDestination`, `ExternalWebhookDeliveryAttempt`.
 
 Preference columns: `recipientPhoneE164`, `recipientPhoneVerifiedAt`, `smsEnabled`.
 
-The intake hook, queue, and sender are a later change. They insert `buildExternalWebhookAttemptRecord` inside the lead transaction and classify with `classifyExternalWebhookResponse`. A configuration miss returns. A database error is the only throw that can roll the lead back.
+The intake hook, queue, and sender insert `buildExternalWebhookAttemptRecord` inside the lead transaction and classify with `classifyExternalWebhookResponse`. A configuration miss returns. A database error is the only throw that can roll the lead back.
+
+## Configuration API
+
+Admin key only. A portal key, portal assertion, workspace key, or `x-sa360-admin-role: SA360_OBSERVER` is `403` before the admin key is accepted. Writes require `requestId` and `expectedRevision`. A repeated id with the same payload returns the stored result. A different payload for that id is `409 request_id_conflict`. A stale revision is `409 revision_conflict` and does not consume the id.
+
+Responses contain kind, auth mode, hostname, enabled, revision, configuration validity, and whether a live native GHL destination would conflict. They do not contain the URL, the HMAC secret, or a raw payload.
+
+| Method | Path | Effect |
+| --- | --- | --- |
+| GET | `/admin/v1/clients/:clientAccountId/external-webhook` | Safe status. Missing destination is revision 0. |
+| PUT | same path | Create or replace a disabled destination. |
+| PUT | `/admin/v1/clients/:clientAccountId/external-webhook/activation` | Enable or disable after validation. |
+| POST | `/admin/v1/clients/:clientAccountId/external-webhook/preflight` | No write and no POST. |
+
+`ghl_inbound` uses `authMode: none`. `external_https` may use `hmac_sha256`. The signing secret is encrypted and write-only. A new row starts disabled. Enabling rechecks HTTPS, public DNS, kind, credentials, and primary-CRM exclusivity. A live native GHL destination returns `409 primary_crm_conflict`. Google Sheets is not written. `SA360_EXTERNAL_WEBHOOK_DELIVERY_ENABLED` is not set. `enabled: true` does not prove a lead was delivered. `http_accepted` proves only `http_2xx`. `provesCrmCreation` is always false.
+
+Preflight returns `canary.implemented: false`. A later synthetic canary requires operator approval, a sandbox endpoint, an observable receipt, and no consumer lead data. This API does not POST that canary.
+
+Team Workspace UI reads this shape:
+
+```ts
+{
+  ok: true;
+  present: boolean;
+  kind: "ghl_inbound" | "external_https" | null;
+  authMode: "none" | "hmac_sha256" | null;
+  hostname: string | null;
+  enabled: boolean;
+  revision: number;
+  configurationValid: boolean;
+  primaryCrmConflict: boolean;
+  latestAttempt: {
+    state: string;
+    outcome: string | null;
+    httpStatus: number | null;
+    httpAccepted: boolean;
+    provesCrmCreation: false;
+  } | null;
+}
+```

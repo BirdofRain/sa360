@@ -69,6 +69,14 @@ test("manager writes are the request paths and operations cannot use them", () =
   assert.equal(staffWorkspaceAdminApiAllowed(OPERATIONS, "POST", "/admin/v1/clients"), false);
   assert.equal(staffWorkspaceAdminApiAllowed(OPERATIONS, "PATCH", `/admin/v1/clients/${CLIENT}/setup`), false);
   assert.equal(staffWorkspaceAdminApiAllowed(WORKSPACE, "POST", `/admin/v1/clients/${CLIENT}/source-campaign-requests`), false);
+  assert.equal(staffWorkspaceAdminApiAllowed(WORKSPACE, "GET", `/admin/v1/clients/${CLIENT}/external-webhook`), true);
+  assert.equal(staffWorkspaceAdminApiAllowed(OPERATIONS, "GET", `/admin/v1/clients/${CLIENT}/external-webhook`), true);
+  assert.equal(staffWorkspaceAdminApiAllowed(MANAGER, "PUT", `/admin/v1/clients/${CLIENT}/external-webhook`), true);
+  assert.equal(staffWorkspaceAdminApiAllowed(MANAGER, "POST", `/admin/v1/clients/${CLIENT}/external-webhook/preflight`), true);
+  assert.equal(staffWorkspaceAdminApiAllowed(WORKSPACE, "PUT", `/admin/v1/clients/${CLIENT}/external-webhook`), false);
+  assert.equal(staffWorkspaceAdminApiAllowed(OPERATIONS, "PUT", `/admin/v1/clients/${CLIENT}/external-webhook`), false);
+  assert.equal(staffWorkspaceAdminApiAllowed(OPERATIONS, "POST", `/admin/v1/clients/${CLIENT}/external-webhook/preflight`), false);
+  assert.equal(staffWorkspaceAdminApiAllowed(MANAGER, "PUT", `/admin/v1/clients/${CLIENT}/external-webhook/activation`), false);
 });
 
 test("delivery, correction, diagnostics, and path tricks stay closed", () => {

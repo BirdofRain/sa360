@@ -173,6 +173,22 @@ Responses contain kind, auth mode, hostname, enabled, revision, configuration va
 
 Preflight returns `canary.implemented: false`. A later synthetic canary requires operator approval, a sandbox endpoint, an observable receipt, and no consumer lead data. This API does not POST that canary.
 
+## Team Workspace bridge
+
+The browser does not receive the admin API key. Server actions in `apps/admin-coc/src/app/actions/external-webhook-config.ts` call the configuration API after a live staff capability or Admin C.O.C. session check. `SA360_EXTERNAL_WEBHOOK_CONFIG_BRIDGE_ENABLED` must be the exact string `true`. Unset, blank, `TRUE`, `1`, and `yes` leave the bridge off.
+
+| Action | Permission | Upstream |
+| --- | --- | --- |
+| `readExternalWebhookDestinationAction` | `team_workspace`, or an administrator | `GET /admin/v1/clients/:clientAccountId/external-webhook` |
+| `preflightExternalWebhookDestinationAction` | `team_manager`, or an administrator | `POST .../external-webhook/preflight` |
+| `saveExternalWebhookDestinationAction` | `team_manager`, or an administrator | `PUT .../external-webhook` |
+| `activateExternalWebhookDestinationAction` | Administrator only | `PUT .../external-webhook/activation` with `enabled: true` |
+| `deactivateExternalWebhookDestinationAction` | Administrator only | `PUT .../external-webhook/activation` with `enabled: false` |
+
+`team_workspace` alone and `team_operations` can read. They cannot preflight, save, or activate. An observer, a portal session, and an anonymous or limited staff session are denied. A team manager has no cutover grant for activation. Saving a destination does not enable it, does not change Google Sheets, and does not change a native GHL destination. The bridge does not set `SA360_EXTERNAL_WEBHOOK_DELIVERY_ENABLED`.
+
+Each returned result is `ok`, `code`, `message`, `replayed`, `needsReload`, `status`, and `preflight`. `status` is the safe configuration shape below. `httpAccepted` is HTTP acceptance. `provesCrmCreation` is false. Audit lines record the actor, client id, operation, request id, revision, and result code. They do not record the URL or the signing secret.
+
 Team Workspace UI reads this shape:
 
 ```ts

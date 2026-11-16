@@ -33,8 +33,9 @@ export async function syncExternalWebhookNoticeScheduleOnWorkerStart(
   const every = intervalMs(env.SA360_EXTERNAL_WEBHOOK_NOTICE_DISCOVER_INTERVAL_SECONDS);
   const queue = new Queue(EXTERNAL_WEBHOOK_NOTICE_QUEUE, { connection: redis });
   try {
-    const repeatables = await queue.getRepeatableJobs();
-    const existing = repeatables.filter((job) => job.name === EXTERNAL_WEBHOOK_NOTICE_DISCOVER_JOB);
+    const discover = () =>
+      queue.getRepeatableJobs().then((jobs) => jobs.filter((job) => job.name === EXTERNAL_WEBHOOK_NOTICE_DISCOVER_JOB));
+    const existing = await discover();
     if (!enabled) {
       for (const job of existing) await queue.removeRepeatableByKey(job.key);
       logger.info("external_webhook_notice.schedule", {
@@ -43,17 +44,28 @@ export async function syncExternalWebhookNoticeScheduleOnWorkerStart(
       });
       return;
     }
-    await queue.add(
-      EXTERNAL_WEBHOOK_NOTICE_DISCOVER_JOB,
-      {},
-      {
-        repeat: { every },
-        jobId: EXTERNAL_WEBHOOK_NOTICE_DISCOVER_JOB_ID,
-        removeOnComplete: 20,
-        removeOnFail: 40,
-        attempts: 1,
+    for (const job of existing) {
+      const currentEvery = job.every == null ? null : Number(job.every);
+      if (currentEvery !== every || job.id !== EXTERNAL_WEBHOOK_NOTICE_DISCOVER_JOB_ID) {
+        await queue.removeRepeatableByKey(job.key);
       }
-    );
+    }
+    const remaining = await discover();
+    if (remaining.length === 0) {
+      await queue.add(
+        EXTERNAL_WEBHOOK_NOTICE_DISCOVER_JOB,
+        {},
+        {
+          repeat: { every },
+          jobId: EXTERNAL_WEBHOOK_NOTICE_DISCOVER_JOB_ID,
+          removeOnComplete: 20,
+          removeOnFail: 40,
+          attempts: 1,
+        }
+      );
+    } else {
+      for (const extra of remaining.slice(1)) await queue.removeRepeatableByKey(extra.key);
+    }
     logger.info("external_webhook_notice.schedule", { enabled: true, action: "upserted", every });
   } finally {
     await queue.close();

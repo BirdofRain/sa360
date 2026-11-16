@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { after, test } from "node:test";
 
@@ -7,14 +8,13 @@ import { Prisma, PrismaClient } from "@prisma/client";
 import { buildApp } from "../../app.js";
 import { prisma } from "../../lib/db.js";
 import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
-import {
-  discoverExternalWebhookNotices,
-  externalWebhookNoticeRoleSeesAllTransactions,
-  externalWebhookNoticeTransactionVisibility,
-} from "./notice-discovery.js";
+import { discoverExternalWebhookNotices, externalWebhookNoticeTransactionVisibility } from "./notice-discovery.js";
 import { dispatchExternalWebhookNotice } from "./notice-dispatch.js";
 import { enqueueExternalWebhookNotice } from "./notice-queue.js";
-import { recoverPendingExternalWebhookNotices } from "./notice-recovery.js";
+import {
+  EXTERNAL_WEBHOOK_NOTICE_PENDING_CURSOR_ID,
+  recoverPendingExternalWebhookNotices,
+} from "./notice-recovery.js";
 import { recordEligibleExternalWebhookNotice } from "./notice-receipt.js";
 import {
   SMS_CONSENT_TEXT,
@@ -368,39 +368,207 @@ test("a pending receipt behind the cursor is dispatched once after enqueue fails
   }
 });
 
-test("a restricted database role does not see other transactions, and the revisit window is bounded", async () => {
+test("pending recovery rotates past a blocked page and sends the later receipt once", async () => {
   assertSafeTestDatabaseUrl(process.env.SA360_TEST_DATABASE_URL);
-  assert.equal(await externalWebhookNoticeRoleSeesAllTransactions(prisma), false);
-  assert.equal(await externalWebhookNoticeTransactionVisibility(prisma), "snapshot");
-  const databaseUrl = process.env.SA360_TEST_DATABASE_URL ?? "";
-  const sep = databaseUrl.includes("?") ? "&" : "?";
-  const other = new PrismaClient({ datasources: { db: { url: `${databaseUrl}${sep}connection_limit=1` } } });
-  let release = () => {};
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
+  const ids: string[] = [];
+  for (let index = 0; index < 5; index += 1) {
+    const clientAccountId = await client();
+    await prisma.clientDeliveryNotificationPreference.create({
+      data: {
+        clientAccountId,
+        enabled: true,
+        recipientEmail: `ops-page-${index}@example.com`,
+        recipientEmailVerifiedAt: new Date("2020-01-01T00:00:00.000Z"),
+        enabledAt: new Date("2020-01-01T00:00:00.000Z"),
+      },
+    });
+    const attempt = await accept(clientAccountId, `page_${index}`);
+    const recorded = await recordEligibleExternalWebhookNotice(
+      prisma,
+      { attemptId: attempt.id, channel: "email" },
+      { emailConfigured: false }
+    );
+    assert.equal(recorded.ok, true);
+    if (recorded.ok) ids.push(recorded.receipt.id);
+  }
+  const first = await prisma.externalWebhookNotificationReceipt.findUniqueOrThrow({ where: { id: ids[0] } });
+  const previous = await prisma.externalWebhookNoticeDiscoveryCursor.findUnique({
+    where: { id: EXTERNAL_WEBHOOK_NOTICE_PENDING_CURSOR_ID },
   });
-  let markStarted = () => {};
-  const started = new Promise<void>((resolve) => {
-    markStarted = resolve;
+  await prisma.externalWebhookNoticeDiscoveryCursor.upsert({
+    where: { id: EXTERNAL_WEBHOOK_NOTICE_PENDING_CURSOR_ID },
+    create: {
+      id: EXTERNAL_WEBHOOK_NOTICE_PENDING_CURSOR_ID,
+      lastHttpAcceptedAt: new Date(first.createdAt.getTime() - 1),
+      lastAttemptId: "",
+      updatedAt: new Date(),
+    },
+    update: { lastHttpAcceptedAt: new Date(first.createdAt.getTime() - 1), lastAttemptId: "" },
   });
-  const open = other.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT 1`;
-    markStarted();
-    await gate;
-  }, { timeout: 20_000 });
-  await started;
+  const seen: string[] = [];
   try {
-    const visible = await prisma.$queryRaw<Array<{ count: number }>>`
+    for (let page = 0; page < 3; page += 1) {
+      await recoverPendingExternalWebhookNotices(prisma, {
+        limit: 2,
+        enqueue: async (id) => {
+          if (ids.includes(id)) seen.push(id);
+        },
+      });
+    }
+    assert.ok(seen.includes(ids[4] ?? ""));
+    assert.ok(seen.includes(ids[0] ?? ""));
+    let mailCalls = 0;
+    const sent = await dispatchExternalWebhookNotice(prisma, ids[4] ?? "", {
+      emailConfigured: true,
+      mail: async () => {
+        mailCalls += 1;
+        return { ok: true, id: "email_later_page" };
+      },
+    });
+    const replay = await dispatchExternalWebhookNotice(prisma, ids[4] ?? "", {
+      emailConfigured: true,
+      mail: async () => {
+        mailCalls += 1;
+        return { ok: true, id: "email_later_page_again" };
+      },
+    });
+    assert.equal(sent.status, "provider_accepted");
+    assert.equal(replay.skipped, "provider_accepted");
+    assert.equal(mailCalls, 1);
+    for (const blocked of ids.slice(0, 4)) {
+      assert.equal(
+        (await prisma.externalWebhookNotificationReceipt.findUniqueOrThrow({ where: { id: blocked } })).status,
+        "pending"
+      );
+    }
+    await assert.rejects(() =>
+      recoverPendingExternalWebhookNotices(prisma, {
+        ids: [ids[0] ?? ""],
+        enqueue: async () => {
+          throw new Error("redis down");
+        },
+      })
+    );
+    assert.equal(
+      (await prisma.externalWebhookNotificationReceipt.findUniqueOrThrow({ where: { id: ids[0] } })).status,
+      "pending"
+    );
+  } finally {
+    if (previous) {
+      await prisma.externalWebhookNoticeDiscoveryCursor.update({
+        where: { id: EXTERNAL_WEBHOOK_NOTICE_PENDING_CURSOR_ID },
+        data: { lastHttpAcceptedAt: previous.lastHttpAcceptedAt, lastAttemptId: previous.lastAttemptId },
+      });
+    } else {
+      await prisma.externalWebhookNoticeDiscoveryCursor.deleteMany({
+        where: { id: EXTERNAL_WEBHOOK_NOTICE_PENDING_CURSOR_ID },
+      });
+    }
+  }
+});
+
+test("a restricted role cannot prove foreign transaction visibility, and rotation still recovers eligibility", async () => {
+  assertSafeTestDatabaseUrl(process.env.SA360_TEST_DATABASE_URL);
+  const databaseUrl = assertSafeTestDatabaseUrl(process.env.SA360_TEST_DATABASE_URL);
+  const databaseName = new URL(databaseUrl).pathname.replace(/^\//, "");
+  execFileSync(
+    "sudo",
+    [
+      "-n",
+      "-u",
+      "postgres",
+      "psql",
+      "-d",
+      databaseName,
+      "-v",
+      "ON_ERROR_STOP=1",
+      "-c",
+       `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'sa360_notice_visibility_probe') THEN
+           CREATE ROLE sa360_notice_visibility_probe LOGIN NOSUPERUSER NOINHERIT PASSWORD 'notice-probe-test';
+         ELSE
+           ALTER ROLE sa360_notice_visibility_probe LOGIN NOSUPERUSER NOINHERIT PASSWORD 'notice-probe-test';
+         END IF;
+       END $$;`,
+    ],
+    { stdio: "pipe" }
+  );
+  const sep = databaseUrl.includes("?") ? "&" : "?";
+  const probeUrl = `postgresql://sa360_notice_visibility_probe:notice-probe-test@127.0.0.1:5432/${databaseName}${sep}connection_limit=1`;
+  const probe = new PrismaClient({ datasources: { db: { url: probeUrl } } });
+  const sameRole = new PrismaClient({ datasources: { db: { url: probeUrl } } });
+  const foreign = new PrismaClient({ datasources: { db: { url: `${databaseUrl}${sep}connection_limit=1` } } });
+  let releaseForeign = () => {};
+  let releaseSame = () => {};
+  const foreignGate = new Promise<void>((resolve) => {
+    releaseForeign = resolve;
+  });
+  const sameGate = new Promise<void>((resolve) => {
+    releaseSame = resolve;
+  });
+  try {
+    let foreignPid = 0;
+    let markForeign = () => {};
+    const foreignStarted = new Promise<void>((resolve) => {
+      markForeign = resolve;
+    });
+    const foreignTx = foreign.$transaction(async (tx) => {
+      const pid = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid()::int AS pid`;
+      foreignPid = pid[0]?.pid ?? 0;
+      markForeign();
+      await foreignGate;
+    }, { timeout: 20_000 });
+    await foreignStarted;
+    assert.equal(await externalWebhookNoticeTransactionVisibility(probe, { backendPid: foreignPid }), "unproven");
+    let samePid = 0;
+    let markSame = () => {};
+    const sameStarted = new Promise<void>((resolve) => {
+      markSame = resolve;
+    });
+    const sameTx = sameRole.$transaction(async (tx) => {
+      const pid = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid()::int AS pid`;
+      samePid = pid[0]?.pid ?? 0;
+      markSame();
+      await sameGate;
+    }, { timeout: 20_000 });
+    await sameStarted;
+    const seen = await probe.$queryRaw<Array<{ count: number }>>`
       SELECT count(*)::int AS count
       FROM pg_stat_activity
-      WHERE xact_start IS NOT NULL
-        AND pid <> pg_backend_pid()
+      WHERE pid = ${samePid} AND xact_start IS NOT NULL
     `;
-    assert.ok((visible[0]?.count ?? 0) >= 1);
+    assert.equal(seen[0]?.count ?? 0, 1);
+    assert.equal(await externalWebhookNoticeTransactionVisibility(probe, { backendPid: samePid }), "unproven");
+    releaseForeign();
+    releaseSame();
+    await foreignTx.catch(() => undefined);
+    await sameTx.catch(() => undefined);
   } finally {
-    release();
-    await open.catch(() => undefined);
-    await other.$disconnect();
+    releaseForeign();
+    releaseSame();
+    await probe.$disconnect();
+    await sameRole.$disconnect();
+    await foreign.$disconnect();
+    try {
+      execFileSync(
+        "sudo",
+        [
+          "-n",
+          "-u",
+          "postgres",
+          "psql",
+          "-d",
+          databaseName,
+          "-v",
+          "ON_ERROR_STOP=1",
+          "-c",
+          `DROP ROLE IF EXISTS sa360_notice_visibility_probe;`,
+        ],
+        { stdio: "pipe" }
+      );
+    } catch {
+      // A leftover session can keep the role until the next test recreates it.
+    }
   }
 
   const clientAccountId = await client();
@@ -435,101 +603,98 @@ test("a restricted database role does not see other transactions, and the revisi
     update: { lastHttpAcceptedAt: new Date(at.getTime() - 1), lastAttemptId: "" },
   });
   try {
+    const discover = () =>
+      discoverExternalWebhookNotices(prisma, {
+        env: { SA360_EXTERNAL_WEBHOOK_NOTICE_DISPATCH_ENABLED: "true" },
+        now: new Date(at.getTime() + 60_000),
+        limit: 50,
+        emailConfigured: true,
+        twilioConfig: twilioReady,
+      });
     for (let pass = 0; pass < 3; pass += 1) {
       const existing = await prisma.externalWebhookNoticeChannelDecision.findUnique({
         where: { attemptId_channel: { attemptId: attempt.id, channel: "sms" } },
       });
       if (existing) break;
-      await discoverExternalWebhookNotices(prisma, {
-        env: { SA360_EXTERNAL_WEBHOOK_NOTICE_DISPATCH_ENABLED: "true" },
-        now: new Date(at.getTime() + 60_000),
-        limit: 25,
-        emailConfigured: true,
-        twilioConfig: twilioReady,
-        transactionVisibility: "restricted",
-      });
+      await discover();
     }
     const decision = await prisma.externalWebhookNoticeChannelDecision.findUniqueOrThrow({
       where: { attemptId_channel: { attemptId: attempt.id, channel: "sms" } },
     });
     assert.equal(decision.reason, "not_opted_in");
-    assert.ok(decision.revisitAfter && decision.revisitAfter.getTime() > Date.now());
-    await setSmsNotificationEnabled(prisma, { clientAccountId, enabled: true });
-    await prisma.$executeRaw`
-      UPDATE "ClientDeliveryNotificationPreference"
-      SET "smsEnabledAt" = ${new Date(at.getTime() - 60_000)},
-          "smsConsentRecordedAt" = ${new Date(at.getTime() - 60_000)}
-      WHERE "clientAccountId" = ${clientAccountId}
-    `;
-    await discoverExternalWebhookNotices(prisma, {
-      env: { SA360_EXTERNAL_WEBHOOK_NOTICE_DISPATCH_ENABLED: "true" },
-      now: new Date(),
-      limit: 5,
-      emailConfigured: true,
-      twilioConfig: twilioReady,
-      transactionVisibility: "restricted",
-    });
-    const sms = await prisma.externalWebhookNotificationReceipt.findMany({ where: { attemptId: attempt.id, channel: "sms" } });
-    assert.equal(sms.length, 1);
-    assert.equal(sms[0]?.status, "pending");
+    assert.ok(decision.revisitAfter);
+    execFileSync(
+      "sudo",
+      [
+        "-n",
+        "-u",
+        "postgres",
+        "psql",
+        "-d",
+        databaseName,
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-c",
+        `UPDATE "ClientDeliveryNotificationPreference"
+         SET "smsEnabled" = true,
+             "smsEnabledAt" = '2099-06-01T00:00:00Z',
+             "smsConsentRecordedAt" = '2099-06-01T00:00:00Z'
+         WHERE "clientAccountId" = '${clientAccountId}';`,
+      ],
+      { stdio: "pipe" }
+    );
+    let recovered = false;
+    for (let pass = 0; pass < 40 && !recovered; pass += 1) {
+      await discover();
+      const sms = await prisma.externalWebhookNotificationReceipt.findMany({
+        where: { attemptId: attempt.id, channel: "sms", status: "pending" },
+      });
+      recovered = sms.length === 1;
+    }
+    assert.equal(recovered, true);
 
     const laterClient = await client();
     await prisma.clientDeliveryNotificationPreference.create({
       data: {
         clientAccountId: laterClient,
         enabled: true,
-        recipientEmail: "ops-expired@example.com",
+        recipientEmail: "ops-after@example.com",
         recipientEmailVerifiedAt: new Date("2020-01-01T00:00:00.000Z"),
         enabledAt: new Date("2020-01-01T00:00:00.000Z"),
       },
     });
     await recordNotificationPhone(prisma, { clientAccountId: laterClient, phoneE164: "+15555550803" });
     await recordSmsConsent(prisma, { clientAccountId: laterClient, version: SMS_CONSENT_VERSION, text: SMS_CONSENT_TEXT });
-    const expired = await accept(laterClient, "restricted_expired");
-    const expiredAt = new Date("2099-08-01T00:00:00.000Z");
-    await prisma.$executeRaw`ALTER TABLE "ExternalWebhookDeliveryAttempt" DISABLE TRIGGER "ExternalWebhookDeliveryAttempt_accepted_at"`;
-    try {
-      await prisma.$executeRaw`
-        UPDATE "ExternalWebhookDeliveryAttempt"
-        SET "httpAcceptedAt" = ${expiredAt}
-        WHERE id = ${expired.id}
-      `;
-    } finally {
-      await prisma.$executeRaw`ALTER TABLE "ExternalWebhookDeliveryAttempt" ENABLE TRIGGER "ExternalWebhookDeliveryAttempt_accepted_at"`;
+    const later = await accept(laterClient, "opt_in_after");
+    await sealOthers([attempt.id, later.id]);
+    for (let pass = 0; pass < 5; pass += 1) {
+      const existing = await prisma.externalWebhookNoticeChannelDecision.findUnique({
+        where: { attemptId_channel: { attemptId: later.id, channel: "sms" } },
+      });
+      if (existing) break;
+      await discoverExternalWebhookNotices(prisma, {
+        env: { SA360_EXTERNAL_WEBHOOK_NOTICE_DISPATCH_ENABLED: "true" },
+        now: new Date(Date.now() + 120_000),
+        limit: 50,
+        emailConfigured: true,
+        twilioConfig: twilioReady,
+      });
     }
-    await sealOthers([attempt.id, expired.id]);
-    await prisma.externalWebhookNoticeDiscoveryCursor.update({
-      where: { id: "acceptance" },
-      data: { lastHttpAcceptedAt: new Date(expiredAt.getTime() - 1), lastAttemptId: "" },
+    const enabled = await setSmsNotificationEnabled(prisma, { clientAccountId: laterClient, enabled: true });
+    assert.equal(enabled.ok, true);
+    for (let pass = 0; pass < 5; pass += 1) {
+      await discoverExternalWebhookNotices(prisma, {
+        env: { SA360_EXTERNAL_WEBHOOK_NOTICE_DISPATCH_ENABLED: "true" },
+        now: new Date(Date.now() + 120_000),
+        limit: 50,
+        emailConfigured: true,
+        twilioConfig: twilioReady,
+      });
+    }
+    const retroactive = await prisma.externalWebhookNotificationReceipt.findMany({
+      where: { attemptId: later.id, channel: "sms", status: "pending" },
     });
-    await discoverExternalWebhookNotices(prisma, {
-      env: { SA360_EXTERNAL_WEBHOOK_NOTICE_DISPATCH_ENABLED: "true" },
-      now: new Date(expiredAt.getTime() + 60_000),
-      limit: 1,
-      emailConfigured: true,
-      twilioConfig: twilioReady,
-      transactionVisibility: "restricted",
-    });
-    await prisma.externalWebhookNoticeChannelDecision.updateMany({
-      where: { attemptId: expired.id, channel: "sms" },
-      data: { revisitAfter: new Date(Date.now() - 60_000) },
-    });
-    await setSmsNotificationEnabled(prisma, { clientAccountId: laterClient, enabled: true });
-    await prisma.$executeRaw`
-      UPDATE "ClientDeliveryNotificationPreference"
-      SET "smsEnabledAt" = ${new Date(expired.httpAcceptedAt!.getTime() - 60_000)},
-          "smsConsentRecordedAt" = ${new Date(expired.httpAcceptedAt!.getTime() - 60_000)}
-      WHERE "clientAccountId" = ${laterClient}
-    `;
-    await discoverExternalWebhookNotices(prisma, {
-      env: { SA360_EXTERNAL_WEBHOOK_NOTICE_DISPATCH_ENABLED: "true" },
-      now: new Date(Date.now() + 60_000),
-      limit: 5,
-      emailConfigured: true,
-      twilioConfig: twilioReady,
-      transactionVisibility: "restricted",
-    });
-    assert.equal(await prisma.externalWebhookNotificationReceipt.count({ where: { attemptId: expired.id, channel: "sms" } }), 0);
+    assert.equal(retroactive.length, 0);
   } finally {
     if (previous) {
       await prisma.externalWebhookNoticeDiscoveryCursor.update({

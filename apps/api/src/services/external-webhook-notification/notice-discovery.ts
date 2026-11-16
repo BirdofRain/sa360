@@ -18,8 +18,6 @@ import type { TwilioConfigResult } from "./twilio-programmable-messaging.js";
 export const EXTERNAL_WEBHOOK_NOTICE_DISPATCH_ENABLED_ENV = "SA360_EXTERNAL_WEBHOOK_NOTICE_DISPATCH_ENABLED";
 export const EXTERNAL_WEBHOOK_NOTICE_DISCOVERY_LAG_MS = 30_000;
 export const EXTERNAL_WEBHOOK_NOTICE_DISCOVERY_PAGE = 25;
-/** How long a restricted role keeps rechecking an ineligible decision. */
-export const EXTERNAL_WEBHOOK_NOTICE_RESTRICTED_REVISIT_MS = 15 * 60 * 1000;
 const CURSOR_ID = "acceptance";
 
 /**
@@ -64,8 +62,12 @@ export async function discoverExternalWebhookNotices(
     now?: Date;
     limit?: number;
     enqueue?: (receiptId: string) => Promise<unknown>;
-    /** Test seam. Production reads the database role and does not grant extra privileges. */
-    transactionVisibility?: "snapshot" | "restricted";
+    /**
+     * Production leaves this unset, which is unproven. `proven` is only valid
+     * after externalWebhookNoticeTransactionVisibility saw another role's
+     * open transaction. It is not inferred from pg_roles.
+     */
+    transactionVisibility?: "proven" | "unproven";
     emailConfigured?: boolean;
     twilioConfig?: TwilioConfigResult;
   } = {}
@@ -81,30 +83,15 @@ export async function discoverExternalWebhookNotices(
   let enqueued = 0;
   let scanned = 0;
 
-  const visibility = input.transactionVisibility ?? (await externalWebhookNoticeTransactionVisibility(db));
-  const revisitAfter =
-    visibility === "restricted"
-      ? new Date(now.getTime() + EXTERNAL_WEBHOOK_NOTICE_RESTRICTED_REVISIT_MS)
-      : await oldestOtherTransactionStart(db);
-  if (visibility === "snapshot" && stored?.lastHttpAcceptedAt && stored.lastAttemptId != null) {
+  const visibility = input.transactionVisibility ?? "unproven";
+  if (visibility === "proven" && stored?.lastHttpAcceptedAt && stored.lastAttemptId != null) {
     await releaseSettledDecisions(db, stored.lastHttpAcceptedAt, stored.lastAttemptId);
   }
-  if (visibility === "restricted") {
-    const changed = await recheckProvisionalDecisions(db, now, limit, env, input, (receiptId) => {
-      enqueued += 1;
-      return input.enqueue?.(receiptId) ?? Promise.resolve();
-    });
-    scanned += changed;
-    if (changed === limit) {
-      return {
-        enabled: true,
-        scanned,
-        enqueued,
-        cursor: storedCursor(stored),
-        hasMore: true,
-      };
-    }
-  }
+  const changed = await recheckRevisitableDecisions(db, now, limit, env, input, (receiptId) => {
+    enqueued += 1;
+    return input.enqueue?.(receiptId) ?? Promise.resolve();
+  });
+  scanned += changed;
   const holes =
     stored?.lastHttpAcceptedAt && stored.lastAttemptId != null
       ? await findUncoveredAcceptances(db, stored.lastHttpAcceptedAt, stored.lastAttemptId, limit)
@@ -112,7 +99,7 @@ export async function discoverExternalWebhookNotices(
   let halted = false;
   for (const attempt of holes) {
     scanned += 1;
-    const settled = await settleAttempt(db, attempt, env, input, revisitAfter, (receiptId) => {
+    const settled = await settleAttempt(db, attempt, env, input, now, (receiptId) => {
       enqueued += 1;
       return input.enqueue?.(receiptId) ?? Promise.resolve();
     });
@@ -145,7 +132,7 @@ export async function discoverExternalWebhookNotices(
   for (const attempt of page) {
     if (!attempt.httpAcceptedAt) continue;
     scanned += 1;
-    const settled = await settleAttempt(db, { id: attempt.id, httpAcceptedAt: attempt.httpAcceptedAt }, env, input, revisitAfter, (receiptId) => {
+    const settled = await settleAttempt(db, { id: attempt.id, httpAcceptedAt: attempt.httpAcceptedAt }, env, input, now, (receiptId) => {
       enqueued += 1;
       return input.enqueue?.(receiptId) ?? Promise.resolve();
     });
@@ -258,43 +245,33 @@ async function findUncoveredAcceptances(
 }
 
 /**
- * `snapshot` when this role can read open-transaction times for sessions it is
- * allowed to see. A normal application role sees its own other sessions, which
- * is enough for preference and acceptance transactions it writes. This does
- * not grant pg_monitor or pg_read_all_stats. `restricted` is the fail-safe
- * when that catalog read fails: ineligible decisions are rechecked for 15 minutes.
- * A transaction owned by a different role can still be invisible.
+ * Proven only when this session can read xact_start for a backend whose
+ * role is different from current_user. Seeing pg_roles, or seeing another
+ * session of the same role, is not complete visibility. Otherwise unproven:
+ * discovery does not drop an ineligible decision. This does not grant
+ * pg_monitor or pg_read_all_stats.
  */
 export async function externalWebhookNoticeTransactionVisibility(
-  db: PrismaClient
-): Promise<"snapshot" | "restricted"> {
+  db: PrismaClient,
+  observed: { backendPid: number }
+): Promise<"proven" | "unproven"> {
   try {
-    const rows = await db.$queryRaw<Array<{ ok: number }>>`
-      SELECT 1 AS ok
-      FROM pg_roles
-      WHERE rolname = current_user
+    const rows = await db.$queryRaw<Array<{ usename: string | null; xactStart: Date | null }>>`
+      SELECT usename::text AS usename, xact_start AS "xactStart"
+      FROM pg_stat_activity
+      WHERE pid = ${observed.backendPid}
     `;
-    return rows[0] ? "snapshot" : "restricted";
+    const row = rows[0];
+    if (!row?.xactStart || !row.usename) return "unproven";
+    const who = await db.$queryRaw<Array<{ currentUser: string }>>`SELECT current_user AS "currentUser"`;
+    if (!who[0] || row.usename === who[0].currentUser) return "unproven";
+    return "proven";
   } catch {
-    return "restricted";
+    return "unproven";
   }
 }
 
-/** True only for superuser or an explicit stats role. Same-role sessions do not require it. */
-export async function externalWebhookNoticeRoleSeesAllTransactions(db: PrismaClient): Promise<boolean> {
-  const rows = await db.$queryRaw<Array<{ seesAll: boolean }>>`
-    SELECT (
-      rolsuper
-      OR pg_has_role(oid, 'pg_read_all_stats', 'MEMBER')
-      OR pg_has_role(oid, 'pg_monitor', 'MEMBER')
-    ) AS "seesAll"
-    FROM pg_roles
-    WHERE rolname = current_user
-  `;
-  return rows[0]?.seesAll === true;
-}
-
-async function recheckProvisionalDecisions(
+async function recheckRevisitableDecisions(
   db: PrismaClient,
   now: Date,
   limit: number,
@@ -303,8 +280,8 @@ async function recheckProvisionalDecisions(
   onPending: (receiptId: string) => Promise<unknown>
 ): Promise<number> {
   const rows = await db.externalWebhookNoticeChannelDecision.findMany({
-    where: { revisitAfter: { gt: now }, reason: { in: [...REVISITABLE] } },
-    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    where: { revisitAfter: { not: null }, reason: { in: [...REVISITABLE] } },
+    orderBy: [{ revisitAfter: "asc" }, { id: "asc" }],
     take: limit,
     select: { id: true, attemptId: true, channel: true },
   });
@@ -316,26 +293,25 @@ async function recheckProvisionalDecisions(
       { attemptId: row.attemptId, channel: row.channel },
       { emailConfigured: input.emailConfigured, twilioConfig: input.twilioConfig, env }
     );
-    if (!recorded.ok) continue;
-    await db.externalWebhookNoticeChannelDecision.delete({ where: { id: row.id } });
-    if (recorded.receipt.status === "pending") await onPending(recorded.receipt.id);
-    changed += 1;
+    if (recorded.ok) {
+      await db.externalWebhookNoticeChannelDecision.delete({ where: { id: row.id } });
+      if (recorded.receipt.status === "pending") await onPending(recorded.receipt.id);
+      changed += 1;
+      continue;
+    }
+    if (isDurableIneligible(recorded.reason) && !REVISITABLE.has(recorded.reason)) {
+      await db.externalWebhookNoticeChannelDecision.update({
+        where: { id: row.id },
+        data: { reason: recorded.reason, revisitAfter: null },
+      });
+      continue;
+    }
+    await db.externalWebhookNoticeChannelDecision.update({
+      where: { id: row.id },
+      data: { revisitAfter: now },
+    });
   }
   return changed;
-}
-
-async function oldestOtherTransactionStart(db: PrismaClient): Promise<Date | null> {
-  try {
-    const rows = await db.$queryRaw<Array<{ oldest: Date | null }>>`
-      SELECT min(xact_start) AS oldest
-      FROM pg_stat_activity
-      WHERE xact_start IS NOT NULL
-        AND pid <> pg_backend_pid()
-    `;
-    return rows[0]?.oldest ?? null;
-  } catch {
-    return null;
-  }
 }
 
 async function releaseSettledDecisions(db: PrismaClient, cursorAt: Date, cursorId: string): Promise<void> {
@@ -349,12 +325,11 @@ async function releaseSettledDecisions(db: PrismaClient, cursorAt: Date, cursorI
         AND NOT EXISTS (
           SELECT 1 FROM pg_stat_activity s
           WHERE s.xact_start IS NOT NULL
-            AND s.pid <> pg_backend_pid()
-            AND s.xact_start <= d."revisitAfter"
+            AND s.xact_start <= a."httpAcceptedAt"
         )
     `;
   } catch {
-    // Without a transaction snapshot the existing decision stays in place.
+    // Unproven or unreadable activity leaves the decision in the rotation.
   }
 }
 

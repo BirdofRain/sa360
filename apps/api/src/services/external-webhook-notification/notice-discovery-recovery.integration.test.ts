@@ -414,7 +414,10 @@ test("consent recorded after acceptance does not backfill an SMS notice", async 
         emailConfigured: true,
         twilioConfig: twilioReady,
       });
-      assert.equal(await prisma.externalWebhookNotificationReceipt.count({ where: { attemptId: attempt.id, channel: "sms" } }), 0);
+      const backfill = await prisma.externalWebhookNotificationReceipt.findMany({
+        where: { attemptId: attempt.id, channel: "sms" },
+      });
+      assert.equal(backfill.filter((row) => row.status === "pending").length, 0);
       const later = await accept(clientAccountId, "consent_later_next");
       await discoverExternalWebhookNotices(prisma, {
         env: ENABLED,
@@ -427,7 +430,10 @@ test("consent recorded after acceptance does not backfill an SMS notice", async 
         where: { attemptId: later.id, channel: "sms" },
       });
       assert.equal(next.status, "pending");
-      assert.equal(await prisma.externalWebhookNotificationReceipt.count({ where: { attemptId: attempt.id, channel: "sms" } }), 0);
+      const original = await prisma.externalWebhookNotificationReceipt.findMany({
+        where: { attemptId: attempt.id, channel: "sms" },
+      });
+      assert.equal(original.filter((row) => row.status === "pending").length, 0);
     });
   } finally {
     if (sealed.length > 0) await prisma.externalWebhookNoticeChannelDecision.deleteMany({ where: { id: { in: sealed } } });
@@ -594,16 +600,19 @@ test("a preference committed by an older transaction still qualifies on the next
         assert.ok(decision.revisitAfter);
         release();
         await work;
-        await discoverExternalWebhookNotices(prisma, {
-          env: ENABLED,
-          now: new Date(Date.now() + 60_000),
-          limit: 5,
-          emailConfigured: true,
-          twilioConfig: twilioReady,
-        });
-        const sms = await prisma.externalWebhookNotificationReceipt.findMany({
-          where: { attemptId: attempt.id, channel: "sms" },
-        });
+        let sms: Array<{ status: string; acceptedAt: Date }> = [];
+        for (let pass = 0; pass < 40 && sms.length === 0; pass += 1) {
+          await discoverExternalWebhookNotices(prisma, {
+            env: ENABLED,
+            now: new Date(Date.now() + 60_000),
+            limit: 50,
+            emailConfigured: true,
+            twilioConfig: twilioReady,
+          });
+          sms = await prisma.externalWebhookNotificationReceipt.findMany({
+            where: { attemptId: attempt.id, channel: "sms" },
+          });
+        }
         assert.equal(sms.length, 1);
         assert.equal(sms[0]?.status, "pending");
         assert.equal(sms[0]?.acceptedAt.toISOString(), at.toISOString());

@@ -15,17 +15,19 @@ The Twilio routes parse `application/x-www-form-urlencoded` only in their own pl
 
 ## Worker and schedule
 
-`EXTERNAL_WEBHOOK_NOTICE_QUEUE` has one BullMQ worker that calls `processExternalWebhookNoticeJob`. Flag off returns before HTTP. The repeatable job name is `discover-external-webhook-notices` and its id is `external-webhook-notice-discover`. A second worker start updates that same job. Flag off removes it. The default interval is 60 seconds. `SA360_EXTERNAL_WEBHOOK_NOTICE_DISCOVER_INTERVAL_SECONDS` may be 15 through 3600. It is unset.
+`EXTERNAL_WEBHOOK_NOTICE_QUEUE` has one BullMQ worker that calls `processExternalWebhookNoticeJob`. Flag off returns before HTTP. The repeatable job name is `discover-external-webhook-notices` and its id is `external-webhook-notice-discover`. A second worker start leaves that one job. Changing the interval removes the previous repeatable key and keeps the new one. Flag off removes only those discovery repeatables. Other repeatable names on the queue stay. The default interval is 60 seconds. `SA360_EXTERNAL_WEBHOOK_NOTICE_DISCOVER_INTERVAL_SECONDS` may be 15 through 3600. It is unset.
 
 Sheets, GHL, and external-webhook delivery workers are unchanged. `scanCanonicalDeliveryNotifications` is not mounted.
 
 ## Pending receipt recovery
 
-Each enabled discovery pass re-queues `pending` receipts, oldest first, one page at a time. A receipt whose queue job was lost is found without scanning its acceptance again. The job id is the receipt id, so a second enqueue does not add a second job. The claim allows one send. `provider_accepted`, `uncertain`, `sent`, `failed`, and `suppressed` are not re-queued. A `sending` row older than 10 minutes becomes `uncertain` and is not resent.
+Each enabled discovery pass re-queues one page of `pending` receipts. The page is a keyset on `(createdAt, id)` and the cursor advances, so a page that stays pending cannot hide a later receipt. After the last row the cursor wraps. The job id is the receipt id, so a second enqueue does not add a second job. The claim allows one send. `provider_accepted`, `uncertain`, `sent`, `failed`, and `suppressed` are not re-queued. A `sending` row older than 10 minutes becomes `uncertain` and is not resent. A failed enqueue leaves the receipt pending and does not move the cursor past it.
 
 ## Database role
 
-Decision reopen reads `pg_stat_activity` for sessions this role can already see. An application role sees its own other sessions, so its preference and acceptance transactions are visible without `pg_monitor` or `pg_read_all_stats`. This code does not grant those roles. If that catalog read fails, ineligible decisions are rechecked for 15 minutes and then left in place. A transaction owned by a different database role can remain invisible, and an eligible acceptance can stay blocked for that channel after the decision is stable. Opt-in that starts after `httpAcceptedAt` still does not send.
+Complete transaction visibility is proven only when this session can read `xact_start` for a backend running as a different role. Reading `pg_roles`, or seeing another session of the same role, is not proof. This code does not grant `pg_monitor` or `pg_read_all_stats`. Production discovery leaves visibility unproven and does not delete an ineligible decision because of `pg_stat_activity`.
+
+Those decisions stay in a fair rotation on `(revisitAfter, id)`. Each pass rechecks one page and moves the checked rows to the back. A preference committed later, including by another database role, is still judged on `httpAcceptedAt`. There is no timeout that drops it. Opt-in that starts after `httpAcceptedAt` does not become a pending notice. The snapshot shortcut runs only when visibility was proven. Nothing in this process proves it.
 
 ## Twilio configuration is not assumed
 

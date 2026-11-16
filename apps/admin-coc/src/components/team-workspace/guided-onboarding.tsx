@@ -12,6 +12,7 @@ import {
   type GuidedSetupSaveResult,
 } from "@/app/actions/team-workspace-onboarding";
 import { CompanySheetsDiscoveryGuide } from "@/components/team-workspace/company-sheets-discovery-guide";
+import { ExternalWebhookDestinationGuide, type ExternalWebhookGuideAccess } from "@/components/team-workspace/external-webhook-destination-guide";
 import { GhlDestinationGuide } from "@/components/team-workspace/ghl-destination-guide";
 import { SourceCampaignRequestPanel } from "@/components/team-workspace/source-campaign-request-panel";
 import { SourceCampaignReviewPanel } from "@/components/team-workspace/source-campaign-review-panel";
@@ -76,11 +77,13 @@ export function GuidedOnboarding({
   step,
   clients,
   notice = null,
+  webhookAccess = { canPrepare: false, canActivate: false },
 }: {
   model: GuidedOnboardingModel | null;
   step: GuideStepId;
   clients: { clientAccountId: string; clientDisplayName: string }[];
   notice?: "created" | null;
+  webhookAccess?: ExternalWebhookGuideAccess;
 }) {
   const router = useRouter();
   const token = guideSyncToken(model);
@@ -463,7 +466,7 @@ export function GuidedOnboarding({
           />
         ) : null}
         {model && current === "destination" ? (
-          <DestinationStep model={model} draft={draft} busy={busy} onDraft={updateDraft} onSave={() => void saveSetup("The destination choice was saved. GoHighLevel and Company Sheets were not changed, and delivery was not turned on.")} />
+          <DestinationStep model={model} draft={draft} busy={busy} webhookAccess={webhookAccess} onDraft={updateDraft} onSave={() => void saveSetup("The destination choice was saved. GoHighLevel and Company Sheets were not changed, and delivery was not turned on.")} />
         ) : null}
         {model && current === "summary" ? <SummaryStep model={model} busy={busy} onSave={() => void saveInformation()} /> : null}
       </div>
@@ -853,12 +856,14 @@ function DestinationStep({
   model,
   draft,
   busy,
+  webhookAccess,
   onDraft,
   onSave,
 }: {
   model: GuidedOnboardingModel;
   draft: GuidedSetupDraft;
   busy: boolean;
+  webhookAccess: ExternalWebhookGuideAccess;
   onDraft: (patch: Partial<GuidedSetupDraft>) => void;
   onSave: () => void;
 }) {
@@ -904,8 +909,19 @@ function DestinationStep({
         </Button>
       </div>
     </form>
-    <GhlDestinationGuide clientAccountId={model.clientAccountId} />
-    <CompanySheetsDiscoveryGuide clientAccountId={model.clientAccountId} />
+    <ExternalWebhookDestinationGuide clientAccountId={model.clientAccountId} access={webhookAccess} />
+    <details className="rounded-md border border-slate-200 p-3">
+      <summary className="cursor-pointer text-sm font-medium text-slate-950">Native GoHighLevel destination</summary>
+      <div className="mt-3">
+        <GhlDestinationGuide clientAccountId={model.clientAccountId} />
+      </div>
+    </details>
+    <details className="rounded-md border border-slate-200 p-3">
+      <summary className="cursor-pointer text-sm font-medium text-slate-950">Company Sheets</summary>
+      <div className="mt-3">
+        <CompanySheetsDiscoveryGuide clientAccountId={model.clientAccountId} />
+      </div>
+    </details>
     </div>
   );
 }

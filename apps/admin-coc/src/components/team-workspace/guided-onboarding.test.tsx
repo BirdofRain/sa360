@@ -118,6 +118,55 @@ moduleLoader._load = function (request: string, parent: NodeModule, isMain: bool
       }),
     };
   }
+  if (request === "@/app/actions/external-webhook-config") {
+    return {
+      readExternalWebhookDestinationAction: async () => ({
+        ok: false,
+        code: "FEATURE_DISABLED",
+        message: "External webhook configuration is turned off. Nothing was saved or enabled.",
+        replayed: false,
+        needsReload: false,
+        status: null,
+        preflight: null,
+      }),
+      preflightExternalWebhookDestinationAction: async () => ({
+        ok: false,
+        code: "FEATURE_DISABLED",
+        message: "External webhook configuration is turned off. Nothing was saved or enabled.",
+        replayed: false,
+        needsReload: false,
+        status: null,
+        preflight: null,
+      }),
+      saveExternalWebhookDestinationAction: async () => ({
+        ok: false,
+        code: "FEATURE_DISABLED",
+        message: "External webhook configuration is turned off. Nothing was saved or enabled.",
+        replayed: false,
+        needsReload: false,
+        status: null,
+        preflight: null,
+      }),
+      activateExternalWebhookDestinationAction: async () => ({
+        ok: false,
+        code: "forbidden",
+        message: "This operator cannot change the external webhook.",
+        replayed: false,
+        needsReload: false,
+        status: null,
+        preflight: null,
+      }),
+      deactivateExternalWebhookDestinationAction: async () => ({
+        ok: false,
+        code: "forbidden",
+        message: "This operator cannot change the external webhook.",
+        replayed: false,
+        needsReload: false,
+        status: null,
+        preflight: null,
+      }),
+    };
+  }
   if (request === "@/app/actions/source-campaign-request") {
     return {
       submitSourceCampaignRequestAction: async () => ({
@@ -241,6 +290,10 @@ test("a successful save stores the request and does not activate delivery", asyn
   fireEvent.click(screen.getByRole("radio", { name: "Both" }));
   fireEvent.click(screen.getByRole("button", { name: "Save destination choice" }));
   await screen.findByText(/destination choice was saved/i);
+  assert.equal(await screen.findByText("External webhook configuration is turned off. Nothing can be saved or enabled from this screen."), await screen.findByText("External webhook configuration is turned off. Nothing can be saved or enabled from this screen."));
+  assert.ok(screen.getAllByText("Company Sheets").length >= 2);
+  assert.equal(screen.getByText("Native GoHighLevel destination").textContent, "Native GoHighLevel destination");
+  assert.equal(screen.queryByRole("button", { name: "Save disabled configuration" }), null);
   assert.equal(saves.length, 1);
   assert.equal(saves[0]?.expectedRevision, 2);
   assert.equal(saves[0]?.data.destinationChoice, "both");

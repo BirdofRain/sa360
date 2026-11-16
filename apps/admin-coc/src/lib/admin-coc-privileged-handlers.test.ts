@@ -36,6 +36,9 @@ const STAFF_WORKSPACE_ACTIONS = new Map<string, "team_workspace" | "team_manager
   ["createGuidedClientAction", "team_manager"],
   ["updateGuidedClientAction", "team_manager"],
   ["saveGuidedSetupAction", "team_manager"],
+  ["readExternalWebhookDestinationAction", "team_workspace"],
+  ["preflightExternalWebhookDestinationAction", "team_manager"],
+  ["saveExternalWebhookDestinationAction", "team_manager"],
 ]);
 
 const PUBLIC_BFF_PREFIXES = ["client-portal/", "front-office/", "health/"];

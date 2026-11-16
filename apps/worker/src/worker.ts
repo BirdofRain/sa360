@@ -5,6 +5,7 @@ import {
   COMPANY_SHEETS_DISPATCH_QUEUE,
   GHL_ASSOCIATION_DISPATCH_QUEUE,
   EXTERNAL_WEBHOOK_DELIVERY_QUEUE,
+  EXTERNAL_WEBHOOK_NOTICE_QUEUE,
   CONSUMER_AGE_BIRTHDAY_SWEEP_QUEUE,
   FACETS_SUPPLY_REBUILD_QUEUE,
   FULFILLMENT_SHADOW_QUEUE,
@@ -24,12 +25,14 @@ import { processConsumerAgeBirthdaySweepJob } from "./processors/consumer-age-bi
 import { processCompanySheetsDispatchJob } from "./processors/company-sheets-dispatch.processor.js";
 import { processGhlAssociationDispatchJob } from "./processors/ghl-association-dispatch.processor.js";
 import { processExternalWebhookDeliveryJob } from "./processors/external-webhook-delivery.processor.js";
+import { processExternalWebhookNoticeJob } from "./processors/external-webhook-notice.processor.js";
 import { logBulkImportWorkerStartupDiagnostics } from "./lib/bulk-import-worker-diagnostics.js";
 import { syncFacetsSupplyRebuildScheduleOnWorkerStart } from "./lib/facets-supply-rebuild-schedule.js";
 import { syncConsumerAgeBirthdaySweepScheduleOnWorkerStart } from "./lib/consumer-age-birthday-sweep-schedule.js";
 import { syncCompanySheetsDispatchScheduleOnWorkerStart } from "./lib/company-sheets-dispatch-schedule.js";
 import { syncGhlAssociationDispatchScheduleOnWorkerStart } from "./lib/ghl-association-dispatch-schedule.js";
 import { syncExternalWebhookDeliveryScheduleOnWorkerStart } from "./lib/external-webhook-delivery-schedule.js";
+import { syncExternalWebhookNoticeScheduleOnWorkerStart } from "./lib/external-webhook-notice-schedule.js";
 
 dotenv.config();
 
@@ -126,6 +129,15 @@ const externalWebhookDeliveryWorker = new Worker(
   }
 );
 
+const externalWebhookNoticeWorker = new Worker(
+  EXTERNAL_WEBHOOK_NOTICE_QUEUE,
+  (job) => processExternalWebhookNoticeJob(job),
+  {
+    connection: redis,
+    concurrency: 1,
+  }
+);
+
 const worker = metaWorker;
 
 worker.on("completed", (job) => {
@@ -202,6 +214,17 @@ externalWebhookDeliveryWorker.on("failed", (job, err) => {
   });
 });
 
+externalWebhookNoticeWorker.on("completed", (job) => {
+  logger.info("External webhook notice job completed", { jobId: job.id });
+});
+
+externalWebhookNoticeWorker.on("failed", (job, err) => {
+  logger.error("External webhook notice job failed", {
+    jobId: job?.id,
+    error: err.message,
+  });
+});
+
 worker.on("failed", (job, err) => {
   const job_id = String(job?.id ?? "unknown");
   const request_id = `worker:${job_id}`;
@@ -261,6 +284,11 @@ void syncExternalWebhookDeliveryScheduleOnWorkerStart().catch((err) => {
     error: err instanceof Error ? err.message : String(err),
   });
 });
+void syncExternalWebhookNoticeScheduleOnWorkerStart().catch((err) => {
+  logger.error("External webhook notice schedule sync failed", {
+    error: err instanceof Error ? err.message : String(err),
+  });
+});
 
 async function shutdown(signal: string) {
   stopRuntimeDiagnostics();
@@ -274,6 +302,7 @@ async function shutdown(signal: string) {
   await companySheetsDispatchWorker.close();
   await ghlAssociationDispatchWorker.close();
   await externalWebhookDeliveryWorker.close();
+  await externalWebhookNoticeWorker.close();
   await flushLogger();
   process.exit(0);
 }

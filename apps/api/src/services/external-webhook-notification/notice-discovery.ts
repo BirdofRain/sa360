@@ -18,6 +18,8 @@ import type { TwilioConfigResult } from "./twilio-programmable-messaging.js";
 export const EXTERNAL_WEBHOOK_NOTICE_DISPATCH_ENABLED_ENV = "SA360_EXTERNAL_WEBHOOK_NOTICE_DISPATCH_ENABLED";
 export const EXTERNAL_WEBHOOK_NOTICE_DISCOVERY_LAG_MS = 30_000;
 export const EXTERNAL_WEBHOOK_NOTICE_DISCOVERY_PAGE = 25;
+/** How long a restricted role keeps rechecking an ineligible decision. */
+export const EXTERNAL_WEBHOOK_NOTICE_RESTRICTED_REVISIT_MS = 15 * 60 * 1000;
 const CURSOR_ID = "acceptance";
 
 /**
@@ -61,7 +63,9 @@ export async function discoverExternalWebhookNotices(
     env?: NodeJS.ProcessEnv;
     now?: Date;
     limit?: number;
-    enqueue?: (receiptId: string) => Promise<void>;
+    enqueue?: (receiptId: string) => Promise<unknown>;
+    /** Test seam. Production reads the database role and does not grant extra privileges. */
+    transactionVisibility?: "snapshot" | "restricted";
     emailConfigured?: boolean;
     twilioConfig?: TwilioConfigResult;
   } = {}
@@ -77,9 +81,29 @@ export async function discoverExternalWebhookNotices(
   let enqueued = 0;
   let scanned = 0;
 
-  const revisitAfter = await oldestOtherTransactionStart(db);
-  if (stored?.lastHttpAcceptedAt && stored.lastAttemptId != null) {
+  const visibility = input.transactionVisibility ?? (await externalWebhookNoticeTransactionVisibility(db));
+  const revisitAfter =
+    visibility === "restricted"
+      ? new Date(now.getTime() + EXTERNAL_WEBHOOK_NOTICE_RESTRICTED_REVISIT_MS)
+      : await oldestOtherTransactionStart(db);
+  if (visibility === "snapshot" && stored?.lastHttpAcceptedAt && stored.lastAttemptId != null) {
     await releaseSettledDecisions(db, stored.lastHttpAcceptedAt, stored.lastAttemptId);
+  }
+  if (visibility === "restricted") {
+    const changed = await recheckProvisionalDecisions(db, now, limit, env, input, (receiptId) => {
+      enqueued += 1;
+      return input.enqueue?.(receiptId) ?? Promise.resolve();
+    });
+    scanned += changed;
+    if (changed === limit) {
+      return {
+        enabled: true,
+        scanned,
+        enqueued,
+        cursor: storedCursor(stored),
+        hasMore: true,
+      };
+    }
   }
   const holes =
     stored?.lastHttpAcceptedAt && stored.lastAttemptId != null
@@ -233,6 +257,73 @@ async function findUncoveredAcceptances(
   `;
 }
 
+/**
+ * `snapshot` when this role can read open-transaction times for sessions it is
+ * allowed to see. A normal application role sees its own other sessions, which
+ * is enough for preference and acceptance transactions it writes. This does
+ * not grant pg_monitor or pg_read_all_stats. `restricted` is the fail-safe
+ * when that catalog read fails: ineligible decisions are rechecked for 15 minutes.
+ * A transaction owned by a different role can still be invisible.
+ */
+export async function externalWebhookNoticeTransactionVisibility(
+  db: PrismaClient
+): Promise<"snapshot" | "restricted"> {
+  try {
+    const rows = await db.$queryRaw<Array<{ ok: number }>>`
+      SELECT 1 AS ok
+      FROM pg_roles
+      WHERE rolname = current_user
+    `;
+    return rows[0] ? "snapshot" : "restricted";
+  } catch {
+    return "restricted";
+  }
+}
+
+/** True only for superuser or an explicit stats role. Same-role sessions do not require it. */
+export async function externalWebhookNoticeRoleSeesAllTransactions(db: PrismaClient): Promise<boolean> {
+  const rows = await db.$queryRaw<Array<{ seesAll: boolean }>>`
+    SELECT (
+      rolsuper
+      OR pg_has_role(oid, 'pg_read_all_stats', 'MEMBER')
+      OR pg_has_role(oid, 'pg_monitor', 'MEMBER')
+    ) AS "seesAll"
+    FROM pg_roles
+    WHERE rolname = current_user
+  `;
+  return rows[0]?.seesAll === true;
+}
+
+async function recheckProvisionalDecisions(
+  db: PrismaClient,
+  now: Date,
+  limit: number,
+  env: NodeJS.ProcessEnv,
+  input: { emailConfigured?: boolean; twilioConfig?: TwilioConfigResult },
+  onPending: (receiptId: string) => Promise<unknown>
+): Promise<number> {
+  const rows = await db.externalWebhookNoticeChannelDecision.findMany({
+    where: { revisitAfter: { gt: now }, reason: { in: [...REVISITABLE] } },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    take: limit,
+    select: { id: true, attemptId: true, channel: true },
+  });
+  let changed = 0;
+  for (const row of rows) {
+    if (row.channel !== "email" && row.channel !== "sms") continue;
+    const recorded = await recordEligibleExternalWebhookNotice(
+      db,
+      { attemptId: row.attemptId, channel: row.channel },
+      { emailConfigured: input.emailConfigured, twilioConfig: input.twilioConfig, env }
+    );
+    if (!recorded.ok) continue;
+    await db.externalWebhookNoticeChannelDecision.delete({ where: { id: row.id } });
+    if (recorded.receipt.status === "pending") await onPending(recorded.receipt.id);
+    changed += 1;
+  }
+  return changed;
+}
+
 async function oldestOtherTransactionStart(db: PrismaClient): Promise<Date | null> {
   try {
     const rows = await db.$queryRaw<Array<{ oldest: Date | null }>>`
@@ -273,7 +364,7 @@ async function settleAttempt(
   env: NodeJS.ProcessEnv,
   input: { emailConfigured?: boolean; twilioConfig?: TwilioConfigResult },
   revisitAfter: Date | null,
-  onPending: (receiptId: string) => Promise<void>
+  onPending: (receiptId: string) => Promise<unknown>
 ): Promise<boolean> {
   for (const channel of ["email", "sms"] as const) {
     const recorded = await recordEligibleExternalWebhookNotice(

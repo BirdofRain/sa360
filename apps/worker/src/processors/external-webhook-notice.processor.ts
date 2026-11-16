@@ -27,8 +27,7 @@ export type ExternalWebhookNoticeJobOptions = {
 };
 
 /**
- * Calls the unmounted internal notice routes. Flag off returns before HTTP.
- * This processor is not registered in worker.ts.
+ * Calls the internal notice routes. Flag off returns before HTTP.
  */
 export async function processExternalWebhookNoticeJob(
   job: Job,

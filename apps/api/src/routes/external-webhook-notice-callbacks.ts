@@ -18,15 +18,17 @@ type CallbackOpts = {
 };
 
 /**
- * Independent Twilio callback plugin. It is not registered from app.ts.
- * Mount later with `app.register(externalWebhookNoticeCallbackRoutes)`.
- * Unsigned requests do not change notice or consent state.
+ * Twilio callback plugin. Unsigned requests do not change notice or consent state.
+ * The form parser is added only when this plugin context does not already have one,
+ * so a parent intake parser is left in place.
  */
 export async function externalWebhookNoticeCallbackRoutes(app: FastifyInstance, opts: CallbackOpts = {}) {
-  app.addContentTypeParser("application/x-www-form-urlencoded", { parseAs: "string" }, (_request, body, done) => {
-    const text = typeof body === "string" ? body : body.toString("utf8");
-    done(null, Object.fromEntries(new URLSearchParams(text)));
-  });
+  if (!app.hasContentTypeParser("application/x-www-form-urlencoded")) {
+    app.addContentTypeParser("application/x-www-form-urlencoded", { parseAs: "string" }, (_request, body, done) => {
+      const text = typeof body === "string" ? body : body.toString("utf8");
+      done(null, Object.fromEntries(new URLSearchParams(text)));
+    });
+  }
 
   app.post("/integrations/twilio/external-webhook-notice/status", async (request, reply) => {
     const params = asParams(request.body);
@@ -61,6 +63,7 @@ function signed(
 }
 
 function asParams(body: unknown): Record<string, string> {
+  if (typeof body === "string") return Object.fromEntries(new URLSearchParams(body));
   if (!body || typeof body !== "object") return {};
   const params: Record<string, string> = {};
   for (const [key, value] of Object.entries(body)) {

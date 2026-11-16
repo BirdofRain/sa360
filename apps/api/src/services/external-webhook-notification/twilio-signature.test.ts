@@ -19,12 +19,16 @@ test("Twilio signatures cover the public URL and sorted fields", () => {
   assert.equal(twilioSignatureMatches(url, { ...params, MessageStatus: "failed" }, signature, token), false);
 });
 
-test("callback routes and the notice worker are not mounted", () => {
+test("callback routes and the notice worker are mounted, and the legacy scanner is not", () => {
   const app = readFileSync(path.join(repoRoot, "apps/api/src/app.ts"), "utf8");
   const worker = readFileSync(path.join(repoRoot, "apps/worker/src/worker.ts"), "utf8");
   assert.equal(app.includes("adminExternalWebhookConfigRoutes"), true);
-  assert.equal(app.includes("externalWebhookNoticeCallbackRoutes"), false);
-  assert.equal(app.includes("adminExternalWebhookNoticeDispatchRoutes"), false);
-  assert.equal(worker.includes("processExternalWebhookNoticeJob"), false);
+  assert.equal(app.includes("adminExternalWebhookDispatchRoutes"), true);
+  assert.equal(app.includes("externalWebhookNoticeCallbackRoutes"), true);
+  assert.equal(app.includes("adminExternalWebhookNoticeDispatchRoutes"), true);
+  assert.equal(worker.includes("processExternalWebhookNoticeJob"), true);
+  assert.equal(worker.includes("EXTERNAL_WEBHOOK_NOTICE_QUEUE"), true);
+  assert.equal(worker.includes("syncExternalWebhookNoticeScheduleOnWorkerStart"), true);
+  assert.equal(app.includes("scanCanonicalDeliveryNotifications"), false);
   assert.equal(worker.includes("scanCanonicalDeliveryNotifications"), false);
 });

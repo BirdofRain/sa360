@@ -19,7 +19,9 @@ import {
 import {
   createTwilioMessageClient,
   isSmsNotificationsEnabled,
+  publicTwilioStatusCallbackUrl,
   readTwilioMessagingConfig,
+  TWILIO_STATUS_CALLBACK_URL_ENV,
   type TwilioConfigResult,
   type TwilioPostResult,
 } from "./twilio-programmable-messaging.js";
@@ -37,6 +39,7 @@ export type NoticeSmsSender = (input: {
   body: string;
   messagingServiceSid: string;
   from: string | null;
+  statusCallback: string | null;
 }) => Promise<TwilioPostResult>;
 
 /**
@@ -73,10 +76,14 @@ export async function dispatchExternalWebhookNotice(
     return { ok: true, skipped: current.status };
   }
   if (current.status !== "pending") return { ok: true, skipped: current.status };
+  const twilioConfig = current.channel === "sms" ? (deps.twilioConfig ?? readTwilioMessagingConfig(env)) : deps.twilioConfig;
+  if (current.channel === "sms" && twilioConfig && !twilioConfig.ok) {
+    return { ok: true, skipped: "invalid_twilio_config" };
+  }
   const claimed = await claimExternalWebhookNotice(
     db,
     { idempotencyKey: current.idempotencyKey, dispatchEnabled: isSmsNotificationsEnabled(env) },
-    { env, emailConfigured: deps.emailConfigured, twilioConfig: deps.twilioConfig }
+    { env, emailConfigured: deps.emailConfigured, twilioConfig }
   );
   if (!claimed.claimed || !claimed.receipt) {
     return { ok: true, skipped: claimed.claimed ? "not_pending" : claimed.reason };
@@ -103,20 +110,18 @@ export async function dispatchExternalWebhookNotice(
       await markExternalWebhookNoticeUncertain(db, { idempotencyKey: claimed.receipt.idempotencyKey });
       return { ok: true, status: "uncertain" };
     }
-    const config = deps.twilioConfig ?? readTwilioMessagingConfig(env);
-    if (!config.ok) {
-      await markExternalWebhookNoticeFailed(db, { idempotencyKey: claimed.receipt.idempotencyKey, providerCode: null });
-      return { ok: true, status: "failed" };
+    if (!twilioConfig?.ok) {
+      return { ok: true, skipped: "invalid_twilio_config" };
     }
-    const send = deps.sms ?? ((input) =>
-      createTwilioMessageClient(config.config, fetch).postMessage({
-        ...input,
-      }));
+    const config = twilioConfig;
+    const statusCallback = publicTwilioStatusCallbackUrl(env[TWILIO_STATUS_CALLBACK_URL_ENV]);
+    const send = deps.sms ?? ((input) => createTwilioMessageClient(config.config, fetch).postMessage(input));
     const posted = await send({
       to: claimed.receipt.recipient,
       body: EXTERNAL_WEBHOOK_SMS_TEMPLATES.delivery_accepted,
       messagingServiceSid: config.config.messagingServiceSid,
       from: config.config.from,
+      statusCallback,
     });
     if (!posted.ok && posted.errorClass === "stop_suppressed") {
       await markExternalWebhookNoticeProviderStop(db, { idempotencyKey: claimed.receipt.idempotencyKey });

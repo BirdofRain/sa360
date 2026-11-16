@@ -4419,6 +4419,24 @@ model ExternalWebhookNoticeDiscoveryCursor {
   updatedAt          DateTime  @updatedAt
 }
 
+/// Durable mark that an accepted attempt was considered for one channel and
+/// was not eligible. A missing row is not a decision, so reconciliation can
+/// still create the receipt. This does not send.
+model ExternalWebhookNoticeChannelDecision {
+  id        String                       @id @default(cuid())
+  attemptId String
+  channel   ExternalWebhookNoticeChannel
+  /// Safe reason code. No phone, address, or lead payload.
+  reason    String
+  /// When set, another transaction was open at decision time. The row is
+  /// deleted and the channel is evaluated again after that transaction ends.
+  revisitAfter DateTime?
+  createdAt DateTime                     @default(now())
+
+  @@unique([attemptId, channel], map: "ExternalWebhookNoticeChannelDecision_attempt_channel_key")
+  @@index([attemptId])
+}
+
 /// One accepted Admin C.O.C. write of a notification recipient or on/off choice.
 /// requestId is the idempotency key. A repeat of the same id and payload returns
 /// the stored result. A different payload for that id conflicts. Deleting the

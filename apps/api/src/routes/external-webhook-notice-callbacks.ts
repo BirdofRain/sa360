@@ -3,9 +3,12 @@ import type { FastifyInstance } from "fastify";
 import { prisma } from "../lib/db.js";
 import { applyTwilioInboundOptOut, applyTwilioNoticeStatus } from "../services/external-webhook-notification/notice-callbacks.js";
 import { twilioSignatureMatches } from "../services/external-webhook-notification/twilio-signature.js";
-import { TWILIO_AUTH_TOKEN_ENV } from "../services/external-webhook-notification/twilio-programmable-messaging.js";
+import {
+  TWILIO_AUTH_TOKEN_ENV,
+  TWILIO_STATUS_CALLBACK_URL_ENV,
+} from "../services/external-webhook-notification/twilio-programmable-messaging.js";
 
-export const TWILIO_STATUS_CALLBACK_URL_ENV = "SA360_TWILIO_STATUS_CALLBACK_URL";
+export { TWILIO_STATUS_CALLBACK_URL_ENV };
 export const TWILIO_INBOUND_CALLBACK_URL_ENV = "SA360_TWILIO_INBOUND_CALLBACK_URL";
 
 type CallbackOpts = {

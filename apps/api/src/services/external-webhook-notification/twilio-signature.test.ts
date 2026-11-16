@@ -22,6 +22,7 @@ test("Twilio signatures cover the public URL and sorted fields", () => {
 test("callback routes and the notice worker are not mounted", () => {
   const app = readFileSync(path.join(repoRoot, "apps/api/src/app.ts"), "utf8");
   const worker = readFileSync(path.join(repoRoot, "apps/worker/src/worker.ts"), "utf8");
+  assert.equal(app.includes("adminExternalWebhookConfigRoutes"), true);
   assert.equal(app.includes("externalWebhookNoticeCallbackRoutes"), false);
   assert.equal(app.includes("adminExternalWebhookNoticeDispatchRoutes"), false);
   assert.equal(worker.includes("processExternalWebhookNoticeJob"), false);

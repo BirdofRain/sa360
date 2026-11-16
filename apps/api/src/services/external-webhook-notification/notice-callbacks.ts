@@ -6,7 +6,7 @@
 
 import type { PrismaClient } from "@prisma/client";
 
-import { suppressSmsLocally } from "./sms-consent.js";
+import { suppressSmsPhone } from "./sms-consent.js";
 import {
   markExternalWebhookNoticeDeliveryConfirmed,
   markExternalWebhookNoticeFailed,
@@ -87,11 +87,7 @@ export async function applyTwilioInboundOptOut(
   if (isTwilioStartKeyword(body) || !isTwilioStopKeyword(body)) return { ok: true, applied: "ignored" };
   const from = params.From?.trim() ?? "";
   if (!/^\+[1-9]\d{7,14}$/.test(from)) return { ok: true, applied: "ignored" };
-  const preference = await db.clientDeliveryNotificationPreference.findFirst({
-    where: { recipientPhoneE164: from },
-    select: { clientAccountId: true },
-  });
-  if (!preference) return { ok: true, applied: "ignored" };
-  await suppressSmsLocally(db, { clientAccountId: preference.clientAccountId });
+  const suppressed = await suppressSmsPhone(db, from);
+  if (suppressed.suppressed === 0) return { ok: true, applied: "ignored" };
   return { ok: true, applied: "suppressed" };
 }

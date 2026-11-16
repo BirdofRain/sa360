@@ -12,6 +12,7 @@ export const TWILIO_ACCOUNT_SID_ENV = "SA360_TWILIO_ACCOUNT_SID";
 export const TWILIO_AUTH_TOKEN_ENV = "SA360_TWILIO_AUTH_TOKEN";
 export const TWILIO_MESSAGING_SERVICE_SID_ENV = "SA360_TWILIO_MESSAGING_SERVICE_SID";
 export const TWILIO_SMS_FROM_ENV = "SA360_TWILIO_SMS_FROM";
+export const TWILIO_STATUS_CALLBACK_URL_ENV = "SA360_TWILIO_STATUS_CALLBACK_URL";
 
 export const TWILIO_API_HOST = "https://api.twilio.com";
 export const TWILIO_MESSAGES_PATH_PREFIX = "/2010-04-01/Accounts/";
@@ -169,6 +170,8 @@ export type TwilioCreateMessageRequest = {
   to: string;
   body: string;
   from: string | null;
+  /** Public HTTPS status callback. Omitted unless it passes publicTwilioStatusCallbackUrl. */
+  statusCallback?: string | null;
 };
 
 export type TwilioPostResult =
@@ -197,7 +200,29 @@ export type TwilioOutboundMessage = {
   body: string;
   messagingServiceSid: string;
   from: string | null;
+  statusCallback?: string | null;
 };
+
+const PRIVATE_CALLBACK_HOST = /^(localhost|.*\.localhost|.*\.local|.*\.internal)$/i;
+
+/** HTTPS callback with a public host. Internal, admin, and loopback URLs are refused. */
+export function publicTwilioStatusCallbackUrl(value: string | undefined | null): string | null {
+  if (!value?.trim()) return null;
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) return null;
+  if (url.pathname.includes("/admin")) return null;
+  const host = url.hostname.toLowerCase();
+  if (PRIVATE_CALLBACK_HOST.test(host)) return null;
+  if (host === "0.0.0.0" || host === "::1" || host.startsWith("127.") || host.startsWith("10.")) return null;
+  if (/^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)) return null;
+  if (host === "169.254.169.254" || host.endsWith(".nip.io")) return null;
+  return url.toString();
+}
 
 export type TwilioMessageClient = {
   postMessage(message: TwilioOutboundMessage): Promise<TwilioPostResult>;
@@ -228,6 +253,8 @@ export async function postTwilioProgrammableMessage(
     Body: request.body,
   });
   if (request.from) form.set("From", request.from);
+  const statusCallback = publicTwilioStatusCallbackUrl(request.statusCallback);
+  if (statusCallback) form.set("StatusCallback", statusCallback);
   const authorization = `Basic ${Buffer.from(`${request.accountSid}:${request.authToken}`, "utf8").toString("base64")}`;
   try {
     const response = await fetchImpl(url, {

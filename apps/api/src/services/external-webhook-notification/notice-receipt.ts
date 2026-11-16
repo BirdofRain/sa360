@@ -22,7 +22,7 @@ import {
   providerStatusIsStorable,
   type ExternalWebhookNoticeStatusName,
 } from "./notice-status.js";
-import { SMS_CONSENT_VERSION } from "./sms-consent.js";
+import { SMS_CONSENT_VERSION, suppressSmsPhone } from "./sms-consent.js";
 import { isSmsNotificationsEnabled, readTwilioMessagingConfig } from "./twilio-programmable-messaging.js";
 
 const MESSAGE_ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -152,6 +152,12 @@ export async function claimExternalWebhookNotice(
   if (current.channel === "sms" && !(input.dispatchEnabled ?? isSmsNotificationsEnabled(env))) {
     return { ok: false, claimed: false, reason: "sms_disabled", receipt: toView(current) };
   }
+  if (current.channel === "sms") {
+    const config = deps.twilioConfig ?? readTwilioMessagingConfig(env);
+    if (!config.ok) {
+      return { ok: false, claimed: false, reason: "invalid_twilio_config", receipt: toView(current) };
+    }
+  }
   if (current.channel === "email" && !(deps.emailConfigured ?? isTransactionalEmailConfigured())) {
     return { ok: false, claimed: false, reason: "email_not_configured", receipt: toView(current) };
   }
@@ -266,6 +272,9 @@ export async function markExternalWebhookNoticeProviderStop(
       )
     `;
   });
+  if (current.channel === "sms" && /^\+[1-9]\d{7,14}$/.test(current.recipient)) {
+    await suppressSmsPhone(db, current.recipient);
+  }
   const receipt = await db.externalWebhookNotificationReceipt.findUnique({
     where: { idempotencyKey: current.idempotencyKey },
     select: receiptSelect,
@@ -343,34 +352,64 @@ async function loadEligibility(
     preference.smsSuppressionState === "clear" &&
     preference.smsConsentVersion === SMS_CONSENT_VERSION &&
     Boolean(preference.smsConsentRecordedAt);
-  const plan = prepareExternalWebhookNotification(
-    {
-      event: {
-        acceptanceId: attempt.id,
-        clientAccountId: attempt.clientAccountId,
-        sourceLeadEventId: attempt.sourceLeadEventId,
-        destinationId: attempt.destinationId,
-        attemptId: attempt.id,
-        httpStatus: attempt.httpStatus,
-        acceptedAt: attempt.httpAcceptedAt.toISOString(),
-      },
-      channel,
-      recipient,
-      preferenceEnabled: preference?.enabled === true,
-      recipientVerified: Boolean(preference?.recipientEmailVerifiedAt),
-      enabledAt: preference?.enabledAt?.toISOString() ?? null,
-      templateId: "delivery_accepted",
-      sms: {
-        optIn: { optedIn, recordedAt: smsClock?.toISOString() ?? null },
-        stopState: preference?.smsSuppressionState ?? "unknown",
-      },
+  const input = {
+    event: {
+      acceptanceId: attempt.id,
+      clientAccountId: attempt.clientAccountId,
+      sourceLeadEventId: attempt.sourceLeadEventId,
+      destinationId: attempt.destinationId,
+      attemptId: attempt.id,
+      httpStatus: attempt.httpStatus,
+      acceptedAt: attempt.httpAcceptedAt.toISOString(),
     },
-    {
+    channel,
+    recipient,
+    preferenceEnabled: preference?.enabled === true,
+    recipientVerified: Boolean(preference?.recipientEmailVerifiedAt),
+    enabledAt: preference?.enabledAt?.toISOString() ?? null,
+    templateId: "delivery_accepted" as const,
+    sms: {
+      optIn: { optedIn, recordedAt: smsClock?.toISOString() ?? null },
+      stopState: preference?.smsSuppressionState ?? "unknown",
+    },
+  };
+  let plan = prepareExternalWebhookNotification(input, {
+    smsEnabled: true,
+    emailConfigured: channel === "email" ? (deps.emailConfigured ?? isTransactionalEmailConfigured()) : true,
+    twilioConfig: channel === "sms" ? (deps.twilioConfig ?? readTwilioMessagingConfig(deps.env)) : undefined,
+  });
+  if (plan.action === "skip" && (plan.reason === "email_not_configured" || plan.reason === "invalid_twilio_config")) {
+    const ready = prepareExternalWebhookNotification(input, {
       smsEnabled: true,
-      emailConfigured: channel === "email" ? (deps.emailConfigured ?? isTransactionalEmailConfigured()) : true,
-      twilioConfig: channel === "sms" ? (deps.twilioConfig ?? readTwilioMessagingConfig(deps.env)) : undefined,
+      emailConfigured: true,
+      twilioConfig: {
+        ok: true,
+        config: {
+          accountSid: "AC00000000000000000000000000000000",
+          authToken: "00000000000000000000000000000000",
+          messagingServiceSid: "MG00000000000000000000000000000000",
+          from: null,
+        },
+      },
+    });
+    if (ready.action === "skip") {
+      plan = ready;
+    } else {
+      return {
+        ok: true,
+        attempt: {
+          id: attempt.id,
+          clientAccountId: attempt.clientAccountId,
+          sourceLeadEventId: attempt.sourceLeadEventId,
+          destinationId: attempt.destinationId,
+          httpAcceptedAt: attempt.httpAcceptedAt,
+        },
+        recipient: ready.request.to,
+        idempotencyKey: ready.idempotencyKey,
+        terminalSuppression: null,
+      };
     }
-  );
+  }
   if (plan.action === "skip") {
     if (plan.reason === "before_enabled_at" || plan.reason === "stop_suppressed") {
       const key = externalWebhookNotificationIdempotencyKey({

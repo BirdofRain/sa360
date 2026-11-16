@@ -56,6 +56,29 @@ const repairRequiredSetup: ClientSetup = {
   operationalEffects: false,
 };
 
+test("destination sharing and source notes stay a request, not verification", () => {
+  render(
+    <ClientSetupPanel
+      client={client}
+      initialSetup={{
+        ...repairRequiredSetup,
+        repairRequired: false,
+        data: { destinationChoice: "google_sheets", accessRecipient: "ray@example.com" },
+      }}
+    />
+  );
+
+  fireEvent.click(screen.getByRole("tab", { name: "source" }));
+  assert.ok(screen.getByText(/notes below are not verification/i));
+  assert.ok(screen.getAllByText(/This is not verification/i).length >= 2);
+
+  fireEvent.click(screen.getByRole("tab", { name: "destination" }));
+  assert.ok(screen.getByText("Share spreadsheet with (email)"));
+  assert.ok(screen.getByDisplayValue("ray@example.com"));
+  assert.ok(screen.getByText(/does not share the spreadsheet/i));
+  assert.equal(screen.queryByText("Client access recipient"), null);
+});
+
 test("repair-required review state directs recovery and never claims completion", () => {
   render(<ClientSetupPanel client={client} initialSetup={repairRequiredSetup} />);
 

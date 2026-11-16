@@ -120,6 +120,7 @@ export function ClientSetupPanel({
             <h2 className="text-lg font-semibold">Client setup</h2>
             <p className="text-sm text-muted-foreground">
               Save a configuration request for review. Nothing here activates routing or delivery.
+              Sources and destinations already stored for this client are in the read-only summary above.
             </p>
           </div>
           <Badge variant="outline">{setup.status.replaceAll("_", " ")}</Badge>
@@ -183,7 +184,12 @@ export function ClientSetupPanel({
               <Field label="Client email" value={text(data, "clientEmail")} onChange={(value) => update("clientEmail", value || null)} type="email" />
               <Field label="Client phone" value={text(data, "clientPhone")} onChange={(value) => update("clientPhone", value || null)} type="tel" />
               <Field label="Geography" value={text(data, "geography")} onChange={(value) => update("geography", value || null)} placeholder="States, regions, or service area" />
-              <Field label="Setup owner" value={text(data, "setupOwner")} onChange={(value) => update("setupOwner", value || null)} />
+              <div className="grid gap-1.5">
+                <Field label="Setup owner" value={text(data, "setupOwner")} onChange={(value) => update("setupOwner", value || null)} />
+                <p className="text-xs text-muted-foreground">
+                  A name saved here is a label on this request. It does not identify a staff account or grant access.
+                </p>
+              </div>
               <Field label="Planned go-live date" value={text(data, "plannedGoLiveDate")} onChange={(value) => update("plannedGoLiveDate", value || null)} type="date" />
             </div>
             <div className="grid gap-2 text-sm md:grid-cols-2">
@@ -195,6 +201,11 @@ export function ClientSetupPanel({
 
         {tab === "source" ? (
           <>
+            <p className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+              Page URL, funnel id, campaign id, and lead times that SA360 already stored are shown in
+              the summary above. This form keeps a request. It does not copy those records, and the
+              notes below are not verification.
+            </p>
             <div className="grid gap-4 md:grid-cols-2">
               <SelectField label="Source provider" value={data.sourceProvider ?? ""} onChange={(value) => update("sourceProvider", (value || null) as ClientSetupData["sourceProvider"])}>
                 <option value="">Select provider…</option>
@@ -222,8 +233,8 @@ export function ClientSetupPanel({
                 <p className="mt-1">Duplicate a known working webhook, avoid two active webhooks on one funnel, preserve the native payload and immutable lead UUID, and never manufacture a missing funnel ID. A synthetic request is not final source proof.</p>
               </div>
             ) : null}
-            <label className="flex gap-2 text-sm"><input type="checkbox" checked={data.webhookConfigured === true} onChange={(event) => update("webhookConfigured", event.target.checked)} /> Webhook configuration checked</label>
-            <label className="flex gap-2 text-sm"><input type="checkbox" checked={data.sourceTestSubmitted === true} onChange={(event) => update("sourceTestSubmitted", event.target.checked)} /> Source-generated test submitted</label>
+            <label className="flex gap-2 text-sm"><input type="checkbox" checked={data.webhookConfigured === true} onChange={(event) => update("webhookConfigured", event.target.checked)} /> Operator note: webhook looked configured. This is not verification.</label>
+            <label className="flex gap-2 text-sm"><input type="checkbox" checked={data.sourceTestSubmitted === true} onChange={(event) => update("sourceTestSubmitted", event.target.checked)} /> Operator note: a source test was submitted. This is not verification.</label>
           </>
         ) : null}
 
@@ -260,7 +271,12 @@ export function ClientSetupPanel({
                 {data.sheetsMode === "create_new" ? <Field label="Requested spreadsheet name" value={text(data, "requestedSpreadsheetName")} onChange={(value) => update("requestedSpreadsheetName", value || null)} /> : null}
                 <Field label="Tab (optional)" value={text(data, "worksheetName")} onChange={(value) => update("worksheetName", value || null)} />
                 <Field label="Folder (optional)" value={text(data, "requestedFolder")} onChange={(value) => update("requestedFolder", value || null)} />
-                <Field label="Client access recipient" value={text(data, "accessRecipient")} onChange={(value) => update("accessRecipient", value || null)} type="email" />
+                <div className="grid gap-1.5 md:col-span-2">
+                  <Field label="Share spreadsheet with (email)" value={text(data, "accessRecipient")} onChange={(value) => update("accessRecipient", value || null)} type="email" />
+                  <p className="text-xs text-muted-foreground">
+                    Optional. Records an email for a later share. Saving this request does not share the spreadsheet or grant access.
+                  </p>
+                </div>
                 <SelectField label="Requested access level" value={data.accessLevel ?? ""} onChange={(value) => update("accessLevel", (value || null) as ClientSetupData["accessLevel"])}>
                   <option value="">Select level…</option><option value="viewer">Viewer</option><option value="commenter">Commenter</option><option value="editor">Editor</option>
                 </SelectField>
@@ -291,6 +307,7 @@ export function ClientSetupPanel({
             <div className="rounded-md border p-3 text-xs text-muted-foreground">
               Administrative review is separate from source receipt, exact client association,
               GHL delivery verification, Sheets delivery verification, and live activation.
+              Marking setup reviewed does not verify a source, a destination, or a delivery.
             </div>
             <div className="flex flex-wrap gap-2">
               <Button type="button" onClick={() => save("submit")} disabled={pending || setup.repairRequired}>Submit for review</Button>

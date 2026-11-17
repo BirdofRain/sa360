@@ -28,7 +28,7 @@ export const EXTERNAL_WEBHOOK_EMAIL_PROVIDER = "resend" as const;
  */
 export const EXTERNAL_WEBHOOK_SMS_TEMPLATES = {
   delivery_accepted:
-    "SA360: your delivery destination accepted the webhook. Open Team Workspace for the receipt. Reply STOP to opt out.",
+    "Life Agent Launch: a delivery webhook was accepted. Reply STOP to opt out. Reply HELP for help. Msg & data rates may apply.",
 } as const;
 
 export const EXTERNAL_WEBHOOK_EMAIL_TEMPLATES = {

@@ -23,6 +23,7 @@ import {
 import { CLIENT_PORTAL_SESSION_COOKIE } from "@/lib/client-portal/portal-session-cookie";
 import { verifyPortalSessionTokenEdge } from "@/lib/client-portal/portal-session-edge";
 import { isFrontOfficeDevPreview } from "@/lib/front-office/auth-edge";
+import { isSmsOptInPrivacyPath, smsOptInPrivacyHeaders } from "@/lib/client-portal/portal-public-paths";
 
 function isClientPortalLiveConfigured(): boolean {
   const base =
@@ -30,6 +31,14 @@ function isClientPortalLiveConfigured(): boolean {
     process.env.NEXT_PUBLIC_API_BASE_URL?.trim();
   const key = process.env.CLIENT_PORTAL_API_KEY?.trim();
   return Boolean(base && key);
+}
+
+function applySmsOptInPrivacyHeaders(response: NextResponse, pathname: string): NextResponse {
+  if (!isSmsOptInPrivacyPath(pathname)) return response;
+  for (const [key, value] of Object.entries(smsOptInPrivacyHeaders())) {
+    response.headers.set(key, value);
+  }
+  return response;
 }
 
 function applyAuthenticatedCacheHeaders(response: NextResponse, pathname: string, reviewer: boolean) {
@@ -77,15 +86,21 @@ export async function middleware(request: NextRequest) {
     case "rewrite": {
       const url = request.nextUrl.clone();
       url.pathname = decision.pathname;
-      return NextResponse.rewrite(url);
+      return applySmsOptInPrivacyHeaders(NextResponse.rewrite(url), pathname);
     }
     case "not-found":
-      return new NextResponse("Not Found", {
-        status: 404,
-        headers: { "content-type": "text/plain; charset=utf-8" },
-      });
+      return applySmsOptInPrivacyHeaders(
+        new NextResponse("Not Found", {
+          status: 404,
+          headers: { "content-type": "text/plain; charset=utf-8" },
+        }),
+        pathname
+      );
     case "unauthorized":
-      return NextResponse.json({ ok: false, error: "Sign in required" }, { status: 401 });
+      return applySmsOptInPrivacyHeaders(
+        NextResponse.json({ ok: false, error: "Sign in required" }, { status: 401 }),
+        pathname
+      );
     case "forbidden":
       if (decision.surface === "api") {
         return applyAuthenticatedCacheHeaders(
@@ -104,10 +119,13 @@ export async function middleware(request: NextRequest) {
           hasMetaReviewerSession
         );
       }
-      return new NextResponse("Forbidden — read-only observer", {
-        status: 403,
-        headers: { "content-type": "text/plain; charset=utf-8" },
-      });
+      return applySmsOptInPrivacyHeaders(
+        new NextResponse("Forbidden — read-only observer", {
+          status: 403,
+          headers: { "content-type": "text/plain; charset=utf-8" },
+        }),
+        pathname
+      );
     case "redirect": {
       const target = new URL(decision.pathname, request.url);
       if (decision.next) target.searchParams.set("next", decision.next);
@@ -125,7 +143,10 @@ export async function middleware(request: NextRequest) {
           getContentSecurityPolicyForAgentWorkspaceEmbed()
         );
       }
-      return applyAuthenticatedCacheHeaders(res, pathname, hasMetaReviewerSession);
+      return applySmsOptInPrivacyHeaders(
+        applyAuthenticatedCacheHeaders(res, pathname, hasMetaReviewerSession),
+        pathname
+      );
     }
   }
 }

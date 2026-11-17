@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 
 import { prisma } from "../lib/db.js";
-import { applyTwilioInboundOptOut, applyTwilioNoticeStatus } from "../services/external-webhook-notification/notice-callbacks.js";
+import { applyTwilioInboundMessage, applyTwilioNoticeStatus } from "../services/external-webhook-notification/notice-callbacks.js";
 import { twilioSignatureMatches } from "../services/external-webhook-notification/twilio-signature.js";
 import {
   TWILIO_AUTH_TOKEN_ENV,
@@ -15,6 +15,7 @@ type CallbackOpts = {
   statusUrl?: string;
   inboundUrl?: string;
   authToken?: string;
+  env?: NodeJS.ProcessEnv;
 };
 
 /**
@@ -46,7 +47,7 @@ export async function externalWebhookNoticeCallbackRoutes(app: FastifyInstance, 
     if (!signed(request.headers["x-twilio-signature"], params, url, opts.authToken)) {
       return reply.code(403).send({ ok: false, error: "invalid_signature" });
     }
-    const result = await applyTwilioInboundOptOut(prisma, params);
+    const result = await applyTwilioInboundMessage(prisma, params, opts.env ?? process.env);
     return reply.send(result);
   });
 }

@@ -22,7 +22,7 @@ import {
   providerStatusIsStorable,
   type ExternalWebhookNoticeStatusName,
 } from "./notice-status.js";
-import { SMS_CONSENT_VERSION, suppressSmsPhone } from "./sms-consent.js";
+import { smsConsentAllowsNotice, suppressSmsPhone } from "./sms-consent.js";
 import { isSmsNotificationsEnabled, readTwilioMessagingConfig } from "./twilio-programmable-messaging.js";
 
 const MESSAGE_ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -347,11 +347,7 @@ async function loadEligibility(
   }
   const recipient = channel === "email" ? preference?.recipientEmail ?? "" : preference?.recipientPhoneE164 ?? "";
   const smsClock = laterDate(preference?.smsConsentRecordedAt ?? null, preference?.smsEnabledAt ?? null);
-  const optedIn =
-    preference?.smsEnabled === true &&
-    preference.smsSuppressionState === "clear" &&
-    preference.smsConsentVersion === SMS_CONSENT_VERSION &&
-    Boolean(preference.smsConsentRecordedAt);
+  const optedIn = preference ? smsConsentAllowsNotice(preference) : false;
   const input = {
     event: {
       acceptanceId: attempt.id,

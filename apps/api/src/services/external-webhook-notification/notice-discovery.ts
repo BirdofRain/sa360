@@ -11,6 +11,8 @@
 
 import type { PrismaClient } from "@prisma/client";
 
+import { readSmsCanaryIsolation } from "@sa360/shared";
+
 import { recordEligibleExternalWebhookNotice } from "./notice-receipt.js";
 import type { NotificationSkipReason } from "./notification-contract.js";
 import type { TwilioConfigResult } from "./twilio-programmable-messaging.js";
@@ -71,8 +73,18 @@ export async function discoverExternalWebhookNotices(
     emailConfigured?: boolean;
     twilioConfig?: TwilioConfigResult;
   } = {}
-): Promise<{ enabled: boolean; scanned: number; enqueued: number; cursor: NoticeDiscoveryCursor; hasMore: boolean }> {
+): Promise<{
+  enabled: boolean;
+  scanned: number;
+  enqueued: number;
+  cursor: NoticeDiscoveryCursor;
+  hasMore: boolean;
+  skipped?: "canary_isolation";
+}> {
   const env = input.env ?? process.env;
+  if (readSmsCanaryIsolation(env).mode !== "off") {
+    return { enabled: false, scanned: 0, enqueued: 0, cursor: null, hasMore: false, skipped: "canary_isolation" };
+  }
   if (!isExternalWebhookNoticeDispatchEnabled(env)) {
     return { enabled: false, scanned: 0, enqueued: 0, cursor: null, hasMore: false };
   }

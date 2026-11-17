@@ -36,6 +36,9 @@ import { adminExternalWebhookDispatchRoutes } from "./routes/admin-external-webh
 import { adminExternalWebhookConfigRoutes } from "./routes/admin-external-webhook-config.js";
 import { adminExternalWebhookNoticeDispatchRoutes } from "./routes/admin-external-webhook-notice-dispatch.js";
 import { externalWebhookNoticeCallbackRoutes } from "./routes/external-webhook-notice-callbacks.js";
+import { clientSmsOptInRoutes } from "./routes/client-sms-opt-in.js";
+import { publicSmsOptInRoutes } from "./routes/public-sms-opt-in.js";
+import { adminSmsVerbalConsentRoutes } from "./routes/admin-sms-verbal-consent.js";
 import { adminGhlOAuthRoutes, integrationsGhlRoutes } from "./routes/integrations-ghl.js";
 import {
   clientGoogleIntegrationRoutes,
@@ -189,6 +192,8 @@ export async function buildApp() {
   await app.register(adminSupportTicketRoutes, { prefix: "/admin/v1" });
   await app.register(adminClientOnboardingV2ReadRoutes, { prefix: "/admin/v1" });
   await app.register(adminTeamWorkspaceRoutes, { prefix: "/admin/v1" });
+  // Verbal notes stay pending. They do not enable SMS.
+  await app.register(adminSmsVerbalConsentRoutes, { prefix: "/admin/v1" });
   // Proposal only. This route does not confirm a source or write a routing rule.
   await app.register(adminSourceCampaignRequestRoutes, { prefix: "/admin/v1" });
   // Configuration request only. This route does not write ClientGhlDestination or arm delivery.
@@ -231,6 +236,8 @@ export async function buildApp() {
     prefix: "/admin/v1/action-dashboard",
   });
   await app.register(clientPortalRoutes, { prefix: "/client/v1" });
+  await app.register(clientSmsOptInRoutes, { prefix: "/client/v1" });
+  await app.register(publicSmsOptInRoutes);
   await app.register(clientAccountProfileRoutes, { prefix: "/client/v1" });
   await app.register(clientGoogleIntegrationRoutes, { prefix: "/client/v1" });
   await app.register(clientCompanySheetsReadRoutes, { prefix: "/client/v1" });

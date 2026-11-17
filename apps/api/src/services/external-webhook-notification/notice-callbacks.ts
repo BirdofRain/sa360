@@ -6,7 +6,7 @@
 
 import type { PrismaClient } from "@prisma/client";
 
-import { suppressSmsPhone } from "./sms-consent.js";
+import { confirmSmsHandsetInbound, suppressSmsPhone } from "./sms-consent.js";
 import {
   markExternalWebhookNoticeDeliveryConfirmed,
   markExternalWebhookNoticeFailed,
@@ -17,9 +17,14 @@ import { providerStatusConfirmsDelivery, providerStatusIsStorable } from "./noti
 import { isTwilioStartKeyword, isTwilioStopKeyword } from "./notice-dispatch.js";
 
 export const SMS_INBOUND_OPT_OUT_ENABLED_ENV = "SA360_SMS_INBOUND_OPT_OUT_ENABLED";
+export const SMS_HANDSET_PROOF_ENABLED_ENV = "SA360_SMS_HANDSET_PROOF_ENABLED";
 
 export function isSmsInboundOptOutEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env[SMS_INBOUND_OPT_OUT_ENABLED_ENV]?.trim() === "true";
+}
+
+export function isSmsHandsetProofEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env[SMS_HANDSET_PROOF_ENABLED_ENV]?.trim() === "true";
 }
 
 export async function applyTwilioNoticeStatus(
@@ -75,6 +80,28 @@ export async function applyTwilioNoticeStatus(
     return { ok: true, applied: "updated" };
   }
   return { ok: true, applied: "duplicate" };
+}
+
+/**
+ * STOP and handset proof are separate. START never clears suppression and never proves a handset.
+ * OWN is ignored unless the handset-proof flag is the exact string true.
+ */
+export async function applyTwilioInboundMessage(
+  db: PrismaClient,
+  params: { From?: string; Body?: string },
+  env: NodeJS.ProcessEnv = process.env
+): Promise<{ ok: true; applied: "gated" | "ignored" | "suppressed" | "handset_proven" }> {
+  const body = params.Body ?? "";
+  if (isTwilioStopKeyword(body) || isTwilioStartKeyword(body)) {
+    return applyTwilioInboundOptOut(db, params, env);
+  }
+  const own = /^OWN\s+(\d{6})$/i.exec(body.trim());
+  if (!own) return { ok: true, applied: "ignored" };
+  if (!isSmsHandsetProofEnabled(env)) return { ok: true, applied: "gated" };
+  const from = params.From?.trim() ?? "";
+  const confirmed = await confirmSmsHandsetInbound(db, { phoneE164: from, code: own[1] ?? "" });
+  if (!confirmed.ok || !confirmed.preference.smsHandsetProvenAt) return { ok: true, applied: "ignored" };
+  return { ok: true, applied: "handset_proven" };
 }
 
 export async function applyTwilioInboundOptOut(

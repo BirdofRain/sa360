@@ -20,7 +20,13 @@ const WORKSPACE_READS = [
   new RegExp(`^/admin/v1/clients/${CLIENT_ID}/external-webhook$`),
   new RegExp(`^/admin/v1/clients/${CLIENT_ID}/onboarding-attribution/${REQUEST_ID}$`),
   new RegExp(`^/admin/v1/team-workspace/clients/${CLIENT_ID}$`),
+  new RegExp(`^/admin/v1/team-workspace/clients/${CLIENT_ID}/sms-consent-status$`),
   new RegExp(`^/admin/v1/team-workspace/clients/${CLIENT_ID}/source-campaign-review$`),
+];
+
+const SMS_WRITES: Array<{ method: string; pattern: RegExp }> = [
+  { method: "POST", pattern: new RegExp(`^/admin/v1/team-workspace/clients/${CLIENT_ID}/sms-verbal-consent$`) },
+  { method: "POST", pattern: new RegExp(`^/admin/v1/team-workspace/clients/${CLIENT_ID}/sms-opt-in-link$`) },
 ];
 
 const MANAGER_WRITES: Array<{ method: string; pattern: RegExp }> = [
@@ -48,6 +54,8 @@ export function staffWorkspaceAdminApiAllowed(
     if (!permissions.includes("team_workspace")) return false;
     return WORKSPACE_READS.some((pattern) => pattern.test(pathname));
   }
+  const smsWrite = SMS_WRITES.some((entry) => entry.method === upper && entry.pattern.test(pathname));
+  if (smsWrite) return permissions.includes("team_workspace") || permissions.includes("team_manager");
   if (!permissions.includes("team_manager")) return false;
   return MANAGER_WRITES.some((entry) => entry.method === upper && entry.pattern.test(pathname));
 }

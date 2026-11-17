@@ -6,7 +6,7 @@
  * and historical source events stay untouched.
  */
 
-import type { PrismaClient, SourceFunnel } from "@prisma/client";
+import type { Prisma, PrismaClient, SourceFunnel } from "@prisma/client";
 import { isCampaignLeadTypeKey, type CampaignLeadTypeKey } from "@sa360/shared";
 
 import { prisma } from "../../lib/db.js";
@@ -53,17 +53,19 @@ export async function configureSourceFunnelLeadType(
   if (!actor) throw new SourceFunnelLeadTypeError("actor_rejected");
 
   const sourceFunnelId = input.sourceFunnelId.trim();
-  const current = await findSourceFunnelById(sourceFunnelId, db);
-  if (!current) throw new SourceFunnelLeadTypeError("source_funnel_not_found");
-  if (input.leadTypeKey === undefined) return { sourceFunnel: current, changed: false };
+  if (input.leadTypeKey === undefined) {
+    const current = await findSourceFunnelById(sourceFunnelId, db);
+    if (!current) throw new SourceFunnelLeadTypeError("source_funnel_not_found");
+    return { sourceFunnel: current, changed: false };
+  }
 
   const next = normalizeNextKey(input.leadTypeKey);
-  if (current.leadTypeKey === next) return { sourceFunnel: current, changed: false };
-
-  const sourceFunnel = await db.$transaction(async (tx) => {
-    const locked = await tx.sourceFunnel.findUnique({ where: { id: current.id } });
+  return db.$transaction(async (tx) => {
+    const lockedId = await lockSourceFunnelId(tx, sourceFunnelId);
+    if (!lockedId) throw new SourceFunnelLeadTypeError("source_funnel_not_found");
+    const locked = await tx.sourceFunnel.findUnique({ where: { id: lockedId } });
     if (!locked) throw new SourceFunnelLeadTypeError("source_funnel_not_found");
-    if (locked.leadTypeKey === next) return locked;
+    if (locked.leadTypeKey === next) return { sourceFunnel: locked, changed: false };
     const updated = await tx.sourceFunnel.update({
       where: { id: locked.id },
       data: { leadTypeKey: next },
@@ -76,9 +78,19 @@ export async function configureSourceFunnelLeadType(
         actor,
       },
     });
-    return updated;
+    return { sourceFunnel: updated, changed: true };
   });
-  return { sourceFunnel, changed: sourceFunnel.leadTypeKey !== current.leadTypeKey };
+}
+
+/** Serialize Lead Type writes so the audit previous value is the locked row. */
+async function lockSourceFunnelId(
+  tx: Prisma.TransactionClient,
+  sourceFunnelId: string
+): Promise<string | null> {
+  const rows = await tx.$queryRaw<Array<{ id: string }>>`
+    SELECT id FROM "SourceFunnel" WHERE id = ${sourceFunnelId} FOR UPDATE
+  `;
+  return rows[0]?.id ?? null;
 }
 
 function normalizeNextKey(raw: string | null): CampaignLeadTypeKey | null {

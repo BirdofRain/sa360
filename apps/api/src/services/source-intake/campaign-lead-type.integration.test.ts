@@ -56,7 +56,7 @@ function payload(input: {
     product_type: "Final Expense",
     sa360_route_key: input.routeKey,
     ...(input.campaignId ? { campaign_id: input.campaignId } : {}),
-    ...(input.campaignLeadType ? { campaign_lead_type: input.campaignLeadType } : {}),
+    ...(input.campaignLeadType ? { sa360_campaign_lead_type: input.campaignLeadType } : {}),
   };
 }
 
@@ -327,6 +327,30 @@ describe("campaign lead type at intake", { skip: !runIntegration, concurrency: 1
     assert.equal(decision.binding.id, rayFunnelId);
   });
 
+  it("does not let a consumer answer impersonate campaign lead type", async () => {
+    const body = payload({
+      leadId: leadId("402"),
+      parentUrl: RAY_URL,
+      routeKey: "CLT_RAY_ANSWER_563F",
+      phone: "5555634402",
+    });
+    body.campaign_lead_type = "nurse_web_form";
+    body.healthcare_profession = "Vet Web Form";
+    body.answers = { sa360_campaign_lead_type: "Trucker Web Form", campaign_lead_type: "vet_web_form" };
+    body.routing = {
+      campaign_lead_type: "nurse_web_form",
+      source_intake: { campaign_lead_type: "Vet Web Form" },
+    };
+    const result = await intake(body);
+    const { decision } = await storedDecision(result.sourceEventId);
+    assert.equal(decision.status, "resolved");
+    assert.equal(decision.leadTypeKey, "vet_web_form");
+    assert.equal(decision.leadTypeLabel, "Vet Web Form");
+    assert.equal(decision.evidence.trustedKey, null);
+    assert.equal(decision.evidence.trustedAdapter, null);
+    assert.equal(decision.binding.id, rayFunnelId);
+  });
+
   it("records agreement when trusted evidence matches the binding", async () => {
     const result = await intake(
       payload({
@@ -433,6 +457,33 @@ describe("campaign lead type at intake", { skip: !runIntegration, concurrency: 1
     assert.equal(laterDecision.leadTypeLabel, "Trucker Web Form");
     assert.equal((await storedDecision(first.sourceEventId)).decision.leadTypeLabel, "Vet Web Form");
 
+    await admin(`/admin/v1/source-funnels/${rayFunnelId}/lead-type`, { leadTypeKey: "vet_web_form" });
+  });
+
+  it("records concurrent Lead Type edits from the locked previous value", async () => {
+    const cleared = await admin(`/admin/v1/source-funnels/${rayFunnelId}/lead-type`, { leadTypeKey: null });
+    assert.equal(cleared.statusCode, 200);
+    const before = await db.sourceFunnelLeadTypeAudit.count({ where: { sourceFunnelId: rayFunnelId } });
+    const [vet, nurse] = await Promise.all([
+      admin(`/admin/v1/source-funnels/${rayFunnelId}/lead-type`, { leadTypeKey: "vet_web_form" }),
+      admin(`/admin/v1/source-funnels/${rayFunnelId}/lead-type`, { leadTypeKey: "nurse_web_form" }),
+    ]);
+    assert.equal(vet.statusCode, 200);
+    assert.equal(nurse.statusCode, 200);
+    const audits = await db.sourceFunnelLeadTypeAudit.findMany({
+      where: { sourceFunnelId: rayFunnelId },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    });
+    const added = audits.slice(before);
+    assert.equal(added.length, 2);
+    const first = added.find((row) => row.previousKey === null);
+    const second = added.find((row) => row.previousKey !== null);
+    assert.ok(first?.nextKey);
+    assert.equal(second?.previousKey, first.nextKey);
+    assert.notEqual(second?.nextKey, first.nextKey);
+    const stored = await db.sourceFunnel.findUniqueOrThrow({ where: { id: rayFunnelId } });
+    assert.equal(stored.leadTypeKey, second?.nextKey);
+    assert.equal(stored.originClientAccountId, RAY);
     await admin(`/admin/v1/source-funnels/${rayFunnelId}/lead-type`, { leadTypeKey: "vet_web_form" });
   });
 });

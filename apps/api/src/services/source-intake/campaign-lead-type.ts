@@ -3,10 +3,11 @@
  *
  * The decision comes from the binding that won routing. A confirmed source
  * association contributes its configured key. An exact campaign rule does not
- * inherit a key from a source association it bypassed. Provider text is
- * trusted only when it is an explicit campaign lead type field that matches
- * the controlled catalog exactly. URL text, niche, product, sheet headers,
- * and inventory are not evidence.
+ * inherit a key from a source association it bypassed. A catalog key or exact
+ * label only validates vocabulary. The value is trusted when it is the
+ * integration field `sa360_campaign_lead_type` and that field is not a
+ * consumer answer. URL text, niche, product, sheet headers, inventory, and
+ * form answers are not evidence.
  *
  * The display label is copied onto the decision. A later catalog label change
  * does not rewrite a decision that was already stored.
@@ -24,7 +25,10 @@ import { isExactRoutingRuleMatchType } from "../routing-matcher.service.js";
 
 export const CAMPAIGN_LEAD_TYPE_DECISION_VERSION = 1 as const;
 
-export const TRUSTED_CAMPAIGN_LEAD_TYPE_ADAPTER = "campaign_lead_type_catalog" as const;
+/** Integration metadata field. Not a LeadCapture answer key. */
+export const AUTHORITATIVE_CAMPAIGN_LEAD_TYPE_FIELD = "sa360_campaign_lead_type" as const;
+
+export const TRUSTED_CAMPAIGN_LEAD_TYPE_ADAPTER = AUTHORITATIVE_CAMPAIGN_LEAD_TYPE_FIELD;
 
 export type CampaignLeadTypeStatus = "resolved" | "agreement" | "conflict" | "unresolved";
 
@@ -100,30 +104,37 @@ export function parseTrustedCampaignLeadTypeValue(raw: unknown): CampaignLeadTyp
   return campaignLeadTypeKeyFromLabel(value);
 }
 
+function answerContainerHas(
+  root: Record<string, unknown>,
+  field: typeof AUTHORITATIVE_CAMPAIGN_LEAD_TYPE_FIELD
+): boolean {
+  for (const containerKey of ["answers", "form"] as const) {
+    const container = asRecord(root[containerKey]);
+    if (!container || !(field in container)) continue;
+    const value = container[field];
+    if (value == null) continue;
+    if (typeof value === "string" && value.trim() === "") continue;
+    return true;
+  }
+  return false;
+}
+
 /**
- * Trust provider input only from the explicit campaign lead type fields.
- * The first present value must validate. Niche `lead_type`, product, URL,
- * funnel name, and sheet headers are ignored.
+ * Trust one integration field, and only when a consumer answer did not supply it.
+ * A matching catalog key or label is vocabulary, not authority. `campaign_lead_type`
+ * shares the LeadCapture answer namespace with survey fields, so it is ignored.
+ * Nested `routing` copies, sheet headers, niche, and custom form answers are ignored.
  */
 export function readTrustedCampaignLeadType(payload: unknown): TrustedCampaignLeadType | null {
   const root = asRecord(payload);
   if (!root) return null;
-  const routing = asRecord(root.routing);
-  const sourceIntake = routing ? asRecord(routing.source_intake) : null;
-  const candidates = [
-    root.campaign_lead_type,
-    root.sa360_campaign_lead_type,
-    routing?.campaign_lead_type,
-    sourceIntake?.campaign_lead_type,
-  ];
-  for (const candidate of candidates) {
-    if (candidate == null) continue;
-    if (typeof candidate === "string" && candidate.trim() === "") continue;
-    const key = parseTrustedCampaignLeadTypeValue(candidate);
-    if (!key) return null;
-    return { key, adapter: TRUSTED_CAMPAIGN_LEAD_TYPE_ADAPTER };
-  }
-  return null;
+  if (answerContainerHas(root, AUTHORITATIVE_CAMPAIGN_LEAD_TYPE_FIELD)) return null;
+  const candidate = root[AUTHORITATIVE_CAMPAIGN_LEAD_TYPE_FIELD];
+  if (candidate == null) return null;
+  if (typeof candidate === "string" && candidate.trim() === "") return null;
+  const key = parseTrustedCampaignLeadTypeValue(candidate);
+  if (!key) return null;
+  return { key, adapter: TRUSTED_CAMPAIGN_LEAD_TYPE_ADAPTER };
 }
 
 function labelFor(

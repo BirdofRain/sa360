@@ -582,3 +582,34 @@ test("observed custom-domain same slug warns and does not auto-substitute", asyn
   });
 });
 
+test("confirmed source Lead Type save does not change client ownership", async () => {
+  const calls: Array<{ id: string; key: string | null }> = [];
+  const { confirmCalls, reassignCalls, clearCalls } = renderSection(
+    [confirmed("sf_ray", "learn-ray-rodriguez-563f", "Ray Rodriguez")],
+    {
+      configureLeadTypeAction: async (sourceFunnelId, leadTypeKey) => {
+        calls.push({ id: sourceFunnelId, key: leadTypeKey });
+        return {
+          ok: true,
+          changed: true,
+          item: {
+            ...confirmed("sf_ray", "learn-ray-rodriguez-563f", "Ray Rodriguez"),
+            leadTypeKey,
+            leadTypeLabel: "Vet Web Form",
+          },
+        };
+      },
+    }
+  );
+  fireEvent.change(screen.getByLabelText("Lead Type for Ray Rodriguez"), {
+    target: { value: "vet_web_form" },
+  });
+  await waitFor(() => {
+    assert.deepEqual(calls, [{ id: "sf_ray", key: "vet_web_form" }]);
+  });
+  assert.deepEqual(confirmCalls, []);
+  assert.deepEqual(reassignCalls, []);
+  assert.deepEqual(clearCalls, []);
+  assert.ok(screen.getByText(/Client ownership was not changed/));
+});
+

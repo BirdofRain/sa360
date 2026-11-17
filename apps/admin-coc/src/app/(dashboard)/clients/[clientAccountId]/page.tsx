@@ -5,6 +5,7 @@ import { Suspense } from "react";
 import {
   associateClientSourceFunnelAction,
   clearClientSourceFunnelAssociationAction,
+  configureClientSourceFunnelLeadTypeAction,
   confirmClientSourceFunnelAction,
   listClientSourceFunnelsAction,
   reassignClientSourceFunnelAction,
@@ -218,6 +219,7 @@ export default async function ClientDetailPage({
             confirmAction={confirmClientSourceFunnelAction}
             reassignAction={reassignClientSourceFunnelAction}
             clearAction={clearClientSourceFunnelAssociationAction}
+            configureLeadTypeAction={configureClientSourceFunnelLeadTypeAction}
           />
           <ClientDetailPanel initialClient={data.item} />
         </div>

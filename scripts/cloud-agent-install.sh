@@ -63,6 +63,9 @@ REDIS_URL=redis://127.0.0.1:6379
 # localhost host with a database name containing "test".
 SA360_TEST_DATABASE_URL=postgresql://sa360:sa360password@127.0.0.1:5432/sa360_test
 SA360_TEST_REDIS_URL=redis://127.0.0.1:6379
+# Local services only. Do not export this into `next build`: Next.js 15 keeps
+# a pre-set NODE_ENV=development and the Admin C.O.C. prerender then crashes.
+# apps/admin-coc/scripts/production-build.cjs forces production for that build.
 NODE_ENV=development
 ENV
 else

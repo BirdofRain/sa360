@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "node ./scripts/production-build.cjs",
     "start": "next start",
     "lint": "next lint",
     "test": "tsx --import ./src/test/happy-dom-register.ts --test \"src/**/*.test.ts\" \"src/**/*.test.tsx\""

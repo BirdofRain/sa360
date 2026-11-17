@@ -9,11 +9,13 @@ import {
   fetchAdminClientSourceFunnels,
   postAdminClientSourceFunnel,
   postAdminSourceFunnelConfirm,
+  postAdminSourceFunnelLeadType,
   postAdminSourceFunnelReassign,
 } from "@/lib/admin-api/source-funnels-server";
 import type {
   AssociateSourceFunnelResult,
   ClearSourceFunnelSuccess,
+  ConfigureSourceFunnelLeadTypeSuccess,
   ConfirmSourceFunnelSuccess,
   ReassignSourceFunnelSuccess,
   SourceFunnelListResponse,
@@ -55,6 +57,15 @@ export async function reassignClientSourceFunnelAction(
   await requireAdminCocSession();
   await requireAdminCocAdminSession();
   return postAdminSourceFunnelReassign(sourceFunnelId, originClientAccountId);
+}
+
+export async function configureClientSourceFunnelLeadTypeAction(
+  sourceFunnelId: string,
+  leadTypeKey: string | null
+): Promise<ConfigureSourceFunnelLeadTypeSuccess | { ok: false; error: string }> {
+  await requireAdminCocSession();
+  await requireAdminCocAdminSession();
+  return postAdminSourceFunnelLeadType(sourceFunnelId, leadTypeKey);
 }
 
 export async function clearClientSourceFunnelAssociationAction(

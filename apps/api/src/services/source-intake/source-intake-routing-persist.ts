@@ -2,7 +2,11 @@ import type { SourceLeadEventStatus } from "@prisma/client";
 import type { LifecycleEventSchema } from "../../schemas/lifecycle-event.schema.js";
 import { prisma } from "../../lib/db.js";
 import { logger } from "../../lib/logger.js";
-import { updateSourceLeadEvent } from "../../repositories/source-lead-event.repository.js";
+import {
+  findSourceLeadEventById,
+  updateSourceLeadEvent,
+} from "../../repositories/source-lead-event.repository.js";
+import { findSourceFunnelById } from "../../repositories/source-funnel.repository.js";
 import { recordCompanySheetsCampaignIntent } from "../company-sheets-dispatch/company-sheets-dispatch-record.js";
 import { findCampaignRoutingRuleById } from "../../repositories/campaign-routing-rule.repository.js";
 import { findClientAccountById } from "../../repositories/client-account.repository.js";
@@ -14,6 +18,11 @@ import {
 } from "./source-enrichment-pipeline.service.js";
 import { hasDeliverableIdentity } from "./source-enrichment.service.js";
 import type { SourceLeadRoutingResult } from "./source-intake.types.js";
+import {
+  readCampaignLeadTypeDecision,
+  readTrustedCampaignLeadType,
+  resolveCampaignLeadType,
+} from "./campaign-lead-type.js";
 import { persistLeadProofFromPayload } from "../lead-proof/lead-proof-ingest.service.js";
 import { deliverConfirmedAssociationIfActivated } from "../association-ongoing-delivery.js";
 import {
@@ -70,6 +79,35 @@ export async function persistRoutingAndDuplicate(
     routingAuthority: dryRun.routingAuthority,
     ...(dryRun.sourceAssociation ? { sourceAssociation: dryRun.sourceAssociation } : {}),
   };
+
+  const priorEvent = await findSourceLeadEventById(sourceEventId);
+  const priorDecision = readCampaignLeadTypeDecision(priorEvent?.routingResultJson);
+  if (priorDecision) {
+    routing.campaignLeadType = priorDecision;
+  } else {
+    const associationId = routing.sourceAssociation?.sourceFunnelId ?? null;
+    const observedId = options?.sourceFunnelId ?? null;
+    const [associationFunnel, observedFunnel] = await Promise.all([
+      associationId ? findSourceFunnelById(associationId) : Promise.resolve(null),
+      observedId ? findSourceFunnelById(observedId) : Promise.resolve(null),
+    ]);
+    routing.campaignLeadType = resolveCampaignLeadType({
+      routingAuthority: routing.routingAuthority,
+      matched: routing.matched,
+      matchedRuleId: routing.matchedRuleId,
+      matchType: routing.matchType,
+      sourceAssociation: associationId
+        ? {
+            id: associationId,
+            leadTypeKey: associationFunnel?.leadTypeKey ?? null,
+          }
+        : null,
+      observedSource: observedFunnel
+        ? { id: observedFunnel.id, leadTypeKey: observedFunnel.leadTypeKey }
+        : null,
+      trusted: readTrustedCampaignLeadType(rawPayload) ?? readTrustedCampaignLeadType(normalized),
+    });
+  }
 
   const duplicateRisk = await evaluateSourceLeadDuplicateRisk({
     payload: normalized,

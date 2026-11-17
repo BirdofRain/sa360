@@ -8,6 +8,7 @@ import {
   type AssociateSourceFunnelResult,
   type AssociateSourceFunnelSuccess,
   type ClearSourceFunnelSuccess,
+  type ConfigureSourceFunnelLeadTypeSuccess,
   type ConfirmSourceFunnelSuccess,
   type ReassignSourceFunnelSuccess,
   type SourceFunnelListResponse,
@@ -69,6 +70,19 @@ export async function postAdminSourceFunnelReassign(
     "POST",
     `/admin/v1/source-funnels/${encodeURIComponent(sourceFunnelId)}/reassign`,
     { originClientAccountId }
+  );
+  if (res.ok) return res.data;
+  return { ok: false, error: formatAdminApiError(res) };
+}
+
+export async function postAdminSourceFunnelLeadType(
+  sourceFunnelId: string,
+  leadTypeKey: string | null
+): Promise<ConfigureSourceFunnelLeadTypeSuccess | { ok: false; error: string }> {
+  const res = await adminRequestJson<ConfigureSourceFunnelLeadTypeSuccess>(
+    "POST",
+    `/admin/v1/source-funnels/${encodeURIComponent(sourceFunnelId)}/lead-type`,
+    { leadTypeKey }
   );
   if (res.ok) return res.data;
   return { ok: false, error: formatAdminApiError(res) };

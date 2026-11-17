@@ -171,6 +171,7 @@ export async function processLeadCaptureIoWebhookIntake(
     now.toISOString(),
     now,
     {
+      sourceFunnelId: funnelObservation.sourceFunnel?.id ?? null,
       extraEnrichmentMetadata: {
         sourceFunnelId: funnelObservation.sourceFunnel?.id ?? null,
         sourceFunnelObserved: funnelObservation.observed,

@@ -18,6 +18,8 @@ export type SourceFunnelAdminItem = {
   associationStatus: SourceFunnelAssociationStatus;
   suggestedClientAccountId: string | null;
   originClientAccountId: string | null;
+  leadTypeKey?: string | null;
+  leadTypeLabel?: string | null;
   firstSeenAt: string | null;
   lastSeenAt: string | null;
 };
@@ -72,6 +74,12 @@ export type ReassignSourceFunnelSuccess = {
 export type ClearSourceFunnelSuccess = {
   ok: true;
   clearedInventoryCount: number;
+  item: SourceFunnelAdminItem;
+};
+
+export type ConfigureSourceFunnelLeadTypeSuccess = {
+  ok: true;
+  changed: boolean;
   item: SourceFunnelAdminItem;
 };
 

@@ -119,6 +119,7 @@ const columnMapPreviewSchema = z
     expectedRevision: z.number().int().nonnegative(),
     assignments: z.array(z.unknown()).max(80).optional(),
     previewToken: z.string().min(1).max(80),
+    sourceLeadEventId: z.string().trim().min(1).max(80).optional(),
     clientAccountId: z.string().optional(),
   })
   .strict();
@@ -422,6 +423,7 @@ export const adminClientOnboardingV2ConfigRoutes: FastifyPluginAsync<OnboardingC
       expectedRevision: parsed.data.expectedRevision,
       assignments: parsed.data.assignments,
       previewToken: parsed.data.previewToken,
+      sourceLeadEventId: parsed.data.sourceLeadEventId,
     });
     if (!preview.ok) return reply.status(preview.statusCode).send({ ok: false, error: preview.error, detail: preview.detail });
     return reply.send({ ok: true, preview: preview.preview, deliveryEnabled: false, sendsRow: false });

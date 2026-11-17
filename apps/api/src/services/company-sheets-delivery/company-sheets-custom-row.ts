@@ -37,7 +37,11 @@ import {
   projectCampaignDobAge,
   type CampaignDobAgePreview,
 } from "../consumer-age/campaign-dob-age.js";
-import { companySheetsCampaignRowValues, type CampaignSheetLeadInput } from "./company-sheets-campaign-row.js";
+import {
+  companySheetsCampaignRowValues,
+  projectSheetsLeadType,
+  type CampaignSheetLeadInput,
+} from "./company-sheets-campaign-row.js";
 
 export const COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA = "company_sheets_campaign_custom_v1";
 
@@ -361,6 +365,9 @@ export function explainDraftProjection(
     if (column.decision !== "mapped" || !column.target) {
       return cell(column, null, "", "", "unmapped");
     }
+    if (canonicalField === "lead_type" && projected.warnings.some((warning) => warning.startsWith("campaign_lead_type_"))) {
+      return cell(column, canonicalField, "", written, null);
+    }
     if (!receivedAnswer.trim() && written.trim()) {
       return cell(column, canonicalField, written, written, null);
     }
@@ -455,7 +462,7 @@ export function customRowProjection(
     if (column.transform === "date_america_new_york") value = formatDateAmericaNewYork(value);
     return value;
   });
-  const warnings: string[] = [];
+  const warnings: string[] = [...projectSheetsLeadType(lead).diagnostics];
   if (filledFromReason) warnings.push(PRIMARY_CONCERN_FILLED_FROM_REASON);
   if (omitted) warnings.push(PRIMARY_CONCERN_OMITTED);
   const dobAge = projectCampaignDobAge({

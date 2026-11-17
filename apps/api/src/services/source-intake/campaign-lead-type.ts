@@ -243,6 +243,25 @@ function nullableString(value: unknown): string | null | undefined {
   return value;
 }
 
+export type CampaignLeadTypeSnapshotInspection =
+  | { presence: "absent" }
+  | { presence: "malformed" }
+  | { presence: "decision"; decision: CampaignLeadTypeDecision };
+
+/**
+ * Distinguish a historical event with no snapshot from a snapshot that is present
+ * but cannot be read. Delivery must not treat the second case as absent.
+ */
+export function inspectCampaignLeadTypeSnapshot(routingResult: unknown): CampaignLeadTypeSnapshotInspection {
+  const root = asRecord(routingResult);
+  if (!root || !Object.prototype.hasOwnProperty.call(root, "campaignLeadType")) {
+    return { presence: "absent" };
+  }
+  const decision = readCampaignLeadTypeDecision(routingResult);
+  if (!decision) return { presence: "malformed" };
+  return { presence: "decision", decision };
+}
+
 /** Read a previously stored decision without applying today's catalog labels. */
 export function readCampaignLeadTypeDecision(routingResult: unknown): CampaignLeadTypeDecision | null {
   const root = asRecord(routingResult);

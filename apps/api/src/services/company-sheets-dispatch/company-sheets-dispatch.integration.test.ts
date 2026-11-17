@@ -799,6 +799,8 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
           receivedAt: lead.receivedAt.toISOString(),
           sourceLeadId: lead.sourceLeadId,
           normalizedPayload: lead.id === ruleLead.id ? rulePayload : pagePayload,
+          routingResultJson: lead.routingResultJson,
+          sheetsPresentation: true,
         });
         assert.ok(data.some((line) => JSON.stringify(line) === JSON.stringify(expected)));
       }

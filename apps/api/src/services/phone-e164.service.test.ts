@@ -5,6 +5,7 @@ import {
   buyerPhoneSpreadsheetCell,
   csvEscapePhoneAsText,
   formatBuyerPhoneSpreadsheetText,
+  formatSheetsPhoneDisplay,
   normalizeToE164,
   tryNormalizeStrictUsNanpE164,
   tryNormalizeToVerifiedE164,
@@ -95,6 +96,24 @@ describe("tryNormalizeStrictUsNanpE164", () => {
       ok: false,
       reason: "phone_overlong",
     });
+  });
+});
+
+describe("Sheets phone display", () => {
+  it("formats supported US numbers and preserves everything else", () => {
+    assert.equal(formatSheetsPhoneDisplay("+12025550100"), "(202) 555-0100");
+    assert.equal(formatSheetsPhoneDisplay("2025550100"), "(202) 555-0100");
+    assert.equal(formatSheetsPhoneDisplay("1-202-555-0100"), "(202) 555-0100");
+    assert.equal(formatSheetsPhoneDisplay("(202) 555-0100"), "(202) 555-0100");
+    assert.equal(formatSheetsPhoneDisplay(""), "");
+    assert.equal(formatSheetsPhoneDisplay("   "), "");
+    assert.equal(formatSheetsPhoneDisplay(null), "");
+    assert.equal(formatSheetsPhoneDisplay("2025550100 x12"), "2025550100 x12");
+    assert.equal(formatSheetsPhoneDisplay("2025550100 ext 12"), "2025550100 ext 12");
+    assert.equal(formatSheetsPhoneDisplay("123"), "123");
+    assert.equal(formatSheetsPhoneDisplay("+44 20 7946 0958"), "+44 20 7946 0958");
+    assert.equal(formatSheetsPhoneDisplay("not-a-phone"), "not-a-phone");
+    assert.equal(formatBuyerPhoneSpreadsheetText("2025550100"), "+12025550100");
   });
 });
 

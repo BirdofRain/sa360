@@ -12,6 +12,7 @@ import {
   type GuidedSetupSaveResult,
 } from "@/app/actions/team-workspace-onboarding";
 import { CompanySheetsDiscoveryGuide } from "@/components/team-workspace/company-sheets-discovery-guide";
+import { ExternalWebhookDestinationGuide, type ExternalWebhookGuideAccess } from "@/components/team-workspace/external-webhook-destination-guide";
 import { GhlDestinationGuide } from "@/components/team-workspace/ghl-destination-guide";
 import { SourceCampaignRequestPanel } from "@/components/team-workspace/source-campaign-request-panel";
 import { SourceCampaignReviewPanel } from "@/components/team-workspace/source-campaign-review-panel";
@@ -76,11 +77,13 @@ export function GuidedOnboarding({
   step,
   clients,
   notice = null,
+  webhookAccess = { canPrepare: false, canActivate: false },
 }: {
   model: GuidedOnboardingModel | null;
   step: GuideStepId;
   clients: { clientAccountId: string; clientDisplayName: string }[];
   notice?: "created" | null;
+  webhookAccess?: ExternalWebhookGuideAccess;
 }) {
   const router = useRouter();
   const token = guideSyncToken(model);
@@ -463,7 +466,7 @@ export function GuidedOnboarding({
           />
         ) : null}
         {model && current === "destination" ? (
-          <DestinationStep model={model} draft={draft} busy={busy} onDraft={updateDraft} onSave={() => void saveSetup("The destination choice was saved. GoHighLevel and Company Sheets were not changed, and delivery was not turned on.")} />
+          <DestinationStep model={model} draft={draft} busy={busy} webhookAccess={webhookAccess} onDraft={updateDraft} onSave={() => void saveSetup("The destination choice was saved. GoHighLevel and Company Sheets were not changed, and delivery was not turned on.")} />
         ) : null}
         {model && current === "summary" ? <SummaryStep model={model} busy={busy} onSave={() => void saveInformation()} /> : null}
       </div>
@@ -853,21 +856,23 @@ function DestinationStep({
   model,
   draft,
   busy,
+  webhookAccess,
   onDraft,
   onSave,
 }: {
   model: GuidedOnboardingModel;
   draft: GuidedSetupDraft;
   busy: boolean;
+  webhookAccess: ExternalWebhookGuideAccess;
   onDraft: (patch: Partial<GuidedSetupDraft>) => void;
   onSave: () => void;
 }) {
   const locked = busy || !model.setupWritable;
   const selected = draft.destinationChoice === "" || draft.destinationChoice === "undecided" ? "unset" : draft.destinationChoice;
   const options = [
-    { value: "ghl", label: "GoHighLevel" },
+    { value: "ghl", label: "Native GoHighLevel" },
     { value: "google_sheets", label: "Company Sheets" },
-    { value: "both", label: "Both" },
+    { value: "both", label: "Native GoHighLevel and Company Sheets" },
     ...(draft.destinationChoice === "intake_only" ? [{ value: "intake_only", label: "Intake only, already saved" }] : []),
     { value: "unset", label: "Not chosen yet" },
   ];
@@ -882,7 +887,12 @@ function DestinationStep({
       }}
     >
       <fieldset className="grid gap-2" disabled={locked}>
-        <legend className="text-sm font-medium text-slate-950">Intended destination</legend>
+        <legend className="text-sm font-medium text-slate-950">Onboarding intention</legend>
+        <p className="text-sm text-slate-600">
+          Saving this choice records an intention only. It does not activate delivery. Native GoHighLevel is a different
+          path from an external GoHighLevel inbound webhook. Company Sheets is independent. The external webhook below is
+          a separate operational configuration and is not one of these saved choices.
+        </p>
         {options.map((option) => (
           <label key={option.value} className="flex items-center gap-2 text-sm text-slate-800">
             <input
@@ -904,8 +914,19 @@ function DestinationStep({
         </Button>
       </div>
     </form>
-    <GhlDestinationGuide clientAccountId={model.clientAccountId} />
-    <CompanySheetsDiscoveryGuide clientAccountId={model.clientAccountId} />
+    <ExternalWebhookDestinationGuide clientAccountId={model.clientAccountId} access={webhookAccess} />
+    <details className="rounded-md border border-slate-200 p-3">
+      <summary className="cursor-pointer text-sm font-medium text-slate-950">Native GoHighLevel destination</summary>
+      <div className="mt-3">
+        <GhlDestinationGuide clientAccountId={model.clientAccountId} />
+      </div>
+    </details>
+    <details className="rounded-md border border-slate-200 p-3">
+      <summary className="cursor-pointer text-sm font-medium text-slate-950">Company Sheets</summary>
+      <div className="mt-3">
+        <CompanySheetsDiscoveryGuide clientAccountId={model.clientAccountId} />
+      </div>
+    </details>
     </div>
   );
 }
@@ -916,7 +937,7 @@ function DestinationReadout({ model }: { model: GuidedOnboardingModel }) {
   const sheets = model.destinations.companySheets;
   return (
     <ul className="space-y-1 text-sm text-slate-700">
-      <li>GoHighLevel row: {ghl.configured ? "Configured" : "Not configured"}. Delivery flag: {ghl.deliveryEnabled ? "on" : "off"}. The guide below separates configured, verified, and active.</li>
+      <li>Native GoHighLevel row: {ghl.configured ? "Configured" : "Not configured"}. Delivery flag: {ghl.deliveryEnabled ? "on" : "off"}. That row is not an external inbound webhook. The guide below separates configured, verified, and active.</li>
       <li>
         Company Sheets row: {sheets.configured ? "Configured" : "Not configured"}. Dispatch: {sheets.campaignDispatchEnabled || sheets.agedDispatchEnabled ? "Active" : "Off"}.
       </li>

@@ -2,7 +2,7 @@ import {
   reloadDeliveryNotificationPreferenceAction,
   saveDeliveryNotificationPreferenceAction,
 } from "@/app/actions/delivery-notification-preference";
-import { AdminCocForbiddenError } from "@/lib/admin-coc-session-guard";
+import { AdminCocForbiddenError, readAdminCocAccess } from "@/lib/admin-coc-session-guard";
 import { loadTeamWorkspaceClient } from "@/lib/team-workspace/load";
 import { parseGuideStep } from "@/lib/team-workspace/onboarding-guide";
 
@@ -26,6 +26,11 @@ export default async function TeamWorkspaceClientPage({
   const createdFlag = Array.isArray(created) ? created[0] : created;
   const step = parseGuideStep(requested) ?? "information";
   try {
+    const access = await readAdminCocAccess();
+    const webhookAccess = {
+      canPrepare: access.kind === "admin" || (access.kind === "staff_workspace" && access.permissions.includes("team_manager")),
+      canActivate: access.kind === "admin",
+    };
     const model = await loadTeamWorkspaceClient(clientAccountId);
     if (model.kind === "disabled") return <TeamWorkspaceDisabled />;
     if (model.kind === "invalid_client") {
@@ -68,7 +73,7 @@ export default async function TeamWorkspaceClientPage({
         {model.guide ? (
           <>
             <TeamWorkspaceIntro />
-            <GuidedOnboarding model={model.guide} step={step} clients={model.clients} notice={createdFlag === "1" ? "created" : null} />
+            <GuidedOnboarding model={model.guide} step={step} clients={model.clients} notice={createdFlag === "1" ? "created" : null} webhookAccess={webhookAccess} />
           </>
         ) : null}
         <TeamWorkspaceBoard

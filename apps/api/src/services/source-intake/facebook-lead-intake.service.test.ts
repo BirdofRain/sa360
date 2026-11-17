@@ -4,6 +4,8 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { deliverConfirmedAssociationIfActivated } from "../association-ongoing-delivery.js";
+import { ROUTING_AUTHORITY_CAMPAIGN_RULE } from "../routing-source-association.service.js";
 import {
   isFacebookLeadCanonicalProcessed,
   isFacebookLeadFullyProcessed,
@@ -25,10 +27,52 @@ test("Meta intake source never calls campaign inventory tracking", () => {
   );
 });
 
-test("Meta intake source does not reach live GHL delivery", () => {
-  assert.doesNotMatch(intakeSource, /enqueueGhl|ghl-live-canary|ghl-delivery-adapter-run|source-lead-delivery/);
-  assert.doesNotMatch(persistSource, /enqueueGhl|ghl-live-canary|ghl-delivery-adapter-run|source-lead-delivery/);
-  assert.match(persistSource, /No GHL delivery is performed here/);
+test("Meta intake source does not reach live GHL delivery", async () => {
+  assert.doesNotMatch(intakeSource, /enqueueGhl|ghl-live-canary|ghl-delivery-adapter-run|source-lead-delivery|executeRecordedGhlDelivery/);
+  assert.doesNotMatch(persistSource, /enqueueGhl|ghl-live-canary|ghl-delivery-adapter-run|source-lead-delivery|executeRecordedGhlDelivery/);
+  assert.doesNotMatch(intakeSource, /recordCompanySheets|company-sheets-dispatch|trackCampaignInventory|leadInventoryItem\.create|enqueueMetaDispatch/);
+
+  const captureReturn = intakeSource.indexOf("if (!routingEnabled)");
+  const persistCall = intakeSource.indexOf("await persistRoutingAndDuplicate(");
+  assert.ok(captureReturn > 0 && persistCall > captureReturn);
+  const captureOnly = intakeSource.slice(captureReturn, persistCall);
+  assert.match(captureOnly, /status: "normalized"/);
+  assert.doesNotMatch(captureOnly, /persistRoutingAndDuplicate|deliverConfirmedAssociationIfActivated|executeRecordedGhlDelivery/);
+
+  let liveCalls = 0;
+  const blocked = await deliverConfirmedAssociationIfActivated(
+    {
+      sourceLeadEventId: "evt_meta_campaign_rule",
+      status: "routing_matched",
+      routing: {
+        matched: true,
+        routingAuthority: ROUTING_AUTHORITY_CAMPAIGN_RULE,
+        routingDryRunDecisionId: "dec_meta",
+        destinationClientAccountId: "client_should_not_deliver",
+        destinationLocationIdGhl: "loc_should_not_deliver",
+      },
+    },
+    {
+      loadDestination: async () => {
+        throw new Error("live destination must not be loaded for a campaign-rule route");
+      },
+      runtimeCanExecute: async () => {
+        throw new Error("live runtime must not be consulted for a campaign-rule route");
+      },
+      duplicateBlocks: async () => false,
+      findPlan: async () => null,
+      createPlan: async () => ({ ok: false, reason: "must_not_create" }),
+      findRun: async () => null,
+      execute: async () => {
+        liveCalls += 1;
+        throw new Error("live GHL must not execute");
+      },
+    }
+  );
+  assert.equal(liveCalls, 0);
+  assert.equal(blocked.outcome, "skipped");
+  assert.equal(blocked.reason, "not_association");
+  assert.equal(blocked.externalCallExecuted, false);
 });
 
 test("Meta intake source does not reach Meta CAPI dispatch", () => {

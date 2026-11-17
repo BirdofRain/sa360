@@ -308,6 +308,7 @@ export async function loadMetaCaptureInventory(input?: {
           accessToken,
           appSecret: process.env.META_APP_SECRET?.trim() || null,
           appId: credential.appId ?? process.env.META_APP_ID?.trim() ?? null,
+          credentialKind: credential.kind,
           pageIds: credential.pageGrants.map((grant) => grant.pageId),
         });
         for (const form of discovery.forms.items) {

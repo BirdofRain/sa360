@@ -30,6 +30,7 @@ test("stored Page tokens are selected per Page and a disabled grant does not fal
           captureEnabled: true,
           credential: {
             id: "cred_a",
+            kind: "page_access_token" as const,
             status: "active" as const,
             expiresAt: null,
             scopes: ["leads_retrieval", "pages_manage_ads", "pages_read_engagement"],
@@ -46,6 +47,7 @@ test("stored Page tokens are selected per Page and a disabled grant does not fal
           captureEnabled: false,
           credential: {
             id: "cred_b",
+            kind: "page_access_token" as const,
             status: "active" as const,
             expiresAt: null,
             scopes: ["leads_retrieval", "pages_manage_ads", "pages_read_engagement"],
@@ -96,6 +98,7 @@ test("unknown Pages, expiry, and missing scopes fail closed without using anothe
           captureEnabled: true,
           credential: {
             id: "cred_exp",
+            kind: "page_access_token",
             status: "active",
             expiresAt: new Date("2020-01-01T00:00:00.000Z"),
             scopes: ["leads_retrieval", "pages_manage_ads", "pages_read_engagement"],
@@ -113,8 +116,9 @@ test("unknown Pages, expiry, and missing scopes fail closed without using anothe
       findGrantImpl: async () => ({
         pageId: PAGE_A,
         captureEnabled: true,
-        credential: {
+          credential: {
           id: "cred_scope",
+          kind: "page_access_token",
           status: "active",
           expiresAt: null,
           scopes: ["pages_show_list"],
@@ -170,6 +174,7 @@ test("enabling a test Page does not let the pilot env token fetch the pilot or t
           captureEnabled: true,
           credential: {
             id: "cred_test",
+            kind: "page_access_token" as const,
             status: "active" as const,
             expiresAt: null,
             scopes: ["leads_retrieval", "pages_manage_ads", "pages_read_engagement"],
@@ -186,6 +191,7 @@ test("enabling a test Page does not let the pilot env token fetch the pilot or t
           captureEnabled: false,
           credential: {
             id: "cred_pilot_hold",
+            kind: "page_access_token" as const,
             status: "active" as const,
             expiresAt: null,
             scopes: [] as string[],
@@ -228,6 +234,66 @@ test("enabling a test Page does not let the pilot env token fetch the pilot or t
       assert.equal(withoutHold.accessToken, envToken);
     }
   } finally {
+    if (saved === undefined) delete process.env.META_TOKEN_ENCRYPTION_KEY;
+    else process.env.META_TOKEN_ENCRYPTION_KEY = saved;
+  }
+});
+
+test("system user grant resolution does not call Graph and a disabled grant still fails closed", async () => {
+  const saved = process.env.META_TOKEN_ENCRYPTION_KEY;
+  process.env.META_TOKEN_ENCRYPTION_KEY = KEY;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new Error("Graph must not be called while resolving a capture grant");
+  };
+  try {
+    const systemUser = await resolveMetaCapturePageToken(PAGE_A, config(), {
+      findGrantImpl: async () => ({
+        pageId: PAGE_A,
+        captureEnabled: true,
+        credential: {
+          id: "cred_system",
+          kind: "system_user",
+          status: "active",
+          expiresAt: null,
+          scopes: ["leads_retrieval", "pages_manage_ads", "pages_read_engagement"],
+          tokenCiphertext: encryptMetaToken(TOKEN_A),
+          tokenFingerprint: metaTokenFingerprint(TOKEN_A),
+          lastDiagnostic: null,
+        },
+      }),
+    });
+    assert.equal(systemUser.ok, true);
+    if (systemUser.ok) {
+      assert.equal(systemUser.credentialKind, "system_user");
+      assert.equal(systemUser.accessToken, TOKEN_A);
+      assert.equal(systemUser.source, "stored_page");
+    }
+
+    const disabled = await resolveMetaCapturePageToken(PAGE_B, config({ unboundPageTokenEnabled: true }), {
+      findGrantImpl: async () => ({
+        pageId: PAGE_B,
+        captureEnabled: false,
+        credential: {
+          id: "cred_system_off",
+          kind: "system_user",
+          status: "active",
+          expiresAt: null,
+          scopes: [],
+          tokenCiphertext: encryptMetaToken(TOKEN_B),
+          tokenFingerprint: metaTokenFingerprint(TOKEN_B),
+          lastDiagnostic: null,
+        },
+      }),
+    });
+    assert.equal(disabled.ok, false);
+    if (!disabled.ok) {
+      assert.equal(disabled.reason, "capture_not_allowlisted");
+      assert.equal(disabled.diagnostic.includes(TOKEN_A), false);
+      assert.equal(disabled.diagnostic.includes(TOKEN_B), false);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
     if (saved === undefined) delete process.env.META_TOKEN_ENCRYPTION_KEY;
     else process.env.META_TOKEN_ENCRYPTION_KEY = saved;
   }

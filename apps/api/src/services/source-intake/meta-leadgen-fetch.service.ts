@@ -8,6 +8,11 @@ import {
 } from "../../lib/meta-webhook.js";
 import { redactMetaSecretText } from "../../lib/meta-token-encryption.js";
 import { resolveMetaCapturePageToken } from "./meta-page-token.service.js";
+import { readFacebookId } from "./facebook-form-association.js";
+import {
+  exchangeSystemUserPageToken,
+  type SystemUserPageTokenExchange,
+} from "./meta-system-user-page-token.js";
 import { isSettledCaptureOnlyFacebookEvent } from "./facebook-capture-provenance.js";
 import {
   FACEBOOK_LEAD_PROVIDER,
@@ -125,7 +130,29 @@ export type ProcessMetaLeadgenFetchDeps = {
    */
   beforeGraphFailurePersistImpl?: () => Promise<void>;
   resolvePageTokenImpl?: typeof resolveMetaCapturePageToken;
+  /**
+   * System user credentials are exchanged for one Page token before the lead
+   * GET. Tests inject this so they do not call Meta. Omitted uses Graph.
+   */
+  exchangeSystemUserPageTokenImpl?: typeof exchangeSystemUserPageToken;
 };
+
+function redactStoredGraphBody(
+  body: Record<string, unknown> | null,
+  secrets: Array<string | null | undefined>
+): Record<string, unknown> | null {
+  if (!body) return body;
+  const error = body.error;
+  if (typeof error === "string") {
+    return { ...body, error: redactMetaSecretText(error, secrets) };
+  }
+  if (error && typeof error === "object" && !Array.isArray(error)) {
+    const rec = error as Record<string, unknown>;
+    if (typeof rec.message !== "string") return body;
+    return { ...body, error: { ...rec, message: redactMetaSecretText(rec.message, secrets) } };
+  }
+  return body;
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -547,23 +574,124 @@ export async function processMetaLeadgenFetch(
       tokenCredentialId = token.credentialId;
       tokenFingerprint = token.tokenFingerprint;
 
+      const secretValues: Array<string | null | undefined> = [token.accessToken, config.appSecret];
+      let graphAccessToken = token.accessToken;
+      if (token.credentialKind === "system_user") {
+        const exchange = deps.exchangeSystemUserPageTokenImpl ?? exchangeSystemUserPageToken;
+        let exchanged: SystemUserPageTokenExchange;
+        try {
+          exchanged = await exchange({
+            systemUserToken: token.accessToken,
+            pageId: envelope.pageId ?? "",
+            appSecret: config.appSecret,
+            graphApiVersion: config.graphApiVersion,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "page_token_exchange_threw";
+          exchanged = {
+            ok: false,
+            reason: "page_token_exchange_unavailable",
+            retryable: true,
+            diagnostic: redactMetaSecretText(
+              `The system user credential could not be exchanged for a Page access token. ${message}`,
+              secretValues
+            ),
+            graphCode: null,
+            httpStatus: 0,
+          };
+        }
+        const requestedPage = readFacebookId(envelope.pageId);
+        if (exchanged.ok && (!requestedPage.ok || exchanged.pageId !== requestedPage.value)) {
+          exchanged = {
+            ok: false,
+            reason: "page_token_missing",
+            retryable: false,
+            diagnostic: `No Page access token matched Page ${envelope.pageId ?? "unknown"}. A token for a different Page was not used.`,
+            graphCode: null,
+            httpStatus: 0,
+          };
+        }
+        if (!exchanged.ok) {
+          if (deps.beforeGraphFailurePersistImpl) {
+            await deps.beforeGraphFailurePersistImpl();
+          }
+          const graphOutcome = exchanged.retryable ? "retryable_failure" : "token_unavailable";
+          await mergeFetchMeta(
+            leadgenId,
+            gate.eventId,
+            {
+              ownerId,
+              state: exchanged.retryable ? "retrying" : "failed",
+              jobId: input.jobId,
+              attempt,
+              fetchFinishedAt: nowImpl().toISOString(),
+              graphOutcome,
+              graphStatus: 0,
+              graphError: exchanged.graphCode
+                ? {
+                    code: exchanged.graphCode,
+                    subcode: null,
+                    type: exchanged.reason === "missing_permission" ? "OAuthException" : null,
+                    message: null,
+                    isTransient: exchanged.retryable,
+                  }
+                : null,
+              tokenBlockReason: exchanged.reason,
+              ...tokenMeta(),
+              liveDelivery: false,
+              capiDispatched: false,
+            },
+            {
+              errorSummary: redactMetaSecretText(exchanged.diagnostic, secretValues),
+              rawPayloadJson: {
+                ...(asRecord(gate.rawPayloadJson) ?? {}),
+                envelope,
+                graphStatus: 0,
+                graphOutcome,
+              } as object,
+            },
+            withLock
+          );
+          logger.warn("meta_leadgen_fetch.page_token_exchange_failed", {
+            leadgenId,
+            sourceLeadEventId: gate.eventId,
+            pageId: envelope.pageId ?? null,
+            reason: exchanged.reason,
+            graphCode: exchanged.graphCode,
+            retryable: exchanged.retryable,
+            credentialId: token.credentialId ?? null,
+          });
+          return {
+            ok: false,
+            retryable: exchanged.retryable,
+            error: exchanged.retryable ? "graph_retryable_failure" : "graph_token_unavailable",
+            graphFetched: false,
+            graphOutcome,
+            graphStatus: 0,
+          };
+        }
+        graphAccessToken = exchanged.accessToken;
+        secretValues.push(exchanged.accessToken);
+      }
+
       let lead: MetaGraphLeadResult;
       try {
-        lead = await fetchImpl(leadgenId, { ...config, accessToken: token.accessToken });
+        lead = await fetchImpl(leadgenId, { ...config, accessToken: graphAccessToken });
       } catch (err) {
         const message = err instanceof Error ? err.message : "graph_fetch_threw";
         lead = {
           ok: false,
           status: 0,
-          body: { error: redactMetaSecretText(message, [token.accessToken, config.appSecret]) },
+          body: { error: redactMetaSecretText(message, secretValues) },
         };
       }
       graphFetched = true;
       graphStatus = lead.status;
       graphOutcome = classifyMetaGraphResult(lead);
+      const storedBody = redactStoredGraphBody(lead.body, secretValues);
       if (graphOutcome !== "success" || !lead.body) {
         const retryable = isRetryableMetaGraphOutcome(graphOutcome);
-        const graphError = readMetaGraphError(lead.body);
+        const graphError = readMetaGraphError(storedBody);
         if (deps.beforeGraphFailurePersistImpl) {
           await deps.beforeGraphFailurePersistImpl();
         }
@@ -584,12 +712,15 @@ export async function processMetaLeadgenFetch(
             capiDispatched: false,
           },
           {
-            errorSummary: describeMetaGraphFailure({
-              outcome: graphOutcome,
-              status: graphStatus,
-              body: lead.body,
-              leadgenId,
-            }),
+            errorSummary: redactMetaSecretText(
+              describeMetaGraphFailure({
+                outcome: graphOutcome,
+                status: graphStatus,
+                body: storedBody,
+                leadgenId,
+              }),
+              secretValues
+            ),
             rawPayloadJson: {
               ...(asRecord(gate.rawPayloadJson) ?? {}),
               envelope,

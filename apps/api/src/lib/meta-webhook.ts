@@ -226,7 +226,9 @@ export type MetaPageTokenBlockReason =
   | "missing_permission"
   | "credential_disabled"
   | "credential_revoked"
-  | "credential_unreadable";
+  | "credential_unreadable"
+  | "page_token_missing"
+  | "page_token_exchange_unavailable";
 
 export type MetaPageTokenResolution =
   | {
@@ -236,6 +238,12 @@ export type MetaPageTokenResolution =
       source: MetaPageTokenSource;
       credentialId?: string;
       tokenFingerprint?: string;
+      /**
+       * Set for a stored credential. `system_user` still carries the system
+       * user token here. Lead fetch and discovery exchange it for one Page
+       * token. Webhook enqueue does not call Graph.
+       */
+      credentialKind?: "page_access_token" | "system_user";
     }
   | {
       ok: false;

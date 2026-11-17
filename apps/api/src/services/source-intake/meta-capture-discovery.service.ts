@@ -3,6 +3,11 @@ import { createHmac } from "node:crypto";
 import { DEFAULT_GRAPH_API_VERSION } from "../../lib/meta-webhook.js";
 import { redactMetaSecretText } from "../../lib/meta-token-encryption.js";
 import { readFacebookId } from "./facebook-form-association.js";
+import {
+  listSystemUserPageAccounts,
+  selectExactPageAccessToken,
+  type SystemUserAccountsList,
+} from "./meta-system-user-page-token.js";
 
 /**
  * Read-only Graph inventory for one stored credential.
@@ -240,14 +245,36 @@ export async function discoverMetaAuthorizedAssets(input: {
   appSecret: string | null;
   appId: string | null;
   graphApiVersion?: string;
+  /**
+   * `system_user` exchanges `/me/accounts` Page tokens before Page endpoints.
+   * Omitted and `page_access_token` keep using the stored token directly.
+   */
+  credentialKind?: "page_access_token" | "system_user";
   pageIds: string[];
   fetchImpl?: FetchLike;
 }): Promise<MetaCaptureDiscovery> {
   const fetchImpl = input.fetchImpl ?? fetch;
   const version = input.graphApiVersion ?? DEFAULT_GRAPH_API_VERSION;
-  const secrets = [input.accessToken, input.appSecret];
+  const kind = input.credentialKind ?? "page_access_token";
+  const secrets: Array<string | null> = [input.accessToken, input.appSecret];
   const token = await diagnoseToken(input, version, fetchImpl, secrets);
-  const pages = await discoverPages(input, version, fetchImpl, secrets);
+  const accountList =
+    kind === "system_user"
+      ? await listSystemUserPageAccounts({
+          systemUserToken: input.accessToken,
+          appSecret: input.appSecret,
+          graphApiVersion: version,
+          fetchImpl,
+        })
+      : null;
+  if (accountList) {
+    for (const page of accountList.pages) {
+      if (page.accessToken) secrets.push(page.accessToken);
+    }
+  }
+  const pages = accountList
+    ? publicPagesFromAccounts(accountList)
+    : await discoverPages(input, version, fetchImpl, secrets);
   const pageIds = [
     ...new Set([
       ...input.pageIds.filter((id) => readFacebookId(id).ok),
@@ -256,11 +283,33 @@ export async function discoverMetaAuthorizedAssets(input: {
   ].slice(0, 25);
   const forms = emptySection<MetaDiscoveredForm>();
   const subscriptions = emptySection<MetaDiscoveredSubscription>();
-  for (const pageId of pageIds) {
+  const userTokenRefused = Boolean(accountList && !accountList.ok && accountList.permissionDenied);
+  let accountListIncomplete = false;
+  if (userTokenRefused && accountList) {
+    forms.permissionDenied = true;
+    forms.diagnostic = accountList.diagnostic;
+    subscriptions.permissionDenied = true;
+    subscriptions.diagnostic = accountList.diagnostic;
+  }
+  for (const pageId of userTokenRefused ? [] : pageIds) {
     if (forms.rateLimited || subscriptions.rateLimited) break;
+    const pageToken = tokenForPageEndpoint(kind, input.accessToken, accountList, pageId);
+    if (!pageToken.ok) {
+      if (accountList?.rateLimited) {
+        accountListIncomplete = true;
+        forms.diagnostic = forms.diagnostic ?? accountList.diagnostic ?? pageToken.diagnostic;
+        subscriptions.diagnostic = subscriptions.diagnostic ?? forms.diagnostic;
+      } else {
+        forms.permissionDenied = true;
+        forms.diagnostic = forms.diagnostic ?? pageToken.diagnostic;
+        subscriptions.permissionDenied = true;
+        subscriptions.diagnostic = subscriptions.diagnostic ?? pageToken.diagnostic;
+      }
+      continue;
+    }
     const formPage = await collectPages({
       path: `${pageId}/leadgen_forms`,
-      token: input.accessToken,
+      token: pageToken.accessToken,
       appSecret: input.appSecret,
       version,
       fields: "id,name,status",
@@ -282,7 +331,7 @@ export async function discoverMetaAuthorizedAssets(input: {
     if (formSection.rateLimited) break;
     const subscriptionPage = await collectPages({
       path: `${pageId}/subscribed_apps`,
-      token: input.accessToken,
+      token: pageToken.accessToken,
       appSecret: input.appSecret,
       version,
       fields: "id,name,subscribed_fields",
@@ -306,7 +355,19 @@ export async function discoverMetaAuthorizedAssets(input: {
     subscriptions.permissionDenied = subscriptions.permissionDenied || subscriptionSection.permissionDenied;
     subscriptions.diagnostic = subscriptions.diagnostic ?? subscriptionSection.diagnostic;
   }
-  const adAccounts = await discoverAdAccounts(input, version, fetchImpl, secrets, forms.rateLimited);
+  if (accountListIncomplete) {
+    forms.rateLimited = true;
+    subscriptions.rateLimited = true;
+  }
+  const adAccounts = userTokenRefused
+    ? {
+        items: [],
+        truncated: false,
+        rateLimited: false,
+        permissionDenied: true,
+        diagnostic: accountList?.diagnostic ?? "Ad account discovery was skipped because the system user token was refused.",
+      }
+    : await discoverAdAccounts(input, version, fetchImpl, secrets, forms.rateLimited);
   const campaigns = emptySection<MetaDiscoveredCampaign>();
   if (!adAccounts.rateLimited && !forms.rateLimited) {
     for (const account of adAccounts.items.slice(0, 10)) {
@@ -339,15 +400,64 @@ export async function discoverMetaAuthorizedAssets(input: {
       if (campaignSection.rateLimited) break;
     }
   }
+  return stripDiscoverySecrets(
+    {
+      credentialId: input.credentialId,
+      graphApiVersion: version,
+      token,
+      pages,
+      forms,
+      adAccounts,
+      campaigns,
+      subscriptions,
+    },
+    secrets
+  );
+}
+
+function tokenForPageEndpoint(
+  kind: "page_access_token" | "system_user",
+  storedToken: string,
+  accountList: SystemUserAccountsList | null,
+  pageId: string
+): { ok: true; accessToken: string } | { ok: false; diagnostic: string } {
+  if (kind !== "system_user" || !accountList) return { ok: true, accessToken: storedToken };
+  const selected = selectExactPageAccessToken(accountList.pages, pageId);
+  if (!selected.ok) return { ok: false, diagnostic: selected.diagnostic };
+  return { ok: true, accessToken: selected.accessToken };
+}
+
+function publicPagesFromAccounts(list: SystemUserAccountsList): MetaDiscoverySection<MetaDiscoveredPage> {
   return {
-    credentialId: input.credentialId,
-    graphApiVersion: version,
-    token,
-    pages,
-    forms,
-    adAccounts,
-    campaigns,
-    subscriptions,
+    items: list.pages.map((page) => ({ id: page.id, name: page.name, tasks: page.tasks })),
+    truncated: list.truncated,
+    rateLimited: list.rateLimited,
+    permissionDenied: list.permissionDenied,
+    diagnostic: list.diagnostic,
+  };
+}
+
+function stripDiscoverySecrets(discovery: MetaCaptureDiscovery, secrets: Array<string | null>): MetaCaptureDiscovery {
+  const json = JSON.stringify(discovery);
+  const leaked = secrets.some((secret) => Boolean(secret && secret.length >= 8 && json.includes(secret)));
+  if (!leaked) return discovery;
+  const diagnostic = "Discovery results were withheld because they contained credential material.";
+  const blank = (): MetaDiscoverySection<never> => ({
+    items: [],
+    truncated: false,
+    rateLimited: false,
+    permissionDenied: false,
+    diagnostic,
+  });
+  return {
+    credentialId: discovery.credentialId,
+    graphApiVersion: discovery.graphApiVersion,
+    token: { ...discovery.token, diagnostic },
+    pages: blank(),
+    forms: { ...blank(), permissionDenied: true },
+    adAccounts: blank(),
+    campaigns: blank(),
+    subscriptions: { ...blank(), permissionDenied: true },
   };
 }
 

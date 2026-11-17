@@ -11,7 +11,7 @@ import { confirmFacebookFormAssociation } from "./facebook-form-association.serv
 import { buildFacebookLeadUid } from "./facebook-lead-normalizer.js";
 import { importMetaFormCandidates } from "./meta-capture-inventory.service.js";
 import { processMetaLeadgenFetch } from "./meta-leadgen-fetch.service.js";
-import { createMetaPageCredential, listMetaPageCredentials } from "./meta-page-token.service.js";
+import { createMetaPageCredential, listMetaPageCredentials, rotateMetaPageCredential } from "./meta-page-token.service.js";
 import { processZapierFacebookCapture } from "./zapier-facebook-capture.service.js";
 
 const integrationUrlRaw = process.env.SA360_TEST_DATABASE_URL?.trim() || "";
@@ -185,6 +185,9 @@ describe("multi-Page Meta capture foundation", { skip: !runIntegration }, () => 
       { leadgenId: leadA, sourceLeadEventId: eventA.id, jobId: `job_${id}_a` },
       {
         getMetaWebhookConfigImpl: () => captureConfig(),
+        exchangeSystemUserPageTokenImpl: async () => {
+          throw new Error("page access token credentials must not exchange");
+        },
         fetchMetaLeadDetailsImpl: async (_leadgenId, fetchConfig) => {
           seen.push(fetchConfig.accessToken ?? "");
           return {
@@ -264,6 +267,9 @@ describe("multi-Page Meta capture foundation", { skip: !runIntegration }, () => 
       { leadgenId: leadB, sourceLeadEventId: eventB.id, jobId: `job_${id}_b` },
       {
         getMetaWebhookConfigImpl: () => captureConfig(),
+        exchangeSystemUserPageTokenImpl: async () => {
+          throw new Error("a disabled system user grant must not exchange");
+        },
         fetchMetaLeadDetailsImpl: async () => {
           blockedCalls += 1;
           return { ok: true, status: 200, body: { id: leadB } };
@@ -282,12 +288,21 @@ describe("multi-Page Meta capture foundation", { skip: !runIntegration }, () => 
     assert.equal(blockedMeta?.tokenBlockReason, "capture_not_allowlisted");
 
     await db.metaPageCaptureGrant.update({ where: { pageId: pageB }, data: { captureEnabled: true } });
+    const pageTokenB = `EAAB-page-token-b-${id}-not-real`;
     const recovered = await processMetaLeadgenFetch(
       { leadgenId: leadB, sourceLeadEventId: eventB.id, jobId: `job_${id}_b2` },
       {
         getMetaWebhookConfigImpl: () => captureConfig(),
+        exchangeSystemUserPageTokenImpl: async (input) => {
+          assert.equal(input.systemUserToken, tokenB);
+          assert.equal(input.pageId, pageB);
+          assert.notEqual(input.systemUserToken, tokenA);
+          return { ok: true, pageId: pageB, accessToken: pageTokenB };
+        },
         fetchMetaLeadDetailsImpl: async (_id, fetchConfig) => {
-          assert.equal(fetchConfig.accessToken, tokenB);
+          assert.equal(fetchConfig.accessToken, pageTokenB);
+          assert.notEqual(fetchConfig.accessToken, tokenA);
+          assert.notEqual(fetchConfig.accessToken, tokenB);
           return {
             ok: true,
             status: 200,
@@ -431,5 +446,141 @@ describe("multi-Page Meta capture foundation", { skip: !runIntegration }, () => 
     const email = (storedRow?.normalizedPayloadJson as { contact?: { email?: string } } | null)?.contact?.email;
     assert.equal(email, `zap.${id}@example.test`);
     assert.equal(await db.leadInventoryItem.count({ where: { sourceLeadEventId: event.id } }), 0);
+  });
+
+  it("exchanges one system user credential per Page, isolates tokens, and follows rotation", async () => {
+    const id = stamp();
+    const pageA = facebookId("91", id);
+    const pageB = facebookId("92", id);
+    const pageMissing = facebookId("93", id);
+    const tokenV1 = `EAAB-system-v1-${id}-not-real`;
+    const tokenV2 = `EAAB-system-v2-${id}-not-real`;
+    const pageTokenA = `EAAB-isolated-a-${id}-not-real`;
+    const pageTokenB = `EAAB-isolated-b-${id}-not-real`;
+    const pageTokenA2 = `EAAB-isolated-a2-${id}-not-real`;
+    const pageTokenB2 = `EAAB-isolated-b2-${id}-not-real`;
+    pageIds.push(pageA, pageB, pageMissing);
+    const stored = await createMetaPageCredential({
+      kind: "system_user",
+      label: `system ${id}`,
+      accessToken: tokenV1,
+      appId: "1641287293781686",
+      scopes: ["leads_retrieval", "pages_manage_ads", "pages_read_engagement"],
+      pages: [
+        { pageId: pageA, captureEnabled: true },
+        { pageId: pageB, captureEnabled: true },
+        { pageId: pageMissing, captureEnabled: true },
+      ],
+    });
+    assert.equal(stored.ok, true);
+    if (!stored.ok) return;
+    credentialIds.push(stored.credential.id);
+    assert.equal(JSON.stringify(stored.credential).includes(tokenV1), false);
+
+    const exchangeFor = (systemToken: string) =>
+      async (input: { systemUserToken: string; pageId: string }) => {
+        assert.equal(input.systemUserToken, systemToken);
+        if (input.pageId === pageA) {
+          return { ok: true as const, pageId: pageA, accessToken: systemToken === tokenV2 ? pageTokenA2 : pageTokenA };
+        }
+        if (input.pageId === pageB) {
+          return { ok: true as const, pageId: pageB, accessToken: systemToken === tokenV2 ? pageTokenB2 : pageTokenB };
+        }
+        return {
+          ok: false as const,
+          reason: "page_token_missing" as const,
+          retryable: false,
+          diagnostic: `Meta did not return a Page access token for ${input.pageId}. Refusing ${systemToken}.`,
+          graphCode: null,
+          httpStatus: 200,
+        };
+      };
+
+    let leadSerial = 0;
+    const fetchLead = async (pageId: string, expected: string, systemToken: string) => {
+      leadSerial += 1;
+      const leadgenId = facebookId(`7${leadSerial}`, id);
+      const formId = facebookId(`8${leadSerial}`, id);
+      const event = await claim(leadgenId, pageId, formId);
+      let seen = "";
+      const result = await processMetaLeadgenFetch(
+        { leadgenId, sourceLeadEventId: event.id, jobId: `job_${leadgenId}` },
+        {
+          getMetaWebhookConfigImpl: () => captureConfig(),
+          exchangeSystemUserPageTokenImpl: exchangeFor(systemToken),
+          fetchMetaLeadDetailsImpl: async (_id, fetchConfig) => {
+            seen = fetchConfig.accessToken ?? "";
+            return {
+              ok: true,
+              status: 200,
+              body: {
+                id: leadgenId,
+                form_id: formId,
+                created_time: "2026-11-04T15:04:00+0000",
+                field_data: [{ name: "email", values: [`iso.${leadgenId}@example.test`] }],
+              },
+            };
+          },
+        }
+      );
+      assert.equal(result.ok, true);
+      assert.equal(seen, expected);
+      const row = await db.sourceLeadEvent.findUnique({ where: { id: event.id } });
+      const blob = JSON.stringify(row);
+      assert.equal(blob.includes(systemToken), false);
+      assert.equal(blob.includes(pageTokenA), false);
+      assert.equal(blob.includes(pageTokenB), false);
+      assert.equal(blob.includes(pageTokenA2), false);
+      assert.equal(blob.includes(pageTokenB2), false);
+    };
+
+    await fetchLead(pageA, pageTokenA, tokenV1);
+    await fetchLead(pageB, pageTokenB, tokenV1);
+
+    const missingLead = facebookId("95", id);
+    const missingEvent = await claim(missingLead, pageMissing, facebookId("96", id));
+    let missingFetches = 0;
+    const missing = await processMetaLeadgenFetch(
+      { leadgenId: missingLead, sourceLeadEventId: missingEvent.id, jobId: `job_${id}_missing` },
+      {
+        getMetaWebhookConfigImpl: () => captureConfig(),
+        exchangeSystemUserPageTokenImpl: exchangeFor(tokenV1),
+        fetchMetaLeadDetailsImpl: async () => {
+          missingFetches += 1;
+          return { ok: true, status: 200, body: { id: missingLead } };
+        },
+      }
+    );
+    assert.equal(missingFetches, 0);
+    assert.equal(missing.ok, false);
+    if (!missing.ok) assert.equal(missing.graphOutcome, "token_unavailable");
+    const missingRow = await db.sourceLeadEvent.findUnique({ where: { id: missingEvent.id } });
+    assert.equal((missingRow?.errorSummary ?? "").includes(tokenV1), false);
+    assert.equal((missingRow?.errorSummary ?? "").includes(pageTokenA), false);
+    assert.equal((missingRow?.errorSummary ?? "").includes(pageTokenB), false);
+    const missingMeta = (
+      missingRow?.enrichmentMetadataJson as { metaLeadgenFetch?: { tokenBlockReason?: string } } | null
+    )?.metaLeadgenFetch;
+    assert.equal(missingMeta?.tokenBlockReason, "page_token_missing");
+
+    const rotated = await rotateMetaPageCredential({
+      credentialId: stored.credential.id,
+      accessToken: tokenV2,
+    });
+    assert.equal(rotated.ok, true);
+    if (!rotated.ok) return;
+    assert.equal(rotated.credential.tokenVersion, 2);
+    assert.notEqual(rotated.credential.tokenFingerprint, stored.credential.tokenFingerprint);
+    assert.equal(JSON.stringify(rotated.credential).includes(tokenV2), false);
+    const ciphertext = await db.metaGraphCredential.findUnique({
+      where: { id: stored.credential.id },
+      select: { tokenCiphertext: true },
+    });
+    assert.ok(ciphertext);
+    assert.equal(ciphertext.tokenCiphertext.includes(tokenV2), false);
+    assert.equal(decryptMetaToken(ciphertext.tokenCiphertext), tokenV2);
+
+    await fetchLead(pageA, pageTokenA2, tokenV2);
+    await fetchLead(pageB, pageTokenB2, tokenV2);
   });
 });

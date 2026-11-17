@@ -18,15 +18,27 @@ delivery, company Sheets rows, LF2 reservations, or CAPI dispatch.
 signed leadgen notification
   -> raw SourceLeadEvent retained (existing)
   -> BullMQ meta-leadgen-fetch (only if intake AND graph flags are true)
-  -> resolveMetaCapturePageToken
+  -> resolveMetaCapturePageToken (no Graph call)
        1. stored MetaPageCaptureGrant for that exact Page, if a row exists
+          captureEnabled false fails closed and does not fall through
        2. else META_PAGE_ACCESS_TOKEN only when PAGE_ID matches
        3. else the env token only if SA360_META_UNBOUND_PAGE_TOKEN_ENABLED=true
-  -> Graph GET /{leadgen-id} with that token only
+  -> if the stored credential kind is system_user:
+       GET /me/accounts?fields=id,name,tasks,access_token
+       use the access_token on the row whose id equals this Page
+       a missing row or a missing access_token does not call the lead endpoint
+       another Page's access_token is never substituted
+     page_access_token credentials and the env Page token are used as stored
+  -> Graph GET /{leadgen-id} with that Page token only
   -> settleMetaLeadCapture (routing flag false)
        associated only when one confirmed SourceFunnel origin exists
        otherwise admin review, clientAccountIdResolved stays null
 ```
+
+Live discovery uses the same exchange for `/{page-id}/leadgen_forms` and
+`/{page-id}/subscribed_apps`. `/me/accounts`, `/me/adaccounts`, and `debug_token`
+still use the system user token. Page tokens are held in memory for that call
+and are not stored, logged, or returned.
 
 Global flags stay independent:
 
@@ -238,6 +250,31 @@ Use this only after the prerequisites. It does not subscribe the Page by itself.
    through a later admin action. Disabling the grant is enough to stop Graph calls.
 4. Do not delete `SourceLeadEvent` rows as a rollback. Do not turn off Zapier capture to
    roll back Meta.
+
+## Read-only check after the system-user Page token fix
+
+Do not rotate the production token, subscribe a Page, fetch a lead, or turn on
+intake, Graph fetch, routing, or delivery as part of verifying this change.
+`GET /admin/v1/meta-capture/health` does not call Graph.
+
+1. Confirm `SA360_META_LEAD_ADS_INTAKE_ENABLED`, `SA360_META_LEAD_ADS_GRAPH_FETCH_ENABLED`,
+   `SA360_META_LEAD_ADS_ROUTING_ENABLED`, `SA360_META_UNBOUND_PAGE_TOKEN_ENABLED`, and
+   `FACEBOOK_DIRECT_INTAKE_ENABLED` are unset or false.
+2. `GET /admin/v1/meta-capture/health` with `x-sa360-admin-key`. The credential
+   `cmwl1r7hv001aiv0ujzbt0zjp` should be `kind: system_user`, app id
+   `1641287293781686`, and every Page grant `captureEnabled: false`. The JSON
+   must not contain an access token or ciphertext.
+3. Leave Zapier Facebook capture unchanged.
+4. Optional later read, still with intake and Graph fetch off: set
+   `SA360_META_CAPTURE_INVENTORY_ENABLED=true` only for the request, then
+   `GET /admin/v1/meta-capture/inventory?live=1&credentialId=cmwl1r7hv001aiv0ujzbt0zjp`.
+   That calls `/me/accounts` with the system user token and calls
+   `leadgen_forms` and `subscribed_apps` with the Page token for
+   `222591640945329` only. It does not call `GET /{leadgen-id}` and it does not
+   subscribe the Page. Turn the inventory flag off again when the read is done.
+   A remaining OAuth 190 on those Page endpoints is a Page-token permission
+   problem, not the system user token being sent to the Page. The response
+   must still omit every token.
 
 ## One-Click Resolve Source — contract for the next agent
 

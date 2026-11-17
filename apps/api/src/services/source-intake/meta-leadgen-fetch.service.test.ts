@@ -7,6 +7,7 @@ import type { Prisma } from "@prisma/client";
 import type { MetaWebhookConfig } from "../../lib/meta-webhook.js";
 import type { FacebookLeadIntakeResult } from "./facebook-lead-intake.service.js";
 import type { MetaLeadCaptureResult, SettleMetaLeadCaptureInput } from "./meta-lead-capture.service.js";
+import { buildFacebookCaptureEnrichment } from "./facebook-capture-record.js";
 import {
   processMetaLeadgenFetch,
   type ProcessMetaLeadgenFetchDeps,
@@ -14,8 +15,12 @@ import {
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fetchSource = readFileSync(join(here, "meta-leadgen-fetch.service.ts"), "utf8");
-const persistSource = readFileSync(join(here, "source-intake-routing-persist.ts"), "utf8");
+const captureSource = readFileSync(join(here, "meta-lead-capture.service.ts"), "utf8");
+const captureRecordSource = readFileSync(join(here, "facebook-capture-record.ts"), "utf8");
 const routeSource = readFileSync(join(here, "../../routes/sources-facebook.ts"), "utf8");
+
+const DELIVERY_BOUNDARY =
+  /trackCampaignInventory|leadInventoryItem\.create|approveSourceLeadDelivery|enqueueGhl|ghl-live-canary|ghl-delivery-adapter|deliverConfirmedAssociationIfActivated|ghl-association-dispatch|recordCompanySheets|company-sheets-dispatch|companySheetsDelivery|enqueueMetaDispatch|metaDispatchAttempt|META_DISPATCH_QUEUE|ensureFulfillmentOutbox|fulfillment-shadow|source-intake-routing-persist/;
 
 function config(overrides: Partial<MetaWebhookConfig> = {}): MetaWebhookConfig {
   return {
@@ -166,13 +171,77 @@ function memoryHarness(leadgenId: string) {
   };
 }
 
-test("fetch service source never reaches inventory, GHL, LF2, or Meta CAPI", () => {
-  assert.doesNotMatch(fetchSource, /trackCampaignInventory|leadInventoryItem\.create/);
-  assert.doesNotMatch(fetchSource, /approveSourceLeadDelivery|enqueueGhl|ghl-live-canary/);
-  assert.doesNotMatch(fetchSource, /enqueueMetaDispatch|metaDispatchAttempt|META_DISPATCH_QUEUE/);
-  assert.doesNotMatch(fetchSource, /ensureFulfillmentOutbox|fulfillment-shadow/);
+test("capture-only Meta fetch does not initiate GHL, Sheets, inventory, or CAPI", () => {
+  assert.doesNotMatch(fetchSource, DELIVERY_BOUNDARY);
+  assert.doesNotMatch(captureSource, DELIVERY_BOUNDARY);
+  assert.doesNotMatch(captureRecordSource, DELIVERY_BOUNDARY);
   assert.match(fetchSource, /RELEASE before/);
-  assert.match(persistSource, /No GHL delivery is performed here/);
+
+  const captureStart = fetchSource.indexOf("const captureMode = !config.routingEnabled");
+  const routingStart = fetchSource.indexOf("const intake = await processImpl");
+  assert.ok(captureStart > 0 && routingStart > captureStart);
+  const captureOnly = fetchSource.slice(captureStart, routingStart);
+  assert.match(captureOnly, /settleImpl\(/);
+  assert.doesNotMatch(captureOnly, /processImpl\(/);
+  assert.match(captureOnly, /liveDelivery: false/);
+  assert.match(captureOnly, /capiDispatched: false/);
+  assert.match(captureOnly, /kind: "captured"/);
+
+  const enrichment = buildFacebookCaptureEnrichment({
+    fields: {
+      leadgenId: "lead_boundary",
+      pageId: "222591640945329",
+      formId: "1149211490298917",
+      formIdentityStatus: "present",
+      formName: null,
+      campaignId: null,
+      campaignName: null,
+      adsetId: null,
+      adsetName: null,
+      adId: null,
+      adName: null,
+      firstName: null,
+      lastName: null,
+      email: "boundary@example.test",
+      phone: null,
+      phoneE164: null,
+      state: null,
+      postalCode: null,
+      submittedAt: null,
+    },
+    association: {
+      outcome: "unassociated",
+      clientAccountId: null,
+      sourceFunnelId: null,
+      pageId: "222591640945329",
+      formId: "1149211490298917",
+      explanation: "No confirmed Page ID + Form ID association exists.",
+    },
+    receivedAt: "2026-11-17T19:00:00.000Z",
+    intakeMethod: "meta_lead_ads",
+    provenance: "meta",
+  });
+  const inventory = enrichment.inventory as {
+    thisRequestTracked: boolean;
+    historicalTracked: boolean;
+    saleEligible: boolean;
+    mutated: boolean;
+  };
+  const delivery = enrichment.delivery as { thisRequestAttempted: boolean };
+  const resolveSource = enrichment.resolveSource as {
+    deliveryOnLaterMatch: boolean;
+    reevaluate: { startsDelivery: boolean; recapturesLead: boolean };
+  };
+  assert.equal(enrichment.captureOnly, true);
+  assert.equal(enrichment.intakeStage, "capture_only");
+  assert.equal(inventory.thisRequestTracked, false);
+  assert.equal(inventory.historicalTracked, false);
+  assert.equal(inventory.saleEligible, false);
+  assert.equal(inventory.mutated, false);
+  assert.equal(delivery.thisRequestAttempted, false);
+  assert.equal(resolveSource.deliveryOnLaterMatch, false);
+  assert.equal(resolveSource.reevaluate.startsDelivery, false);
+  assert.equal(resolveSource.reevaluate.recapturesLead, false);
 });
 
 test("webhook handler no longer calls Graph or intake inline", () => {
@@ -181,6 +250,8 @@ test("webhook handler no longer calls Graph or intake inline", () => {
   const handler = routeSource.slice(handlerStart, handlerEnd);
   assert.doesNotMatch(handler, /fetchMetaLeadDetailsImpl\(/);
   assert.doesNotMatch(handler, /processFacebookSourceLeadImpl\(/);
+  assert.doesNotMatch(routeSource, /exchangeSystemUserPageToken/);
+  assert.match(fetchSource, /credentialKind === "system_user"/);
   assert.match(handler, /enqueueImpl/);
 });
 
@@ -277,6 +348,8 @@ test("successful Graph path settles capture-only (Page+Form association) when ro
   assert.equal((settle.rawPayloadJson.lead as { id: string }).id, leadgenId);
   assert.equal((settle.fetchMeta as { state: string }).state, "captured");
   assert.equal((settle.fetchMeta as { tokenScope?: string }).tokenScope, "unbound");
+  assert.equal((settle.fetchMeta as { liveDelivery: boolean }).liveDelivery, false);
+  assert.equal((settle.fetchMeta as { capiDispatched: boolean }).capiDispatched, false);
 });
 
 test("Page-bound token is only used for its own Page; other Pages are retained with a diagnostic", async () => {
@@ -810,4 +883,290 @@ test("other owner is in_flight during lease and may proceed after 5-minute expir
   assert.equal(after.ok, true);
   if (after.ok) assert.equal(after.graphFetched, true);
   assert.equal(fetchCalls, 1);
+});
+
+const PAGE_A = "222591640945329";
+const PAGE_B = "222591640945330";
+const SYSTEM_V1 = "EAAB-system-user-v1-token-not-real";
+const SYSTEM_V2 = "EAAB-system-user-v2-token-not-real";
+const PAGE_TOKEN_A = "EAAB-page-a-access-token-not-real";
+const PAGE_TOKEN_B = "EAAB-page-b-access-token-not-real";
+const PAGE_TOKEN_A2 = "EAAB-page-a-rotated-token-not-real";
+
+function storedResolution(
+  accessToken: string,
+  kind: "page_access_token" | "system_user"
+) {
+  return {
+    ok: true as const,
+    accessToken,
+    scope: "page_bound" as const,
+    source: "stored_page" as const,
+    credentialId: "cred_system",
+    tokenFingerprint: kind === "system_user" ? "systemfp" : "pagefp",
+    credentialKind: kind,
+  };
+}
+
+test("system user lead fetch uses only the exchanged token for that Page", async () => {
+  const leadgenId = "lead_system_page";
+  const harness = memoryHarness(leadgenId);
+  harness.store.event.rawPayloadJson = { envelope: { leadgenId, pageId: PAGE_A, formId: "form_9" } };
+  let exchangeCalls = 0;
+  let fetchedWith = "";
+  const result = await processMetaLeadgenFetch(
+    { leadgenId, sourceLeadEventId: `evt_${leadgenId}`, jobId: "job_system" },
+    {
+      getMetaWebhookConfigImpl: () => config(),
+      resolvePageTokenImpl: async () => storedResolution(SYSTEM_V1, "system_user"),
+      exchangeSystemUserPageTokenImpl: async (input) => {
+        exchangeCalls += 1;
+        assert.equal(input.systemUserToken, SYSTEM_V1);
+        assert.equal(input.pageId, PAGE_A);
+        return { ok: true, pageId: PAGE_A, accessToken: PAGE_TOKEN_A };
+      },
+      fetchMetaLeadDetailsImpl: async (_id, fetchConfig) => {
+        fetchedWith = fetchConfig.accessToken ?? "";
+        return { ok: true, status: 200, body: { id: leadgenId, field_data: [] } };
+      },
+      ...harness.deps,
+    }
+  );
+  assert.equal(result.ok, true);
+  assert.equal(exchangeCalls, 1);
+  assert.equal(fetchedWith, PAGE_TOKEN_A);
+  assert.notEqual(fetchedWith, SYSTEM_V1);
+  assert.notEqual(fetchedWith, PAGE_TOKEN_B);
+  const stored = JSON.stringify(harness.store.event);
+  assert.equal(stored.includes(PAGE_TOKEN_A), false);
+  assert.equal(stored.includes(SYSTEM_V1), false);
+});
+
+test("a Page token for a different Page is not used to fetch the lead", async () => {
+  const leadgenId = "lead_wrong_page";
+  const harness = memoryHarness(leadgenId);
+  harness.store.event.rawPayloadJson = { envelope: { leadgenId, pageId: PAGE_A, formId: "form_9" } };
+  let fetchCalls = 0;
+  const result = await processMetaLeadgenFetch(
+    { leadgenId, sourceLeadEventId: `evt_${leadgenId}`, jobId: "job_wrong" },
+    {
+      getMetaWebhookConfigImpl: () => config(),
+      resolvePageTokenImpl: async () => storedResolution(SYSTEM_V1, "system_user"),
+      exchangeSystemUserPageTokenImpl: async () => ({
+        ok: true,
+        pageId: PAGE_B,
+        accessToken: PAGE_TOKEN_B,
+      }),
+      fetchMetaLeadDetailsImpl: async () => {
+        fetchCalls += 1;
+        return { ok: true, status: 200, body: { id: leadgenId, field_data: [] } };
+      },
+      ...harness.deps,
+    }
+  );
+  assert.equal(fetchCalls, 0);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.equal(result.graphOutcome, "token_unavailable");
+    assert.equal(result.retryable, false);
+  }
+  const summary = String(harness.store.event.errorSummary ?? "");
+  assert.equal(summary.includes(PAGE_TOKEN_B), false);
+  assert.equal(summary.includes(SYSTEM_V1), false);
+  const meta = (
+    harness.store.event.enrichmentMetadataJson as { metaLeadgenFetch?: { tokenBlockReason?: string } }
+  ).metaLeadgenFetch;
+  assert.equal(meta?.tokenBlockReason, "page_token_missing");
+});
+
+test("missing Page token and permission errors do not call lead retrieval or leak tokens", async () => {
+  const leadgenId = "lead_missing_page_token";
+  const harness = memoryHarness(leadgenId);
+  harness.store.event.rawPayloadJson = { envelope: { leadgenId, pageId: PAGE_A, formId: "form_9" } };
+  let fetchCalls = 0;
+  const missing = await processMetaLeadgenFetch(
+    { leadgenId, sourceLeadEventId: `evt_${leadgenId}`, jobId: "job_missing" },
+    {
+      getMetaWebhookConfigImpl: () => config(),
+      resolvePageTokenImpl: async () => storedResolution(SYSTEM_V1, "system_user"),
+      exchangeSystemUserPageTokenImpl: async () => ({
+        ok: false,
+        reason: "page_token_missing",
+        retryable: false,
+        diagnostic: `No Page access token for ${PAGE_A}. system token ${SYSTEM_V1}`,
+        graphCode: null,
+        httpStatus: 200,
+      }),
+      fetchMetaLeadDetailsImpl: async () => {
+        fetchCalls += 1;
+        return { ok: true, status: 200, body: { id: leadgenId } };
+      },
+      ...harness.deps,
+    }
+  );
+  assert.equal(fetchCalls, 0);
+  assert.equal(missing.ok, false);
+  if (!missing.ok) assert.equal(missing.retryable, false);
+  const missingSummary = String(harness.store.event.errorSummary ?? "");
+  assert.equal(missingSummary.includes(SYSTEM_V1), false);
+  assert.match(missingSummary, new RegExp(PAGE_A));
+
+  const deniedLead = "lead_perm";
+  const denied = memoryHarness(deniedLead);
+  denied.store.event.rawPayloadJson = { envelope: { leadgenId: deniedLead, pageId: PAGE_A, formId: "form_9" } };
+  const permission = await processMetaLeadgenFetch(
+    { leadgenId: deniedLead, sourceLeadEventId: `evt_${deniedLead}`, jobId: "job_perm" },
+    {
+      getMetaWebhookConfigImpl: () => config(),
+      resolvePageTokenImpl: async () => storedResolution(SYSTEM_V1, "system_user"),
+      exchangeSystemUserPageTokenImpl: async () => ({
+        ok: false,
+        reason: "missing_permission",
+        retryable: false,
+        diagnostic: `Meta refused /me/accounts (code 190). Invalid ${SYSTEM_V1}`,
+        graphCode: "190",
+        httpStatus: 400,
+      }),
+      fetchMetaLeadDetailsImpl: async () => {
+        fetchCalls += 1;
+        return { ok: true, status: 200, body: { id: deniedLead } };
+      },
+      ...denied.deps,
+    }
+  );
+  assert.equal(fetchCalls, 0);
+  assert.equal(permission.ok, false);
+  if (!permission.ok) assert.equal(permission.retryable, false);
+  const deniedSummary = String(denied.store.event.errorSummary ?? "");
+  assert.equal(deniedSummary.includes(SYSTEM_V1), false);
+  assert.match(deniedSummary, /190/);
+  const deniedMeta = (
+    denied.store.event.enrichmentMetadataJson as { metaLeadgenFetch?: { tokenBlockReason?: string; graphError?: { code?: string } } }
+  ).metaLeadgenFetch;
+  assert.equal(deniedMeta?.tokenBlockReason, "missing_permission");
+  assert.equal(deniedMeta?.graphError?.code, "190");
+});
+
+test("page access tokens and the env token are not exchanged", async () => {
+  const leadgenId = "lead_page_token";
+  const harness = memoryHarness(leadgenId);
+  harness.store.event.rawPayloadJson = { envelope: { leadgenId, pageId: PAGE_A, formId: "form_9" } };
+  let exchangeCalls = 0;
+  let fetchedWith = "";
+  const pageToken = await processMetaLeadgenFetch(
+    { leadgenId, sourceLeadEventId: `evt_${leadgenId}`, jobId: "job_page" },
+    {
+      getMetaWebhookConfigImpl: () => config(),
+      resolvePageTokenImpl: async () => storedResolution(PAGE_TOKEN_A, "page_access_token"),
+      exchangeSystemUserPageTokenImpl: async () => {
+        exchangeCalls += 1;
+        return { ok: true, pageId: PAGE_A, accessToken: PAGE_TOKEN_B };
+      },
+      fetchMetaLeadDetailsImpl: async (_id, fetchConfig) => {
+        fetchedWith = fetchConfig.accessToken ?? "";
+        return { ok: true, status: 200, body: { id: leadgenId, field_data: [] } };
+      },
+      ...harness.deps,
+    }
+  );
+  assert.equal(pageToken.ok, true);
+  assert.equal(exchangeCalls, 0);
+  assert.equal(fetchedWith, PAGE_TOKEN_A);
+
+  const envLead = "lead_env_token";
+  const envHarness = memoryHarness(envLead);
+  envHarness.store.event.rawPayloadJson = { envelope: { leadgenId: envLead, pageId: PAGE_B, formId: "form_9" } };
+  const envToken = "EAAB-env-page-token-value-not-real";
+  let envFetched = "";
+  const envResult = await processMetaLeadgenFetch(
+    { leadgenId: envLead, sourceLeadEventId: `evt_${envLead}`, jobId: "job_env" },
+    {
+      getMetaWebhookConfigImpl: () => config(),
+      resolvePageTokenImpl: async () => ({
+        ok: true as const,
+        accessToken: envToken,
+        scope: "page_bound" as const,
+        source: "env_page" as const,
+      }),
+      exchangeSystemUserPageTokenImpl: async () => {
+        exchangeCalls += 1;
+        return { ok: true, pageId: PAGE_B, accessToken: PAGE_TOKEN_B };
+      },
+      fetchMetaLeadDetailsImpl: async (_id, fetchConfig) => {
+        envFetched = fetchConfig.accessToken ?? "";
+        return { ok: true, status: 200, body: { id: envLead, field_data: [] } };
+      },
+      ...envHarness.deps,
+    }
+  );
+  assert.equal(envResult.ok, true);
+  assert.equal(exchangeCalls, 0);
+  assert.equal(envFetched, envToken);
+});
+
+test("rotating the system user token changes the Page token used for the next lead", async () => {
+  let systemToken = SYSTEM_V1;
+  const seen: string[] = [];
+  const run = async (leadgenId: string) => {
+    const harness = memoryHarness(leadgenId);
+    harness.store.event.rawPayloadJson = { envelope: { leadgenId, pageId: PAGE_A, formId: "form_9" } };
+    let fetchedWith = "";
+    const result = await processMetaLeadgenFetch(
+      { leadgenId, sourceLeadEventId: `evt_${leadgenId}`, jobId: `job_${leadgenId}` },
+      {
+        getMetaWebhookConfigImpl: () => config(),
+        resolvePageTokenImpl: async () => storedResolution(systemToken, "system_user"),
+        exchangeSystemUserPageTokenImpl: async (input) => {
+          seen.push(input.systemUserToken);
+          assert.equal(input.pageId, PAGE_A);
+          const accessToken = input.systemUserToken === SYSTEM_V2 ? PAGE_TOKEN_A2 : PAGE_TOKEN_A;
+          return { ok: true, pageId: PAGE_A, accessToken };
+        },
+        fetchMetaLeadDetailsImpl: async (_id, fetchConfig) => {
+          fetchedWith = fetchConfig.accessToken ?? "";
+          return { ok: true, status: 200, body: { id: leadgenId, field_data: [] } };
+        },
+        ...harness.deps,
+      }
+    );
+    assert.equal(result.ok, true);
+    return fetchedWith;
+  };
+  assert.equal(await run("lead_rot_1"), PAGE_TOKEN_A);
+  systemToken = SYSTEM_V2;
+  assert.equal(await run("lead_rot_2"), PAGE_TOKEN_A2);
+  assert.deepEqual(seen, [SYSTEM_V1, SYSTEM_V2]);
+});
+
+test("a disabled capture grant does not exchange or fetch", async () => {
+  const leadgenId = "lead_allowlist";
+  const harness = memoryHarness(leadgenId);
+  harness.store.event.rawPayloadJson = { envelope: { leadgenId, pageId: PAGE_B, formId: "form_9" } };
+  let exchangeCalls = 0;
+  let fetchCalls = 0;
+  const result = await processMetaLeadgenFetch(
+    { leadgenId, sourceLeadEventId: `evt_${leadgenId}`, jobId: "job_allow" },
+    {
+      getMetaWebhookConfigImpl: () => config({ unboundPageTokenEnabled: true }),
+      resolvePageTokenImpl: async () => ({
+        ok: false as const,
+        reason: "capture_not_allowlisted" as const,
+        diagnostic: "Page grant is disabled.",
+        credentialId: "cred_system",
+      }),
+      exchangeSystemUserPageTokenImpl: async () => {
+        exchangeCalls += 1;
+        return { ok: true, pageId: PAGE_B, accessToken: PAGE_TOKEN_B };
+      },
+      fetchMetaLeadDetailsImpl: async () => {
+        fetchCalls += 1;
+        return { ok: true, status: 200, body: { id: leadgenId } };
+      },
+      ...harness.deps,
+    }
+  );
+  assert.equal(exchangeCalls, 0);
+  assert.equal(fetchCalls, 0);
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.retryable, false);
 });

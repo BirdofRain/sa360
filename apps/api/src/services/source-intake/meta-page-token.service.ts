@@ -54,6 +54,7 @@ type GrantWithCredential = {
   captureEnabled: boolean;
   credential: {
     id: string;
+    kind: MetaGraphCredentialKind;
     status: MetaGraphCredentialStatus;
     expiresAt: Date | null;
     scopes: Prisma.JsonValue;
@@ -101,6 +102,11 @@ function fail(
  *    unbound opt-in is on.
  * Non-numeric Page IDs skip the database so unit fixtures keep using the env
  * resolver. Production Meta Page IDs are numeric.
+ *
+ * A stored `system_user` credential returns the system user token. It is not
+ * a Page token. Callers that read `leadgen_forms`, `subscribed_apps`, or a
+ * lead must exchange it for the exact Page via `/me/accounts`. This function
+ * does not call Graph, so a disabled grant fails closed before any exchange.
  */
 export async function resolveMetaCapturePageToken(
   pageId: string | null | undefined,
@@ -125,6 +131,7 @@ async function defaultFindGrant(pageId: string): Promise<GrantWithCredential | n
       credential: {
         select: {
           id: true,
+          kind: true,
           status: true,
           expiresAt: true,
           scopes: true,
@@ -204,6 +211,7 @@ function resolutionFromGrant(grant: GrantWithCredential, now: Date): MetaPageTok
     source: "stored_page",
     credentialId,
     tokenFingerprint: grant.credential.tokenFingerprint,
+    credentialKind: grant.credential.kind,
   };
 }
 

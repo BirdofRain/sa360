@@ -634,7 +634,9 @@ test("conflict and unresolved snapshots stay blank and a malformed snapshot does
   const unresolved = presented(legacyPayload, {
     campaignLeadType: savedDecision("unresolved", "vet_web_form", null),
   });
-  const malformed = presented(legacyPayload, { campaignLeadType: { version: 1, status: "resolved" } });
+  const malformed = presented(legacyPayload, { campaignLeadType: { hello: "world" } });
+  const nullSnapshot = presented(legacyPayload, { campaignLeadType: null });
+  const arraySnapshot = presented(legacyPayload, { campaignLeadType: ["vet_web_form"] });
   const historical = presented(legacyPayload, { matched: true });
   assert.equal(conflict.cells["Lead Type"], "");
   assert.deepEqual(conflict.diagnostics, [CAMPAIGN_LEAD_TYPE_CONFLICT_DIAGNOSTIC]);
@@ -642,6 +644,10 @@ test("conflict and unresolved snapshots stay blank and a malformed snapshot does
   assert.deepEqual(unresolved.diagnostics, [CAMPAIGN_LEAD_TYPE_UNRESOLVED_DIAGNOSTIC]);
   assert.equal(malformed.cells["Lead Type"], "");
   assert.deepEqual(malformed.diagnostics, [CAMPAIGN_LEAD_TYPE_MALFORMED_DIAGNOSTIC]);
+  assert.equal(nullSnapshot.cells["Lead Type"], "");
+  assert.deepEqual(nullSnapshot.diagnostics, [CAMPAIGN_LEAD_TYPE_MALFORMED_DIAGNOSTIC]);
+  assert.equal(arraySnapshot.cells["Lead Type"], "");
+  assert.deepEqual(arraySnapshot.diagnostics, [CAMPAIGN_LEAD_TYPE_MALFORMED_DIAGNOSTIC]);
   assert.equal(historical.cells["Lead Type"], "VET");
   assert.deepEqual(historical.diagnostics, []);
 });

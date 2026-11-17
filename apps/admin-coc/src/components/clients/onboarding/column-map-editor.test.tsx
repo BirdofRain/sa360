@@ -387,6 +387,32 @@ test("preview names whether it used the unpublished draft or the published deliv
   assert.match((await screen.findByTestId("column-map-preview-source")).textContent ?? "", /This preview uses the published map that delivery uses/);
 });
 
+test("preview shows a blank Lead Type conflict warning", async () => {
+  const record = mapRecord();
+  render(
+    <ColumnMapEditor
+      record={record}
+      campaignDispatchEnabled={false}
+      boundSchemaVersion="company_sheets_campaign_custom_v1"
+      actions={{
+        previewColumnMap: async (_mapId, input) => ({
+          ok: true,
+          data: {
+            ...previewData(record, input, "evt_conflict", "", "supplied", false),
+            warnings: ["campaign_lead_type_conflict"],
+          },
+        }),
+      }}
+      onChange={() => undefined}
+    />
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Preview received submission" }));
+  assert.match(
+    (await screen.findByTestId("column-map-preview-warnings")).textContent ?? "",
+    /Lead Type was left blank because the saved decision conflicts/
+  );
+});
+
 function previewData(
   record: ColumnMapRecord,
   input: { expectedRevision: number; previewToken: string },

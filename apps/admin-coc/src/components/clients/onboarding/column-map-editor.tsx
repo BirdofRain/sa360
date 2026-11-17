@@ -92,6 +92,19 @@ function reasonCopy(reason: ColumnMapDraftPreview["cells"][number]["reason"]): s
   return "Shown";
 }
 
+function warningCopy(warning: string): string {
+  if (warning === "campaign_lead_type_conflict") {
+    return "Lead Type was left blank because the saved decision conflicts.";
+  }
+  if (warning === "campaign_lead_type_unresolved") {
+    return "Lead Type was left blank because the saved decision is unresolved.";
+  }
+  if (warning === "campaign_lead_type_malformed") {
+    return "Lead Type was left blank because the saved decision could not be read.";
+  }
+  return warning;
+}
+
 function previewMatches(
   preview: ColumnMapDraftPreview,
   record: ColumnMapRecord,
@@ -360,6 +373,13 @@ export function ColumnMapEditor({
                   </tbody>
                 </table>
               </div>
+              {preview.warnings.length > 0 ? (
+                <ul data-testid="column-map-preview-warnings" className="list-disc space-y-1 pl-4 text-xs text-slate-800">
+                  {preview.warnings.map((warning) => (
+                    <li key={warning}>{warningCopy(warning)}</li>
+                  ))}
+                </ul>
+              ) : null}
               <div data-testid="column-map-dob-age" className="rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-800">
                 <p className="font-medium text-slate-900">{dobAgeStatus(preview.sheet.dobAge)}</p>
                 <p>Date of birth {preview.sheet.dobAge.dateOfBirth || "(blank)"}</p>

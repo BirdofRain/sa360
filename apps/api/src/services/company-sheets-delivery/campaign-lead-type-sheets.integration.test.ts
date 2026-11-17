@@ -450,6 +450,27 @@ describe("Sheets campaign Lead Type delivery", { skip: !runIntegration, concurre
     if (!other.ok) return;
     assert.deepEqual(other.preview.sheet?.values, truckerValues);
     assert.equal(other.preview.sheet?.values[0], "Trucker Web Form");
+
+    const foreign = await createEvent({
+      clientAccountId: v3Client,
+      phone: "+12025550153",
+      email: `foreign.${suffix}@example.test`,
+      routingResultJson: { campaignLeadType: decision("resolved", "vet_web_form", "Vet Web Form") },
+    });
+    const denied = await previewColumnMapDraft(
+      {
+        clientAccountId: customClient,
+        mapId: customMapId,
+        expectedRevision: 1,
+        previewToken: "foreign-preview",
+        sourceLeadEventId: foreign.id,
+      },
+      db
+    );
+    assert.equal(denied.ok, false);
+    if (denied.ok) return;
+    assert.equal(denied.statusCode, 404);
+    assert.equal(denied.error, "lead_not_found");
   });
 
   it("keeps a pre-change job row and uses legacy text only when the snapshot is absent", async () => {

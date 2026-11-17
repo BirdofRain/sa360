@@ -14,6 +14,8 @@ const allowed = new Set([
   "apps/api/src/lib/onboarding-staff-actor.ts",
   "apps/api/src/lib/onboarding-staff-actor.test.ts",
   "apps/api/src/routes/onboarding-staff-actor.integration.test.ts",
+  "apps/api/src/routes/admin-sms-verbal-consent.ts",
+  "apps/api/src/services/external-webhook-notification/sms-toll-free-canary.integration.test.ts",
   "apps/admin-coc/src/lib/admin-api/onboarding-actor.ts",
   "apps/admin-coc/src/lib/admin-api/onboarding-actor.test.ts",
   "docs/architecture/staff-assertion.md",

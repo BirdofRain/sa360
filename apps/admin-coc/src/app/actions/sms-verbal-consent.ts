@@ -25,7 +25,7 @@ export async function recordVerbalSmsConsentAction(input: {
   }>("POST", `/admin/v1/team-workspace/clients/${encodeURIComponent(id)}/sms-verbal-consent`, {
     phoneE164: input.phoneE164.trim(),
     affirmativeResponse: input.affirmativeResponse,
-    disclosureVersion: "external-webhook-sms-v2",
+    disclosureVersion: "ghl-lead-sms-v1",
     confirmationEmail: input.confirmationEmail.trim(),
     evidence: input.evidence.trim() || undefined,
   });

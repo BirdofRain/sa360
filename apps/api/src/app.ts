@@ -35,6 +35,7 @@ import { adminGhlAssociationDispatchRoutes } from "./routes/admin-ghl-associatio
 import { adminExternalWebhookDispatchRoutes } from "./routes/admin-external-webhook-dispatch.js";
 import { adminExternalWebhookConfigRoutes } from "./routes/admin-external-webhook-config.js";
 import { adminExternalWebhookNoticeDispatchRoutes } from "./routes/admin-external-webhook-notice-dispatch.js";
+import { adminGhlLeadNoticeDispatchRoutes } from "./routes/admin-ghl-lead-notice-dispatch.js";
 import { externalWebhookNoticeCallbackRoutes } from "./routes/external-webhook-notice-callbacks.js";
 import { clientSmsOptInRoutes } from "./routes/client-sms-opt-in.js";
 import { publicSmsOptInRoutes } from "./routes/public-sms-opt-in.js";
@@ -181,6 +182,7 @@ export async function buildApp() {
   await app.register(adminExternalWebhookConfigRoutes, { prefix: "/admin/v1" });
   // Notice drain. Exact-true flag stays off, so these routes do not send.
   await app.register(adminExternalWebhookNoticeDispatchRoutes, { prefix: "/admin/v1" });
+  await app.register(adminGhlLeadNoticeDispatchRoutes, { prefix: "/admin/v1" });
   await app.register(externalWebhookNoticeCallbackRoutes);
   // Public GHL OAuth callback: GET /integrations/oauth/callback (alias: /integrations/ghl/oauth/callback)
   await app.register(integrationsGhlRoutes, { prefix: "/integrations" });

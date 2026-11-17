@@ -1,12 +1,14 @@
 /**
  * Recipient-facing SMS disclosure for toll-free verification.
  *
- * The v1 sentence remains valid for rows already stored. New recipient opt-in
- * uses v2 and refuses to record consent until both legal URLs are configured.
- * This module does not invent those URLs and does not send.
+ * v1 and v2 remain valid for rows already stored. Those versions describe
+ * webhook acceptance and are not rewritten. New recipient opt-in uses
+ * ghl-lead-sms-v1 and refuses to record that consent until both legal URLs
+ * are configured. This module does not invent those URLs and does not send.
  */
 
 export const SMS_CONSENT_VERSION_V2 = "external-webhook-sms-v2";
+export const SMS_CONSENT_VERSION_GHL = "ghl-lead-sms-v1";
 export const SMS_PRIVACY_POLICY_URL_ENV = "SA360_SMS_PRIVACY_POLICY_URL";
 export const SMS_TERMS_URL_ENV = "SA360_SMS_TERMS_URL";
 export const SMS_OPT_IN_CLIENT_ENV = "SA360_SMS_OPT_IN_CLIENT_ACCOUNT_ID";
@@ -22,12 +24,19 @@ export const SMS_VERBAL_OPERATOR_EMAILS = [
 export const SMS_DISCLOSURE = {
   businessName: "Life Agent Launch",
   program: "SA360 Delivery Notifications",
-  purpose: "operational notification when a delivery webhook is accepted",
+  purpose: "operational notification when a lead is received in your GoHighLevel account",
   frequency: "Message frequency varies.",
   rates: "Message and data rates may apply.",
   stop: "Reply STOP to opt out.",
   help: "Reply HELP for help.",
 } as const;
+
+/** Opening sentence stored on external-webhook-sms-v2 rows. Do not change it. */
+export const SMS_DISCLOSURE_V2_OPENING =
+  "Life Agent Launch may text this number with operational SA360 delivery notifications.";
+
+export const SMS_DISCLOSURE_GHL_OPENING =
+  "Life Agent Launch may text this number when a lead is received in your GoHighLevel account.";
 
 const BLOCKED_HOSTS = new Set([
   "localhost",
@@ -43,7 +52,7 @@ export type SmsLegalUrls = {
 };
 
 export type SmsDisclosureView = {
-  version: typeof SMS_CONSENT_VERSION_V2;
+  version: typeof SMS_CONSENT_VERSION_GHL;
   businessName: string;
   program: string;
   purpose: string;
@@ -91,9 +100,18 @@ export function readSmsLegalUrls(env: NodeJS.ProcessEnv = process.env): SmsLegal
   return { privacyPolicyUrl, termsUrl };
 }
 
+/** Exact v2 sentence. Stored rows stay on this text. New opt-in does not use it. */
 export function composeSmsConsentText(urls: SmsLegalUrls): string {
+  return joinDisclosure(SMS_DISCLOSURE_V2_OPENING, urls);
+}
+
+export function composeGhlLeadSmsConsentText(urls: SmsLegalUrls): string {
+  return joinDisclosure(SMS_DISCLOSURE_GHL_OPENING, urls);
+}
+
+function joinDisclosure(opening: string, urls: SmsLegalUrls): string {
   return [
-    "Life Agent Launch may text this number with operational SA360 delivery notifications.",
+    opening,
     SMS_DISCLOSURE.frequency,
     SMS_DISCLOSURE.rates,
     SMS_DISCLOSURE.stop,
@@ -106,8 +124,25 @@ export function composeSmsConsentText(urls: SmsLegalUrls): string {
 const V2_TEXT =
   /^Life Agent Launch may text this number with operational SA360 delivery notifications\. Message frequency varies\. Message and data rates may apply\. Reply STOP to opt out\. Reply HELP for help\. Privacy Policy: (https:\/\/\S+) Terms: (https:\/\/\S+)$/;
 
+const GHL_TEXT =
+  /^Life Agent Launch may text this number when a lead is received in your GoHighLevel account\. Message frequency varies\. Message and data rates may apply\. Reply STOP to opt out\. Reply HELP for help\. Privacy Policy: (https:\/\/\S+) Terms: (https:\/\/\S+)$/;
+
+/** True only for a stored external-webhook-sms-v2 sentence. */
 export function smsDisclosureTextIsComplete(text: string): boolean {
-  const match = V2_TEXT.exec(text);
+  return disclosureTextMatches(text, V2_TEXT, composeSmsConsentText);
+}
+
+/** True only for the current GoHighLevel lead-received sentence. */
+export function ghlLeadSmsDisclosureTextIsComplete(text: string): boolean {
+  return disclosureTextMatches(text, GHL_TEXT, composeGhlLeadSmsConsentText);
+}
+
+function disclosureTextMatches(
+  text: string,
+  pattern: RegExp,
+  compose: (urls: SmsLegalUrls) => string
+): boolean {
+  const match = pattern.exec(text);
   if (!match) return false;
   if (text.length < 160 || text.length > 500) return false;
   if (text.includes("@") || /\+\d{8,}/.test(text)) return false;
@@ -115,14 +150,14 @@ export function smsDisclosureTextIsComplete(text: string): boolean {
   const termsUrl = publicLegalUrl(match[2]);
   if (!privacyPolicyUrl || !termsUrl || privacyPolicyUrl !== match[1] || termsUrl !== match[2]) return false;
   if (privacyPolicyUrl === termsUrl) return false;
-  return text === composeSmsConsentText({ privacyPolicyUrl, termsUrl });
+  return text === compose({ privacyPolicyUrl, termsUrl });
 }
 
 export function readSmsDisclosure(env: NodeJS.ProcessEnv = process.env): SmsDisclosureView {
   const urls = readSmsLegalUrls(env);
-  const text = urls ? composeSmsConsentText(urls) : null;
+  const text = urls ? composeGhlLeadSmsConsentText(urls) : null;
   return {
-    version: SMS_CONSENT_VERSION_V2,
+    version: SMS_CONSENT_VERSION_GHL,
     businessName: SMS_DISCLOSURE.businessName,
     program: SMS_DISCLOSURE.program,
     purpose: SMS_DISCLOSURE.purpose,
@@ -132,7 +167,7 @@ export function readSmsDisclosure(env: NodeJS.ProcessEnv = process.env): SmsDisc
     help: SMS_DISCLOSURE.help,
     privacyPolicyUrl: urls?.privacyPolicyUrl ?? null,
     termsUrl: urls?.termsUrl ?? null,
-    recordable: text != null && smsDisclosureTextIsComplete(text),
+    recordable: text != null && ghlLeadSmsDisclosureTextIsComplete(text),
     text,
   };
 }

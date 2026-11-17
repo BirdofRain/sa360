@@ -158,6 +158,7 @@ function confirmFailureMessage(error: string): string | null {
   if (error === "token_expired" || error === "token_invalid") return null;
   if (error === "consent_not_affirmed") return "Check the box to confirm. Nothing was submitted.";
   if (error === "disclosure_mismatch") return "The disclosure changed, so consent was not recorded.";
+  if (error === "prior_consent_retained") return "Earlier consent is unchanged. This form did not replace it.";
   return null;
 }
 

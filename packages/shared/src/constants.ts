@@ -123,6 +123,16 @@ export const EXTERNAL_WEBHOOK_NOTICE_DISPATCH_JOB = "dispatch-external-webhook-n
 export const EXTERNAL_WEBHOOK_NOTICE_DISCOVER_JOB = "discover-external-webhook-notices";
 export const EXTERNAL_WEBHOOK_NOTICE_DISCOVER_JOB_ID = "external-webhook-notice-discover";
 
+/**
+ * SMS after a proven GoHighLevel contact write. Separate from the external
+ * webhook notice queue. The processor no-ops unless SA360_GHL_LEAD_NOTICE_ENABLED
+ * is the exact string true. The SMS kill switch is still required before Twilio.
+ */
+export const GHL_LEAD_NOTICE_QUEUE = "ghl-lead-notice";
+export const GHL_LEAD_NOTICE_DISPATCH_JOB = "dispatch-ghl-lead-notice";
+export const GHL_LEAD_NOTICE_DISCOVER_JOB = "discover-ghl-lead-notices";
+export const GHL_LEAD_NOTICE_DISCOVER_JOB_ID = "ghl-lead-notice-discover";
+
 /** Guarded lead inventory review & activation (stacked on aged ingestion). */
 export const LEAD_INVENTORY_REVIEW_MAKE_AVAILABLE_CONFIRMATION =
   "MAKE REVIEWED INVENTORY AVAILABLE" as const;

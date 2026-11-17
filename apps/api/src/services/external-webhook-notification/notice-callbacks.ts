@@ -6,6 +6,12 @@
 
 import type { PrismaClient } from "@prisma/client";
 
+import {
+  markGhlLeadNoticeDeliveryConfirmed,
+  markGhlLeadNoticeFailed,
+  markGhlLeadNoticeProviderAccepted,
+  markGhlLeadNoticeSuppressed,
+} from "../ghl-lead-notice/receipt.js";
 import { confirmSmsHandsetInbound, suppressSmsPhone } from "./sms-consent.js";
 import {
   markExternalWebhookNoticeDeliveryConfirmed,
@@ -39,7 +45,7 @@ export async function applyTwilioNoticeStatus(
   const receipt = await db.externalWebhookNotificationReceipt.findFirst({
     where: { providerMessageId: sid, provider: "twilio" },
   });
-  if (!receipt) return { ok: true, applied: "unknown_sid" };
+  if (!receipt) return applyGhlLeadNoticeStatus(db, { sid, status, errorCode: params.ErrorCode });
   if (receipt.status === "sent" || receipt.status === "failed" || receipt.status === "suppressed") {
     return { ok: true, applied: "duplicate" };
   }
@@ -76,6 +82,55 @@ export async function applyTwilioNoticeStatus(
       provider: "twilio",
       providerMessageId: sid,
       providerStatus: status,
+    });
+    return { ok: true, applied: "updated" };
+  }
+  return { ok: true, applied: "duplicate" };
+}
+
+/** Same status words as an external-webhook receipt. A missing GHL row stays unknown. */
+async function applyGhlLeadNoticeStatus(
+  db: PrismaClient,
+  input: { sid: string; status: string; errorCode?: string }
+): Promise<{ ok: true; applied: "updated" | "duplicate" | "unknown_sid" | "ignored" }> {
+  const receipt = await db.ghlLeadReceivedNotice.findFirst({
+    where: { providerMessageId: input.sid, provider: "twilio" },
+  });
+  if (!receipt) return { ok: true, applied: "unknown_sid" };
+  if (receipt.status === "sent" || receipt.status === "failed" || receipt.status === "suppressed") {
+    return { ok: true, applied: "duplicate" };
+  }
+  const code = input.errorCode?.trim() ? Number(input.errorCode) : null;
+  if (code === 21610) {
+    await markGhlLeadNoticeSuppressed(db, receipt.idempotencyKey);
+    return { ok: true, applied: "updated" };
+  }
+  if (providerStatusConfirmsDelivery(input.status)) {
+    if (receipt.status === "sending" || receipt.status === "uncertain") {
+      await markGhlLeadNoticeProviderAccepted(db, {
+        idempotencyKey: receipt.idempotencyKey,
+        providerMessageId: input.sid,
+        providerStatus: "accepted",
+      });
+    }
+    const confirmed = await markGhlLeadNoticeDeliveryConfirmed(db, {
+      idempotencyKey: receipt.idempotencyKey,
+      providerStatus: input.status,
+    });
+    return { ok: true, applied: confirmed ? "updated" : "duplicate" };
+  }
+  if (input.status === "failed" || input.status === "undelivered" || input.status === "canceled") {
+    await markGhlLeadNoticeFailed(db, {
+      idempotencyKey: receipt.idempotencyKey,
+      providerCode: Number.isInteger(code) ? code : null,
+    });
+    return { ok: true, applied: "updated" };
+  }
+  if (receipt.status === "sending" || receipt.status === "uncertain") {
+    await markGhlLeadNoticeProviderAccepted(db, {
+      idempotencyKey: receipt.idempotencyKey,
+      providerMessageId: input.sid,
+      providerStatus: input.status,
     });
     return { ok: true, applied: "updated" };
   }

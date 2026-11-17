@@ -9,6 +9,11 @@
  * `findProductionGhlReceipt` still requires mode `location_api` and is not
  * this predicate. A later assignment can teach that helper to call here.
  * This module does not edit the GHL writer or the Sheets writer.
+ *
+ * `ghlContactReceived` is the contact-write evidence used by the
+ * ghl_lead_received SMS. It uses the same persisted contact receipt as
+ * `canonicalGhlDelivery` and does not treat workflow, tag, opportunity, or
+ * Sheets success as that evidence.
  */
 
 import {
@@ -286,6 +291,127 @@ export function canonicalGhlDelivery(input: GhlCanonicalInput): CanonicalDeliver
     sourceLeadEventId: outbox ? text(outbox.sourceLeadEventId) : null,
     canonical: reasons.length === 0,
     at: iso(run.completedAt),
+    reasons,
+  };
+}
+
+const CONTACT_RECEIVED_STATUSES = new Set(["succeeded", "partial_success", "failed"]);
+
+export type GhlContactReceivedInput = {
+  run: GhlCanonicalInput["run"] & { destinationSubaccountIdGhl: string };
+  steps: GhlCanonicalStep[];
+  destination: { clientAccountId: string; locationIdGhl: string } | null;
+  /**
+   * Association schedule row. Its status is not a contact proof. A later
+   * workflow failure can leave this row uncertain without removing the
+   * contact receipt on the run.
+   */
+  outbox: {
+    status: string;
+    clientAccountId: string;
+    sourceLeadEventId: string;
+    destinationLocationIdGhl: string;
+    liveRunId: string | null;
+  } | null;
+  sourceLead: {
+    id: string;
+    bulkImportId: string | null;
+    bulkImportRowId: string | null;
+    sourceType?: string | null;
+  } | null;
+  onboardingTestAttemptId?: string | null;
+  onboardingTestAttemptKeys: string[] | null;
+};
+
+export type GhlContactReceivedVerdict = {
+  received: boolean;
+  contactId: string | null;
+  sourceLeadEventId: string | null;
+  locationIdGhl: string | null;
+  completedAt: string | null;
+  reasons: string[];
+};
+
+/**
+ * Proven create-or-update of one production contact in the client's location.
+ * Workflow enrollment is not read. A failed or ambiguous contact receipt is
+ * not received. Sheets evidence cannot be passed here.
+ */
+export function ghlContactReceived(input: GhlContactReceivedInput): GhlContactReceivedVerdict {
+  const { run, destination, outbox, sourceLead } = input;
+  const reasons: string[] = [];
+  const results = separateDeliveryResults(input.steps);
+  const contactStep = stepOf(input.steps, "create_or_update_contact");
+  const contactReceipt = storedReceipt(contactStep);
+  const locationIdGhl = text(run.destinationSubaccountIdGhl);
+
+  if (run.mode !== GHL_PRODUCTION_MODE) {
+    add(reasons, GHL_REJECTED_MODES.has(run.mode) ? `mode_${run.mode}` : "mode_not_ongoing_association");
+  }
+  if (run.status === "executing" || run.status === "skipped_duplicate") {
+    add(reasons, `status_${run.status}`);
+  } else if (!CONTACT_RECEIVED_STATUSES.has(run.status)) {
+    add(reasons, "status_not_finished");
+  } else if (!present(run.completedAt)) {
+    add(reasons, "completed_at_missing");
+  }
+
+  if (text(input.onboardingTestAttemptId) || isOnboardingTestKey(run.idempotencyKey)) {
+    add(reasons, "onboarding_test_attempt");
+  }
+  const receiptKeys: string[] = [];
+  for (const step of input.steps) {
+    const receipt = storedReceipt(step);
+    if (!receipt) continue;
+    receiptKeys.push(receipt.idempotencyKey);
+    if (isOnboardingTestKey(receipt.idempotencyKey)) add(reasons, "onboarding_test_attempt");
+  }
+  assessOnboardingKeys(input.onboardingTestAttemptKeys, [run.idempotencyKey, ...receiptKeys], reasons);
+
+  if (!locationIdGhl) add(reasons, "location_missing");
+  if (!destination) add(reasons, "destination_missing");
+  else {
+    if (destination.clientAccountId !== run.destinationClientAccountId) add(reasons, "client_mismatch");
+    if (text(destination.locationIdGhl) !== locationIdGhl) add(reasons, "location_mismatch");
+  }
+
+  if (!outbox) {
+    add(reasons, "outbox_missing");
+  } else {
+    if (outbox.clientAccountId !== run.destinationClientAccountId) add(reasons, "outbox_client_mismatch");
+    if (text(outbox.destinationLocationIdGhl) !== locationIdGhl) add(reasons, "outbox_location_mismatch");
+    if (outbox.liveRunId !== run.id) add(reasons, "outbox_run_mismatch");
+    if (!text(outbox.sourceLeadEventId)) add(reasons, "source_lead_event_missing");
+    // Status, lastError, and externalCallExecuted stay on the row for the
+    // full canonical predicate. They do not erase a proven contact receipt.
+    void outbox.status;
+  }
+
+  const sourceLeadEventId = outbox ? text(outbox.sourceLeadEventId) : null;
+  if (!sourceLead) add(reasons, "production_lead_missing");
+  else {
+    if (sourceLeadEventId && sourceLead.id !== sourceLeadEventId) add(reasons, "source_lead_mismatch");
+    if (
+      text(sourceLead.bulkImportId) ||
+      text(sourceLead.bulkImportRowId) ||
+      sourceLead.sourceType === "bulk_import"
+    ) {
+      add(reasons, "historical_backfill");
+    }
+  }
+  if (sourceLeadEventId === SYNTHETIC_CAMPAIGN_TEST_EVENT) add(reasons, "synthetic_campaign_test");
+
+  assessContact(results, contactStep, contactReceipt, reasons);
+  flagBadOutcome(contactStep, reasons);
+
+  const received = reasons.length === 0;
+  const contactId = text(contactStep?.externalId) ?? contactReceipt?.externalId ?? null;
+  return {
+    received,
+    contactId: received ? contactId : null,
+    sourceLeadEventId: received ? sourceLeadEventId : null,
+    locationIdGhl: received ? locationIdGhl : null,
+    completedAt: received ? iso(run.completedAt) : null,
     reasons,
   };
 }

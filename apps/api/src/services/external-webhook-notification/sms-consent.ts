@@ -11,12 +11,14 @@ import { createHash, randomInt, randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 
 import {
+  SMS_CONSENT_VERSION_GHL,
   SMS_CONSENT_VERSION_V2,
+  ghlLeadSmsDisclosureTextIsComplete,
   smsDisclosureTextIsComplete,
 } from "./sms-disclosure.js";
 
 export const SMS_CONSENT_VERSION = "external-webhook-sms-v1";
-export { SMS_CONSENT_VERSION_V2 };
+export { SMS_CONSENT_VERSION_GHL, SMS_CONSENT_VERSION_V2 };
 
 /** Canonical consent copy. Stored only when the caller presents this exact text. */
 export const SMS_CONSENT_TEXT =
@@ -36,7 +38,8 @@ export type SmsConsentCode =
   | "handset_not_proven"
   | "challenge_expired"
   | "challenge_mismatch"
-  | "disclosure_mismatch";
+  | "disclosure_mismatch"
+  | "prior_consent_retained";
 
 export type SmsConsentView = {
   clientAccountId: string;
@@ -56,9 +59,19 @@ export type SmsConsentResult = { ok: true; preference: SmsConsentView } | { ok: 
 
 type PreferenceDb = PrismaClient;
 
+/** v1 and v2 only. A GoHighLevel lead consent is not webhook-acceptance consent. */
 export function smsConsentTextIsCanonical(version: string, text: string): boolean {
   if (version === SMS_CONSENT_VERSION && text === SMS_CONSENT_TEXT) return true;
   return version === SMS_CONSENT_VERSION_V2 && smsDisclosureTextIsComplete(text);
+}
+
+export function smsConsentTextIsGhlLead(version: string, text: string): boolean {
+  return version === SMS_CONSENT_VERSION_GHL && ghlLeadSmsDisclosureTextIsComplete(text);
+}
+
+/** Either recorded program can turn the SMS switch on. The sender still checks the program. */
+export function smsConsentCanEnable(version: string, text: string): boolean {
+  return smsConsentTextIsCanonical(version, text) || smsConsentTextIsGhlLead(version, text);
 }
 
 export function smsConsentAllowsNotice(preference: {
@@ -75,6 +88,21 @@ export function smsConsentAllowsNotice(preference: {
   if (!preference.smsConsentVersion || !preference.smsConsentText) return false;
   if (!smsConsentTextIsCanonical(preference.smsConsentVersion, preference.smsConsentText)) return false;
   return true;
+}
+
+/** Active ghl-lead-sms-v1 consent. v1 and v2 do not authorize this message. */
+export function smsConsentAllowsGhlLeadNotice(preference: {
+  smsEnabled: boolean;
+  smsSuppressionState: string;
+  smsConsentVersion: string | null;
+  smsConsentText: string | null;
+  smsConsentRecordedAt: Date | null;
+}): boolean {
+  if (!preference.smsEnabled || preference.smsSuppressionState !== "clear" || !preference.smsConsentRecordedAt) {
+    return false;
+  }
+  if (!preference.smsConsentVersion || !preference.smsConsentText) return false;
+  return smsConsentTextIsGhlLead(preference.smsConsentVersion, preference.smsConsentText);
 }
 
 /**
@@ -270,7 +298,7 @@ export async function setSmsNotificationEnabled(
       !existing.consentRecordedAt ||
       !existing.consentVersion ||
       !existing.consentText ||
-      !smsConsentTextIsCanonical(existing.consentVersion, existing.consentText)
+      !smsConsentCanEnable(existing.consentVersion, existing.consentText)
     ) {
       return { ok: false, code: "not_opted_in" };
     }
@@ -358,6 +386,14 @@ export async function suppressSmsLocally(
         AND "channel" = 'sms'::"ExternalWebhookNoticeChannel"
         AND "status" = 'pending'::"ExternalWebhookNoticeStatus"
     `;
+    await tx.$executeRaw`
+      UPDATE "GhlLeadReceivedNotice"
+      SET "status" = 'suppressed'::"ExternalWebhookNoticeStatus",
+          "skipReason" = 'stop_suppressed',
+          "updatedAt" = transaction_timestamp()
+      WHERE "clientAccountId" = ${clientAccountId}
+        AND "status" = 'pending'::"ExternalWebhookNoticeStatus"
+    `;
     return { ok: true, preference: await readView(tx, clientAccountId) };
   });
 }
@@ -381,7 +417,9 @@ export async function issueSmsHandsetChallenge(
   const phone = input.phoneE164.trim();
   if (!clientAccountId) return { ok: false, code: "client_not_found" };
   if (!E164.test(phone)) return { ok: false, code: "invalid_e164" };
-  if (!smsDisclosureTextIsComplete(input.disclosureText)) return { ok: false, code: "invalid_consent" };
+  if (!ghlLeadSmsDisclosureTextIsComplete(input.disclosureText) && !smsDisclosureTextIsComplete(input.disclosureText)) {
+    return { ok: false, code: "invalid_consent" };
+  }
   const now = input.now ?? new Date();
   const expiresAt = new Date(now.getTime() + HANDSET_CHALLENGE_MS);
   const challengeCode = randomInt(0, 1_000_000).toString().padStart(6, "0");

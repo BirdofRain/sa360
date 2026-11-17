@@ -1074,6 +1074,8 @@ model ClientAccount {
   externalWebhookDestinationConfigRequests ExternalWebhookDestinationConfigRequest[]
   /// Channel-specific external-webhook notices. Restrict so account deletion cannot erase them.
   externalWebhookNotificationReceipts ExternalWebhookNotificationReceipt[]
+  /// One SMS receipt per source lead and GHL location. Restrict so account deletion cannot erase it.
+  ghlLeadReceivedNotices GhlLeadReceivedNotice[]
   /// Per-client notification on/off choice. Defaults disabled and cascades without sending.
   deliveryNotificationPreference ClientDeliveryNotificationPreference?
   /// Accepted recipient and on/off writes. Cascade with the client. These rows do not send.
@@ -4387,8 +4389,9 @@ model ClientDeliveryNotificationPreference {
   /// SQL rejects true unless consent, a verified E.164, smsEnabledAt, and
   /// suppression `clear` are all present.
   smsEnabled                Boolean                           @default(false)
-  /// Exact consent copy for external-webhook-sms-v1 or external-webhook-sms-v2.
-  /// Null until that consent is recorded.
+  /// Exact consent copy for external-webhook-sms-v1, external-webhook-sms-v2,
+  /// or ghl-lead-sms-v1. A stored version keeps the text recorded with it.
+  /// Null until that consent is recorded. A later version does not rewrite it.
   smsConsentVersion         String?
   smsConsentText            String?
   /// Transaction time of the consent record. Not a phone verification time.
@@ -4452,6 +4455,62 @@ model ExternalWebhookNotificationReceipt {
   @@index([status, claimedAt])
   @@index([attemptId])
   @@index([clientAccountId, channel])
+}
+
+/// One operational SMS after a proven GoHighLevel contact write.
+/// idempotencyKey is ghl_lead_received:{client}:{sourceLead}:{location}.
+/// A second run for that same lead and location does not insert another row.
+/// The row stores the GHL contact id and the operator recipient. It does not
+/// store the consumer's name, phone, or email. provider_accepted is the Twilio
+/// create call. sent requires a later status callback.
+/// ON DELETE RESTRICT: deleting the client must not erase the receipt.
+model GhlLeadReceivedNotice {
+  id                       String                      @id @default(cuid())
+  idempotencyKey           String                      @unique
+  /// Always ghl_lead_received. Not an external-webhook acceptance.
+  event                    String                      @default("ghl_lead_received")
+  clientAccountId          String
+  clientAccount            ClientAccount               @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Restrict)
+  sourceLeadEventId        String
+  destinationLocationIdGhl String
+  /// Evidence of the run that first proved the contact. Not part of the key.
+  liveRunId                String
+  /// GHL contact id from the persisted contact receipt. Not a consumer phone.
+  contactExternalId        String
+  channel                  ExternalWebhookNoticeChannel @default(sms)
+  /// Operator E.164. Not a lead field.
+  recipient                String
+  status                   ExternalWebhookNoticeStatus @default(pending)
+  /// Consent version copied at insert. Later consent edits do not rewrite it.
+  consentVersion           String
+  /// Contact evidence time. Frozen.
+  completedAt              DateTime
+  templateId               String                      @default("ghl_lead_received")
+  claimCount               Int                         @default(0)
+  claimedAt                DateTime?
+  provider                 String?
+  providerMessageId        String?
+  providerStatus           String?
+  providerCode             Int?
+  deliveryEvidence         Boolean                     @default(false)
+  skipReason               String?
+  lastError                String?
+  createdAt                DateTime                    @default(now())
+  updatedAt                DateTime                    @updatedAt
+
+  @@unique([clientAccountId, sourceLeadEventId, destinationLocationIdGhl], map: "GhlLeadReceivedNotice_lead_location_key")
+  @@index([status, claimedAt], map: "GhlLeadReceivedNotice_status_claimed_idx")
+  @@index([providerMessageId], map: "GhlLeadReceivedNotice_provider_message_idx")
+  @@index([clientAccountId], map: "GhlLeadReceivedNotice_client_idx")
+}
+
+/// One row. The first discovery pass stamps the cutoff and does not notify
+/// for contact writes that already completed. Later passes move forward only.
+model GhlLeadNoticeDiscoveryCursor {
+  id              String    @id
+  lastCompletedAt DateTime?
+  lastRunId       String    @default("")
+  updatedAt       DateTime  @updatedAt
 }
 
 /// One row. The discovery pass moves it forward only through acceptances

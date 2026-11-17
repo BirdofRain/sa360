@@ -3,7 +3,9 @@ import test from "node:test";
 
 import {
   SMS_DISCLOSURE,
+  composeGhlLeadSmsConsentText,
   composeSmsConsentText,
+  ghlLeadSmsDisclosureTextIsComplete,
   publicLegalUrl,
   readSmsDisclosure,
   smsDisclosureTextIsComplete,
@@ -37,13 +39,19 @@ test("a complete disclosure names the program, frequency, rates, STOP, HELP, and
     SA360_SMS_TERMS_URL: TERMS,
   });
   assert.equal(view.recordable, true);
+  assert.equal(view.version, "ghl-lead-sms-v1");
   assert.equal(view.privacyPolicyUrl, PRIVACY);
-  assert.equal(view.text, composeSmsConsentText({ privacyPolicyUrl: PRIVACY, termsUrl: TERMS }));
-  assert.equal(smsDisclosureTextIsComplete(view.text ?? ""), true);
+  assert.equal(view.text, composeGhlLeadSmsConsentText({ privacyPolicyUrl: PRIVACY, termsUrl: TERMS }));
+  assert.equal(ghlLeadSmsDisclosureTextIsComplete(view.text ?? ""), true);
+  assert.equal(smsDisclosureTextIsComplete(view.text ?? ""), false);
+  assert.match(view.text ?? "", /lead is received in your GoHighLevel account/);
+  const historical = composeSmsConsentText({ privacyPolicyUrl: PRIVACY, termsUrl: TERMS });
+  assert.equal(smsDisclosureTextIsComplete(historical), true);
+  assert.match(historical, /operational SA360 delivery notifications/);
   assert.equal(view.text?.includes(SMS_DISCLOSURE.frequency), true);
   assert.equal(view.text?.includes(SMS_DISCLOSURE.stop), true);
   assert.equal(view.text?.includes(SMS_DISCLOSURE.help), true);
   assert.equal(view.text?.includes("@"), false);
   assert.equal((view.text ?? "").length <= 500, true);
-  assert.equal(smsDisclosureTextIsComplete(`${view.text} extra`), false);
+  assert.equal(ghlLeadSmsDisclosureTextIsComplete(`${view.text} extra`), false);
 });

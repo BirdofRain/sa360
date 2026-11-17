@@ -6,6 +6,7 @@ import {
   GHL_ASSOCIATION_DISPATCH_QUEUE,
   EXTERNAL_WEBHOOK_DELIVERY_QUEUE,
   EXTERNAL_WEBHOOK_NOTICE_QUEUE,
+  GHL_LEAD_NOTICE_QUEUE,
   CONSUMER_AGE_BIRTHDAY_SWEEP_QUEUE,
   FACETS_SUPPLY_REBUILD_QUEUE,
   FULFILLMENT_SHADOW_QUEUE,
@@ -26,6 +27,7 @@ import { processCompanySheetsDispatchJob } from "./processors/company-sheets-dis
 import { processGhlAssociationDispatchJob } from "./processors/ghl-association-dispatch.processor.js";
 import { processExternalWebhookDeliveryJob } from "./processors/external-webhook-delivery.processor.js";
 import { processExternalWebhookNoticeJob } from "./processors/external-webhook-notice.processor.js";
+import { processGhlLeadNoticeJob } from "./processors/ghl-lead-notice.processor.js";
 import { logBulkImportWorkerStartupDiagnostics } from "./lib/bulk-import-worker-diagnostics.js";
 import { syncFacetsSupplyRebuildScheduleOnWorkerStart } from "./lib/facets-supply-rebuild-schedule.js";
 import { syncConsumerAgeBirthdaySweepScheduleOnWorkerStart } from "./lib/consumer-age-birthday-sweep-schedule.js";
@@ -33,6 +35,7 @@ import { syncCompanySheetsDispatchScheduleOnWorkerStart } from "./lib/company-sh
 import { syncGhlAssociationDispatchScheduleOnWorkerStart } from "./lib/ghl-association-dispatch-schedule.js";
 import { syncExternalWebhookDeliveryScheduleOnWorkerStart } from "./lib/external-webhook-delivery-schedule.js";
 import { syncExternalWebhookNoticeScheduleOnWorkerStart } from "./lib/external-webhook-notice-schedule.js";
+import { syncGhlLeadNoticeScheduleOnWorkerStart } from "./lib/ghl-lead-notice-schedule.js";
 
 dotenv.config();
 
@@ -132,6 +135,15 @@ const externalWebhookDeliveryWorker = new Worker(
 const externalWebhookNoticeWorker = new Worker(
   EXTERNAL_WEBHOOK_NOTICE_QUEUE,
   (job) => processExternalWebhookNoticeJob(job),
+  {
+    connection: redis,
+    concurrency: 1,
+  }
+);
+
+const ghlLeadNoticeWorker = new Worker(
+  GHL_LEAD_NOTICE_QUEUE,
+  (job) => processGhlLeadNoticeJob(job),
   {
     connection: redis,
     concurrency: 1,
@@ -289,6 +301,11 @@ void syncExternalWebhookNoticeScheduleOnWorkerStart().catch((err) => {
     error: err instanceof Error ? err.message : String(err),
   });
 });
+void syncGhlLeadNoticeScheduleOnWorkerStart().catch((err) => {
+  logger.error("GHL lead notice schedule sync failed", {
+    error: err instanceof Error ? err.message : String(err),
+  });
+});
 
 async function shutdown(signal: string) {
   stopRuntimeDiagnostics();
@@ -303,6 +320,7 @@ async function shutdown(signal: string) {
   await ghlAssociationDispatchWorker.close();
   await externalWebhookDeliveryWorker.close();
   await externalWebhookNoticeWorker.close();
+  await ghlLeadNoticeWorker.close();
   await flushLogger();
   process.exit(0);
 }

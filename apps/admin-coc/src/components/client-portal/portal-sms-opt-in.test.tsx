@@ -21,6 +21,7 @@ test("the SMS opt-in form starts unchecked and does not invent legal links", () 
   assert.match(text, /Message and data rates may apply/);
   assert.match(text, /Reply STOP to opt out/);
   assert.match(text, /Reply HELP for help/);
+  assert.match(text, /GoHighLevel account/);
   assert.match(text, /Portal login is not required/);
   cleanup();
 });

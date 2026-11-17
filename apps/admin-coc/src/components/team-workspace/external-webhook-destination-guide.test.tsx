@@ -18,6 +18,7 @@ let preflightResult: ExternalWebhookBridgeResult = disabled();
 let saveResult: ExternalWebhookBridgeResult = disabled();
 let activateResult: ExternalWebhookBridgeResult = denied();
 let saveThrows = false;
+let activateThrows = false;
 
 const moduleLoader = module as unknown as {
   _load: (request: string, parent: NodeModule, isMain: boolean) => unknown;
@@ -47,6 +48,7 @@ moduleLoader._load = function (request: string, parent: NodeModule, isMain: bool
       activateExternalWebhookDestinationAction: async (input: { requestId: string }) => {
         calls.push("activate");
         activateIds.push(input.requestId);
+        if (activateThrows) throw new Error("socket hang up");
         return activateResult;
       },
       deactivateExternalWebhookDestinationAction: async (input: { requestId: string }) => {
@@ -74,6 +76,7 @@ test.afterEach(() => {
   readGate = Promise.resolve();
   readThrows = false;
   saveThrows = false;
+  activateThrows = false;
   readResult = disabled();
   preflightResult = disabled();
   saveResult = disabled();
@@ -346,12 +349,34 @@ test("a dropped save can be retried with the same request id", async () => {
   fireEvent.change(webhookUrl(), { target: { value: "https://hooks.example.com/inbound" } });
   fireEvent.click(screen.getByRole("button", { name: "Check this endpoint" }));
   fireEvent.click(await screen.findByRole("button", { name: "Save disabled configuration" }));
+  const uncertain = await screen.findByRole("status");
+  assert.match(uncertain.textContent ?? "", /cannot confirm whether the destination was saved/);
+  assert.equal(/was not saved/i.test(document.body.textContent ?? ""), false);
   await screen.findByRole("button", { name: "Retry" });
   saveThrows = false;
   saveResult = savedStatusResult({ enabled: false });
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   assert.equal(await screen.findByText("External webhook destination saved and disabled."), await screen.findByText("External webhook destination saved and disabled."));
   assert.equal(saveIds[0], saveIds[1]);
+});
+
+test("an uncertain activation reads the saved row before describing it", async () => {
+  readResult = savedStatus({ enabled: false, hostname: "hooks.example.com", revision: 4 });
+  activateThrows = true;
+  render(<Guide clientAccountId="client_a" access={{ canPrepare: true, canActivate: true }} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Review activation" }));
+  fireEvent.click(screen.getByRole("checkbox"));
+  fireEvent.click(screen.getByRole("button", { name: "Enable this destination" }));
+  const note = await screen.findByRole("status");
+  assert.match(note.textContent ?? "", /read again and is unchanged/);
+  assert.equal(/was not changed/i.test(document.body.textContent ?? ""), false);
+  assert.equal(calls.filter((call) => call === "read").length >= 2, true);
+  readResult = savedStatus({ enabled: true, hostname: "hooks.example.com", revision: 5 });
+  activateThrows = true;
+  fireEvent.click(screen.getByRole("button", { name: "Enable this destination" }));
+  const changed = await screen.findByText(/shows the current destination/);
+  assert.match(changed.textContent ?? "", /shows the current destination/);
+  assert.equal(/was not changed/i.test(document.body.textContent ?? ""), false);
 });
 
 test("the feature-off state has no save or activation control", async () => {

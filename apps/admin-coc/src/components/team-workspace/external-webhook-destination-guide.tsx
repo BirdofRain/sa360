@@ -276,7 +276,7 @@ export function ExternalWebhookDestinationGuide({
         ...(mode === "hmac_sha256" && signingSecret ? { signingSecret } : {}),
       });
       if (!result.ok || !result.status) {
-        applyFailure(result.ok ? { ok: false, code: "unavailable", message: "The save did not finish.", replayed: false, needsReload: false, status: null, preflight: null } : result, !result.ok && result.code === "unavailable");
+        applyFailure(result.ok ? { ok: false, code: "unavailable", message: "The save did not finish. SA360 cannot confirm whether the destination was saved.", replayed: false, needsReload: false, status: null, preflight: null } : result, !result.ok && result.code === "unavailable");
         return;
       }
       setReadState("ready");
@@ -291,7 +291,7 @@ export function ExternalWebhookDestinationGuide({
       setStage("saved");
       intent.current = { key: "", id: "" };
     } catch {
-      setMessage("The save did not finish. The external webhook was not saved.");
+      setMessage("The save did not finish. SA360 cannot confirm whether the destination was saved. Retry uses the same request.");
       setCode("unavailable");
       requestId(true);
     } finally {
@@ -308,8 +308,12 @@ export function ExternalWebhookDestinationGuide({
       const action = enabled ? activateExternalWebhookDestinationAction : deactivateExternalWebhookDestinationAction;
       const result = await action({ clientAccountId, requestId: id, expectedRevision: status.revision });
       if (!result.ok || !result.status) {
-        if (result.ok || result.code !== "unavailable") activationIntent.current = "";
-        applyFailure(result.ok ? { ok: false, code: "unavailable", message: "Activation did not finish. The destination was not changed.", replayed: false, needsReload: false, status: null, preflight: null } : result, false);
+        if (!result.ok && result.code !== "unavailable") activationIntent.current = "";
+        if (result.ok || result.code === "unavailable") {
+          await reconcileActivation(status);
+          return;
+        }
+        applyFailure(result, false);
         return;
       }
       activationIntent.current = "";
@@ -323,10 +327,34 @@ export function ExternalWebhookDestinationGuide({
       setCode(null);
       setStage("saved");
     } catch {
-      setMessage("Activation did not finish. The destination was not changed.");
-      setCode("unavailable");
+      await reconcileActivation(status);
     } finally {
       setPending(null);
+    }
+  }
+
+  async function reconcileActivation(before: ExternalWebhookBridgeStatus) {
+    setCode("unavailable");
+    try {
+      const read = await readExternalWebhookDestinationAction(clientAccountId);
+      if (!read.ok || !read.status) {
+        setMessage("Activation did not finish. The saved row could not be read back, so this screen cannot confirm whether it changed.");
+        return;
+      }
+      setReadState("ready");
+      setStatus(read.status);
+      const unchanged = read.status.revision === before.revision && read.status.enabled === before.enabled;
+      if (unchanged) {
+        setMessage("Activation did not finish. The saved row was read again and is unchanged.");
+        return;
+      }
+      activationIntent.current = "";
+      setConfirmed(false);
+      setCode(null);
+      setStage(read.status.present ? "saved" : "select");
+      setMessage("Activation did not finish. The saved row was read again and shows the current destination.");
+    } catch {
+      setMessage("Activation did not finish. The saved row could not be read back, so this screen cannot confirm whether it changed.");
     }
   }
 

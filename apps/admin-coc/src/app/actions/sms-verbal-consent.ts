@@ -3,7 +3,7 @@
 import { adminRequestJson } from "@/lib/admin-api/server";
 import { requireStaffWorkspacePermission } from "@/lib/admin-coc-session-guard";
 import { normalizeTeamWorkspaceClientId } from "@/lib/team-workspace/contract";
-import type { SmsVerbalActionResult } from "@/components/team-workspace/sms-verbal-consent";
+import type { SmsEmailResult, SmsVerbalActionResult } from "@/components/team-workspace/sms-verbal-consent";
 
 const E164 = /^\+[1-9]\d{7,14}$/;
 
@@ -32,7 +32,7 @@ export async function recordVerbalSmsConsentAction(input: {
   if (!saved.ok || saved.data.smsEnabled || saved.data.consentRecorded || saved.data.status !== "pending_confirmation") {
     return { ok: false, error: "The verbal note was not saved. Texts stay off." };
   }
-  return { ok: true, status: "pending_confirmation", smsEnabled: false, consentRecorded: false, email: saved.data.email ?? "not_sent" };
+  return { ok: true, status: "pending_confirmation", smsEnabled: false, consentRecorded: false, email: emailResult(saved.data.email) };
 }
 
 export async function issueSmsOptInLinkAction(input: {
@@ -54,5 +54,12 @@ export async function issueSmsOptInLinkAction(input: {
   if (!saved.ok || saved.data.smsEnabled || saved.data.consentRecorded) {
     return { ok: false, error: "The confirmation link was not issued. Texts stay off." };
   }
-  return { ok: true, status: "link_only", smsEnabled: false, consentRecorded: false, email: saved.data.email ?? "not_sent" };
+  return { ok: true, status: "link_only", smsEnabled: false, consentRecorded: false, email: emailResult(saved.data.email) };
+}
+
+function emailResult(value: string | undefined): SmsEmailResult {
+  if (value === "sent" || value === "email_not_configured" || value === "origin_unconfigured" || value === "invalid_recipient") {
+    return value;
+  }
+  return "not_sent";
 }

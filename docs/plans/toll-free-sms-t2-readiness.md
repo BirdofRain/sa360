@@ -38,7 +38,16 @@ until this build is deployed and a reviewer can open the live page.
 The confirmation email is sent only when `SA360_SMS_OPT_IN_PUBLIC_ORIGIN` is a
 real public `https` origin and transactional email is configured. Otherwise the
 API reports `origin_unconfigured` or `email_not_configured` and does not invent
-a host. The raw token is stored only as a SHA-256 hash.
+a host. Team Workspace repeats that result. It says the provider accepted the
+message only when the provider did, and it does not call that inbox delivery.
+The raw token is stored only as a SHA-256 hash.
+
+Confirming a link locks that preference row and writes consent, enablement, and
+token consumption in one update. The update matches the token hash and the phone
+on the row. A replaced token, a phone change, STOP, or a second submit cannot
+confirm a different recipient. The number on the link is staff-supplied.
+`smsHandsetProvenAt` is the only independent handset-ownership mark, and the
+link does not set it.
 
 Verbal-only enrollment stays pending until Life Agent Launch's Privacy Policy
 and compliance review explicitly allow it. Operator attestation does not call

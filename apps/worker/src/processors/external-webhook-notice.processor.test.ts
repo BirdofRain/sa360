@@ -50,4 +50,21 @@ test("the notice worker stays off unless its own flag is exact true", async () =
   });
   assert.equal(isolated.skipped, "canary_isolation");
   assert.equal(calls, 1);
+  const mismatched = await processExternalWebhookNoticeJob(job(EXTERNAL_WEBHOOK_NOTICE_DISPATCH_JOB, { receiptId: "rcpt_1" }), {
+    env: {
+      SA360_EXTERNAL_WEBHOOK_NOTICE_DISPATCH_ENABLED: "true",
+      SA360_SMS_NOTIFICATIONS_ENABLED: "true",
+      ADMIN_API_KEY: "admin",
+      SA360_SMS_CANARY_ENABLED: "true",
+      SA360_SMS_CANARY_CLIENT_ACCOUNT_ID: "sandbox_client",
+      SA360_SMS_CANARY_ATTEMPT_ID: "attempt_1",
+      SA360_SMS_CANARY_RECIPIENT_E164: "not-a-phone",
+    },
+    postImpl: async () => {
+      calls += 1;
+      return { status: 200, body: "" };
+    },
+  });
+  assert.equal(mismatched.skipped, "canary_isolation");
+  assert.equal(calls, 1);
 });

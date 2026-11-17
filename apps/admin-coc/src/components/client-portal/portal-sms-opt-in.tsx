@@ -1,24 +1,54 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState, type FormEvent } from "react";
 
 import { PORTAL_SMS_OPT_IN_PREVIEW, type PortalSmsOptInPreview } from "./portal-sms-disclosure";
 
 export type { PortalSmsOptInPreview };
 export { PORTAL_SMS_OPT_IN_PREVIEW };
 
+export type SmsOptInSubmitResult = { ok: boolean; message: string };
+
 export function PortalSmsOptInForm({
   preview,
   action,
 }: {
   preview: PortalSmsOptInPreview;
-  action?: (formData: FormData) => void | Promise<void>;
+  action?: (formData: FormData) => Promise<SmsOptInSubmitResult>;
 }) {
   const [affirmed, setAffirmed] = useState(false);
-  const canSubmit = preview.recordable && affirmed && !preview.smsEnabled;
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState<SmsOptInSubmitResult | null>(null);
+  const lock = useRef(false);
+  const canSubmit = preview.recordable && affirmed && !preview.smsEnabled && !submitting && !result?.ok;
+
+  async function onSubmit(event: FormEvent<HTMLFormElement>) {
+    if (!action) return;
+    event.preventDefault();
+    if (lock.current || result?.ok) return;
+    if (!affirmed) {
+      setResult({ ok: false, message: "Check the box to confirm. Consent was not recorded." });
+      return;
+    }
+    lock.current = true;
+    setSubmitting(true);
+    try {
+      const outcome = await action(new FormData(event.currentTarget));
+      setResult(outcome);
+      if (!outcome.ok) lock.current = false;
+    } catch {
+      lock.current = false;
+      setResult({
+        ok: false,
+        message: "The confirmation could not be completed. Consent was not recorded and texts stay off.",
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   return (
-    <form className="space-y-4 rounded-xl border border-slate-200 bg-white p-4 sm:p-6" action={action}>
+    <form className="space-y-4 rounded-xl border border-slate-200 bg-white p-4 sm:p-6" onSubmit={onSubmit}>
       <div>
         <h1 className="text-xl font-semibold text-slate-900">Text notifications</h1>
         <p className="mt-1 text-sm text-slate-600">
@@ -81,10 +111,13 @@ export function PortalSmsOptInForm({
         Continue
       </button>
       <p className="text-sm text-slate-600">
-        The checkbox starts unchecked. Portal login is not required. Submitting this form is what records consent.
-        {preview.consentRecorded ? " Consent is on file." : " Consent is not on file."}{" "}
-        {preview.smsEnabled ? "Texts are enabled." : "Texts are off."}
+        The checkbox starts unchecked. Portal login is not required. Submitting this form is what records recipient
+        consent. {preview.phoneMasked ? "This number was supplied by staff. It is not proof that the handset sent a message. " : ""}
+        {preview.consentRecorded || result?.ok ? "Recipient consent is confirmed. " : "Recipient consent is not confirmed. "}
+        {preview.handsetProven ? "Handset ownership is independently proven. " : "Handset ownership is not independently proven. "}
+        {preview.smsEnabled || result?.ok ? "Texts are on." : "Texts are off."}
       </p>
+      {result ? <p className="text-sm text-slate-800">{result.message}</p> : null}
     </form>
   );
 }

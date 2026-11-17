@@ -16,13 +16,7 @@ import {
   smsOptInPublicOrigin,
   type SmsDisclosureView,
 } from "./sms-disclosure.js";
-import {
-  recordNotificationPhone,
-  recordSmsConsent,
-  setSmsNotificationEnabled,
-  smsDisclosureHash,
-  type SmsConsentCode,
-} from "./sms-consent.js";
+import { recordNotificationPhone, smsDisclosureHash, type SmsConsentCode } from "./sms-consent.js";
 
 const TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -204,6 +198,10 @@ export async function readSmsOptInLink(
       ok: true;
       disclosure: SmsDisclosureView;
       phoneMasked: string;
+      /** The number was typed by staff. It is not handset proof. */
+      phoneSource: "staff_supplied";
+      recipientConsentConfirmed: boolean;
+      handsetOwnershipProven: boolean;
       consentRecorded: boolean;
       smsEnabled: false;
       pendingConfirmation: boolean;
@@ -216,47 +214,77 @@ export async function readSmsOptInLink(
     ok: true,
     disclosure: readSmsDisclosure(env),
     phoneMasked: maskE164(row.phone),
+    phoneSource: "staff_supplied",
+    recipientConsentConfirmed: row.consentRecorded,
+    handsetOwnershipProven: row.handsetProven,
     consentRecorded: row.consentRecorded,
     smsEnabled: false,
     pendingConfirmation: row.collection === "pending_confirmation",
   };
 }
 
+/**
+ * One locked update binds the token hash to the phone on that row, records
+ * consent, enables SMS, and consumes the token. A phone change, a replacement
+ * token, STOP, or a second submit cannot confirm a different recipient.
+ */
 export async function confirmSmsOptInLink(
   db: LinkDb,
   input: { rawToken: string; affirmDisclosure: boolean; env?: NodeJS.ProcessEnv; now?: Date }
-): Promise<{ ok: true; consentRecorded: true; smsEnabled: boolean } | { ok: false; code: SmsLinkCode }> {
+): Promise<{ ok: true; consentRecorded: true; smsEnabled: true } | { ok: false; code: SmsLinkCode }> {
   if (input.affirmDisclosure !== true) return { ok: false, code: "consent_not_affirmed" };
-  const now = input.now ?? new Date();
-  const row = await findToken(db, input.rawToken, now);
-  if (!row.ok) return row;
+  if (!TOKEN_RE.test(input.rawToken)) return { ok: false, code: "token_invalid" };
   const disclosure = readSmsDisclosure(input.env);
   if (!disclosure.recordable || !disclosure.text || !smsDisclosureTextIsComplete(disclosure.text)) {
     return { ok: false, code: "legal_urls_missing" };
   }
-  if (row.disclosureHash && row.disclosureHash !== smsDisclosureHash(disclosure.text)) {
-    return { ok: false, code: "disclosure_mismatch" };
-  }
-  if (!row.consentRecorded) {
-    const recorded = await recordSmsConsent(db, {
-      clientAccountId: row.clientAccountId,
-      version: SMS_CONSENT_VERSION_V2,
-      text: disclosure.text,
-    });
-    if (!recorded.ok) return recorded;
-  }
-  const enabled = await setSmsNotificationEnabled(db, { clientAccountId: row.clientAccountId, enabled: true });
-  if (!enabled.ok) return enabled;
-  await db.$executeRaw`
-    UPDATE "ClientDeliveryNotificationPreference"
-    SET "smsOptInTokenHash" = NULL,
-        "smsOptInTokenExpiresAt" = NULL,
-        "revision" = "revision" + 1,
-        "updatedAt" = transaction_timestamp()
-    WHERE "clientAccountId" = ${row.clientAccountId}
-      AND "smsEnabled" = true
-  `;
-  return { ok: true, consentRecorded: true, smsEnabled: enabled.preference.smsEnabled };
+  const now = input.now ?? new Date();
+  const tokenHash = hashOptInToken(input.rawToken);
+  const text = disclosure.text;
+  const textHash = smsDisclosureHash(text);
+  return db.$transaction(async (tx) => {
+    const locked = await tx.$queryRaw<TokenLockRow[]>`
+      SELECT "recipientPhoneE164" AS "phone",
+             "smsHandsetDisclosureHash" AS "disclosureHash",
+             "smsOptInTokenExpiresAt" AS "expiresAt",
+             "smsSuppressionState" AS "suppression",
+             "smsEnabled" AS "smsEnabled",
+             "recipientPhoneVerifiedAt" AS "phoneRecordedAt",
+             "smsHandsetProvenAt" AS "handsetProvenAt"
+      FROM "ClientDeliveryNotificationPreference"
+      WHERE "smsOptInTokenHash" = ${tokenHash}
+      FOR UPDATE
+    `;
+    const row = locked[0];
+    if (!row?.phone || !row.phoneRecordedAt || !row.expiresAt) return { ok: false, code: "token_invalid" };
+    if (row.suppression === "suppressed") return { ok: false, code: "stop_suppressed" };
+    if (new Date(row.expiresAt).getTime() <= now.getTime()) return { ok: false, code: "token_expired" };
+    if (row.smsEnabled) return { ok: false, code: "token_invalid" };
+    if (row.disclosureHash && row.disclosureHash !== textHash) return { ok: false, code: "disclosure_mismatch" };
+    const updated = await tx.$executeRaw`
+      UPDATE "ClientDeliveryNotificationPreference"
+      SET "smsConsentVersion" = ${SMS_CONSENT_VERSION_V2},
+          "smsConsentText" = ${text},
+          "smsConsentRecordedAt" = COALESCE("smsConsentRecordedAt", transaction_timestamp()),
+          "smsSuppressionState" = 'clear'::"ExternalWebhookSmsSuppression",
+          "smsSuppressedAt" = NULL,
+          "smsConsentCollection" = 'recipient_link',
+          "smsEnabled" = true,
+          "smsEnabledAt" = COALESCE("smsEnabledAt", transaction_timestamp()),
+          "smsOptInTokenHash" = NULL,
+          "smsOptInTokenExpiresAt" = NULL,
+          "revision" = "revision" + 1,
+          "updatedAt" = transaction_timestamp()
+      WHERE "smsOptInTokenHash" = ${tokenHash}
+        AND "recipientPhoneE164" = ${row.phone}
+        AND "recipientPhoneVerifiedAt" IS NOT NULL
+        AND "smsOptInTokenExpiresAt" > ${now}
+        AND "smsSuppressionState" IS DISTINCT FROM 'suppressed'
+        AND "smsEnabled" = false
+    `;
+    if (Number(updated) !== 1) return { ok: false, code: "token_invalid" };
+    return { ok: true, consentRecorded: true, smsEnabled: true };
+  });
 }
 
 async function findToken(
@@ -271,6 +299,7 @@ async function findToken(
       collection: string | null;
       disclosureHash: string | null;
       consentRecorded: boolean;
+      handsetProven: boolean;
     }
   | { ok: false; code: SmsLinkCode }
 > {
@@ -287,8 +316,19 @@ async function findToken(
     collection: row.smsConsentCollection,
     disclosureHash: row.smsHandsetDisclosureHash,
     consentRecorded: Boolean(row.smsConsentRecordedAt),
+    handsetProven: Boolean(row.smsHandsetProvenAt),
   };
 }
+
+type TokenLockRow = {
+  phone: string | null;
+  disclosureHash: string | null;
+  expiresAt: Date | null;
+  suppression: string | null;
+  smsEnabled: boolean;
+  phoneRecordedAt: Date | null;
+  handsetProvenAt: Date | null;
+};
 
 async function offerLinkByEmail(input: {
   to: string;
@@ -316,13 +356,17 @@ async function offerLinkByEmail(input: {
     "Opening this message does not record consent and does not enable texts.",
     input.url,
   ].join(" ");
-  const sent = await send({
-    to,
-    subject: "Confirm Life Agent Launch text notifications",
-    text,
-    idempotencyKey: input.idempotencyKey,
-  });
-  return sent.ok ? "sent" : "email_not_configured";
+  try {
+    const sent = await send({
+      to,
+      subject: "Confirm Life Agent Launch text notifications",
+      text,
+      idempotencyKey: input.idempotencyKey,
+    });
+    return sent.ok ? "sent" : "email_not_configured";
+  } catch {
+    return "email_not_configured";
+  }
 }
 
 function transactionalReady(env: NodeJS.ProcessEnv = process.env): boolean {

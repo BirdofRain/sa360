@@ -16,7 +16,8 @@ import { externalWebhookNoticeCallbackRoutes } from "../../routes/external-webho
 import { discoverExternalWebhookNotices } from "./notice-discovery.js";
 import { dispatchExternalWebhookNotice } from "./notice-dispatch.js";
 import { runIsolatedSmsCanary } from "./sms-canary.js";
-import { issueSmsOptInLink } from "./sms-opt-in-link.js";
+import { recordNotificationPhone, suppressSmsLocally } from "./sms-consent.js";
+import { confirmSmsOptInLink, issueSmsOptInLink } from "./sms-opt-in-link.js";
 import { SMS_CONSENT_VERSION_V2 } from "./sms-disclosure.js";
 import { twilioRequestSignature } from "./twilio-signature.js";
 import { readTwilioMessagingConfig } from "./twilio-programmable-messaging.js";
@@ -752,6 +753,89 @@ test("a one-time link records consent without portal login, and a verbal note st
   assert.equal(pending.smsConsentCollection, "pending_confirmation");
   await app.close();
   await verbal.close();
+});
+
+test("token confirmation is atomic across replacement, replay, STOP, and a phone change", async () => {
+  assertSafeTestDatabaseUrl(process.env.SA360_TEST_DATABASE_URL ?? "");
+  const env = optInEnv(await createClient());
+  const clientAccountId = env.SA360_SMS_OPT_IN_CLIENT_ACCOUNT_ID ?? "";
+  const phone = "+15555551909";
+  const first = await issueSmsOptInLink(prisma, { clientAccountId, phoneE164: phone, env, mail: async () => ({ ok: false, error: "not sent" }) });
+  const second = await issueSmsOptInLink(prisma, { clientAccountId, phoneE164: phone, env, mail: async () => ({ ok: false, error: "not sent" }) });
+  assert.equal(first.ok && second.ok, true);
+  if (!first.ok || !second.ok) return;
+  assert.equal((await confirmSmsOptInLink(prisma, { rawToken: first.rawToken, affirmDisclosure: true, env })).ok, false);
+  const confirmed = await confirmSmsOptInLink(prisma, { rawToken: second.rawToken, affirmDisclosure: true, env });
+  assert.equal(confirmed.ok, true);
+  const replay = await confirmSmsOptInLink(prisma, { rawToken: second.rawToken, affirmDisclosure: true, env });
+  assert.equal(replay.ok, false);
+  const stored = await prisma.clientDeliveryNotificationPreference.findUniqueOrThrow({ where: { clientAccountId } });
+  assert.equal(stored.recipientPhoneE164, phone);
+  assert.equal(stored.smsEnabled, true);
+  assert.equal(stored.smsConsentVersion, SMS_CONSENT_VERSION_V2);
+  assert.equal(stored.smsOptInTokenHash, null);
+  assert.equal(stored.smsHandsetProvenAt, null);
+
+  const racedClient = await createClient();
+  const racedEnv = optInEnv(racedClient);
+  const racedPhone = "+15555551910";
+  const raced = await issueSmsOptInLink(prisma, { clientAccountId: racedClient, phoneE164: racedPhone, env: racedEnv, mail: async () => ({ ok: false, error: "not sent" }) });
+  assert.equal(raced.ok, true);
+  if (!raced.ok) return;
+  const [racedConfirm] = await Promise.all([
+    confirmSmsOptInLink(prisma, { rawToken: raced.rawToken, affirmDisclosure: true, env: racedEnv }),
+    recordNotificationPhone(prisma, { clientAccountId: racedClient, phoneE164: "+15555551911" }),
+  ]);
+  const racedRow = await prisma.clientDeliveryNotificationPreference.findUniqueOrThrow({ where: { clientAccountId: racedClient } });
+  assert.equal(racedRow.smsHandsetProvenAt, null);
+  if (racedRow.recipientPhoneE164 !== racedPhone) {
+    assert.equal(racedRow.smsEnabled, false);
+    assert.equal(racedRow.smsConsentRecordedAt, null);
+  }
+  if (racedRow.smsEnabled) assert.equal(racedRow.recipientPhoneE164, racedPhone);
+  assert.equal(racedConfirm.ok === true || racedRow.smsEnabled === false, true);
+
+  const stoppedClient = await createClient();
+  const stoppedEnv = optInEnv(stoppedClient);
+  const stopped = await issueSmsOptInLink(prisma, {
+    clientAccountId: stoppedClient,
+    phoneE164: "+15555551912",
+    env: stoppedEnv,
+    mail: async () => ({ ok: false, error: "not sent" }),
+  });
+  assert.equal(stopped.ok, true);
+  if (!stopped.ok) return;
+  assert.equal((await suppressSmsLocally(prisma, { clientAccountId: stoppedClient })).ok, true);
+  const blocked = await confirmSmsOptInLink(prisma, { rawToken: stopped.rawToken, affirmDisclosure: true, env: stoppedEnv });
+  assert.equal(blocked.ok, false);
+  if (blocked.ok) return;
+  assert.equal(blocked.code, "stop_suppressed");
+  const stoppedRow = await prisma.clientDeliveryNotificationPreference.findUniqueOrThrow({ where: { clientAccountId: stoppedClient } });
+  assert.equal(stoppedRow.smsEnabled, false);
+  assert.equal(stoppedRow.smsSuppressionState, "suppressed");
+  assert.equal(stoppedRow.smsConsentRecordedAt, null);
+
+  const doubleClient = await createClient();
+  const doubleEnv = optInEnv(doubleClient);
+  const doublePhone = "+15555551913";
+  const doubleIssued = await issueSmsOptInLink(prisma, {
+    clientAccountId: doubleClient,
+    phoneE164: doublePhone,
+    env: doubleEnv,
+    mail: async () => ({ ok: false, error: "not sent" }),
+  });
+  assert.equal(doubleIssued.ok, true);
+  if (!doubleIssued.ok) return;
+  const both = await Promise.all([
+    confirmSmsOptInLink(prisma, { rawToken: doubleIssued.rawToken, affirmDisclosure: true, env: doubleEnv }),
+    confirmSmsOptInLink(prisma, { rawToken: doubleIssued.rawToken, affirmDisclosure: true, env: doubleEnv }),
+  ]);
+  assert.equal(both.filter((item) => item.ok).length, 1);
+  const doubleRow = await prisma.clientDeliveryNotificationPreference.findUniqueOrThrow({ where: { clientAccountId: doubleClient } });
+  assert.equal(doubleRow.smsEnabled, true);
+  assert.equal(doubleRow.recipientPhoneE164, doublePhone);
+  assert.equal(doubleRow.smsOptInTokenHash, null);
+  assert.equal(doubleRow.smsHandsetProvenAt, null);
 });
 
 function verbalBody(phone: string) {

@@ -35,6 +35,9 @@ export async function publicSmsOptInRoutes(app: FastifyInstance, opts: { env?: N
       ok: true,
       disclosure: read.disclosure,
       phoneMasked: read.phoneMasked,
+      phoneSource: read.phoneSource,
+      recipientConsentConfirmed: read.recipientConsentConfirmed,
+      handsetOwnershipProven: read.handsetOwnershipProven,
       consentRecorded: read.consentRecorded,
       smsEnabled: false,
       pendingConfirmation: read.pendingConfirmation,
@@ -49,7 +52,15 @@ export async function publicSmsOptInRoutes(app: FastifyInstance, opts: { env?: N
     if (!parsed.success) return reply.status(400).send({ ok: false, error: "consent_not_affirmed" });
     const confirmed = await confirmSmsOptInLink(prisma, { rawToken: token, affirmDisclosure: true, env });
     if (!confirmed.ok) return reply.status(STATUS[confirmed.code] ?? 409).send({ ok: false, error: confirmed.code });
-    return reply.send({ ok: true, consentRecorded: true, smsEnabled: confirmed.smsEnabled, portalLoginRequired: false });
+    return reply.send({
+      ok: true,
+      consentRecorded: true,
+      smsEnabled: true,
+      phoneSource: "staff_supplied",
+      recipientConsentConfirmed: true,
+      handsetOwnershipProven: false,
+      portalLoginRequired: false,
+    });
   });
 }
 

@@ -13,6 +13,8 @@ export type PortalSmsOptInPreview = {
   handsetProven: boolean;
   smsEnabled: boolean;
   phoneMasked?: string | null;
+  /** staff_supplied is an operator-entered number, not handset proof. */
+  phoneSource?: "staff_supplied" | "not_recorded";
   portalLoginRequired?: boolean;
 };
 

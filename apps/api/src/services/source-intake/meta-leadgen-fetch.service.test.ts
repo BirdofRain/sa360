@@ -7,6 +7,7 @@ import type { Prisma } from "@prisma/client";
 import type { MetaWebhookConfig } from "../../lib/meta-webhook.js";
 import type { FacebookLeadIntakeResult } from "./facebook-lead-intake.service.js";
 import type { MetaLeadCaptureResult, SettleMetaLeadCaptureInput } from "./meta-lead-capture.service.js";
+import { buildFacebookCaptureEnrichment } from "./facebook-capture-record.js";
 import {
   processMetaLeadgenFetch,
   type ProcessMetaLeadgenFetchDeps,
@@ -14,8 +15,12 @@ import {
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fetchSource = readFileSync(join(here, "meta-leadgen-fetch.service.ts"), "utf8");
-const persistSource = readFileSync(join(here, "source-intake-routing-persist.ts"), "utf8");
+const captureSource = readFileSync(join(here, "meta-lead-capture.service.ts"), "utf8");
+const captureRecordSource = readFileSync(join(here, "facebook-capture-record.ts"), "utf8");
 const routeSource = readFileSync(join(here, "../../routes/sources-facebook.ts"), "utf8");
+
+const DELIVERY_BOUNDARY =
+  /trackCampaignInventory|leadInventoryItem\.create|approveSourceLeadDelivery|enqueueGhl|ghl-live-canary|ghl-delivery-adapter|deliverConfirmedAssociationIfActivated|ghl-association-dispatch|recordCompanySheets|company-sheets-dispatch|companySheetsDelivery|enqueueMetaDispatch|metaDispatchAttempt|META_DISPATCH_QUEUE|ensureFulfillmentOutbox|fulfillment-shadow|source-intake-routing-persist/;
 
 function config(overrides: Partial<MetaWebhookConfig> = {}): MetaWebhookConfig {
   return {
@@ -166,13 +171,77 @@ function memoryHarness(leadgenId: string) {
   };
 }
 
-test("fetch service source never reaches inventory, GHL, LF2, or Meta CAPI", () => {
-  assert.doesNotMatch(fetchSource, /trackCampaignInventory|leadInventoryItem\.create/);
-  assert.doesNotMatch(fetchSource, /approveSourceLeadDelivery|enqueueGhl|ghl-live-canary/);
-  assert.doesNotMatch(fetchSource, /enqueueMetaDispatch|metaDispatchAttempt|META_DISPATCH_QUEUE/);
-  assert.doesNotMatch(fetchSource, /ensureFulfillmentOutbox|fulfillment-shadow/);
+test("capture-only Meta fetch does not initiate GHL, Sheets, inventory, or CAPI", () => {
+  assert.doesNotMatch(fetchSource, DELIVERY_BOUNDARY);
+  assert.doesNotMatch(captureSource, DELIVERY_BOUNDARY);
+  assert.doesNotMatch(captureRecordSource, DELIVERY_BOUNDARY);
   assert.match(fetchSource, /RELEASE before/);
-  assert.match(persistSource, /No GHL delivery is performed here/);
+
+  const captureStart = fetchSource.indexOf("const captureMode = !config.routingEnabled");
+  const routingStart = fetchSource.indexOf("const intake = await processImpl");
+  assert.ok(captureStart > 0 && routingStart > captureStart);
+  const captureOnly = fetchSource.slice(captureStart, routingStart);
+  assert.match(captureOnly, /settleImpl\(/);
+  assert.doesNotMatch(captureOnly, /processImpl\(/);
+  assert.match(captureOnly, /liveDelivery: false/);
+  assert.match(captureOnly, /capiDispatched: false/);
+  assert.match(captureOnly, /kind: "captured"/);
+
+  const enrichment = buildFacebookCaptureEnrichment({
+    fields: {
+      leadgenId: "lead_boundary",
+      pageId: "222591640945329",
+      formId: "1149211490298917",
+      formIdentityStatus: "present",
+      formName: null,
+      campaignId: null,
+      campaignName: null,
+      adsetId: null,
+      adsetName: null,
+      adId: null,
+      adName: null,
+      firstName: null,
+      lastName: null,
+      email: "boundary@example.test",
+      phone: null,
+      phoneE164: null,
+      state: null,
+      postalCode: null,
+      submittedAt: null,
+    },
+    association: {
+      outcome: "unassociated",
+      clientAccountId: null,
+      sourceFunnelId: null,
+      pageId: "222591640945329",
+      formId: "1149211490298917",
+      explanation: "No confirmed Page ID + Form ID association exists.",
+    },
+    receivedAt: "2026-11-17T19:00:00.000Z",
+    intakeMethod: "meta_lead_ads",
+    provenance: "meta",
+  });
+  const inventory = enrichment.inventory as {
+    thisRequestTracked: boolean;
+    historicalTracked: boolean;
+    saleEligible: boolean;
+    mutated: boolean;
+  };
+  const delivery = enrichment.delivery as { thisRequestAttempted: boolean };
+  const resolveSource = enrichment.resolveSource as {
+    deliveryOnLaterMatch: boolean;
+    reevaluate: { startsDelivery: boolean; recapturesLead: boolean };
+  };
+  assert.equal(enrichment.captureOnly, true);
+  assert.equal(enrichment.intakeStage, "capture_only");
+  assert.equal(inventory.thisRequestTracked, false);
+  assert.equal(inventory.historicalTracked, false);
+  assert.equal(inventory.saleEligible, false);
+  assert.equal(inventory.mutated, false);
+  assert.equal(delivery.thisRequestAttempted, false);
+  assert.equal(resolveSource.deliveryOnLaterMatch, false);
+  assert.equal(resolveSource.reevaluate.startsDelivery, false);
+  assert.equal(resolveSource.reevaluate.recapturesLead, false);
 });
 
 test("webhook handler no longer calls Graph or intake inline", () => {
@@ -279,6 +348,8 @@ test("successful Graph path settles capture-only (Page+Form association) when ro
   assert.equal((settle.rawPayloadJson.lead as { id: string }).id, leadgenId);
   assert.equal((settle.fetchMeta as { state: string }).state, "captured");
   assert.equal((settle.fetchMeta as { tokenScope?: string }).tokenScope, "unbound");
+  assert.equal((settle.fetchMeta as { liveDelivery: boolean }).liveDelivery, false);
+  assert.equal((settle.fetchMeta as { capiDispatched: boolean }).capiDispatched, false);
 });
 
 test("Page-bound token is only used for its own Page; other Pages are retained with a diagnostic", async () => {

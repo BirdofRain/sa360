@@ -16,8 +16,21 @@ test("Team Workspace shows the email result and retries only when it was not acc
       sends += 1;
       return { ok: true, status: "link_only", smsEnabled: false, consentRecorded: false, email: sends > 2 ? "sent" : "email_not_configured" };
     },
+    readStatus: async () => ({
+      ok: true,
+      recipientConsentConfirmed: false,
+      smsEnabled: false,
+      handsetOwnershipProven: false,
+      suppression: "unknown",
+      linkOutstanding: true,
+      numberOnFile: true,
+    }),
   };
   render(<SmsVerbalConsentPanel clientAccountId="client_a" actions={actions} />);
+  fireEvent.click(screen.getByRole("button", { name: "Check confirmation status" }));
+  assert.match((await screen.findByText(/Recipient consent is not confirmed/)).textContent ?? "", /Texts are off/);
+  assert.match(document.body.textContent ?? "", /does not send a message/);
+  assert.equal(document.body.textContent?.includes("provider accepted"), false);
   fireEvent.change(screen.getByLabelText("Mobile number"), { target: { value: "+15555550100" } });
   fireEvent.change(screen.getByLabelText("Affirmative response"), { target: { value: "Yes, text me." } });
   fireEvent.change(screen.getByLabelText("Confirmation email"), { target: { value: "person@lifeagentlaunch.invalid" } });

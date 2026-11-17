@@ -188,6 +188,60 @@ export async function recordVerbalSmsConsent(
   };
 }
 
+export async function readSmsConsentStatus(
+  db: LinkDb,
+  clientAccountId: string,
+  now: Date = new Date()
+): Promise<
+  | {
+      ok: true;
+      numberOnFile: boolean;
+      phoneMasked: string | null;
+      recipientConsentConfirmed: boolean;
+      smsEnabled: boolean;
+      handsetOwnershipProven: boolean;
+      suppression: "unknown" | "clear" | "suppressed";
+      linkOutstanding: boolean;
+    }
+  | { ok: false; code: "client_not_found" }
+> {
+  const id = clientAccountId.trim();
+  if (!id) return { ok: false, code: "client_not_found" };
+  const client = await db.clientAccount.findUnique({ where: { clientAccountId: id }, select: { clientAccountId: true } });
+  if (!client) return { ok: false, code: "client_not_found" };
+  const row = await db.clientDeliveryNotificationPreference.findUnique({ where: { clientAccountId: id } });
+  if (!row) {
+    return {
+      ok: true,
+      numberOnFile: false,
+      phoneMasked: null,
+      recipientConsentConfirmed: false,
+      smsEnabled: false,
+      handsetOwnershipProven: false,
+      suppression: "unknown",
+      linkOutstanding: false,
+    };
+  }
+  const suppression = row.smsSuppressionState === "clear" || row.smsSuppressionState === "suppressed" ? row.smsSuppressionState : "unknown";
+  const linkOutstanding = Boolean(
+    row.smsOptInTokenHash &&
+      row.smsOptInTokenExpiresAt &&
+      row.smsOptInTokenExpiresAt.getTime() > now.getTime() &&
+      !row.smsConsentRecordedAt &&
+      !row.smsEnabled
+  );
+  return {
+    ok: true,
+    numberOnFile: Boolean(row.recipientPhoneE164),
+    phoneMasked: row.recipientPhoneE164 ? maskE164(row.recipientPhoneE164) : null,
+    recipientConsentConfirmed: Boolean(row.smsConsentRecordedAt),
+    smsEnabled: row.smsEnabled === true,
+    handsetOwnershipProven: Boolean(row.smsHandsetProvenAt),
+    suppression,
+    linkOutstanding,
+  };
+}
+
 export async function readSmsOptInLink(
   db: LinkDb,
   rawToken: string,

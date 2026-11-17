@@ -7,27 +7,35 @@ import { PORTAL_SMS_OPT_IN_PREVIEW, type PortalSmsOptInPreview } from "./portal-
 export type { PortalSmsOptInPreview };
 export { PORTAL_SMS_OPT_IN_PREVIEW };
 
-export type SmsOptInSubmitResult = { ok: boolean; message: string };
+export type SmsOptInOutcome = "confirmed" | "declined" | "unknown";
+
+export type SmsOptInSubmitResult = { ok: boolean; outcome: SmsOptInOutcome; message: string };
+
+export const SMS_OPT_IN_UNKNOWN_MESSAGE =
+  "The confirmation result cannot be confirmed. It may already have been recorded. This page will not send the request again.";
 
 export function PortalSmsOptInForm({
   preview,
   action,
+  reconcile,
 }: {
   preview: PortalSmsOptInPreview;
   action?: (formData: FormData) => Promise<SmsOptInSubmitResult>;
+  reconcile?: () => Promise<SmsOptInSubmitResult>;
 }) {
   const [affirmed, setAffirmed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<SmsOptInSubmitResult | null>(null);
   const lock = useRef(false);
-  const canSubmit = preview.recordable && affirmed && !preview.smsEnabled && !submitting && !result?.ok;
+  const unknown = result?.outcome === "unknown" || preview.statusKnown === false;
+  const canSubmit = preview.recordable && affirmed && !preview.smsEnabled && !submitting && !result?.ok && !unknown;
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     if (!action) return;
     event.preventDefault();
     if (lock.current || result?.ok) return;
     if (!affirmed) {
-      setResult({ ok: false, message: "Check the box to confirm. Consent was not recorded." });
+      setResult({ ok: false, outcome: "declined", message: "Check the box to confirm. Nothing was submitted." });
       return;
     }
     lock.current = true;
@@ -35,13 +43,24 @@ export function PortalSmsOptInForm({
     try {
       const outcome = await action(new FormData(event.currentTarget));
       setResult(outcome);
-      if (!outcome.ok) lock.current = false;
+      if (outcome.outcome === "declined") lock.current = false;
     } catch {
-      lock.current = false;
-      setResult({
-        ok: false,
-        message: "The confirmation could not be completed. Consent was not recorded and texts stay off.",
-      });
+      setResult({ ok: false, outcome: "unknown", message: SMS_OPT_IN_UNKNOWN_MESSAGE });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function onReconcile() {
+    if (!reconcile || submitting) return;
+    setSubmitting(true);
+    try {
+      const outcome = await reconcile();
+      setResult(outcome);
+      lock.current = outcome.outcome !== "declined";
+    } catch {
+      lock.current = true;
+      setResult({ ok: false, outcome: "unknown", message: SMS_OPT_IN_UNKNOWN_MESSAGE });
     } finally {
       setSubmitting(false);
     }
@@ -63,7 +82,7 @@ export function PortalSmsOptInForm({
       </ul>
       <p className="text-sm text-slate-700">
         {preview.privacyPolicyUrl ? (
-          <a className="underline" href={preview.privacyPolicyUrl}>
+          <a className="underline" href={preview.privacyPolicyUrl} rel="noreferrer">
             Privacy Policy
           </a>
         ) : (
@@ -71,7 +90,7 @@ export function PortalSmsOptInForm({
         )}
         <span> · </span>
         {preview.termsUrl ? (
-          <a className="underline" href={preview.termsUrl}>
+          <a className="underline" href={preview.termsUrl} rel="noreferrer">
             Terms
           </a>
         ) : (
@@ -113,11 +132,31 @@ export function PortalSmsOptInForm({
       <p className="text-sm text-slate-600">
         The checkbox starts unchecked. Portal login is not required. Submitting this form is what records recipient
         consent. {preview.phoneMasked ? "This number was supplied by staff. It is not proof that the handset sent a message. " : ""}
-        {preview.consentRecorded || result?.ok ? "Recipient consent is confirmed. " : "Recipient consent is not confirmed. "}
-        {preview.handsetProven ? "Handset ownership is independently proven. " : "Handset ownership is not independently proven. "}
-        {preview.smsEnabled || result?.ok ? "Texts are on." : "Texts are off."}
+        {preview.statusKnown === false
+          ? "This page cannot show whether consent was recorded. "
+          : unknown
+            ? "The confirmation result cannot be confirmed from this page. "
+            : preview.consentRecorded || result?.outcome === "confirmed"
+              ? "Recipient consent is confirmed. "
+              : "Recipient consent is not confirmed. "}
+        {preview.statusKnown === false
+          ? ""
+          : preview.handsetProven
+            ? "Handset ownership is independently proven. "
+            : "Handset ownership is not independently proven. "}
+        {unknown ? "" : preview.smsEnabled || result?.outcome === "confirmed" ? "Texts are on." : "Texts are off."}
       </p>
       {result ? <p className="text-sm text-slate-800">{result.message}</p> : null}
+      {unknown && reconcile ? (
+        <button
+          className="min-h-10 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-900 disabled:bg-slate-100"
+          type="button"
+          onClick={onReconcile}
+          disabled={submitting}
+        >
+          Check the saved result
+        </button>
+      ) : null}
     </form>
   );
 }

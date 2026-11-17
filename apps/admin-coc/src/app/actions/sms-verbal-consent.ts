@@ -3,7 +3,7 @@
 import { adminRequestJson } from "@/lib/admin-api/server";
 import { requireStaffWorkspacePermission } from "@/lib/admin-coc-session-guard";
 import { normalizeTeamWorkspaceClientId } from "@/lib/team-workspace/contract";
-import type { SmsEmailResult, SmsVerbalActionResult } from "@/components/team-workspace/sms-verbal-consent";
+import type { SmsConsentStatusResult, SmsEmailResult, SmsVerbalActionResult } from "@/components/team-workspace/sms-verbal-consent";
 
 const E164 = /^\+[1-9]\d{7,14}$/;
 
@@ -55,6 +55,30 @@ export async function issueSmsOptInLinkAction(input: {
     return { ok: false, error: "The confirmation link was not issued. Texts stay off." };
   }
   return { ok: true, status: "link_only", smsEnabled: false, consentRecorded: false, email: emailResult(saved.data.email) };
+}
+
+export async function readSmsConsentStatusAction(input: { clientAccountId: string }): Promise<SmsConsentStatusResult> {
+  await requireStaffWorkspacePermission("team_workspace");
+  const id = normalizeTeamWorkspaceClientId(input.clientAccountId);
+  if (!id) return { ok: false, error: "That client could not be checked." };
+  const read = await adminRequestJson<{
+    recipientConsentConfirmed?: boolean;
+    smsEnabled?: boolean;
+    handsetOwnershipProven?: boolean;
+    suppression?: string;
+    linkOutstanding?: boolean;
+    numberOnFile?: boolean;
+  }>("GET", `/admin/v1/team-workspace/clients/${encodeURIComponent(id)}/sms-consent-status`);
+  if (!read.ok) return { ok: false, error: "The confirmation status could not be checked. Nothing was sent." };
+  return {
+    ok: true,
+    recipientConsentConfirmed: read.data.recipientConsentConfirmed === true,
+    smsEnabled: read.data.smsEnabled === true,
+    handsetOwnershipProven: read.data.handsetOwnershipProven === true,
+    suppression: read.data.suppression === "suppressed" ? "suppressed" : read.data.suppression === "clear" ? "clear" : "unknown",
+    linkOutstanding: read.data.linkOutstanding === true,
+    numberOnFile: read.data.numberOnFile === true,
+  };
 }
 
 function emailResult(value: string | undefined): SmsEmailResult {

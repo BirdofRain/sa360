@@ -16,8 +16,9 @@ import { externalWebhookNoticeCallbackRoutes } from "../../routes/external-webho
 import { discoverExternalWebhookNotices } from "./notice-discovery.js";
 import { dispatchExternalWebhookNotice } from "./notice-dispatch.js";
 import { runIsolatedSmsCanary } from "./sms-canary.js";
-import { recordNotificationPhone, suppressSmsLocally } from "./sms-consent.js";
-import { confirmSmsOptInLink, issueSmsOptInLink } from "./sms-opt-in-link.js";
+import { confirmSmsHandsetInbound, recordNotificationPhone, suppressSmsLocally } from "./sms-consent.js";
+import { beginRecipientSmsOptIn, recordRecipientSmsConsent, setRecipientSmsEnabled } from "./sms-opt-in.js";
+import { confirmSmsOptInLink, issueSmsOptInLink, readSmsConsentStatus } from "./sms-opt-in-link.js";
 import { SMS_CONSENT_VERSION_V2 } from "./sms-disclosure.js";
 import { twilioRequestSignature } from "./twilio-signature.js";
 import { readTwilioMessagingConfig } from "./twilio-programmable-messaging.js";
@@ -717,6 +718,11 @@ test("a one-time link records consent without portal login, and a verbal note st
     payload: { affirmDisclosure: true },
   });
   assert.equal(reused.statusCode, 404);
+  assert.equal(reused.body.includes(issued.rawToken), false);
+  assert.equal(reused.headers["referrer-policy"], "no-referrer");
+  assert.match(String(reused.headers["cache-control"]), /no-store/);
+  assert.equal(viewed.headers["referrer-policy"], "no-referrer");
+  assert.match(String(viewed.headers["cache-control"]), /no-store/);
 
   const verbalClient = await createClient();
   const operatorId = await ensureVerbalOperator();
@@ -751,6 +757,27 @@ test("a one-time link records consent without portal login, and a verbal note st
   assert.equal(pending.smsVerbalOperatorId, operatorId);
   assert.equal(pending.smsVerbalAffirmation, "Yes, text this number.");
   assert.equal(pending.smsConsentCollection, "pending_confirmation");
+  const statusDenied = await verbal.inject({
+    method: "GET",
+    url: `/admin/v1/team-workspace/clients/${verbalClient}/sms-consent-status`,
+    headers: { "x-sa360-admin-key": ADMIN_KEY },
+  });
+  assert.equal(statusDenied.statusCode, 403);
+  const status = await verbal.inject({
+    method: "GET",
+    url: `/admin/v1/team-workspace/clients/${verbalClient}/sms-consent-status`,
+    headers: {
+      "x-sa360-admin-key": ADMIN_KEY,
+      [STAFF_ASSERTION_HEADER]: signStaffAssertion({ staffPrincipalId: operatorId, secret: env.SA360_STAFF_ASSERTION_SECRET }).token,
+    },
+  });
+  assert.equal(status.statusCode, 200);
+  const account = status.json() as { recipientConsentConfirmed: boolean; smsEnabled: boolean; linkOutstanding: boolean };
+  assert.equal(account.recipientConsentConfirmed, false);
+  assert.equal(account.smsEnabled, false);
+  assert.equal(account.linkOutstanding, true);
+  assert.equal(status.body.includes("smsOptInToken"), false);
+  assert.equal(status.body.includes("/portal/sms-opt-in/"), false);
   await app.close();
   await verbal.close();
 });
@@ -836,6 +863,113 @@ test("token confirmation is atomic across replacement, replay, STOP, and a phone
   assert.equal(doubleRow.recipientPhoneE164, doublePhone);
   assert.equal(doubleRow.smsOptInTokenHash, null);
   assert.equal(doubleRow.smsHandsetProvenAt, null);
+});
+
+test("portal consent stays off the wrong phone when STOP, a phone change, or a second submit races it", async () => {
+  assertSafeTestDatabaseUrl(process.env.SA360_TEST_DATABASE_URL ?? "");
+  const clientAccountId = await createClient();
+  const env = optInEnv(clientAccountId);
+  const phone = "+15555551914";
+  const begun = await beginRecipientSmsOptIn(prisma, {
+    clientAccountId,
+    phoneE164: phone,
+    affirmDisclosure: true,
+    version: SMS_CONSENT_VERSION_V2,
+    env,
+  });
+  assert.equal(begun.ok, true);
+  if (!begun.ok) return;
+  const proven = await confirmSmsHandsetInbound(prisma, { phoneE164: phone, code: begun.challengeCode });
+  assert.equal(proven.ok, true);
+
+  const phoneClient = await createClient();
+  const phoneEnv = optInEnv(phoneClient);
+  const original = "+15555551915";
+  const moved = "+15555551916";
+  const phoneBegun = await beginRecipientSmsOptIn(prisma, {
+    clientAccountId: phoneClient,
+    phoneE164: original,
+    affirmDisclosure: true,
+    version: SMS_CONSENT_VERSION_V2,
+    env: phoneEnv,
+  });
+  assert.equal(phoneBegun.ok, true);
+  if (!phoneBegun.ok) return;
+  assert.equal((await confirmSmsHandsetInbound(prisma, { phoneE164: original, code: phoneBegun.challengeCode })).ok, true);
+  await Promise.all([
+    recordRecipientSmsConsent(prisma, { clientAccountId: phoneClient, affirmDisclosure: true, version: SMS_CONSENT_VERSION_V2, env: phoneEnv }),
+    recordNotificationPhone(prisma, { clientAccountId: phoneClient, phoneE164: moved }),
+  ]);
+  const phoneRow = await prisma.clientDeliveryNotificationPreference.findUniqueOrThrow({ where: { clientAccountId: phoneClient } });
+  if (phoneRow.recipientPhoneE164 !== original) {
+    assert.equal(phoneRow.smsConsentRecordedAt, null);
+    assert.equal(phoneRow.smsEnabled, false);
+  }
+  if (phoneRow.smsConsentRecordedAt) assert.equal(phoneRow.recipientPhoneE164, original);
+
+  const stopClient = await createClient();
+  const stopEnv = optInEnv(stopClient);
+  const stopPhone = "+15555551917";
+  const stopBegun = await beginRecipientSmsOptIn(prisma, {
+    clientAccountId: stopClient,
+    phoneE164: stopPhone,
+    affirmDisclosure: true,
+    version: SMS_CONSENT_VERSION_V2,
+    env: stopEnv,
+  });
+  assert.equal(stopBegun.ok, true);
+  if (!stopBegun.ok) return;
+  assert.equal((await confirmSmsHandsetInbound(prisma, { phoneE164: stopPhone, code: stopBegun.challengeCode })).ok, true);
+  const recorded = await recordRecipientSmsConsent(prisma, {
+    clientAccountId: stopClient,
+    affirmDisclosure: true,
+    version: SMS_CONSENT_VERSION_V2,
+    env: stopEnv,
+  });
+  assert.equal(recorded.ok, true);
+  if (!recorded.ok) return;
+  assert.equal(recorded.state.smsEnabled, false);
+  await Promise.all([
+    setRecipientSmsEnabled(prisma, { clientAccountId: stopClient, enabled: true, env: stopEnv }),
+    suppressSmsLocally(prisma, { clientAccountId: stopClient }),
+  ]);
+  const stopped = await prisma.clientDeliveryNotificationPreference.findUniqueOrThrow({ where: { clientAccountId: stopClient } });
+  assert.equal(stopped.smsSuppressionState, "suppressed");
+  assert.equal(stopped.smsEnabled, false);
+  const again = await setRecipientSmsEnabled(prisma, { clientAccountId: stopClient, enabled: true, env: stopEnv });
+  assert.equal(again.ok, false);
+  const afterStop = await prisma.clientDeliveryNotificationPreference.findUniqueOrThrow({ where: { clientAccountId: stopClient } });
+  assert.equal(afterStop.smsEnabled, false);
+  assert.equal(afterStop.smsSuppressionState, "suppressed");
+
+  const duplicate = await recordRecipientSmsConsent(prisma, {
+    clientAccountId,
+    affirmDisclosure: true,
+    version: SMS_CONSENT_VERSION_V2,
+    env,
+  });
+  assert.equal(duplicate.ok, true);
+  const duplicateAgain = await recordRecipientSmsConsent(prisma, {
+    clientAccountId,
+    affirmDisclosure: true,
+    version: SMS_CONSENT_VERSION_V2,
+    env,
+  });
+  assert.equal(duplicateAgain.ok, true);
+  const firstEnable = await setRecipientSmsEnabled(prisma, { clientAccountId, enabled: true, env });
+  const secondEnable = await setRecipientSmsEnabled(prisma, { clientAccountId, enabled: true, env });
+  assert.equal(firstEnable.ok && secondEnable.ok, true);
+  const enabledRow = await prisma.clientDeliveryNotificationPreference.findUniqueOrThrow({ where: { clientAccountId } });
+  assert.equal(enabledRow.smsEnabled, true);
+  assert.equal(enabledRow.recipientPhoneE164, phone);
+  assert.equal(enabledRow.smsHandsetProvenAt === null, false);
+  const status = await readSmsConsentStatus(prisma, clientAccountId);
+  assert.equal(status.ok, true);
+  if (!status.ok) return;
+  assert.equal(status.recipientConsentConfirmed, true);
+  assert.equal(status.smsEnabled, true);
+  assert.equal(status.handsetOwnershipProven, true);
+  assert.equal(status.linkOutstanding, false);
 });
 
 function verbalBody(phone: string) {

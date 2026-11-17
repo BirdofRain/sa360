@@ -59,8 +59,8 @@ test("a failed confirmation is shown and a success cannot be submitted twice", a
       }}
       action={async () => {
         calls += 1;
-        if (calls === 1) return { ok: false, message: "This number is stopped. Consent was not recorded and texts stay off." };
-        return { ok: true, message: "Recipient consent is confirmed. Texts are on. Handset ownership was not independently proven." };
+        if (calls === 1) return { ok: false, outcome: "declined", message: "This number is stopped. Consent was not recorded and texts stay off." };
+        return { ok: true, outcome: "confirmed", message: "Recipient consent is confirmed. Texts are on. Handset ownership was not independently proven." };
       }}
     />
   );
@@ -75,5 +75,78 @@ test("a failed confirmation is shown and a success cannot be submitted twice", a
   assert.equal(calls, 2);
   assert.equal((screen.getByRole("button", { name: "Continue" }) as HTMLButtonElement).disabled, true);
   view.unmount();
+  cleanup();
+});
+
+test("a lost confirmation does not claim consent failed and does not submit again", async () => {
+  let posts = 0;
+  let checks = 0;
+  const view = render(
+    <PortalSmsOptInForm
+      preview={{
+        ...PORTAL_SMS_OPT_IN_PREVIEW,
+        recordable: true,
+        phoneMasked: "+1••••1908",
+        phoneSource: "staff_supplied",
+        privacyPolicyUrl: "https://policies.lifeagentlaunch.invalid/privacy",
+        termsUrl: "https://policies.lifeagentlaunch.invalid/terms",
+      }}
+      action={async () => {
+        posts += 1;
+        return {
+          ok: false,
+          outcome: "unknown",
+          message: "The confirmation result cannot be confirmed. It may already have been recorded. This page will not send the request again.",
+        };
+      }}
+      reconcile={async () => {
+        checks += 1;
+        return {
+          ok: false,
+          outcome: "unknown",
+          message: "This link cannot show whether consent was recorded. A used link stays used. An authorized operator can check the account.",
+        };
+      }}
+    />
+  );
+  fireEvent.click(screen.getByRole("checkbox"));
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await screen.findByRole("button", { name: "Check the saved result" });
+  assert.match(document.body.textContent ?? "", /cannot be confirmed/);
+  assert.match(document.body.textContent ?? "", /may already have been recorded/);
+  assert.equal(document.body.textContent?.includes("texts stay off"), false);
+  assert.equal((screen.getByRole("button", { name: "Continue" }) as HTMLButtonElement).disabled, true);
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  fireEvent.click(screen.getByRole("button", { name: "Check the saved result" }));
+  assert.match((await screen.findByText(/cannot show whether consent was recorded/)).textContent ?? "", /authorized operator/);
+  assert.equal(posts, 1);
+  assert.equal(checks, 1);
+  assert.equal(screen.getByRole("link", { name: "Privacy Policy" }).getAttribute("rel"), "noreferrer");
+  view.unmount();
+  cleanup();
+});
+
+test("an unreadable link does not claim that texts are off", () => {
+  render(
+    <PortalSmsOptInForm
+      preview={{
+        ...PORTAL_SMS_OPT_IN_PREVIEW,
+        purpose:
+          "This link cannot show whether consent was recorded. A used link stays used. An authorized operator can check the account.",
+        statusKnown: false,
+      }}
+      reconcile={async () => ({
+        ok: false,
+        outcome: "unknown",
+        message: "This link cannot show whether consent was recorded.",
+      })}
+    />
+  );
+  const text = document.body.textContent ?? "";
+  assert.match(text, /cannot show whether consent was recorded/);
+  assert.equal(text.includes("Texts are off"), false);
+  assert.equal(text.includes("Consent was not recorded"), false);
+  assert.equal(text.includes("Handset ownership is not independently proven"), false);
+  assert.equal((screen.getByRole("button", { name: "Continue" }) as HTMLButtonElement).disabled, true);
   cleanup();
 });

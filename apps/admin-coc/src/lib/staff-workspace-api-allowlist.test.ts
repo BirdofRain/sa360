@@ -79,6 +79,8 @@ test("manager writes are the request paths and operations cannot use them", () =
   assert.equal(staffWorkspaceAdminApiAllowed(MANAGER, "PUT", `/admin/v1/clients/${CLIENT}/external-webhook/activation`), false);
   assert.equal(staffWorkspaceAdminApiAllowed(WORKSPACE, "POST", `/admin/v1/team-workspace/clients/${CLIENT}/sms-verbal-consent`), true);
   assert.equal(staffWorkspaceAdminApiAllowed(WORKSPACE, "POST", `/admin/v1/team-workspace/clients/${CLIENT}/sms-opt-in-link`), true);
+  assert.equal(staffWorkspaceAdminApiAllowed(WORKSPACE, "GET", `/admin/v1/team-workspace/clients/${CLIENT}/sms-consent-status`), true);
+  assert.equal(staffWorkspaceAdminApiAllowed([], "GET", `/admin/v1/team-workspace/clients/${CLIENT}/sms-consent-status`), false);
   assert.equal(staffWorkspaceAdminApiAllowed(OPERATIONS, "POST", `/admin/v1/team-workspace/clients/${CLIENT}/sms-verbal-consent`), true);
   assert.equal(staffWorkspaceAdminApiAllowed([], "POST", `/admin/v1/team-workspace/clients/${CLIENT}/sms-verbal-consent`), false);
 });

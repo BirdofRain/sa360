@@ -16,7 +16,7 @@ import { isTeamWorkspaceApiEnabled } from "../lib/team-workspace-env.js";
 import { WORKSPACE_KEY_HEADER } from "../lib/workspace-auth.js";
 import { CLIENT_PORTAL_ASSERTION_HEADER } from "@sa360/shared/client-portal-assertion";
 import { smsVerbalOperatorAllowed } from "../services/external-webhook-notification/sms-disclosure.js";
-import { issueSmsOptInLink, recordVerbalSmsConsent, type SmsLinkCode } from "../services/external-webhook-notification/sms-opt-in-link.js";
+import { issueSmsOptInLink, readSmsConsentStatus, recordVerbalSmsConsent, type SmsLinkCode } from "../services/external-webhook-notification/sms-opt-in-link.js";
 
 const CLIENT_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const E164 = /^\+[1-9]\d{7,14}$/;
@@ -51,6 +51,17 @@ const STATUS: Partial<Record<SmsLinkCode, number>> = {
 
 export async function adminSmsVerbalConsentRoutes(app: FastifyInstance, opts: { env?: NodeJS.ProcessEnv } = {}) {
   const env = opts.env ?? process.env;
+
+  app.get("/team-workspace/clients/:clientAccountId/sms-consent-status", async (request, reply) => {
+    if (!(await authorize(request, reply, env))) return;
+    const clientAccountId = pathClient(request);
+    if (!clientAccountId) return reply.status(404).send({ ok: false, error: "client_not_found" });
+    const operator = await resolveVerbalOperator(request, env);
+    if (!operator.ok) return reply.status(operator.status).send({ ok: false, error: operator.error });
+    const status = await readSmsConsentStatus(prisma, clientAccountId);
+    if (!status.ok) return reply.status(404).send({ ok: false, error: status.code });
+    return reply.send({ ...status, operatorId: operator.operatorId });
+  });
 
   app.post("/team-workspace/clients/:clientAccountId/sms-verbal-consent", async (request, reply) => {
     if (!(await authorize(request, reply, env))) return;

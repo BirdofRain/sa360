@@ -164,6 +164,16 @@ test("getMetaWebhookConfig honors FACEBOOK_DIRECT_INTAKE_ENABLED as legacy intak
   }
 });
 
+test("redactSensitiveWebhookUrl hides a one-time SMS opt-in token", () => {
+  const token = "fixture-sms-opt-in-token-43-chars-aaaaaaa";
+  const redacted = redactSensitiveWebhookUrl(`/public/sms-opt-in/${token}?unused=1`);
+  assert.equal(redacted.includes(token), false);
+  assert.equal(redacted.startsWith("/public/sms-opt-in/[redacted]"), true);
+  const portal = redactSensitiveWebhookUrl(`/portal/sms-opt-in/${token}`);
+  assert.equal(portal.includes(token), false);
+  assert.equal(portal, "/portal/sms-opt-in/[redacted]");
+});
+
 test("redactSensitiveWebhookUrl never retains hub.verify_token", () => {
   const redacted = redactSensitiveWebhookUrl(
     "/webhooks/meta/leadgen?hub.mode=subscribe&hub.verify_token=super-secret-vt&hub.challenge=987654"

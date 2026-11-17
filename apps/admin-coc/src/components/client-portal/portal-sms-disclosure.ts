@@ -16,6 +16,8 @@ export type PortalSmsOptInPreview = {
   /** staff_supplied is an operator-entered number, not handset proof. */
   phoneSource?: "staff_supplied" | "not_recorded";
   portalLoginRequired?: boolean;
+  /** False when this page could not read whether consent is stored. */
+  statusKnown?: boolean;
 };
 
 export const PORTAL_SMS_OPT_IN_PREVIEW: PortalSmsOptInPreview = {

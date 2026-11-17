@@ -97,6 +97,12 @@ export async function recordNotificationPhone(
       select: { clientAccountId: true },
     });
     if (!client) return { ok: false, code: "client_not_found" };
+    await tx.$queryRaw`
+      SELECT "clientAccountId"
+      FROM "ClientDeliveryNotificationPreference"
+      WHERE "clientAccountId" = ${clientAccountId}
+      FOR UPDATE
+    `;
     const existing = await tx.clientDeliveryNotificationPreference.findUnique({
       where: { clientAccountId },
     });
@@ -168,17 +174,21 @@ export async function recordSmsConsent(
   if (!smsConsentTextIsCanonical(input.version, input.text)) return { ok: false, code: "invalid_consent" };
 
   return db.$transaction(async (tx) => {
-    const existing = await tx.clientDeliveryNotificationPreference.findUnique({
-      where: { clientAccountId },
-    });
+    const locked = await tx.$queryRaw<Array<{ phone: string | null; suppression: string | null; verified: Date | null }>>`
+      SELECT "recipientPhoneE164" AS phone,
+             "smsSuppressionState" AS suppression,
+             "recipientPhoneVerifiedAt" AS verified
+      FROM "ClientDeliveryNotificationPreference"
+      WHERE "clientAccountId" = ${clientAccountId}
+      FOR UPDATE
+    `;
+    const existing = locked[0];
     if (!existing) return { ok: false, code: "preference_missing" };
-    if (!existing.recipientPhoneE164 || !existing.recipientPhoneVerifiedAt) {
-      return { ok: false, code: "phone_not_verified" };
-    }
-    if (existing.smsSuppressionState === "suppressed") return { ok: false, code: "stop_suppressed" };
+    if (!existing.phone || !existing.verified) return { ok: false, code: "phone_not_verified" };
+    if (existing.suppression === "suppressed") return { ok: false, code: "stop_suppressed" };
     const version = input.version === SMS_CONSENT_VERSION_V2 ? SMS_CONSENT_VERSION_V2 : SMS_CONSENT_VERSION;
     const text = version === SMS_CONSENT_VERSION_V2 ? input.text : SMS_CONSENT_TEXT;
-    await tx.$executeRaw`
+    const updated = await tx.$executeRaw`
       UPDATE "ClientDeliveryNotificationPreference"
       SET "smsConsentVersion" = ${version},
           "smsConsentText" = ${text},
@@ -192,12 +202,20 @@ export async function recordSmsConsent(
           "revision" = "revision" + 1,
           "updatedAt" = transaction_timestamp()
       WHERE "clientAccountId" = ${clientAccountId}
+        AND "recipientPhoneE164" = ${existing.phone}
         AND "smsSuppressionState" IS DISTINCT FROM 'suppressed'
-        AND "recipientPhoneE164" IS NOT NULL
         AND "recipientPhoneVerifiedAt" IS NOT NULL
     `;
+    if (Number(updated) !== 1) {
+      const again = await readView(tx, clientAccountId);
+      if (again.smsSuppressionState === "suppressed") return { ok: false, code: "stop_suppressed" };
+      if (again.recipientPhoneE164 !== existing.phone) return { ok: false, code: "phone_not_verified" };
+      return { ok: false, code: "invalid_consent" };
+    }
     const preference = await readView(tx, clientAccountId);
-    if (preference.smsConsentVersion !== version) return { ok: false, code: "invalid_consent" };
+    if (preference.smsConsentVersion !== version || preference.recipientPhoneE164 !== existing.phone) {
+      return { ok: false, code: "invalid_consent" };
+    }
     return { ok: true, preference };
   });
 }
@@ -210,9 +228,29 @@ export async function setSmsNotificationEnabled(
   if (!clientAccountId) return { ok: false, code: "client_not_found" };
 
   return db.$transaction(async (tx) => {
-    const existing = await tx.clientDeliveryNotificationPreference.findUnique({
-      where: { clientAccountId },
-    });
+    const locked = await tx.$queryRaw<
+      Array<{
+        phone: string | null;
+        verified: Date | null;
+        suppression: string | null;
+        smsEnabled: boolean;
+        consentVersion: string | null;
+        consentText: string | null;
+        consentRecordedAt: Date | null;
+      }>
+    >`
+      SELECT "recipientPhoneE164" AS phone,
+             "recipientPhoneVerifiedAt" AS verified,
+             "smsSuppressionState" AS suppression,
+             "smsEnabled" AS "smsEnabled",
+             "smsConsentVersion" AS "consentVersion",
+             "smsConsentText" AS "consentText",
+             "smsConsentRecordedAt" AS "consentRecordedAt"
+      FROM "ClientDeliveryNotificationPreference"
+      WHERE "clientAccountId" = ${clientAccountId}
+      FOR UPDATE
+    `;
+    const existing = locked[0];
     if (!existing) return { ok: false, code: "preference_missing" };
     if (!input.enabled) {
       await tx.$executeRaw`
@@ -226,22 +264,22 @@ export async function setSmsNotificationEnabled(
       `;
       return { ok: true, preference: await readView(tx, clientAccountId) };
     }
-    if (existing.smsSuppressionState === "suppressed") return { ok: false, code: "stop_suppressed" };
-    if (existing.smsSuppressionState !== "clear") return { ok: false, code: "stop_unknown" };
+    if (existing.suppression === "suppressed") return { ok: false, code: "stop_suppressed" };
+    if (existing.suppression !== "clear") return { ok: false, code: "stop_unknown" };
     if (
-      !existing.smsConsentRecordedAt ||
-      !existing.smsConsentVersion ||
-      !existing.smsConsentText ||
-      !smsConsentTextIsCanonical(existing.smsConsentVersion, existing.smsConsentText)
+      !existing.consentRecordedAt ||
+      !existing.consentVersion ||
+      !existing.consentText ||
+      !smsConsentTextIsCanonical(existing.consentVersion, existing.consentText)
     ) {
       return { ok: false, code: "not_opted_in" };
     }
-    if (!existing.recipientPhoneE164 || !existing.recipientPhoneVerifiedAt) {
-      return { ok: false, code: "phone_not_verified" };
-    }
-    const version = existing.smsConsentVersion;
-    const text = existing.smsConsentText;
-    await tx.$executeRaw`
+    if (!existing.phone || !existing.verified) return { ok: false, code: "phone_not_verified" };
+    if (existing.smsEnabled) return { ok: true, preference: await readView(tx, clientAccountId) };
+    const version = existing.consentVersion;
+    const text = existing.consentText;
+    const phone = existing.phone;
+    const updated = await tx.$executeRaw`
       UPDATE "ClientDeliveryNotificationPreference"
       SET "smsEnabled" = true,
           "smsEnabledAt" = transaction_timestamp(),
@@ -253,13 +291,18 @@ export async function setSmsNotificationEnabled(
         AND "smsConsentVersion" = ${version}
         AND "smsConsentText" = ${text}
         AND "smsConsentRecordedAt" IS NOT NULL
-        AND "recipientPhoneE164" IS NOT NULL
+        AND "recipientPhoneE164" = ${phone}
         AND "recipientPhoneVerifiedAt" IS NOT NULL
         AND ("smsEnabledAt" IS NULL OR "smsEnabledAt" < transaction_timestamp())
     `;
     const preference = await readView(tx, clientAccountId);
-    if (!preference.smsEnabled) return { ok: false, code: "not_opted_in" };
-    return { ok: true, preference };
+    if (Number(updated) === 1 && preference.smsEnabled && preference.recipientPhoneE164 === phone) {
+      return { ok: true, preference };
+    }
+    if (preference.smsSuppressionState === "suppressed") return { ok: false, code: "stop_suppressed" };
+    if (preference.recipientPhoneE164 !== phone) return { ok: false, code: "phone_not_verified" };
+    if (preference.smsEnabled && preference.smsSuppressionState === "clear") return { ok: true, preference };
+    return { ok: false, code: "not_opted_in" };
   });
 }
 

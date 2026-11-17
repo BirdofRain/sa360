@@ -26,6 +26,12 @@ const STATUS: Partial<Record<SmsLinkCode, number>> = {
 export async function publicSmsOptInRoutes(app: FastifyInstance, opts: { env?: NodeJS.ProcessEnv } = {}) {
   const env = opts.env ?? process.env;
 
+  app.addHook("onRequest", async (_request, reply) => {
+    reply.header("cache-control", "private, no-store");
+    reply.header("referrer-policy", "no-referrer");
+    reply.header("x-robots-tag", "noindex, nofollow");
+  });
+
   app.get("/public/sms-opt-in/:token", async (request, reply) => {
     const token = pathToken(request);
     if (!token) return reply.status(404).send({ ok: false, error: "token_invalid" });

@@ -104,10 +104,11 @@ export function getMetaWebhookConfig(): MetaWebhookConfig {
  * the verification token.
  */
 export function redactSensitiveWebhookUrl(url: string): string {
-  const qIndex = url.indexOf("?");
-  if (qIndex === -1) return url;
-  const path = url.slice(0, qIndex);
-  const params = new URLSearchParams(url.slice(qIndex + 1));
+  const withoutToken = url.replace(/(\/(?:public|portal)\/sms-opt-in\/)[^/?#\s]+/gi, "$1[redacted]");
+  const qIndex = withoutToken.indexOf("?");
+  if (qIndex === -1) return withoutToken;
+  const path = withoutToken.slice(0, qIndex);
+  const params = new URLSearchParams(withoutToken.slice(qIndex + 1));
   const oauthCallback = /\/oauth\/callback\/?$/i.test(path);
   let mutated = false;
   for (const key of [...params.keys()]) {
@@ -120,7 +121,7 @@ export function redactSensitiveWebhookUrl(url: string): string {
       mutated = true;
     }
   }
-  return mutated ? `${path}?${params.toString()}` : url;
+  return mutated ? `${path}?${params.toString()}` : withoutToken;
 }
 
 /** Handshake log body: never includes `hub.verify_token` or any other secret. */

@@ -49,6 +49,17 @@ confirm a different recipient. The number on the link is staff-supplied.
 `smsHandsetProvenAt` is the only independent handset-ownership mark, and the
 link does not set it.
 
+A lost response does not prove the write failed. The page says the result
+cannot be confirmed and does not submit the token again. A named operator can
+read account status without the token. That read does not create a link or
+turn SMS on. The optional portal path locks the same row for consent and for
+enablement, and it still refuses a suppressed number.
+
+The confirmation page sends `Referrer-Policy: no-referrer` and
+`Cache-Control: private, no-store`. Access logs replace the token path segment
+with `[redacted]`. The page does not add an analytics tag. Policy links use
+`rel="noreferrer"`.
+
 Verbal-only enrollment stays pending until Life Agent Launch's Privacy Policy
 and compliance review explicitly allow it. Operator attestation does not call
 `recordSmsConsent` and does not set `smsEnabled`.

@@ -42,6 +42,8 @@ export async function dispatchGhlLeadNotice(
     env?: NodeJS.ProcessEnv;
     twilioConfig?: TwilioConfigResult;
     sms?: GhlLeadSmsSender;
+    /** Test seam. Runs after the pending claim and before the provider call. */
+    afterClaim?: () => Promise<void>;
   } = {}
 ): Promise<{ ok: true; skipped?: string; status?: string }> {
   const env = deps.env ?? process.env;
@@ -79,6 +81,23 @@ export async function dispatchGhlLeadNotice(
   }
   const claimed = await claimGhlLeadNotice(db, current.idempotencyKey);
   if (!claimed.claimed || !claimed.receipt) return { ok: true, skipped: claimed.reason ?? "not_pending" };
+  if (deps.afterClaim) await deps.afterClaim();
+  const latest = await db.clientDeliveryNotificationPreference.findUnique({
+    where: { clientAccountId: current.clientAccountId },
+  });
+  if (
+    !latest ||
+    latest.smsSuppressionState === "suppressed" ||
+    latest.recipientPhoneE164 !== claimed.receipt.recipient ||
+    !smsConsentAllowsGhlLeadNotice(latest)
+  ) {
+    const reason = latest?.smsSuppressionState === "suppressed" ? "stop_suppressed" : "not_opted_in";
+    await markGhlLeadNoticeSuppressed(db, claimed.receipt.idempotencyKey, reason);
+    if (latest?.smsSuppressionState === "suppressed" && latest.recipientPhoneE164) {
+      await suppressSmsPhone(db, latest.recipientPhoneE164);
+    }
+    return { ok: true, status: "suppressed", skipped: reason };
+  }
   const statusCallback = publicTwilioStatusCallbackUrl(env[TWILIO_STATUS_CALLBACK_URL_ENV]);
   const send =
     deps.sms ?? ((input) => createTwilioMessageClient(twilioConfig.config, fetch).postMessage(input));

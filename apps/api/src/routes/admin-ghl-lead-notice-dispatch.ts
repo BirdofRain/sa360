@@ -8,6 +8,7 @@ import { discoverGhlLeadNotices, isGhlLeadNoticeEnabled } from "../services/ghl-
 import { dispatchGhlLeadNotice } from "../services/ghl-lead-notice/dispatch.js";
 import { enqueueGhlLeadNotice } from "../services/ghl-lead-notice/queue.js";
 import { promoteStaleGhlLeadNotices } from "../services/ghl-lead-notice/receipt.js";
+import { recoverPendingGhlLeadNotices } from "../services/ghl-lead-notice/recovery.js";
 
 type NoticeRouteOpts = { env?: NodeJS.ProcessEnv };
 
@@ -27,8 +28,9 @@ export async function adminGhlLeadNoticeDispatchRoutes(app: FastifyInstance, opt
     }
     if (!isGhlLeadNoticeEnabled(env)) return reply.send({ ok: true, skipped: "flag_off" });
     const promoted = await promoteStaleGhlLeadNotices(prisma);
+    const recovered = await recoverPendingGhlLeadNotices(prisma, { enqueue: enqueueGhlLeadNotice });
     const discovered = await discoverGhlLeadNotices(prisma, { env, enqueue: enqueueGhlLeadNotice });
-    return reply.send({ ok: true, ...promoted, ...discovered });
+    return reply.send({ ok: true, promoted: promoted.promoted, recovery: recovered, discovery: discovered });
   });
 
   app.post("/ghl-lead-notice/internal/dispatch", async (request, reply) => {

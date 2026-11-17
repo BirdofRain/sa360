@@ -11,9 +11,12 @@ import { readSmsCanaryIsolation } from "@sa360/shared";
 import { ghlContactReceived, type GhlCanonicalStep } from "../delivery-success/canonical-delivery.js";
 import { planGhlLeadSms } from "./contract.js";
 import { recordGhlLeadNotice } from "./receipt.js";
+import {
+  GHL_LEAD_NOTICE_CUTOFF_CURSOR_ID,
+  GHL_LEAD_NOTICE_DISCOVERY_CURSOR_ID,
+} from "./recovery.js";
 
 export const GHL_LEAD_NOTICE_ENABLED_ENV = "SA360_GHL_LEAD_NOTICE_ENABLED";
-const CURSOR_ID = "ghl_lead_received";
 const PAGE = 20;
 
 export function isGhlLeadNoticeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -35,16 +38,20 @@ export async function discoverGhlLeadNotices(
   const now = deps.now ?? new Date();
   try {
     await db.ghlLeadNoticeDiscoveryCursor.create({
-      data: { id: CURSOR_ID, lastCompletedAt: now, lastRunId: "" },
+      data: { id: GHL_LEAD_NOTICE_DISCOVERY_CURSOR_ID, lastCompletedAt: now, lastRunId: "" },
     });
+    await ensureDiscoveryCutoff(db, now);
     return { scanned: 0, inserted: 0, enqueued: 0, establishedCutoff: true };
   } catch (error) {
     if (!isUniqueConflict(error)) throw error;
   }
-  const cursor = await db.ghlLeadNoticeDiscoveryCursor.findUnique({ where: { id: CURSOR_ID } });
+  const cursor = await db.ghlLeadNoticeDiscoveryCursor.findUnique({
+    where: { id: GHL_LEAD_NOTICE_DISCOVERY_CURSOR_ID },
+  });
   if (!cursor?.lastCompletedAt) {
     return { scanned: 0, inserted: 0, enqueued: 0, establishedCutoff: false };
   }
+  if (cursor.lastRunId === "") await ensureDiscoveryCutoff(db, cursor.lastCompletedAt);
   const runs = await db.ghlLiveDeliveryRun.findMany({
     where: {
       mode: "ongoing_association",
@@ -140,15 +147,18 @@ export async function discoverGhlLeadNotices(
     const recorded = await recordGhlLeadNotice(db, plan);
     if (!recorded.inserted || recorded.receipt.status !== "pending") continue;
     inserted += 1;
-    if (deps.enqueue) {
+    if (!deps.enqueue) continue;
+    try {
       await deps.enqueue(recorded.receipt.id);
       enqueued += 1;
+    } catch {
+      // The insert is already committed. Recovery requeues this pending row.
     }
   }
   const last = runs[runs.length - 1];
   if (last?.completedAt) {
     await db.ghlLeadNoticeDiscoveryCursor.update({
-      where: { id: CURSOR_ID },
+      where: { id: GHL_LEAD_NOTICE_DISCOVERY_CURSOR_ID },
       data: { lastCompletedAt: last.completedAt, lastRunId: last.id },
     });
   }
@@ -183,6 +193,16 @@ async function loadOnboardingAttempts(db: PrismaClient, keys: string[]): Promise
   });
   for (const attempt of attempts) ids.set(attempt.idempotencyKey, attempt.id);
   return ids;
+}
+
+async function ensureDiscoveryCutoff(db: PrismaClient, at: Date): Promise<void> {
+  try {
+    await db.ghlLeadNoticeDiscoveryCursor.create({
+      data: { id: GHL_LEAD_NOTICE_CUTOFF_CURSOR_ID, lastCompletedAt: at, lastRunId: "" },
+    });
+  } catch (error) {
+    if (!isUniqueConflict(error)) throw error;
+  }
 }
 
 function isUniqueConflict(error: unknown): boolean {

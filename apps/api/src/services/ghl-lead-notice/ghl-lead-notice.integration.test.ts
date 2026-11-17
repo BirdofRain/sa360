@@ -188,7 +188,9 @@ before(async () => {
   assert.equal(GHL_TEXT.length >= 160 && GHL_TEXT.length <= 500, true);
   db = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
   await db.$queryRaw`SELECT 1`;
-  await db.ghlLeadNoticeDiscoveryCursor.deleteMany({ where: { id: "ghl_lead_received" } });
+  await db.ghlLeadNoticeDiscoveryCursor.deleteMany({
+    where: { id: { in: ["ghl_lead_received", "ghl_lead_received_cutoff", "ghl_lead_received_pending"] } },
+  });
 });
 
 after(async () => {
@@ -201,7 +203,9 @@ after(async () => {
   if (eventIds.length > 0) {
     await db.sourceLeadEvent.deleteMany({ where: { id: { in: eventIds } } }).catch(() => undefined);
   }
-  await db.ghlLeadNoticeDiscoveryCursor.deleteMany({ where: { id: "ghl_lead_received" } }).catch(() => undefined);
+  await db.ghlLeadNoticeDiscoveryCursor.deleteMany({
+    where: { id: { in: ["ghl_lead_received", "ghl_lead_received_cutoff", "ghl_lead_received_pending"] } },
+  }).catch(() => undefined);
   await db.$disconnect().catch(() => undefined);
 });
 

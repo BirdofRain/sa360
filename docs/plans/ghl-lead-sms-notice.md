@@ -94,9 +94,51 @@ pending row while that switch is off. Dispatch then returns `sms_disabled`
 and does not claim the row.
 
 Canary isolation skips this queue whenever it is not `off`. STOP and Twilio
-error 21610 suppress the preference and any pending GHL notice. Provider
-status callbacks update a `GhlLeadReceivedNotice` only when the MessageSid is
-not already an external-webhook receipt.
+error 21610 call `suppressSmsPhone`, the shared STOP writer. That writer
+suppresses every preference for the phone and every pending SMS notice in
+both the GoHighLevel program and the external-webhook program. A later
+callback does not clear it. A duplicate 21610 stays duplicate once the phone
+is already stopped.
+
+## Pending recovery
+
+Discovery inserts the receipt before it enqueues the worker job. If that
+enqueue throws, the worker job disappears, or dispatch returns while
+`SA360_SMS_NOTIFICATIONS_ENABLED` is off, the row stays `pending`.
+
+The discover request then runs `recoverPendingGhlLeadNotices` for one page of
+at most 20 pending rows. The page walks a cursor and wraps, so one older row
+cannot hide a later one. It does not loop until the table is empty.
+
+A row is requeued only when it is still `pending`, its event is
+`ghl_lead_received`, its stored consent version is `ghl-lead-sms-v1`, the
+live preference still allows that version, the phone matches, STOP is clear,
+and `completedAt` is strictly after the frozen discovery cutoff. Rows before
+that cutoff are not selected. `provider_accepted`, `sending`, `sent`,
+`uncertain`, `suppressed`, and `failed` are not selected. An ineligible
+pending row is marked suppressed instead of requeued. Dispatch claims a
+pending row once, and it checks STOP again after the claim, so a second job
+for the same lead and location does not send a second SMS.
+
+## Customer activation blocker
+
+`smsConsentAllowsGhlLeadNotice` accepts only `ghl-lead-sms-v1`.
+`smsConsentAllowsNotice` still accepts only `external-webhook-sms-v1` and
+`external-webhook-sms-v2`. A stored webhook consent row cannot authorize this
+SMS.
+
+The opt-in link, the portal recorder, and verbal confirmation write
+`ghl-lead-sms-v1` only when `smsConsentRecordedAt` is null. If a version is
+already stored, they return `prior_consent_retained` and do not change
+`smsConsentVersion`, `smsConsentText`, or `smsConsentRecordedAt`.
+
+There is no workflow that keeps the historical sentence and records a new
+affirmative GHL consent beside it. That needs a separate migration: preserve
+the old version, text, and recorded time in new columns or a consent-history
+table, then require a new affirmative act before storing `ghl-lead-sms-v1`.
+Do not clear or delete the old row to make the current link succeed. Until
+that workflow exists, customer activation is NO-GO for anyone who already
+confirmed v1 or v2.
 
 ## Verification checklist
 
@@ -106,6 +148,10 @@ not already an external-webhook receipt.
 - [ ] A failed or unproven contact write writes no row.
 - [ ] Workflow enrollment failure after a proven contact write still leaves the contact id on the notice.
 - [ ] STOP writes no additional SMS. A pending row becomes `suppressed`.
+- [ ] A lost enqueue, a completed job while SMS is disabled, or a missing queue job requeues one eligible pending row and still sends once.
+- [ ] A pending row at or before the discovery cutoff is not requeued.
+- [ ] `provider_accepted`, `sent`, `uncertain`, `suppressed`, and `failed` are not requeued.
+- [ ] Twilio 21610 suppresses the phone for both the GHL notice and pending external-webhook notices. A duplicate callback does not send again.
 - [ ] A stored v2 consent row is not rewritten and does not receive this SMS.
 - [ ] The external-webhook template string is unchanged.
 - [ ] `SA360_GHL_LEAD_NOTICE_ENABLED` is unset.
@@ -119,4 +165,6 @@ not already an external-webhook receipt.
 
 Do not enable either flag. Do not set `SA360_TWILIO_SMS_FROM`. Do not submit
 toll-free verification. Do not send a live SMS. People with stored v1 or v2
-consent are not enrolled in this message.
+consent are not enrolled in this message. Activating them requires a new
+affirmative `ghl-lead-sms-v1` record that preserves the historical consent
+evidence. That workflow is not in this change.

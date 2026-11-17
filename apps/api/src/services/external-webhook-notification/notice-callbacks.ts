@@ -46,13 +46,14 @@ export async function applyTwilioNoticeStatus(
     where: { providerMessageId: sid, provider: "twilio" },
   });
   if (!receipt) return applyGhlLeadNoticeStatus(db, { sid, status, errorCode: params.ErrorCode });
-  if (receipt.status === "sent" || receipt.status === "failed" || receipt.status === "suppressed") {
-    return { ok: true, applied: "duplicate" };
-  }
   const code = params.ErrorCode?.trim() ? Number(params.ErrorCode) : null;
   if (code === 21610) {
-    await markExternalWebhookNoticeProviderStop(db, { idempotencyKey: receipt.idempotencyKey });
-    return { ok: true, applied: "updated" };
+    return applyProviderStop(db, receipt.recipient, receipt.status, () =>
+      markExternalWebhookNoticeProviderStop(db, { idempotencyKey: receipt.idempotencyKey })
+    );
+  }
+  if (receipt.status === "sent" || receipt.status === "failed" || receipt.status === "suppressed") {
+    return { ok: true, applied: "duplicate" };
   }
   if (providerStatusConfirmsDelivery(status)) {
     if (receipt.status === "sending" || receipt.status === "uncertain") {
@@ -88,6 +89,33 @@ export async function applyTwilioNoticeStatus(
   return { ok: true, applied: "duplicate" };
 }
 
+const RECIPIENT_E164 = /^\+[1-9]\d{7,14}$/;
+
+/**
+ * Twilio 21610 stops the phone, not only one receipt.
+ * suppressSmsPhone writes the shared STOP row and pending notices for both programs.
+ * A second callback for an already stopped phone and a closed receipt stays duplicate.
+ */
+async function applyProviderStop(
+  db: PrismaClient,
+  recipient: string,
+  status: string,
+  markNotice: () => Promise<unknown>
+): Promise<{ ok: true; applied: "updated" | "duplicate" }> {
+  const prior = RECIPIENT_E164.test(recipient)
+    ? await db.clientDeliveryNotificationPreference.findFirst({
+        where: { recipientPhoneE164: recipient },
+        select: { smsSuppressionState: true },
+      })
+    : null;
+  const phoneAlreadyStopped = prior?.smsSuppressionState === "suppressed";
+  if (RECIPIENT_E164.test(recipient)) await suppressSmsPhone(db, recipient);
+  const noticeClosed = status === "sent" || status === "failed" || status === "suppressed";
+  if (!noticeClosed) await markNotice();
+  if (phoneAlreadyStopped && noticeClosed) return { ok: true, applied: "duplicate" };
+  return { ok: true, applied: "updated" };
+}
+
 /** Same status words as an external-webhook receipt. A missing GHL row stays unknown. */
 async function applyGhlLeadNoticeStatus(
   db: PrismaClient,
@@ -97,13 +125,14 @@ async function applyGhlLeadNoticeStatus(
     where: { providerMessageId: input.sid, provider: "twilio" },
   });
   if (!receipt) return { ok: true, applied: "unknown_sid" };
-  if (receipt.status === "sent" || receipt.status === "failed" || receipt.status === "suppressed") {
-    return { ok: true, applied: "duplicate" };
-  }
   const code = input.errorCode?.trim() ? Number(input.errorCode) : null;
   if (code === 21610) {
-    await markGhlLeadNoticeSuppressed(db, receipt.idempotencyKey);
-    return { ok: true, applied: "updated" };
+    return applyProviderStop(db, receipt.recipient, receipt.status, async () => {
+      await markGhlLeadNoticeSuppressed(db, receipt.idempotencyKey, "provider_21610");
+    });
+  }
+  if (receipt.status === "sent" || receipt.status === "failed" || receipt.status === "suppressed") {
+    return { ok: true, applied: "duplicate" };
   }
   if (providerStatusConfirmsDelivery(input.status)) {
     if (receipt.status === "sending" || receipt.status === "uncertain") {

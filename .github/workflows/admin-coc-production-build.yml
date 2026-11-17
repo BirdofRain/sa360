@@ -1,0 +1,28 @@
+# Production Admin C.O.C. compile and prerender check. DigitalOcean App Platform
+# builds the admin service with:
+#   corepack enable && corepack prepare pnpm@10.32.1 --activate && pnpm install --frozen-lockfile && pnpm build:admin-coc
+# The API production-build workflow does not run this Next.js build, so a green
+# API check can still merge a broken /404, /_not-found, or Front Office prerender.
+name: Admin C.O.C. production build
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+jobs:
+  build-admin-coc:
+    name: pnpm build:admin-coc
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install and build Admin C.O.C.
+        run: corepack enable && corepack prepare pnpm@10.32.1 --activate && CI=true pnpm install --frozen-lockfile --prod=false && pnpm build:admin-coc

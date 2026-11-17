@@ -1,4 +1,5 @@
 import type { SourceFunnel } from "@prisma/client";
+import { campaignLeadTypeLabel, isCampaignLeadTypeKey } from "@sa360/shared";
 
 export type SourceFunnelAdminDto = {
   id: string;
@@ -11,6 +12,8 @@ export type SourceFunnelAdminDto = {
   associationStatus: SourceFunnel["associationStatus"];
   suggestedClientAccountId: string | null;
   originClientAccountId: string | null;
+  leadTypeKey: string | null;
+  leadTypeLabel: string | null;
   firstSeenAt: string | null;
   lastSeenAt: string | null;
 };
@@ -31,6 +34,11 @@ export function presentSourceFunnelAdmin(row: SourceFunnel): SourceFunnelAdminDt
     associationStatus: row.associationStatus,
     suggestedClientAccountId: row.suggestedClientAccountId,
     originClientAccountId: row.originClientAccountId,
+    leadTypeKey: row.leadTypeKey,
+    leadTypeLabel:
+      row.leadTypeKey && isCampaignLeadTypeKey(row.leadTypeKey)
+        ? campaignLeadTypeLabel(row.leadTypeKey)
+        : null,
     firstSeenAt: iso(row.firstSeenAt),
     lastSeenAt: iso(row.lastSeenAt),
   };

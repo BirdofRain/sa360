@@ -20,6 +20,7 @@ function funnel(partial: Partial<SourceFunnel> & { id: string }): SourceFunnel {
     associationStatus: "confirmed",
     suggestedClientAccountId: null,
     originClientAccountId: "client_a",
+    leadTypeKey: null,
     firstSeenAt: null,
     lastSeenAt: null,
     createdAt: new Date("2026-09-01T00:00:00.000Z"),
@@ -43,6 +44,11 @@ test("presentSourceFunnelAdmin serializes dates and keeps null firstSeenAt", () 
   assert.equal(dto.lastSeenAt, "2026-09-10T15:00:00.000Z");
   assert.equal(dto.observedFunnelName, "Life Insurance For Veterans - Madison Pimentel V2");
   assert.equal(dto.providerFunnelId, null);
+  assert.equal(dto.leadTypeKey, null);
+  assert.equal(dto.leadTypeLabel, null);
+  const labeled = presentSourceFunnelAdmin(funnel({ id: "sf_vet", leadTypeKey: "vet_web_form" }));
+  assert.equal(labeled.leadTypeKey, "vet_web_form");
+  assert.equal(labeled.leadTypeLabel, "Vet Web Form");
 });
 
 test("sort puts confirmed before suggested, observed before pre-registered, newest lastSeen first", () => {

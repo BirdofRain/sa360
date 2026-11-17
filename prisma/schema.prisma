@@ -1232,6 +1232,10 @@ model SourceFunnel {
   /// First natural lead observation. Null when an operator pre-registered the source before any lead.
   firstSeenAt              DateTime?
   lastSeenAt               DateTime?
+  /// Controlled campaign Lead Type key. Null until an operator sets one.
+  /// No database default and no backfill. Routing reads it only from the
+  /// source association that won; it is not inferred from URL, niche, or product.
+  leadTypeKey              String?
   createdAt                DateTime                       @default(now())
   updatedAt                DateTime                       @updatedAt
 
@@ -1242,6 +1246,20 @@ model SourceFunnel {
   @@index([suggestedClientAccountId])
   @@index([lastSeenAt])
   @@index([provider, pageSlug])
+}
+
+/// Append-only record of who changed SourceFunnel.leadTypeKey.
+/// Actor is ADMIN or a StaffPrincipal id. Routing and delivery do not read it.
+/// sourceFunnelId is not a foreign key, so a later registry delete cannot rewrite history.
+model SourceFunnelLeadTypeAudit {
+  id             String   @id @default(cuid())
+  sourceFunnelId String
+  previousKey    String?
+  nextKey        String?
+  actor          String
+  createdAt      DateTime @default(now())
+
+  @@index([sourceFunnelId, createdAt])
 }
 
 /// Config-driven rules mapping master VET attribution → destination client/subaccount.

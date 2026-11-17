@@ -11,7 +11,14 @@ import {
   COMPANY_SHEETS_LEAD_HEADER_V2,
   companySheetsCampaignHeader,
 } from "../../lib/company-google-sheets-env.js";
-import { companySheetsCampaignRowValues } from "./company-sheets-campaign-row.js";
+import {
+  CAMPAIGN_LEAD_TYPE_CONFLICT_DIAGNOSTIC,
+  CAMPAIGN_LEAD_TYPE_MALFORMED_DIAGNOSTIC,
+  CAMPAIGN_LEAD_TYPE_UNRESOLVED_DIAGNOSTIC,
+  companySheetsCampaignRowValues,
+  projectSheetsLeadType,
+} from "./company-sheets-campaign-row.js";
+import { customRowProjection, explainDraftProjection, type ColumnAssignment } from "./company-sheets-custom-row.js";
 
 const EXCLUDED = {
   ip: "203.0.113.50",
@@ -537,4 +544,165 @@ test("Vet Web Form parent URL fills a blank lead type and does not replace an ex
     }),
     "Final Expense"
   );
+});
+
+function savedDecision(status: "resolved" | "agreement" | "conflict" | "unresolved", key: string, label: string | null) {
+  const classified = status === "resolved" || status === "agreement";
+  return {
+    version: 1,
+    status,
+    leadTypeKey: classified ? key : null,
+    leadTypeLabel: classified ? label : null,
+    binding: { kind: "confirmed_source_association", id: "sf_ray", leadTypeKey: key },
+    evidence: {
+      trustedKey: null,
+      trustedAdapter: null,
+      bindingKey: key,
+      bypassedSourceLeadTypeKey: null,
+    },
+  };
+}
+
+function presented(payload: Record<string, unknown>, routingResultJson: unknown) {
+  const input = {
+    schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3,
+    stableRowId: "lead:ray:evt",
+    clientAccountId: "ray",
+    sourceLeadEventId: "evt",
+    receivedAt: "2026-11-17T15:00:00.000Z",
+    sourceLeadId: "provider-1",
+    normalizedPayload: payload,
+    routingResultJson,
+    sheetsPresentation: true,
+  };
+  const values = companySheetsCampaignRowValues(input);
+  assert.ok(values);
+  const cells = Object.fromEntries(COMPANY_SHEETS_V3_HEADER.map((key, index) => [key, values[index] ?? ""]));
+  return { cells, diagnostics: projectSheetsLeadType(input).diagnostics, input };
+}
+
+const RAY_PAYLOAD = {
+  phone: "+12025550100",
+  contact: { first_name: "Ray", last_name: "Rodriguez", email: "ray@example.test", state: "Florida" },
+  state: { lead_type: "NURSE" },
+  routing: {
+    product_type: "Final Expense",
+    niche_key: "NURSE",
+    source_intake: {
+      parent_url_key: VET_WEB_FORM_PARENT,
+      submitted_at: "2026-11-17T14:00:00.000Z",
+    },
+  },
+  lead_details: { date_of_birth: "1979-04-12", consumer_age: "47" },
+};
+
+test("a saved Vet Web Form decision is written exactly and ignores the live niche and parent URL", () => {
+  const sheet = presented(RAY_PAYLOAD, {
+    campaignLeadType: savedDecision("resolved", "vet_web_form", "Vet Web Form"),
+  });
+  assert.equal(sheet.cells["Lead Type"], "Vet Web Form");
+  assert.equal(sheet.cells.Phone, "(202) 555-0100");
+  assert.equal(sheet.cells.State, "Florida");
+  assert.equal(sheet.cells.DOB, "1979-04-12");
+  assert.equal(sheet.cells.Age, "47");
+  assert.equal(sheet.diagnostics.length, 0);
+});
+
+test("nurse and trucker decisions stay with the event that saved them", () => {
+  const nurse = presented(
+    { ...RAY_PAYLOAD, phone: "2025550100" },
+    { campaignLeadType: savedDecision("resolved", "nurse_web_form", "Nurse Web Form") }
+  );
+  const trucker = presented(
+    { ...RAY_PAYLOAD, phone: "(202) 555-0100" },
+    { campaignLeadType: savedDecision("agreement", "trucker_web_form", "Trucker Web Form") }
+  );
+  assert.equal(nurse.cells["Lead Type"], "Nurse Web Form");
+  assert.equal(trucker.cells["Lead Type"], "Trucker Web Form");
+  assert.equal(nurse.cells.Phone, trucker.cells.Phone);
+  assert.equal(nurse.cells.Phone, "(202) 555-0100");
+});
+
+test("conflict and unresolved snapshots stay blank and a malformed snapshot does not use the legacy label", () => {
+  const legacyPayload = {
+    state: { lead_type: "VET" },
+    routing: { source_intake: { parent_url_key: VET_WEB_FORM_PARENT }, product_type: "Final Expense" },
+  };
+  const conflict = presented(legacyPayload, {
+    campaignLeadType: savedDecision("conflict", "vet_web_form", null),
+  });
+  const unresolved = presented(legacyPayload, {
+    campaignLeadType: savedDecision("unresolved", "vet_web_form", null),
+  });
+  const malformed = presented(legacyPayload, { campaignLeadType: { hello: "world" } });
+  const nullSnapshot = presented(legacyPayload, { campaignLeadType: null });
+  const arraySnapshot = presented(legacyPayload, { campaignLeadType: ["vet_web_form"] });
+  const historical = presented(legacyPayload, { matched: true });
+  assert.equal(conflict.cells["Lead Type"], "");
+  assert.deepEqual(conflict.diagnostics, [CAMPAIGN_LEAD_TYPE_CONFLICT_DIAGNOSTIC]);
+  assert.equal(unresolved.cells["Lead Type"], "");
+  assert.deepEqual(unresolved.diagnostics, [CAMPAIGN_LEAD_TYPE_UNRESOLVED_DIAGNOSTIC]);
+  assert.equal(malformed.cells["Lead Type"], "");
+  assert.deepEqual(malformed.diagnostics, [CAMPAIGN_LEAD_TYPE_MALFORMED_DIAGNOSTIC]);
+  assert.equal(nullSnapshot.cells["Lead Type"], "");
+  assert.deepEqual(nullSnapshot.diagnostics, [CAMPAIGN_LEAD_TYPE_MALFORMED_DIAGNOSTIC]);
+  assert.equal(arraySnapshot.cells["Lead Type"], "");
+  assert.deepEqual(arraySnapshot.diagnostics, [CAMPAIGN_LEAD_TYPE_MALFORMED_DIAGNOSTIC]);
+  assert.equal(historical.cells["Lead Type"], "VET");
+  assert.deepEqual(historical.diagnostics, []);
+});
+
+test("preview and append use the same Lead Type and phone cells", () => {
+  const routingResultJson = { campaignLeadType: savedDecision("resolved", "vet_web_form", "Vet Web Form") };
+  const lead = {
+    stableRowId: "lead:ray:evt",
+    clientAccountId: "ray",
+    sourceLeadEventId: "evt",
+    receivedAt: "2026-11-17T15:00:00.000Z",
+    sourceLeadId: "provider-1",
+    normalizedPayload: RAY_PAYLOAD,
+    routingResultJson,
+    sheetsPresentation: true,
+  };
+  const header = ["Lead Type", "Phone", "State"];
+  const assignments: ColumnAssignment[] = [
+    {
+      sheetHeader: "Lead Type",
+      columnIndex: 0,
+      formula: false,
+      decision: "mapped",
+      explicit: true,
+      transform: "passthrough",
+      code: null,
+      target: { kind: "v3_column", header: "Lead Type", sourceField: "lead_type" },
+    },
+    {
+      sheetHeader: "Phone",
+      columnIndex: 1,
+      formula: false,
+      decision: "mapped",
+      explicit: true,
+      transform: "passthrough",
+      code: null,
+      target: { kind: "v3_column", header: "Phone", sourceField: "phone" },
+    },
+    {
+      sheetHeader: "State",
+      columnIndex: 2,
+      formula: false,
+      decision: "mapped",
+      explicit: true,
+      transform: "passthrough",
+      code: null,
+      target: { kind: "v3_column", header: "State", sourceField: "state" },
+    },
+  ];
+  const appended = customRowProjection(assignments, lead);
+  const preview = explainDraftProjection(assignments, lead);
+  assert.ok(appended);
+  assert.ok(preview);
+  assert.deepEqual(preview.sheet?.values, appended.values);
+  assert.deepEqual(appended.values, ["Vet Web Form", "(202) 555-0100", "Florida"]);
+  assert.equal(preview.warnings.some((warning) => warning.startsWith("campaign_lead_type_")), false);
+  assert.equal(header.join(","), assignments.map((column) => column.sheetHeader).join(","));
 });

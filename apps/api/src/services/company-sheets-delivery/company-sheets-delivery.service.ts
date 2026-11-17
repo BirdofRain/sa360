@@ -19,7 +19,11 @@ import {
   isCompanyGoogleSheetsExecutionEnabled,
 } from "../../lib/company-google-sheets-env.js";
 import { findCompanyGoogleConnection } from "../../repositories/company-google-connection.repository.js";
-import { companySheetsCampaignRowValues, type CampaignSheetLeadInput } from "./company-sheets-campaign-row.js";
+import {
+  companySheetsCampaignRowValues,
+  projectSheetsLeadType,
+  type CampaignSheetLeadInput,
+} from "./company-sheets-campaign-row.js";
 import { sheetsEventAlreadyWritten, sheetsEventWriteDisposition } from "./sheets-event-write-guard.js";
 import {
   evaluateClientSheetsPersonGate,
@@ -366,6 +370,7 @@ async function resolveCampaignWrite(
     if (!blocked.ok) return fail(blocked.error, blocked.statusCode);
     const values = customRowValues(applied.assignments, lead);
     if (!values || values.length !== snapshot.length) return fail("mapping_required", 409);
+    noteLeadTypeDiagnostics(lead);
     return {
       ok: true,
       schemaVersion: COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA,
@@ -378,7 +383,17 @@ async function resolveCampaignWrite(
   if (!expectedHeader || !sameContractHeader(contract.header, expectedHeader)) return fail("schema_mismatch", 409);
   const values = companySheetsCampaignRowValues({ ...lead, schemaVersion: contract.schemaVersion });
   if (!values) return fail("schema_mismatch", 409);
+  noteLeadTypeDiagnostics(lead);
   return { ok: true, schemaVersion: contract.schemaVersion, header: [...contract.header], values, contentSha256: null };
+}
+
+function noteLeadTypeDiagnostics(lead: CampaignSheetLeadInput): void {
+  const diagnostics = projectSheetsLeadType(lead).diagnostics;
+  if (diagnostics.length === 0) return;
+  logger.info("company_sheets.lead_type_diagnostic", {
+    sourceLeadEventId: lead.sourceLeadEventId,
+    diagnostics,
+  });
 }
 
 async function otherEventSheetWrite(
@@ -458,6 +473,8 @@ export async function enqueueConfirmedLeadSheetsDelivery(
     receivedAt: lead.receivedAt.toISOString(),
     sourceLeadId: lead.sourceLeadId,
     normalizedPayload: lead.normalizedPayloadJson,
+    routingResultJson: lead.routingResultJson,
+    sheetsPresentation: true,
     sourceFunnelId: sourceFunnelIdFromLead(lead),
   });
   if (!resolved.ok) return resolved;
@@ -879,6 +896,8 @@ export async function sendCompanySheetsCapturedEventTestRow(
           receivedAt: lead.receivedAt.toISOString(),
           sourceLeadId: lead.sourceLeadId,
           normalizedPayload: lead.normalizedPayloadJson,
+          routingResultJson: lead.routingResultJson,
+          sheetsPresentation: true,
           sourceFunnelId: sourceFunnelIdFromLead(lead),
         },
         { controlledTest: true }

@@ -6,8 +6,14 @@ import {
   COMPANY_SHEETS_LEAD_HEADER_V2,
   companySheetsCampaignHeader,
 } from "../../lib/company-google-sheets-env.js";
+import { formatSheetsPhoneDisplay } from "../phone-e164.service.js";
 import { projectCampaignDobAge } from "../consumer-age/campaign-dob-age.js";
+import { inspectCampaignLeadTypeSnapshot } from "../source-intake/campaign-lead-type.js";
 import { normalizeSourceFieldKey } from "../source-intake/source-field-alias.registry.js";
+
+export const CAMPAIGN_LEAD_TYPE_CONFLICT_DIAGNOSTIC = "campaign_lead_type_conflict";
+export const CAMPAIGN_LEAD_TYPE_UNRESOLVED_DIAGNOSTIC = "campaign_lead_type_unresolved";
+export const CAMPAIGN_LEAD_TYPE_MALFORMED_DIAGNOSTIC = "campaign_lead_type_malformed";
 
 /**
  * Campaign sheet cells from the canonical normalized payload.
@@ -39,6 +45,13 @@ export type CampaignSheetLeadInput = {
   receivedAt: string;
   sourceLeadId: string | null;
   normalizedPayload: unknown;
+  /**
+   * Sheets writer and preview only. Other adapters omit this and keep the
+   * legacy lead type and the stored phone text.
+   */
+  sheetsPresentation?: boolean;
+  /** The source event's routingResultJson. Not the live SourceFunnel row. */
+  routingResultJson?: unknown;
 };
 
 export function campaignLeadIdentityFromPayload(normalizedPayload: unknown): {
@@ -82,7 +95,7 @@ export function companySheetsCampaignRowValues(input: CampaignSheetLeadInput & {
     const byKey: Record<string, string> = Object.fromEntries(
       COMPANY_SHEETS_LEAD_HEADER_V2.map((key, index) => [key, extended[index] ?? ""])
     );
-    byKey.lead_type = readLeadType(payload);
+    byKey.lead_type = projectSheetsLeadType(input).value;
     byKey.date_of_birth = readDateOfBirth(payload, input.receivedAt);
     byKey.notes = unmappedNormalized(payload, "notes");
     for (const key of [
@@ -112,6 +125,7 @@ function v2RowValues(input: CampaignSheetLeadInput): string[] | null {
   const header = companySheetsCampaignHeader(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V2);
   if (!header) return null;
   const identity = campaignLeadIdentityFromPayload(input.normalizedPayload);
+  const phone = input.sheetsPresentation ? formatSheetsPhoneDisplay(identity.phone) : identity.phone;
   const base = [
     input.stableRowId,
     input.clientAccountId,
@@ -119,7 +133,7 @@ function v2RowValues(input: CampaignSheetLeadInput): string[] | null {
     input.receivedAt,
     identity.fullName,
     identity.email,
-    identity.phone,
+    phone,
   ];
   const payload = asRecord(input.normalizedPayload) ?? {};
   const contact = asRecord(payload.contact);
@@ -174,11 +188,34 @@ const VET_WEB_FORM_PARENT_URL_KEY = "go.lifeinsuranceforvets.com/learn-alex-gros
 const VET_WEB_FORM_LEAD_TYPE = "Vet Web Form";
 
 /**
- * An explicit stored lead type wins. This webform otherwise has no niche stamp,
- * so the sheet column follows the confirmed parent URL. A different route with
- * no stored lead type stays blank or uses the existing product/niche fallback.
+ * Sheets Lead Type from the event snapshot when the writer or preview asks.
+ * A missing snapshot keeps the legacy cell. A present conflict, unresolved,
+ * or malformed snapshot is blank and named in `diagnostics`.
  */
-function readLeadType(payload: Record<string, unknown>): string {
+export function projectSheetsLeadType(input: CampaignSheetLeadInput): { value: string; diagnostics: string[] } {
+  const payload = asRecord(input.normalizedPayload) ?? {};
+  if (!input.sheetsPresentation) return { value: readLegacyLeadType(payload), diagnostics: [] };
+  const inspected = inspectCampaignLeadTypeSnapshot(input.routingResultJson);
+  if (inspected.presence === "absent") return { value: readLegacyLeadType(payload), diagnostics: [] };
+  if (inspected.presence === "malformed") {
+    return { value: "", diagnostics: [CAMPAIGN_LEAD_TYPE_MALFORMED_DIAGNOSTIC] };
+  }
+  if (inspected.decision.status === "resolved" || inspected.decision.status === "agreement") {
+    return { value: inspected.decision.leadTypeLabel ?? "", diagnostics: [] };
+  }
+  if (inspected.decision.status === "conflict") {
+    return { value: "", diagnostics: [CAMPAIGN_LEAD_TYPE_CONFLICT_DIAGNOSTIC] };
+  }
+  return { value: "", diagnostics: [CAMPAIGN_LEAD_TYPE_UNRESOLVED_DIAGNOSTIC] };
+}
+
+/**
+ * Legacy cell used only when the event has no campaignLeadType snapshot.
+ * An explicit stored lead type wins. The Alex webform otherwise has no niche
+ * stamp, so that parent URL fills Vet Web Form. A different route stays blank
+ * or uses the stored product/niche fallback.
+ */
+function readLegacyLeadType(payload: Record<string, unknown>): string {
   const state = asRecord(payload.state);
   const explicit = readString(state?.lead_type);
   if (explicit) return explicit;

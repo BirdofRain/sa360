@@ -66,7 +66,7 @@ export const COMPANY_SHEETS_V3_COLUMNS: readonly CompanySheetsTemplateColumn[] =
     sourceField: "lead_type",
     group: "identity",
     systemRequired: false,
-    help: "Stored state.lead_type when it is non-blank. The Vet Web Form parent URL fills Vet Web Form only when that value is blank. Otherwise the first stored routing.product_type or routing.niche_key. Other unresolved routes stay blank.",
+    help: "Saved campaign Lead Type label from the source event when that decision resolved. A conflict, unresolved, or malformed snapshot stays blank. Events with no snapshot keep the legacy stored lead type, Vet Web Form parent URL, or product/niche fallback.",
   },
   {
     header: "Age",

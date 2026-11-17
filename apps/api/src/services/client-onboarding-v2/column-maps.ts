@@ -409,6 +409,7 @@ export async function previewColumnMapDraft(
     expectedRevision: number;
     assignments?: unknown;
     previewToken: string;
+    sourceLeadEventId?: string | null;
   },
   db: PrismaClient = prisma
 ): Promise<{ ok: true; preview: ColumnMapDraftPreview } | ColumnMapFailure> {
@@ -429,7 +430,16 @@ export async function previewColumnMapDraft(
     include: { tabContracts: true },
   });
   const boundSchemaVersion = destination?.tabContracts.find((tab) => tab.role === "campaign")?.schemaVersion ?? null;
-  const event = await recentReceivedSubmission(db, input.clientAccountId);
+  const selectedEventId = input.sourceLeadEventId?.trim() || null;
+  const event = await submissionForPreview(db, input.clientAccountId, selectedEventId);
+  if (selectedEventId && !event) {
+    return {
+      ok: false,
+      statusCode: 404,
+      error: "lead_not_found",
+      detail: "That submission is not stored for this client.",
+    };
+  }
   const base = {
     configuration: current.status === "published" ? ("published_map" as const) : ("draft" as const),
     deliveryEnabled: false as const,
@@ -465,6 +475,8 @@ export async function previewColumnMapDraft(
     receivedAt: event.receivedAt.toISOString(),
     sourceLeadId: event.sourceLeadId,
     normalizedPayload: event.normalizedPayloadJson,
+    routingResultJson: event.routingResultJson,
+    sheetsPresentation: true,
   });
   if (!explained) {
     return { ok: false, statusCode: 422, error: "mapping_unresolved", detail: "The stored submission could not be projected." };
@@ -607,15 +619,36 @@ async function finishPublish(
   return { ok: true, map: published.map, schemaRebound: published.schemaRebound, published: true, deliveryEnabled: false };
 }
 
-async function recentReceivedSubmission(db: PrismaClient, clientAccountId: string) {
+async function submissionForPreview(db: PrismaClient, clientAccountId: string, sourceLeadEventId?: string | null) {
+  const selected = sourceLeadEventId?.trim();
+  if (selected) {
+    const event = await db.sourceLeadEvent.findFirst({
+      where: {
+        id: selected,
+        clientAccountIdResolved: clientAccountId,
+        normalizedPayloadJson: { not: Prisma.DbNull },
+      },
+      select: previewEventSelect,
+    });
+    if (!event || isSyntheticSubmission(event.normalizedPayloadJson, event.sourceLeadId)) return null;
+    return event;
+  }
   const rows = await db.sourceLeadEvent.findMany({
     where: { clientAccountIdResolved: clientAccountId, normalizedPayloadJson: { not: Prisma.DbNull } },
     orderBy: [{ receivedAt: "desc" }, { id: "desc" }],
     take: 8,
-    select: { id: true, receivedAt: true, sourceLeadId: true, normalizedPayloadJson: true },
+    select: previewEventSelect,
   });
   return rows.find((row) => !isSyntheticSubmission(row.normalizedPayloadJson, row.sourceLeadId)) ?? null;
 }
+
+const previewEventSelect = {
+  id: true,
+  receivedAt: true,
+  sourceLeadId: true,
+  normalizedPayloadJson: true,
+  routingResultJson: true,
+} as const;
 
 function isSyntheticSubmission(payload: Prisma.JsonValue, sourceLeadId: string | null): boolean {
   if (sourceLeadId === "synthetic-sheets-test") return true;

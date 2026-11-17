@@ -84,6 +84,24 @@ export type SpreadsheetTextCell = {
  * Valid US numbers are E.164; invalid raw input is left unchanged
  * so callers can fail closed rather than invent digits.
  */
+const SHEETS_PHONE_EXTENSION = /(?:\bext\.?\b|\bextension\b|\bx\s*\d|#\s*\d)/i;
+
+/**
+ * Sheets display for one phone cell.
+ * A supported US number is `(###) ###-####`. Blank stays blank.
+ * Extensions, invalid values, and non-US numbers keep the stored text.
+ */
+export function formatSheetsPhoneDisplay(raw: string | null | undefined): string {
+  if (raw == null) return "";
+  const trimmed = String(raw).trim();
+  if (!trimmed) return "";
+  if (SHEETS_PHONE_EXTENSION.test(trimmed)) return trimmed;
+  const strict = tryNormalizeStrictUsNanpE164(trimmed);
+  if (!strict.ok) return trimmed;
+  const national = strict.e164.slice(2);
+  return `(${national.slice(0, 3)}) ${national.slice(3, 6)}-${national.slice(6)}`;
+}
+
 export function formatBuyerPhoneSpreadsheetText(raw: string | null | undefined): string {
   const result = tryNormalizeStrictUsNanpE164(raw);
   if (result.ok) return result.e164;

@@ -3,6 +3,7 @@ import {
   COMPANY_SHEETS_DISPATCH_HTTP_TIMEOUT_MS,
   EXTERNAL_WEBHOOK_NOTICE_DISCOVER_JOB,
   EXTERNAL_WEBHOOK_NOTICE_DISPATCH_JOB,
+  readSmsCanaryIsolation,
 } from "@sa360/shared";
 
 import {
@@ -34,6 +35,10 @@ export async function processExternalWebhookNoticeJob(
   options: ExternalWebhookNoticeJobOptions = {}
 ): Promise<{ ok: true; skipped?: string }> {
   const env = options.env ?? process.env;
+  if (readSmsCanaryIsolation(env).mode !== "off") {
+    logger.info("external_webhook_notice.skipped", { reason: "canary_isolation" });
+    return { ok: true, skipped: "canary_isolation" };
+  }
   if (!isExternalWebhookNoticeWorkerEnabled(env)) {
     logger.info("external_webhook_notice.skipped", { reason: "flag_off" });
     return { ok: true, skipped: "flag_off" };

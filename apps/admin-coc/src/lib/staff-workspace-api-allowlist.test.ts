@@ -77,6 +77,10 @@ test("manager writes are the request paths and operations cannot use them", () =
   assert.equal(staffWorkspaceAdminApiAllowed(OPERATIONS, "PUT", `/admin/v1/clients/${CLIENT}/external-webhook`), false);
   assert.equal(staffWorkspaceAdminApiAllowed(OPERATIONS, "POST", `/admin/v1/clients/${CLIENT}/external-webhook/preflight`), false);
   assert.equal(staffWorkspaceAdminApiAllowed(MANAGER, "PUT", `/admin/v1/clients/${CLIENT}/external-webhook/activation`), false);
+  assert.equal(staffWorkspaceAdminApiAllowed(WORKSPACE, "POST", `/admin/v1/team-workspace/clients/${CLIENT}/sms-verbal-consent`), true);
+  assert.equal(staffWorkspaceAdminApiAllowed(WORKSPACE, "POST", `/admin/v1/team-workspace/clients/${CLIENT}/sms-opt-in-link`), true);
+  assert.equal(staffWorkspaceAdminApiAllowed(OPERATIONS, "POST", `/admin/v1/team-workspace/clients/${CLIENT}/sms-verbal-consent`), true);
+  assert.equal(staffWorkspaceAdminApiAllowed([], "POST", `/admin/v1/team-workspace/clients/${CLIENT}/sms-verbal-consent`), false);
 });
 
 test("delivery, correction, diagnostics, and path tricks stay closed", () => {

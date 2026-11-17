@@ -4338,7 +4338,9 @@ model ExternalWebhookDestinationConfigRequest {
 /// recipientPhoneE164 and recipientPhoneVerifiedAt are present.
 /// ClientDeliveryNotifyPref_sms_consent_chk also rejects smsEnabled=true unless
 /// the canonical consent, smsEnabledAt, and suppression clear are present.
-/// A verified phone is not consent. Email `enabled` is not SMS consent.
+/// v1 keeps the original sentence. v2 stores the Life Agent Launch disclosure.
+/// Handset proof is optional. A verified phone is not consent and is not
+/// handset ownership. Email `enabled` is not SMS consent.
 /// ClientDeliveryNotifyPref_phone_e164_chk requires E.164 when a phone is stored.
 /// Channel stays email. Deleting the client cascades this configuration and does
 /// not send. This row does not arm GHL, Sheets, or webhooks.
@@ -4356,13 +4358,37 @@ model ClientDeliveryNotificationPreference {
   /// This is the operator's phone, not the consumer's. Storing it does not send
   /// and is not SMS consent.
   recipientPhoneE164        String?
-  /// Set in the same admin save that records the E.164. Not an SMS and not consent.
+  /// Set in the same admin save that records the E.164. Not an SMS, not consent,
+  /// and not proof that the handset sent a message.
   recipientPhoneVerifiedAt  DateTime?
+  /// SHA-256 of the unsent inbound ownership code. Null after proof or expiry.
+  smsHandsetChallengeHash   String?
+  /// SHA-256 of the disclosure text shown when the challenge was issued.
+  smsHandsetDisclosureHash  String?
+  smsHandsetChallengeExpiresAt DateTime?
+  /// Set only after an inbound OWN code from this E.164 matches the challenge.
+  /// Not recipientPhoneVerifiedAt. Not required for a one-time opt-in link.
+  smsHandsetProvenAt        DateTime?
+  /// null, pending_confirmation, or recipient_link. Pending cannot enable SMS.
+  smsConsentCollection      String?
+  /// Operator-captured words. Not consent and not an activation.
+  smsVerbalAffirmation      String?
+  smsVerbalDisclosureVersion String?
+  smsVerbalRecordedAt       DateTime?
+  /// StaffPrincipal id for Matt, Alex, or Aaron. Not an email header.
+  smsVerbalOperatorId       String?
+  smsVerbalEvidence         String?
+  /// Mailbox that was offered the confirmation link. Not a lead address.
+  smsConfirmationEmail      String?
+  /// SHA-256 of the one-time opt-in token. Raw token is not stored.
+  smsOptInTokenHash         String?                       @unique
+  smsOptInTokenExpiresAt    DateTime?
   /// SMS on/off. Independent of `enabled`. Default off. Channel stays email.
   /// SQL rejects true unless consent, a verified E.164, smsEnabledAt, and
   /// suppression `clear` are all present.
   smsEnabled                Boolean                           @default(false)
-  /// Exact consent copy for SMS_CONSENT_VERSION. Null until that consent is recorded.
+  /// Exact consent copy for external-webhook-sms-v1 or external-webhook-sms-v2.
+  /// Null until that consent is recorded.
   smsConsentVersion         String?
   smsConsentText            String?
   /// Transaction time of the consent record. Not a phone verification time.

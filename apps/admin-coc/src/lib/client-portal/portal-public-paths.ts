@@ -7,6 +7,8 @@ export function isUnauthenticatedPortalPath(pathname: string): boolean {
     pathname === "/portal/forgot-password" ||
     pathname.startsWith("/portal/forgot-password/") ||
     pathname === "/portal/invite" ||
-    pathname.startsWith("/portal/invite/")
+    pathname.startsWith("/portal/invite/") ||
+    pathname === "/portal/sms-opt-in" ||
+    pathname.startsWith("/portal/sms-opt-in/")
   );
 }

@@ -7,6 +7,8 @@
 
 import type { PrismaClient } from "@prisma/client";
 
+import { readSmsCanaryIsolation } from "@sa360/shared";
+
 import { sendTransactionalEmail, type SendTransactionalEmailResult } from "../../lib/transactional-email.js";
 import { EXTERNAL_WEBHOOK_EMAIL_TEMPLATES, EXTERNAL_WEBHOOK_SMS_TEMPLATES } from "./notification-contract.js";
 import {
@@ -74,6 +76,16 @@ export async function dispatchExternalWebhookNotice(
   if (!current) return { ok: true, skipped: "not_found" };
   if (current.status === "provider_accepted" || current.status === "uncertain" || current.status === "sent") {
     return { ok: true, skipped: current.status };
+  }
+  const isolation = readSmsCanaryIsolation(env);
+  if (isolation.mode !== "off") {
+    const allowed =
+      isolation.mode === "ready" &&
+      current.channel === "sms" &&
+      current.clientAccountId === isolation.clientAccountId &&
+      current.attemptId === isolation.attemptId &&
+      current.recipient === isolation.recipientE164;
+    if (!allowed) return { ok: true, skipped: "canary_isolation" };
   }
   if (current.status !== "pending") return { ok: true, skipped: current.status };
   const twilioConfig = current.channel === "sms" ? (deps.twilioConfig ?? readTwilioMessagingConfig(env)) : deps.twilioConfig;

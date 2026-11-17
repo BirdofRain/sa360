@@ -37,4 +37,17 @@ test("the notice worker stays off unless its own flag is exact true", async () =
   });
   assert.equal(sent.ok, true);
   assert.equal(calls, 1);
+  const isolated = await processExternalWebhookNoticeJob(job(EXTERNAL_WEBHOOK_NOTICE_DISCOVER_JOB), {
+    env: {
+      SA360_EXTERNAL_WEBHOOK_NOTICE_DISPATCH_ENABLED: "true",
+      ADMIN_API_KEY: "admin",
+      SA360_SMS_CANARY_ENABLED: "true",
+    },
+    postImpl: async () => {
+      calls += 1;
+      return { status: 200, body: "" };
+    },
+  });
+  assert.equal(isolated.skipped, "canary_isolation");
+  assert.equal(calls, 1);
 });

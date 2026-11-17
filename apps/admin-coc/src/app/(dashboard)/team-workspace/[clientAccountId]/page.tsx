@@ -2,6 +2,7 @@ import {
   reloadDeliveryNotificationPreferenceAction,
   saveDeliveryNotificationPreferenceAction,
 } from "@/app/actions/delivery-notification-preference";
+import { issueSmsOptInLinkAction, recordVerbalSmsConsentAction } from "@/app/actions/sms-verbal-consent";
 import { AdminCocForbiddenError, readAdminCocAccess } from "@/lib/admin-coc-session-guard";
 import { loadTeamWorkspaceClient } from "@/lib/team-workspace/load";
 import { parseGuideStep } from "@/lib/team-workspace/onboarding-guide";
@@ -83,6 +84,10 @@ export default async function TeamWorkspaceClientPage({
           notificationActions={{
             save: saveDeliveryNotificationPreferenceAction,
             reload: reloadDeliveryNotificationPreferenceAction,
+          }}
+          smsActions={{
+            recordVerbal: recordVerbalSmsConsentAction,
+            issueLink: issueSmsOptInLinkAction,
           }}
         />
       </div>

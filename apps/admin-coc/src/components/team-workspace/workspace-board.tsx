@@ -9,6 +9,7 @@ import type { ClientOption, TeamWorkspaceClientView } from "@/lib/team-workspace
 
 import { ClientPicker } from "./client-picker";
 import { DeliveryNotificationChoice, type NotificationChoiceActions } from "./notification-choice";
+import { SmsVerbalConsentPanel, type SmsVerbalActions } from "./sms-verbal-consent";
 import { StatusPill } from "./status-pill";
 import { TeamWorkspaceIntro } from "./workspace-states";
 
@@ -44,11 +45,13 @@ export function TeamWorkspaceBoard({
   view,
   clients,
   notificationActions,
+  smsActions,
   showIntro = true,
 }: {
   view: TeamWorkspaceClientView;
   clients: ClientOption[];
   notificationActions: NotificationChoiceActions;
+  smsActions?: SmsVerbalActions;
   showIntro?: boolean;
 }) {
   return (
@@ -110,6 +113,9 @@ export function TeamWorkspaceBoard({
                     preference={view.notification}
                     actions={notificationActions}
                   />
+                ) : null}
+                {step.id === "delivery_notifications" && smsActions ? (
+                  <SmsVerbalConsentPanel clientAccountId={view.clientAccountId} actions={smsActions} />
                 ) : null}
                 <div className="mt-3">
                   <SupportTicketInlineButton

@@ -1,5 +1,6 @@
 "use client";
 
+import { CAMPAIGN_LEAD_TYPE_KEYS, CAMPAIGN_LEAD_TYPE_LABELS } from "@sa360/shared";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 
@@ -40,6 +41,7 @@ import {
   sourceFunnelPageIdentity,
   type AssociateSourceFunnelResult,
   type ClearSourceFunnelSuccess,
+  type ConfigureSourceFunnelLeadTypeSuccess,
   type ConfirmSourceFunnelSuccess,
   type ReassignSourceFunnelSuccess,
   type SourceFunnelAdminItem,
@@ -69,6 +71,16 @@ export type LeadCaptureSourcesClearAction = (
   sourceFunnelId: string
 ) => Promise<ClearSourceFunnelSuccess | { ok: false; error: string }>;
 
+export type LeadCaptureSourcesLeadTypeAction = (
+  sourceFunnelId: string,
+  leadTypeKey: string | null
+) => Promise<ConfigureSourceFunnelLeadTypeSuccess | { ok: false; error: string }>;
+
+const LEAD_TYPE_OPTIONS = [
+  { key: "", label: "Not set" },
+  ...CAMPAIGN_LEAD_TYPE_KEYS.map((key) => ({ key, label: CAMPAIGN_LEAD_TYPE_LABELS[key] })),
+];
+
 export type LeadCaptureSourcesSectionProps = {
   clientAccountId: string;
   clientDisplayName: string;
@@ -79,6 +91,7 @@ export type LeadCaptureSourcesSectionProps = {
   confirmAction: LeadCaptureSourcesConfirmAction;
   reassignAction: LeadCaptureSourcesReassignAction;
   clearAction: LeadCaptureSourcesClearAction;
+  configureLeadTypeAction?: LeadCaptureSourcesLeadTypeAction;
 };
 
 export function LeadCaptureSourcesSection({
@@ -91,6 +104,7 @@ export function LeadCaptureSourcesSection({
   confirmAction,
   reassignAction,
   clearAction,
+  configureLeadTypeAction,
 }: LeadCaptureSourcesSectionProps) {
   const router = useRouter();
   const [items, setItems] = useState(initialItems);
@@ -186,6 +200,27 @@ export function LeadCaptureSourcesSection({
       setSuccess(reassignSuccessMessage(result));
       const listed = await listAction(clientAccountId);
       if (listed.ok) setItems(listed.items);
+      router.refresh();
+    });
+  }
+
+  function configureLeadType(item: SourceFunnelAdminItem, leadTypeKey: string | null) {
+    if (!configureLeadTypeAction) return;
+    if ((item.leadTypeKey ?? null) === leadTypeKey) return;
+    setError(null);
+    setSuccess(null);
+    startTransition(async () => {
+      const result = await configureLeadTypeAction(item.id, leadTypeKey);
+      if (!result.ok) {
+        setError(operatorSafeSourceFunnelError(result.error));
+        return;
+      }
+      setItems((current) => current.map((row) => (row.id === item.id ? result.item : row)));
+      setSuccess(
+        leadTypeKey
+          ? `Lead Type saved as ${result.item.leadTypeLabel ?? leadTypeKey}. Client ownership was not changed.`
+          : "Lead Type cleared. Client ownership was not changed."
+      );
       router.refresh();
     });
   }
@@ -334,6 +369,11 @@ export function LeadCaptureSourcesSection({
                 item={item}
                 pending={pending}
                 onRemove={() => removeAssociation(item)}
+                onLeadTypeChange={
+                  configureLeadTypeAction
+                    ? (leadTypeKey) => configureLeadType(item, leadTypeKey)
+                    : undefined
+                }
               />
             ))}
           </ul>
@@ -372,12 +412,14 @@ function SourceFunnelRow({
   suggested = false,
   onConfirm,
   onRemove,
+  onLeadTypeChange,
 }: {
   item: SourceFunnelAdminItem;
   pending: boolean;
   suggested?: boolean;
   onConfirm?: () => void;
   onRemove?: () => void;
+  onLeadTypeChange?: (leadTypeKey: string | null) => void;
 }) {
   const niche = sourceFunnelNicheLabel(item.nicheKey);
   const identity = sourceFunnelPageIdentity(item);
@@ -402,6 +444,29 @@ function SourceFunnelRow({
             <dd className="break-all font-mono text-slate-900">{identity.hostname ?? "—"}</dd>
             <dt className="text-muted-foreground">Page</dt>
             <dd className="break-all font-mono text-slate-900">{identity.pathname ?? "—"}</dd>
+            {onLeadTypeChange ? (
+              <>
+                <dt className="text-muted-foreground">Lead Type</dt>
+                <dd>
+                  <label className="sr-only" htmlFor={`lead-type-${item.id}`}>
+                    Lead Type for {sourceFunnelDisplayName(item)}
+                  </label>
+                  <select
+                    id={`lead-type-${item.id}`}
+                    className="h-8 max-w-full rounded-md border border-input bg-background px-2 text-xs"
+                    value={item.leadTypeKey ?? ""}
+                    disabled={pending}
+                    onChange={(event) => onLeadTypeChange(event.target.value || null)}
+                  >
+                    {LEAD_TYPE_OPTIONS.map((option) => (
+                      <option key={option.key || "unset"} value={option.key}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </dd>
+              </>
+            ) : null}
             <dt className="text-muted-foreground">First lead</dt>
             <dd className="text-slate-900">{firstLead ?? SOURCE_FUNNEL_NO_LEAD_YET}</dd>
             <dt className="text-muted-foreground">Last lead</dt>

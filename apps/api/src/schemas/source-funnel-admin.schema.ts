@@ -25,6 +25,12 @@ export const confirmSourceFunnelBodySchema = z
   })
   .strict();
 
+export const configureSourceFunnelLeadTypeBodySchema = z
+  .object({
+    leadTypeKey: z.string().trim().min(1).max(80).nullable().optional(),
+  })
+  .strict();
+
 export const sourceFunnelIdParamSchema = z
   .object({
     sourceFunnelId: z.string().trim().min(1).max(80),

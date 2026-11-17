@@ -73,6 +73,21 @@ test("POST /admin/v1/source-funnels/:id/confirm → 401 without admin key", asyn
   else delete process.env.ADMIN_API_KEY;
 });
 
+test("POST /admin/v1/source-funnels/:id/lead-type → 401 without admin key", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-source-funnel-secret";
+  const app = await buildAdminApp();
+  const res = await app.inject({
+    method: "POST",
+    url: "/admin/v1/source-funnels/sf_1/lead-type",
+    payload: { leadTypeKey: "vet_web_form" },
+  });
+  assert.equal(res.statusCode, 401);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
 test("DELETE /admin/v1/source-funnels/:id/association → 401 without admin key", async () => {
   const prev = process.env.ADMIN_API_KEY;
   process.env.ADMIN_API_KEY = "admin-source-funnel-secret";

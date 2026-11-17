@@ -2,6 +2,8 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import { logger } from "../lib/logger.js";
 import { verifyAdminApiKey } from "../lib/admin-auth.js";
+import { prisma } from "../lib/db.js";
+import { resolveOnboardingStaffActor } from "../lib/onboarding-staff-actor.js";
 import { findClientAccountById } from "../repositories/client-account.repository.js";
 import {
   findSourceFunnelById,
@@ -12,6 +14,7 @@ import {
 } from "../repositories/source-funnel.repository.js";
 import {
   associateSourceFunnelBodySchema,
+  configureSourceFunnelLeadTypeBodySchema,
   confirmSourceFunnelBodySchema,
   observedSourceFunnelsQuerySchema,
   reassignSourceFunnelBodySchema,
@@ -24,6 +27,10 @@ import {
   presentSourceFunnelOriginConflict,
   sortSourceFunnelsForClientList,
 } from "../services/source-intake/source-funnel-admin.present.js";
+import {
+  configureSourceFunnelLeadType,
+  isSourceFunnelLeadTypeError,
+} from "../services/source-intake/source-funnel-lead-type.service.js";
 import {
   associateSourceFunnelByPageUrl,
   clearSourceFunnelAssociation,
@@ -298,6 +305,48 @@ export async function adminSourceFunnelRoutes(app: FastifyInstance) {
         error: err instanceof Error ? err.message : "reassign_failed",
       });
       return reply.status(500).send({ ok: false, error: "Unable to reassign source." });
+    }
+  });
+
+  app.post("/source-funnels/:sourceFunnelId/lead-type", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const params = sourceFunnelIdParamSchema.safeParse(request.params);
+    const parsed = configureSourceFunnelLeadTypeBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !parsed.success) {
+      return reply.status(400).send({ ok: false, error: "Invalid request" });
+    }
+    const actor = await resolveOnboardingStaffActor(request.headers, prisma);
+    if (!actor.ok) return reply.status(actor.statusCode).send({ ok: false, error: actor.error });
+    try {
+      const before = await findSourceFunnelById(params.data.sourceFunnelId);
+      const result = await configureSourceFunnelLeadType({
+        sourceFunnelId: params.data.sourceFunnelId,
+        leadTypeKey: parsed.data.leadTypeKey,
+        actor: actor.actor,
+      });
+      return reply.send({
+        ok: true,
+        changed: result.changed,
+        originUnchanged: before?.originClientAccountId === result.sourceFunnel.originClientAccountId,
+        associationUnchanged: before?.associationStatus === result.sourceFunnel.associationStatus,
+        item: presentSourceFunnelAdmin(result.sourceFunnel),
+      });
+    } catch (err) {
+      if (isSourceFunnelLeadTypeError(err)) {
+        const status = err.code === "source_funnel_not_found" ? 404 : err.code === "actor_rejected" ? 403 : 400;
+        const error =
+          err.code === "invalid_lead_type_key"
+            ? "Lead Type must be one of the controlled keys."
+            : err.code === "source_funnel_not_found"
+              ? "LeadCapture source not found."
+              : "Unable to record who changed Lead Type.";
+        return reply.status(status).send({ ok: false, error, code: err.code });
+      }
+      logger.warn("admin.source_funnel.lead_type_failed", {
+        sourceFunnelId: params.data.sourceFunnelId,
+        error: err instanceof Error ? err.message : "lead_type_failed",
+      });
+      return reply.status(500).send({ ok: false, error: "Unable to save Lead Type." });
     }
   });
 

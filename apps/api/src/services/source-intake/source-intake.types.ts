@@ -1,5 +1,6 @@
 import type { LifecycleEventSchema } from "../../schemas/lifecycle-event.schema.js";
 import type { SourceLeadProvider, SourceLeadSystem, SourceLeadType } from "@prisma/client";
+import type { CampaignLeadTypeDecision } from "./campaign-lead-type.js";
 
 /** Shared contract for source-specific normalizers (LeadCapture.io, CSV, Meta, vendors). */
 export interface SourceLeadNormalizer {
@@ -45,6 +46,11 @@ export type SourceLeadRoutingResult = {
   routingDryRunDecisionId?: string;
   /** Which resolver produced the destination (rule, confirmed source association, operator). */
   routingAuthority?: string;
+  /**
+   * Campaign Lead Type decided from the binding that won this route.
+   * Later delivery reads this snapshot. A retry keeps the stored object.
+   */
+  campaignLeadType?: CampaignLeadTypeDecision;
   /** Evidence for a confirmed-source-association match (page identity / form id / route key). */
   sourceAssociation?: {
     sourceFunnelId: string;

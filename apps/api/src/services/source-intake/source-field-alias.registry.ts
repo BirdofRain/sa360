@@ -197,6 +197,8 @@ const RESERVED_RAW_KEYS = new Set([
   "sa360_route_key",
   "sa360_campaign_name",
   "sa360_funnel_name",
+  // Integration Lead Type. A catalog match in a form answer is not this field.
+  "sa360_campaign_lead_type",
   // Recognized source/system metadata fields — preserved as non-blocking
   // metadata rather than surfaced as unmapped survey answers.
   "lead_form",

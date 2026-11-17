@@ -357,10 +357,16 @@ export function LeadCaptureSourcesSection({
           Associated sources ({confirmed.length})
         </h4>
         {confirmed.length === 0 ? (
-          <p className="mt-2 text-sm text-muted-foreground">
-            No LeadCapture sources associated yet. Associate a page slug or URL above. The form
-            stays available so additional pages can be added.
-          </p>
+          loadError ? (
+            <p className="mt-2 text-sm text-amber-900" role="status">
+              Associated sources could not be loaded. They are not treated as missing.
+            </p>
+          ) : (
+            <p className="mt-2 text-sm text-muted-foreground">
+              No LeadCapture sources associated yet. Associate a page slug or URL above. The form
+              stays available so additional pages can be added.
+            </p>
+          )
         ) : (
           <ul className="mt-2 space-y-2">
             {confirmed.map((item) => (

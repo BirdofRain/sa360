@@ -18,14 +18,15 @@ import {
 export async function fetchAdminClientSourceFunnels(clientAccountId: string): Promise<{
   data: SourceFunnelListResponse | null;
   error: string | null;
+  status: number;
 }> {
   const id = clientAccountId.trim();
-  if (!id) return { data: null, error: "Missing clientAccountId" };
+  if (!id) return { data: null, error: "Missing clientAccountId", status: 400 };
   const res = await adminFetchJson<SourceFunnelListResponse>(
     `/admin/v1/clients/${encodeURIComponent(id)}/source-funnels`
   );
-  if (!res.ok) return { data: null, error: formatAdminApiError(res) };
-  return { data: res.data, error: null };
+  if (!res.ok) return { data: null, error: formatAdminApiError(res), status: res.status };
+  return { data: res.data, error: null, status: 200 };
 }
 
 export async function postAdminClientSourceFunnel(

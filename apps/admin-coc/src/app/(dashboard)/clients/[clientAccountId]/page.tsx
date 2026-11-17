@@ -11,7 +11,13 @@ import {
   reassignClientSourceFunnelAction,
 } from "@/app/actions/source-funnels";
 import { ClientDetailPanel } from "@/components/clients/client-detail-panel";
-import { ClientDetailSetupLink } from "@/components/clients/onboarding/client-detail-setup-link";
+import {
+  ClientDetailLayout,
+  ClientDiagnosticsLoading,
+  ClientSetupLoading,
+  ClientSourceToolsLoading,
+  StoredRecordsSection,
+} from "@/components/clients/client-detail-layout";
 import { ClientSetupPanel } from "@/components/clients/client-setup-panel";
 import { LeadCaptureSourcesSection } from "@/components/clients/leadcapture-sources-section";
 import { ClientFolderEvidence, OnboardingDiscoveryPanel } from "@/components/clients/onboarding-discovery-panel";
@@ -32,11 +38,9 @@ import {
   isNativeClientSetupEnabled,
 } from "@/lib/admin-api/server";
 import { fetchAdminClientSourceFunnels } from "@/lib/admin-api/source-funnels-server";
-import {
-  buildOnboardingDiscovery,
-  type OnboardingDiscoveryInput,
-} from "@/lib/clients/onboarding-discovery";
-import type { OnboardingGate, OnboardingSummary } from "@/lib/clients/onboarding/types";
+import { clientDetailDiscoveryInput } from "@/lib/clients/client-detail-discovery";
+import { timeClientDetailRead } from "@/lib/clients/client-detail-reads";
+import { buildOnboardingDiscovery } from "@/lib/clients/onboarding-discovery";
 import type { ClientAccountDetail, ClientSetup } from "@/lib/clients/types";
 import { formatClientAccountStatusLabel } from "@/lib/clients/client-account-status-label";
 import {
@@ -66,7 +70,7 @@ export default async function ClientDetailPage({
     );
   }
 
-  const { data, error } = await fetchAdminClientDetail(id);
+  const { data, error } = await timeClientDetailRead("client_detail", () => fetchAdminClientDetail(id));
   if (error) {
     return (
       <div className="space-y-4">
@@ -82,61 +86,157 @@ export default async function ClientDetailPage({
 
   if (!data?.item) notFound();
 
+  const client = data.item;
   const setupEnabled = isNativeClientSetupEnabled();
-  const [readiness, sources, setup, sheetsDestination, googleConnection, sheetsDispatch, onboardingSummary] =
-    await Promise.all([
-      fetchAdminClientCutoverReadiness(id),
-      fetchAdminClientSourceFunnels(id),
-      setupEnabled
-        ? fetchAdminClientSetup(id)
-        : Promise.resolve({ data: null, error: null as string | null }),
-      readStored(fetchCompanySheetsDestination(id)),
-      readStored(fetchCompanyGoogleConnection()),
-      readStored(fetchCompanySheetsDispatch(id)),
-      readStored(fetchOnboardingSummary(id)),
-    ]);
-  const readinessData = readiness.data;
-  const cutoverReport = normalizeCutoverReadinessReport(readinessData?.report);
+  const setupPromise = setupEnabled
+    ? timeClientDetailRead("client_setup", () => fetchAdminClientSetup(id))
+    : Promise.resolve({ data: null, error: null as string | null, status: 0 });
+  const readinessPromise = timeClientDetailRead("cutover_readiness", () => fetchAdminClientCutoverReadiness(id));
+  const sourcesPromise = timeClientDetailRead("source_funnels", () => fetchAdminClientSourceFunnels(id));
+  const sheetsDestinationPromise = timeClientDetailRead("sheets_destination", () =>
+    readStored(fetchCompanySheetsDestination(id))
+  );
+  const googleConnectionPromise = timeClientDetailRead("google_connection", () =>
+    readStored(fetchCompanyGoogleConnection())
+  );
+  const sheetsDispatchPromise = timeClientDetailRead("sheets_dispatch", () =>
+    readStored(fetchCompanySheetsDispatch(id))
+  );
+  const onboardingSummaryPromise = timeClientDetailRead("onboarding_summary", () =>
+    readStored(fetchOnboardingSummary(id))
+  );
+  const folderListingPromise = timeClientDetailRead("folder_spreadsheets", () =>
+    readStored(listCompanyClientSpreadsheets(id))
+  );
 
   return (
-    <div className="space-y-4">
-      <div>
-        <Link href="/clients" className="text-xs text-sky-700 hover:underline">
-          ← All clients
-        </Link>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight">{data.item.clientDisplayName}</h1>
-        <p className="font-mono text-sm text-muted-foreground">{data.item.clientAccountId}</p>
-        <div className="mt-2">
-          <Badge variant="outline">{formatClientAccountStatusLabel(data.item.status)}</Badge>
-        </div>
-        <div className="mt-2 flex flex-wrap gap-3 text-xs">
-          <Link
-            href={`/clients/${encodeURIComponent(id)}/settings`}
-            className="text-sky-700 hover:underline"
-          >
-            Channel Profile settings →
-          </Link>
-          <Link
-            href={`/clients/${encodeURIComponent(id)}/delivery-config`}
-            className="text-sky-700 hover:underline"
-          >
-            GHL destination configuration →
-          </Link>
-          <Link
-            href={`/clients/${encodeURIComponent(id)}/google-sheets`}
-            className="text-sky-700 hover:underline"
-          >
-            Company Google Sheets →
-          </Link>
-          <Link
-            href={`/clients/${encodeURIComponent(id)}/notification-recipient`}
-            className="text-sky-700 hover:underline"
-          >
-            Delivery notification recipient →
-          </Link>
-          <ClientDetailSetupLink clientAccountId={id} />
-        </div>
-      </div>
+    <ClientDetailLayout
+      clientAccountId={id}
+      clientDisplayName={client.clientDisplayName}
+      statusLabel={formatClientAccountStatusLabel(client.status)}
+      setupEnabled={setupEnabled}
+      setup={
+        <Suspense fallback={<ClientSetupLoading />}>
+          <ClientSetupRegion client={client} setupEnabled={setupEnabled} setupPromise={setupPromise} />
+        </Suspense>
+      }
+      diagnostics={
+        <Suspense fallback={<ClientDiagnosticsLoading />}>
+          <ClientDiagnosticsRegion
+            client={client}
+            clientAccountId={id}
+            setupEnabled={setupEnabled}
+            setupPromise={setupPromise}
+            readinessPromise={readinessPromise}
+            sourcesPromise={sourcesPromise}
+            sheetsDestinationPromise={sheetsDestinationPromise}
+            googleConnectionPromise={googleConnectionPromise}
+            sheetsDispatchPromise={sheetsDispatchPromise}
+            onboardingSummaryPromise={onboardingSummaryPromise}
+            folderListingPromise={folderListingPromise}
+          />
+        </Suspense>
+      }
+      advancedSources={
+        <Suspense fallback={<ClientSourceToolsLoading />}>
+          <ClientSourceTools client={client} sourcesPromise={sourcesPromise} />
+        </Suspense>
+      }
+      advancedClient={<ClientDetailPanel initialClient={client} />}
+    />
+  );
+}
+
+async function ClientSetupRegion({
+  client,
+  setupEnabled,
+  setupPromise,
+}: {
+  client: ClientAccountDetail;
+  setupEnabled: boolean;
+  setupPromise: Promise<{ data: { item: ClientSetup } | null; error: string | null }>;
+}) {
+  if (!setupEnabled) {
+    return (
+      <WarningBanner tone="info" title="Native client setup is disabled">
+        Existing client configuration remains available below. Enable the server-side rollout flag
+        to use the new setup workflow.
+      </WarningBanner>
+    );
+  }
+  const setup = await setupPromise;
+  if (setup.data?.item) {
+    return <ClientSetupPanel client={client} initialSetup={setup.data.item} />;
+  }
+  return (
+    <WarningBanner tone="warn" title="Could not load client setup">
+      {setup.error ?? "Setup data is unavailable."}
+    </WarningBanner>
+  );
+}
+
+async function ClientSourceTools({
+  client,
+  sourcesPromise,
+}: {
+  client: ClientAccountDetail;
+  sourcesPromise: ReturnType<typeof fetchAdminClientSourceFunnels>;
+}) {
+  const sources = await sourcesPromise;
+  return (
+    <LeadCaptureSourcesSection
+      clientAccountId={client.clientAccountId}
+      clientDisplayName={client.clientDisplayName}
+      initialItems={sources.data?.items ?? []}
+      loadError={sources.error}
+      listAction={listClientSourceFunnelsAction}
+      associateAction={associateClientSourceFunnelAction}
+      confirmAction={confirmClientSourceFunnelAction}
+      reassignAction={reassignClientSourceFunnelAction}
+      clearAction={clearClientSourceFunnelAssociationAction}
+      configureLeadTypeAction={configureClientSourceFunnelLeadTypeAction}
+    />
+  );
+}
+
+async function ClientDiagnosticsRegion({
+  client,
+  clientAccountId,
+  setupEnabled,
+  setupPromise,
+  readinessPromise,
+  sourcesPromise,
+  sheetsDestinationPromise,
+  googleConnectionPromise,
+  sheetsDispatchPromise,
+  onboardingSummaryPromise,
+  folderListingPromise,
+}: {
+  client: ClientAccountDetail;
+  clientAccountId: string;
+  setupEnabled: boolean;
+  setupPromise: Promise<{ data: { item: ClientSetup } | null; error: string | null }>;
+  readinessPromise: ReturnType<typeof fetchAdminClientCutoverReadiness>;
+  sourcesPromise: ReturnType<typeof fetchAdminClientSourceFunnels>;
+  sheetsDestinationPromise: Promise<Awaited<ReturnType<typeof fetchCompanySheetsDestination>> | null>;
+  googleConnectionPromise: Promise<Awaited<ReturnType<typeof fetchCompanyGoogleConnection>> | null>;
+  sheetsDispatchPromise: Promise<Awaited<ReturnType<typeof fetchCompanySheetsDispatch>> | null>;
+  onboardingSummaryPromise: Promise<Awaited<ReturnType<typeof fetchOnboardingSummary>> | null>;
+  folderListingPromise: Promise<Awaited<ReturnType<typeof listCompanyClientSpreadsheets>> | null>;
+}) {
+  const [readiness, sources, setup, sheetsDestination, googleConnection, sheetsDispatch, onboardingSummary] =
+    await Promise.all([
+      readinessPromise,
+      sourcesPromise,
+      setupPromise,
+      sheetsDestinationPromise,
+      googleConnectionPromise,
+      sheetsDispatchPromise,
+      onboardingSummaryPromise,
+    ]);
+  const cutoverReport = normalizeCutoverReadinessReport(readiness.data?.report);
+  return (
+    <>
       {cutoverReport ? (
         <div className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-950">
           <span className="text-sm font-medium text-slate-900 dark:text-slate-100">
@@ -157,18 +257,22 @@ export default async function ClientDetailPage({
             readiness is on the destination configuration page.
           </span>
           <Link
-            href={`/clients/${encodeURIComponent(id)}/delivery-config`}
+            href={`/clients/${encodeURIComponent(clientAccountId)}/delivery-config`}
             className="ml-auto text-xs text-sky-700 hover:underline"
           >
             View full readiness →
           </Link>
         </div>
+      ) : readiness.error ? (
+        <WarningBanner tone="warn" title="Cutover readiness could not be loaded">
+          {readiness.error} This is not a finding that the client is unconfigured.
+        </WarningBanner>
       ) : null}
-      <OnboardingDiscoveryPanel
-        clientAccountId={id}
-        model={buildOnboardingDiscovery(
-          discoveryInput({
-            client: data.item,
+      <StoredRecordsSection>
+        <OnboardingDiscoveryPanel
+          clientAccountId={clientAccountId}
+          model={buildDiscoveryModel({
+            client,
             sources,
             setupEnabled,
             setup,
@@ -176,55 +280,15 @@ export default async function ClientDetailPage({
             googleConnection,
             sheetsDispatch,
             onboardingSummary,
-          })
-        )}
-        folderRead={
-          <Suspense fallback={<FolderListingFallback />}>
-            <ClientFolderListing clientAccountId={id} />
-          </Suspense>
-        }
-      />
-      {setupEnabled && setup.data?.item ? (
-        <ClientSetupPanel client={data.item} initialSetup={setup.data.item} />
-      ) : setupEnabled ? (
-        <WarningBanner tone="warn" title="Could not load client setup">
-          {setup.error ?? "Setup data is unavailable."}
-        </WarningBanner>
-      ) : (
-        <WarningBanner tone="info" title="Native client setup is disabled">
-          Existing client configuration remains available below. Enable the server-side rollout flag
-          to use the new setup workflow.
-        </WarningBanner>
-      )}
-      <details
-        id="advanced-configuration"
-        open={!setupEnabled}
-        className="rounded-xl border border-slate-200 bg-slate-50"
-      >
-        <summary className="cursor-pointer px-4 py-3 text-sm text-slate-900">
-          <span className="font-semibold">Advanced configuration</span>
-          <span className="mt-1 block text-xs font-normal text-slate-600">
-            Associate sources, confirm ownership, or edit the client record. These tools can write
-            operational records. The summary above does not.
-          </span>
-        </summary>
-        <div className="space-y-4 border-t border-slate-200 p-4">
-          <LeadCaptureSourcesSection
-            clientAccountId={id}
-            clientDisplayName={data.item.clientDisplayName}
-            initialItems={sources.data?.items ?? []}
-            loadError={sources.error}
-            listAction={listClientSourceFunnelsAction}
-            associateAction={associateClientSourceFunnelAction}
-            confirmAction={confirmClientSourceFunnelAction}
-            reassignAction={reassignClientSourceFunnelAction}
-            clearAction={clearClientSourceFunnelAssociationAction}
-            configureLeadTypeAction={configureClientSourceFunnelLeadTypeAction}
-          />
-          <ClientDetailPanel initialClient={data.item} />
-        </div>
-      </details>
-    </div>
+          })}
+          folderRead={
+            <Suspense fallback={<FolderListingFallback />}>
+              <ClientFolderListing listing={folderListingPromise} />
+            </Suspense>
+          }
+        />
+      </StoredRecordsSection>
+    </>
   );
 }
 
@@ -236,8 +300,12 @@ function FolderListingFallback() {
   );
 }
 
-async function ClientFolderListing({ clientAccountId }: { clientAccountId: string }) {
-  const listed = await readStored(listCompanyClientSpreadsheets(clientAccountId));
+async function ClientFolderListing({
+  listing,
+}: {
+  listing: Promise<Awaited<ReturnType<typeof listCompanyClientSpreadsheets>> | null>;
+}) {
+  const listed = await listing;
   if (!listed?.ok) {
     return (
       <ClientFolderEvidence
@@ -279,7 +347,7 @@ async function readStored<T>(promise: Promise<T>): Promise<T | null> {
   }
 }
 
-function discoveryInput(input: {
+function buildDiscoveryModel(input: {
   client: ClientAccountDetail;
   sources: Awaited<ReturnType<typeof fetchAdminClientSourceFunnels>>;
   setupEnabled: boolean;
@@ -288,126 +356,6 @@ function discoveryInput(input: {
   googleConnection: Awaited<ReturnType<typeof fetchCompanyGoogleConnection>> | null;
   sheetsDispatch: Awaited<ReturnType<typeof fetchCompanySheetsDispatch>> | null;
   onboardingSummary: Awaited<ReturnType<typeof fetchOnboardingSummary>> | null;
-}): OnboardingDiscoveryInput {
-  const ghl = input.client.ghlDestination;
-  const fieldMapping = input.client.destinationReadiness?.fieldMapping;
-  const savedDestination = input.sheetsDestination?.ok ? input.sheetsDestination.data.destination : null;
-  const connection = input.googleConnection?.ok ? input.googleConnection.data.connection : null;
-  const summary = input.onboardingSummary?.ok ? input.onboardingSummary.data : null;
-  return {
-    client: {
-      clientDisplayName: input.client.clientDisplayName,
-      createdAt: input.client.createdAt,
-      ghlDestination: ghl
-        ? {
-            destinationSubaccountIdGhl: ghl.destinationSubaccountIdGhl,
-            locationName: ghl.locationName,
-            ghlConnectionStatus: ghl.ghlConnectionStatus,
-            deliveryEnabled: ghl.deliveryEnabled,
-            fieldMappingComplete: fieldMapping ? fieldMapping.coreRequiredComplete : null,
-          }
-        : null,
-      routingRules: (input.client.routingRules ?? []).map((rule) => ({
-        id: rule.id,
-        campaignId: rule.campaignId,
-        campaignName: rule.campaignName,
-        utmCampaign: rule.utmCampaign,
-        active: rule.active,
-        deliveryEnabled: rule.deliveryEnabled,
-      })),
-    },
-    sources: input.sources.data
-      ? { availability: "ready", items: input.sources.data.items }
-      : { availability: "unavailable", items: [] },
-    setup: setupRead(input.setupEnabled, input.setup.data?.item ?? null),
-    sheetsDestination: input.sheetsDestination?.ok
-      ? {
-          availability: "ready",
-          destination: savedDestination
-            ? {
-                spreadsheetId: savedDestination.spreadsheetId,
-                spreadsheetTitle: savedDestination.spreadsheetTitle,
-                spreadsheetUrl: savedDestination.spreadsheetUrl,
-                worksheetTitle: savedDestination.worksheetTitle,
-                accessStatus: savedDestination.accessStatus,
-                writeReadiness: savedDestination.writeReadiness,
-                revision: savedDestination.destinationRevision ?? null,
-                sharingEmail: savedDestination.sharing?.intendedRecipientEmail ?? null,
-                sharingPermission: savedDestination.sharing?.clientGooglePermission ?? null,
-              }
-            : null,
-        }
-      : { availability: "unavailable", destination: null },
-    googleConnection: connection
-      ? {
-          availability: "ready",
-          email: connection.googleEmail,
-          connectionStatus: connection.status,
-          rootFolderTitle: connection.destinationFolder?.title ?? null,
-        }
-      : { availability: "unavailable", email: null, connectionStatus: null, rootFolderTitle: null },
-    clientFolder: { availability: "deferred", title: null, url: null, spreadsheets: [], links: [] },
-    sheetsDispatch: input.sheetsDispatch?.ok
-      ? {
-          availability: "ready",
-          campaignDispatchEnabled: input.sheetsDispatch.data.campaignDispatchEnabled,
-          agedDispatchEnabled: input.sheetsDispatch.data.agedDispatchEnabled,
-        }
-      : { availability: "unavailable", campaignDispatchEnabled: false, agedDispatchEnabled: false },
-    sourceProof: summary ? proofFromSummary(summary) : disabledOrUnavailable(input.onboardingSummary),
-  };
-}
-
-function setupRead(enabled: boolean, item: ClientSetup | null): OnboardingDiscoveryInput["setup"] {
-  if (!enabled) return { availability: "disabled", status: null, revision: null, destinationChoice: null };
-  if (!item) return { availability: "unavailable", status: null, revision: null, destinationChoice: null };
-  return {
-    availability: "ready",
-    status: item.status,
-    revision: item.revision,
-    destinationChoice: item.data.destinationChoice ?? null,
-    operatorNotes: {
-      webhookConfigured: item.data.webhookConfigured === true,
-      sourceTestSubmitted: item.data.sourceTestSubmitted === true,
-      setupReviewed: item.status === "setup_reviewed",
-    },
-  };
-}
-
-function proofFromSummary(summary: OnboardingSummary): OnboardingDiscoveryInput["sourceProof"] {
-  const published = gateSatisfied(summary.gates, "sheets_custom_map_published");
-  const header = gateSatisfied(summary.gates, "sheets_header_dispatch_ready");
-  const writer = gateSatisfied(summary.gates, "sheets_writer_receipt");
-  return {
-    availability: "ready",
-    evidenceTruncated: summary.evidenceTruncated === true,
-    sources: (summary.sources ?? []).map((source) => ({
-      sourceFunnelId: source.sourceFunnelId,
-      sourceKind: source.sourceKind,
-      observedEventId: source.proofs.observed.sourceLeadEventId,
-      observedAt: source.proofs.observed.at ?? null,
-      matchedRuleId: source.proofs.routingMatched.matchedRuleId,
-      deliverySatisfied: source.proofs.delivery.satisfied,
-    })),
-    fieldMapVerified: published == null && header == null ? null : Boolean(published || header),
-    writerReceiptVerified: writer,
-  };
-}
-
-function disabledOrUnavailable(
-  summary: Awaited<ReturnType<typeof fetchOnboardingSummary>> | null
-): OnboardingDiscoveryInput["sourceProof"] {
-  const disabled = Boolean(summary && !summary.ok && summary.error === "onboarding_read_disabled");
-  return {
-    availability: disabled ? "disabled" : "unavailable",
-    evidenceTruncated: false,
-    sources: [],
-    fieldMapVerified: null,
-    writerReceiptVerified: null,
-  };
-}
-
-function gateSatisfied(gates: OnboardingGate[] | undefined, id: string): boolean | null {
-  const gate = (gates ?? []).find((item) => item.id === id);
-  return gate ? gate.satisfied : null;
+}) {
+  return buildOnboardingDiscovery(clientDetailDiscoveryInput(input));
 }

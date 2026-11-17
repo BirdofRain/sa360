@@ -120,7 +120,7 @@ export function ClientSetupPanel({
             <h2 className="text-lg font-semibold">Client setup</h2>
             <p className="text-sm text-muted-foreground">
               Save a configuration request for review. Nothing here activates routing or delivery.
-              Sources and destinations already stored for this client are in the read-only summary above.
+              Sources and destinations already stored for this client are in Records already stored, below this form.
             </p>
           </div>
           <Badge variant="outline">{setup.status.replaceAll("_", " ")}</Badge>
@@ -202,8 +202,8 @@ export function ClientSetupPanel({
         {tab === "source" ? (
           <>
             <p className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
-              Page URL, funnel id, campaign id, and lead times that SA360 already stored are shown in
-              the summary above. This form keeps a request. It does not copy those records, and the
+              Page URL, funnel id, campaign id, and lead times that SA360 already stored are in
+              Records already stored, below this form. This form keeps a request. It does not copy those records, and the
               notes below are not verification.
             </p>
             <div className="grid gap-4 md:grid-cols-2">

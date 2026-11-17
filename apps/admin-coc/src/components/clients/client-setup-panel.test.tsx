@@ -68,7 +68,12 @@ test("destination sharing and source notes stay a request, not verification", ()
     />
   );
 
+  assert.ok(
+    screen.getByText(/Records already stored, below this form/i)
+  );
+
   fireEvent.click(screen.getByRole("tab", { name: "source" }));
+  assert.ok(screen.getAllByText(/Records already stored, below this form/i).length >= 2);
   assert.ok(screen.getByText(/notes below are not verification/i));
   assert.ok(screen.getAllByText(/This is not verification/i).length >= 2);
 

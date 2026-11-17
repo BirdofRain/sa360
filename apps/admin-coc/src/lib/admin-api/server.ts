@@ -919,14 +919,15 @@ export async function fetchAdminClientDeliveryConfig(
 export async function fetchAdminClientCutoverReadiness(clientAccountId: string): Promise<{
   data: import("@/lib/clients/cutover-readiness-types").ClientCutoverReadinessResponse | null;
   error: string | null;
+  status: number;
 }> {
   const id = clientAccountId.trim();
-  if (!id) return { data: null, error: "Missing clientAccountId" };
+  if (!id) return { data: null, error: "Missing clientAccountId", status: 400 };
   const res = await adminFetchJson<
     import("@/lib/clients/cutover-readiness-types").ClientCutoverReadinessResponse
   >(`/admin/v1/clients/${encodeURIComponent(id)}/cutover-readiness`);
-  if (!res.ok) return { data: null, error: formatError(res) };
-  return { data: res.data, error: null };
+  if (!res.ok) return { data: null, error: formatError(res), status: res.status };
+  return { data: res.data, error: null, status: 200 };
 }
 
 export async function postAdminClientGhlConfig(
@@ -1263,26 +1264,26 @@ export async function fetchAdminClients(params?: {
 
 export async function fetchAdminClientDetail(
   clientAccountId: string
-): Promise<{ data: ClientDetailResponse | null; error: string | null }> {
+): Promise<{ data: ClientDetailResponse | null; error: string | null; status: number }> {
   const id = clientAccountId.trim();
-  if (!id) return { data: null, error: "Missing clientAccountId" };
+  if (!id) return { data: null, error: "Missing clientAccountId", status: 400 };
   const res = await adminFetchJson<ClientDetailResponse>(
     `/admin/v1/clients/${encodeURIComponent(id)}`
   );
-  if (!res.ok) return { data: null, error: formatError(res) };
-  return { data: res.data, error: null };
+  if (!res.ok) return { data: null, error: formatError(res), status: res.status };
+  return { data: res.data, error: null, status: 200 };
 }
 
 export async function fetchAdminClientSetup(
   clientAccountId: string
-): Promise<{ data: ClientSetupResponse | null; error: string | null }> {
+): Promise<{ data: ClientSetupResponse | null; error: string | null; status: number }> {
   const id = clientAccountId.trim();
-  if (!id) return { data: null, error: "Missing clientAccountId" };
+  if (!id) return { data: null, error: "Missing clientAccountId", status: 400 };
   const res = await adminFetchJson<ClientSetupResponse>(
     `/admin/v1/clients/${encodeURIComponent(id)}/setup`
   );
-  if (!res.ok) return { data: null, error: formatError(res) };
-  return { data: res.data, error: null };
+  if (!res.ok) return { data: null, error: formatError(res), status: res.status };
+  return { data: res.data, error: null, status: 200 };
 }
 
 export async function postAdminSourceCampaignRequest(clientAccountId: string, body: Record<string, unknown>) {

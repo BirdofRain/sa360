@@ -143,6 +143,13 @@ test("client detail LeadCapture Sources section renders heading, helper, and emp
   assert.equal(screen.queryByText("Source identity:"), null);
 });
 
+test("a failed source read is not presented as an empty association list", () => {
+  renderSection([], { loadError: "Admin API error (503): unavailable" });
+  assert.ok(screen.getByRole("alert").textContent?.includes("unavailable"));
+  assert.ok(screen.getByText(/could not be loaded/));
+  assert.equal(screen.queryByText(/No LeadCapture sources associated yet/), null);
+});
+
 test("add form accepts a slug and a full URL", async () => {
   const { associateCalls } = renderSection([]);
   const input = screen.getByLabelText("Page URL or slug");

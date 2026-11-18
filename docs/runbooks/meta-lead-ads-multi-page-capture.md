@@ -1,9 +1,10 @@
 # Meta Lead Ads — multi-Page capture foundation
 
 Status: **code-ready, default off, not activated.** This runbook does not merge, deploy,
-change production settings, subscribe Pages, retrieve production leads, or perform a
-production write. Another agent may be doing read-only Page and token discovery. Do not
-change that branch or any production Meta setting from this work.
+change production settings, retrieve production leads, or perform a production write.
+The eight-Page leadgen subscription section below is the operator procedure for a later
+approved change. It is not executed by the change that added the routes. Do not change
+any production Meta setting from this document alone.
 
 App ID: `1641287293781686`. Verified callback: `/webhooks/meta/leadgen` (alias of
 `/sources/facebook/lead-created`). Successful Meta-originated handshake: November 4, 2026.
@@ -50,6 +51,7 @@ Global flags stay independent:
 | `SA360_FACEBOOK_CAPTURE_INTAKE_ENABLED` | existing Zapier value | Page+Form association writes |
 | `SA360_META_UNBOUND_PAGE_TOKEN_ENABLED` | false | legacy "one token for every Page" |
 | `SA360_META_CAPTURE_INVENTORY_ENABLED` | false | live Graph discovery |
+| `SA360_META_LEADGEN_SUBSCRIPTION_WRITES_ENABLED` | false | one confirmed Page `subscribed_apps` POST |
 | `MetaPageCaptureGrant.captureEnabled` | false | that Page's stored token |
 
 `FACEBOOK_DIRECT_INTAKE_ENABLED` is still the legacy alias that turns intake, Graph, **and
@@ -110,6 +112,8 @@ All routes require `x-sa360-admin-key`. Responses omit tokens and ciphertext.
 | POST | `/admin/v1/meta-capture/credentials/:id/pages` | Add a Page to an existing credential. Default capture off. |
 | PATCH | `/admin/v1/meta-capture/pages/:pageId` | Toggle `captureEnabled` or reassign the credential. |
 | POST | `/admin/v1/meta-capture/candidates` | Upsert candidate evidence. Rejects `clientAccountId`. |
+| GET | `/admin/v1/meta-capture/credentials/:credentialId/leadgen-subscriptions` | Read `subscribed_apps` for every grant on that system-user credential. Does not subscribe. |
+| POST | `/admin/v1/meta-capture/credentials/:credentialId/pages/:pageId/subscribe-leadgen` | Subscribe that one granted Page to `leadgen` after an exact confirmation. Writes flag required. |
 
 Live discovery reads Pages, lead forms and status, ad accounts and business ids, campaigns,
 `subscribed_apps`, and `debug_token`. It does not request lead field data. Pagination stops
@@ -238,6 +242,120 @@ Use this only after the prerequisites. It does not subscribe the Page by itself.
    admin-review unmatched should rise only for forms that are still unconfirmed.
 6. Do not enable routing. Do not enroll inventory.
 
+## Eight-Page leadgen subscription rollout
+
+This procedure subscribes the SA360 app to `leadgen` on the eight Pages already
+granted to system-user credential `cmwl1r7hv001aiv0ujzbt0zjp`. It does not enable
+capture, intake, Graph lead fetch, routing, GHL, Sheets, CAPI, or Zapier changes.
+Run it only after a separate operator approval. The code change that added these
+routes does not call Graph and does not set the writes flag.
+
+Leave these values false or unset for the whole procedure:
+
+| Variable | Required value |
+| --- | --- |
+| `SA360_META_LEAD_ADS_INTAKE_ENABLED` | false or unset |
+| `SA360_META_LEAD_ADS_GRAPH_FETCH_ENABLED` | false or unset |
+| `SA360_META_LEAD_ADS_ROUTING_ENABLED` | false or unset |
+| `FACEBOOK_DIRECT_INTAKE_ENABLED` | unset |
+| `SA360_META_UNBOUND_PAGE_TOKEN_ENABLED` | false or unset |
+| `SA360_META_LEADGEN_SUBSCRIPTION_WRITES_ENABLED` | false until step 3, then false again after each Page |
+| Every `MetaPageCaptureGrant.captureEnabled` | false |
+
+`GET /admin/v1/meta-capture/health` should still show credential
+`cmwl1r7hv001aiv0ujzbt0zjp` as `kind: system_user`, app id `1641287293781686`,
+and eight grants with `captureEnabled: false`. `META_APP_SECRET` stays set. If
+`META_APP_ID` is set, it must be `1641287293781686`.
+
+The API resolves a Page token by reading `/me/accounts` with the stored
+system-user token and selecting the row whose id is exactly that Page. It
+sends that Page token only to `/{page-id}/subscribed_apps`. A missing row, a
+token shared by two Pages, or a failed `debug_token` app-id check stops the
+call. Responses and logs contain Page ids, the action, the result, and a
+redacted diagnostic. They do not contain access tokens.
+
+`debug_token` must show `pages_show_list` and `pages_manage_metadata` on this
+credential before any Page endpoint is called. When the stored `scopes` list
+is non-empty and omits either permission, the route returns
+`missing_permission` and does not call Graph. An empty `scopes` list skips
+that stored check and uses `debug_token`. Update the stored scopes if they
+were recorded before these two permissions were granted. Do not put a token
+in that update.
+
+1. With the writes flag still false, call:
+
+   ```http
+   GET /admin/v1/meta-capture/credentials/cmwl1r7hv001aiv0ujzbt0zjp/leadgen-subscriptions
+   x-sa360-admin-key: <admin key>
+   ```
+
+   Expect eight Page rows. `captureGrantMutated` is false and every
+   `captureEnabled` is false. `sa360LeadgenSubscribed` is true or false only
+   when `subscriptionKnown` is true. A null value means that Page was not
+   read; do not treat it as unsubscribed. `partial: true` means at least one
+   Page was not read. Stop if `appIdVerified` is not true, if the credential
+   is not the system-user credential above, or if any grant is enabled.
+   Record the eight Page ids and which ones already show `leadgen` on app
+   `1641287293781686`. Other apps and their `subscribedFields` are the
+   baseline that a later POST must leave unchanged.
+
+2. Choose one Page from that list. Prefer Page `222591640945329` when it is
+   one of the eight and `subscriptionKnown` is true. Leave the other seven
+   untouched.
+
+3. Set `SA360_META_LEADGEN_SUBSCRIPTION_WRITES_ENABLED=true` on the API only
+   and restart it. Confirm the intake, Graph-fetch, routing, and
+   `FACEBOOK_DIRECT_INTAKE_ENABLED` values in the table above are still off.
+   The POST is rejected with `production_unsafe` when any of those is true,
+   and with `writes_disabled` when the writes flag is false.
+
+4. Subscribe that one Page. The confirmation text is the Page id, so a body
+   copied from another Page is rejected:
+
+   ```http
+   POST /admin/v1/meta-capture/credentials/cmwl1r7hv001aiv0ujzbt0zjp/pages/<page-id>/subscribe-leadgen
+   x-sa360-admin-key: <admin key>
+
+   { "confirmed": true, "confirmationText": "SUBSCRIBE LEADGEN <page-id>" }
+   ```
+
+   The API reads `subscribed_apps` first. When app `1641287293781686` already
+   has `leadgen`, the result is `already_subscribed`, `postSent: false`, and
+   no POST is sent. Otherwise it POSTs
+   `subscribed_fields` as that app's current fields plus `leadgen`. Fields
+   that belong to other apps are not sent. Success requires `verifiedByGet:
+   true` from a new GET after the POST. A POST body of `{ "success": true }`
+   is not a successful subscription. `captureEnabled` in the response stays
+   false, and `captureGrantMutated` stays false.
+
+5. Repeat the GET from step 1. The chosen Page shows `sa360LeadgenSubscribed:
+   true` with its previous SA360 fields still present. The other seven Pages
+   match the step 1 baseline. Every grant is still disabled. The JSON still
+   has no access token.
+
+6. Set `SA360_META_LEADGEN_SUBSCRIPTION_WRITES_ENABLED=false` and restart the
+   API before doing anything else.
+
+7. For each of the remaining seven Pages, repeat steps 3 through 6 one Page
+   at a time. Read the subscription list after each Page. If a Page returns
+   `page_token_missing`, `missing_permission`, `wrong_app_id`, `rate_limited`,
+   `verification_failed`, or `partial` on the following GET, stop. Do not
+   continue to the next Page and do not send that Page's POST again until a
+   fresh GET shows whether `leadgen` is already present. A second POST is
+   skipped when `leadgen` is already on the SA360 app. A verification failure
+   can mean an earlier SA360 field was dropped; inspect the GET before
+   retrying, because a later call will not POST once `leadgen` is present.
+
+8. After all eight reads agree, leave the writes flag false. Leave intake,
+   Graph fetch, routing, `FACEBOOK_DIRECT_INTAKE_ENABLED`, and all eight
+   `captureEnabled` values false. Subscription makes Meta able to call the
+   existing leadgen webhook. It does not enqueue fetch, route a lead, or
+   deliver one. Zapier Facebook capture is unchanged.
+
+The route does not call `DELETE /{page-id}/subscribed_apps` and does not edit
+another app's subscription. Unsubscribing remains an authorized operator call
+outside this repo, as described in Rollback.
+
 ## Rollback
 
 1. `PATCH` the Page grant to `{ "captureEnabled": false }`, or set
@@ -245,7 +363,8 @@ Use this only after the prerequisites. It does not subscribe the Page by itself.
    already queued finish as `flags_disabled` or `capture_not_allowlisted` and keep the raw
    payload. Requeue after the grant is on again.
 2. Unsubscribe the Page with `DELETE /{page-id}/subscribed_apps` when an operator is
-   authorized to change Meta. This repo does not perform that call.
+   authorized to change Meta. The leadgen subscription route does not perform that call
+   and does not edit another app's subscribed fields.
 3. Rotate or stop using a token with `POST .../rotate` or by setting credential status
    through a later admin action. Disabling the grant is enough to stop Graph calls.
 4. Do not delete `SourceLeadEvent` rows as a rollback. Do not turn off Zapier capture to

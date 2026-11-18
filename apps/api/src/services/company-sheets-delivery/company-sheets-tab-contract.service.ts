@@ -10,8 +10,10 @@ import {
   COMPANY_SHEETS_CANARY_HEADER,
   COMPANY_SHEETS_CANARY_SCHEMA_VERSION,
   COMPANY_SHEETS_CANARY_TAB_TITLE,
+  COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3,
   COMPANY_SHEETS_RECONCILE_ROW_CAP,
   companySheetsCampaignHeader,
+  companySheetsHeaderMatchesCampaign,
   isCompanyGoogleSheetsEnabled,
   isCompanySheetsTabRole,
   type CompanySheetsTabRole,
@@ -55,6 +57,12 @@ function blankRow(row: string[] | undefined): boolean {
 function sameHeader(actual: string[], expected: string[]): boolean {
   if (actual.length < expected.length) return false;
   return expected.every((cell, index) => (actual[index] ?? "") === cell);
+}
+
+/** v3 with only Lead Type removed. The live header is kept and Lead Type is not written back. */
+function omittedLeadTypeHeader(expected: readonly string[], actual: readonly string[]): boolean {
+  if (!companySheetsHeaderMatchesCampaign(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3, expected)) return false;
+  return companySheetsHeaderMatchesCampaign(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3, actual);
 }
 
 function titleFor(role: CompanySheetsTabRole): string {
@@ -170,7 +178,7 @@ async function readPreview(
       reason: empty ? null : truncated ? "reconcile_incomplete" : "needs_schema",
     };
   }
-  if (!blankRow(first) && sameHeader(first, expected.header)) {
+  if (!blankRow(first) && (sameHeader(first, expected.header) || omittedLeadTypeHeader(expected.header, first))) {
     return { ...base, empty: false, header: first, classification: "compatible_header" as const, reason: null };
   }
   if (empty) {
@@ -345,6 +353,9 @@ export async function inspectCompanySheetsTabs(
     );
     if (!("worksheetId" in classified)) return classified;
     if (classified.classification === "compatible_header") {
+      const liveHeader = companySheetsHeaderMatchesCampaign(row.schemaVersion, classified.header)
+        ? classified.header
+        : expectedHeader;
       await persistContract(
         db,
         destination,
@@ -355,7 +366,7 @@ export async function inspectCompanySheetsTabs(
           worksheetId: sheet.sheetId,
           worksheetTitle: sheet.title,
           schemaVersion: row.schemaVersion,
-          headerContract: expectedHeader,
+          headerContract: liveHeader,
           boundAt: row.boundAt,
           inspectedAt: now,
         },
@@ -480,7 +491,9 @@ export async function bindCompanySheetsTab(
       worksheetId: sheet.sheetId,
       worksheetTitle: sheet.title,
       schemaVersion: expected.schemaVersion,
-      headerContract: expected.header,
+      headerContract: companySheetsHeaderMatchesCampaign(expected.schemaVersion, readyPreview.header)
+        ? [...readyPreview.header]
+        : expected.header,
       boundAt: now,
       inspectedAt: now,
     },

@@ -517,7 +517,7 @@ describe("existing tab column maps", { skip: !runIntegration }, () => {
     assert.equal(blocked.published, false);
     assert.equal(blocked.deliveryEnabled, false);
     assert.equal(blocked.error, "mapping_unresolved");
-    assert.match(blocked.detail ?? "", /Age\/DOB/);
+    assert.doesNotMatch(blocked.detail ?? "", /Age\/DOB/);
     assert.match(blocked.detail ?? "", /Score/);
     assert.equal(blocked.map?.status, "draft");
     const savedName = blocked.map?.assignments.find((column) => column.sheetHeader === "Full Name");
@@ -534,7 +534,10 @@ describe("existing tab column maps", { skip: !runIntegration }, () => {
     assert.equal(savedFormula?.explicit, true);
     assert.equal(savedFormula?.target, null);
     assert.equal(savedFormula?.code, "formula_column_omitted");
-    assert.equal(blocked.map?.assignments.find((column) => column.sheetHeader === "Age/DOB")?.explicit, false);
+    const savedDob = blocked.map?.assignments.find((column) => column.sheetHeader === "Age/DOB");
+    assert.equal(savedDob?.explicit, true);
+    assert.equal(savedDob?.target?.sourceField, "date_of_birth");
+    assert.equal(savedDob?.transform, "date_america_new_york");
     const destination = await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId } });
     assert.equal(destination.campaignDispatchEnabled, false);
     assert.equal(destination.enabled, false);

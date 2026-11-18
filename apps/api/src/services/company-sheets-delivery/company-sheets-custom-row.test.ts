@@ -26,7 +26,7 @@ import {
 
 const HEADER = ["Full Name", "Phone", "E-mail", "Age/DOB", "Score", "Phone", ""];
 
-test("suggestions keep blanks, duplicates, and Age/DOB unresolved", () => {
+test("suggestions default a single Age/DOB column to DOB and keep blanks and duplicates unresolved", () => {
   const columns = suggestColumnAssignments(HEADER, ["Pat", "555", "pat@example.invalid", "", "9", "556", ""]);
   assert.equal(columns[0]?.decision, "mapped");
   assert.equal(columns[0]?.target?.sourceField, "full_name");
@@ -34,8 +34,11 @@ test("suggestions keep blanks, duplicates, and Age/DOB unresolved", () => {
   assert.equal(columns[1]?.decision, "ambiguous");
   assert.equal(columns[1]?.code, "duplicate_header");
   assert.equal(columns[2]?.target?.sourceField, "email");
-  assert.equal(columns[3]?.decision, "ambiguous");
-  assert.equal(columns[3]?.code, "ambiguous_age_or_dob");
+  assert.equal(columns[3]?.decision, "mapped");
+  assert.equal(columns[3]?.explicit, true);
+  assert.equal(columns[3]?.target?.sourceField, "date_of_birth");
+  assert.equal(columns[3]?.transform, "date_america_new_york");
+  assert.equal(columns[3]?.code, null);
   assert.equal(columns[4]?.decision, "unmapped");
   assert.equal(columns[5]?.decision, "ambiguous");
   assert.equal(columns[5]?.code, "duplicate_header");
@@ -268,19 +271,21 @@ test("a blank Primary Concern is filled from primary_reason and labeled", () => 
   assert.deepEqual(omitted?.warnings, ["primary_concern_omitted"]);
 });
 
-test("save confirmation accepts unchanged suggestions and still requires Age/DOB, blanks, and formulas", () => {
+test("save confirmation defaults Age/DOB to DOB and still requires unresolved blanks and formulas", () => {
   const header = ["Full Name", "Phone Number", "Age/DOB", "Score", "Running Total", ""];
   const sample = ["Pat", "555", "4/2/1990", "9", "=E2", ""];
   const suggested = suggestColumnAssignments(header, sample);
-  assert.equal(suggested.every((column) => column.explicit === false), true);
+  assert.equal(suggested[2]?.explicit, true);
+  assert.equal(suggested[2]?.target?.sourceField, "date_of_birth");
   const confirmed = confirmVisibleSelections(suggested);
   assert.equal(confirmed[0]?.explicit, true);
   assert.equal(confirmed[0]?.target?.sourceField, "full_name");
   assert.equal(confirmed[1]?.explicit, true);
   assert.equal(confirmed[1]?.target?.sourceField, "phone");
-  assert.equal(confirmed[2]?.explicit, false);
-  assert.equal(confirmed[2]?.decision, "ambiguous");
-  assert.equal(confirmed[2]?.code, "ambiguous_age_or_dob");
+  assert.equal(confirmed[2]?.explicit, true);
+  assert.equal(confirmed[2]?.decision, "mapped");
+  assert.equal(confirmed[2]?.target?.sourceField, "date_of_birth");
+  assert.equal(confirmed[2]?.transform, "date_america_new_york");
   assert.equal(confirmed[3]?.explicit, false);
   assert.equal(confirmed[3]?.decision, "unmapped");
   assert.equal(confirmed[4]?.explicit, true);
@@ -293,7 +298,7 @@ test("save confirmation accepts unchanged suggestions and still requires Age/DOB
   const blocked = publishBlocker(confirmed);
   assert.equal(blocked.ok, false);
   if (blocked.ok) return;
-  assert.match(blocked.detail ?? "", /Age\/DOB/);
+  assert.doesNotMatch(blocked.detail ?? "", /Age\/DOB/);
   assert.match(blocked.detail ?? "", /Score/);
 
   const chosen = confirmed.map((column) =>
@@ -371,4 +376,38 @@ test("the header fingerprint changes when cells move and ignores a prefix match"
   assert.notEqual(headerFingerprint(["Full Name", ""]), headerFingerprint(["Full Name", "\u200b"]));
   assert.equal(exactHeader(stored, ["Full Name", ""]), true);
   assert.equal(exactHeader(["Full Name", "\u200b"], ["Full Name", ""]), false);
+});
+
+test("explicit Age, DOB, and blank choices survive confirmation", () => {
+  const header = ["Age/DOB", "Age/DOB", "Age/DOB"];
+  const suggested = suggestColumnAssignments(header);
+  assert.equal(suggested.every((column) => column.code === "duplicate_header"), true);
+  const confirmedDuplicates = confirmVisibleSelections(suggested);
+  assert.equal(confirmedDuplicates.every((column) => column.code === "duplicate_header"), true);
+  assert.equal(confirmedDuplicates.every((column) => column.target == null), true);
+
+  const single = suggestColumnAssignments(["Full Name", "Age/DOB"]);
+  const age = {
+    ...single[1]!,
+    decision: "mapped" as const,
+    explicit: true,
+    transform: "passthrough" as const,
+    target: { kind: "v3_column" as const, header: "Age", sourceField: "consumer_age" },
+    code: null,
+  };
+  const blank = {
+    ...single[1]!,
+    decision: "unmapped" as const,
+    explicit: true,
+    transform: "blank" as const,
+    target: null,
+    code: null,
+  };
+  const keptAge = confirmVisibleSelections([single[0]!, age]);
+  const keptBlank = confirmVisibleSelections([single[0]!, blank]);
+  assert.equal(keptAge[1]?.target?.sourceField, "consumer_age");
+  assert.equal(keptAge[1]?.explicit, true);
+  assert.equal(keptBlank[1]?.decision, "unmapped");
+  assert.equal(keptBlank[1]?.target, null);
+  assert.equal(keptBlank[1]?.explicit, true);
 });

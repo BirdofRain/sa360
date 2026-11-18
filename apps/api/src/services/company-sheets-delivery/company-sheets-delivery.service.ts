@@ -13,6 +13,7 @@ import {
   COMPANY_SHEETS_ACCEPT_RECONCILED_ROW_PHRASE,
   COMPANY_SHEETS_RELEASE_HOLD_PHRASE,
   companySheetsCampaignHeader,
+  companySheetsHeaderMatchesCampaign,
   companySheetsDeliveryState,
   companySheetsTabUrl,
   isCompanyGoogleSheetsEnabled,
@@ -20,7 +21,7 @@ import {
 } from "../../lib/company-google-sheets-env.js";
 import { findCompanyGoogleConnection } from "../../repositories/company-google-connection.repository.js";
 import {
-  companySheetsCampaignRowValues,
+  companySheetsValuesForSheetHeader,
   projectSheetsLeadType,
   type CampaignSheetLeadInput,
 } from "./company-sheets-campaign-row.js";
@@ -380,8 +381,10 @@ async function resolveCampaignWrite(
     };
   }
   const expectedHeader = companySheetsCampaignHeader(contract.schemaVersion);
-  if (!expectedHeader || !sameContractHeader(contract.header, expectedHeader)) return fail("schema_mismatch", 409);
-  const values = companySheetsCampaignRowValues({ ...lead, schemaVersion: contract.schemaVersion });
+  if (!expectedHeader || !companySheetsHeaderMatchesCampaign(contract.schemaVersion, contract.header)) {
+    return fail("schema_mismatch", 409);
+  }
+  const values = companySheetsValuesForSheetHeader({ ...lead, schemaVersion: contract.schemaVersion }, contract.header);
   if (!values) return fail("schema_mismatch", 409);
   noteLeadTypeDiagnostics(lead);
   return { ok: true, schemaVersion: contract.schemaVersion, header: [...contract.header], values, contentSha256: null };

@@ -34,12 +34,12 @@ import {
   CAMPAIGN_DOB_AGE_CONFLICT_WARNING,
   CAMPAIGN_DOB_AGE_FUTURE_WARNING,
   CAMPAIGN_DOB_AGE_REFERENCE_UNAVAILABLE_WARNING,
-  projectCampaignDobAge,
   type CampaignDobAgePreview,
 } from "../consumer-age/campaign-dob-age.js";
 import {
   companySheetsCampaignRowValues,
   projectSheetsLeadType,
+  sheetsCampaignDobAge,
   type CampaignSheetLeadInput,
 } from "./company-sheets-campaign-row.js";
 
@@ -219,7 +219,19 @@ export function suggestColumnAssignments(header: readonly string[], sampleRow: r
       return assignment({ sheetHeader, columnIndex, formula, target: null, transform: "blank", decision: "ambiguous", explicit: false, code: "duplicate_header" });
     }
     if (key === "age/dob") {
-      return assignment({ sheetHeader, columnIndex, formula, target: null, transform: "blank", decision: "ambiguous", explicit: false, code: "ambiguous_age_or_dob" });
+      if (formula) {
+        return assignment({
+          sheetHeader,
+          columnIndex,
+          formula,
+          target: null,
+          transform: "blank",
+          decision: "unmapped",
+          explicit: true,
+          code: "formula_column_omitted",
+        });
+      }
+      return ageDobDefault(sheetHeader, columnIndex, formula);
     }
     const target = targetForNormalized(key);
     if (!target) {
@@ -275,10 +287,10 @@ export function applyOperatorAssignments(
 }
 
 /**
- * Confirms every visible, unambiguous selection.
- * Age/DOB and any other ambiguous or still-unmapped column stay unresolved
- * until the operator chooses. Blank headers and formula columns become an
- * explicit skip. They are not given a lead field.
+ * Confirms every visible selection.
+ * A non-explicit Age/DOB column becomes canonical DOB. An explicit Age, DOB,
+ * or blank choice is kept. Duplicate headers stay unresolved. Blank headers
+ * and formula columns become an explicit skip.
  */
 export function confirmVisibleSelections(assignments: readonly ColumnAssignment[]): ColumnAssignment[] {
   return assignments.map((column) => {
@@ -291,6 +303,15 @@ export function confirmVisibleSelections(assignments: readonly ColumnAssignment[
         explicit: true,
         code: "blank_header",
       });
+    }
+    if (
+      !column.formula &&
+      !column.explicit &&
+      column.code !== "duplicate_header" &&
+      normalizeSheetHeader(column.sheetHeader) === "age/dob" &&
+      column.decision !== "mapped"
+    ) {
+      return ageDobDefault(column.sheetHeader, column.columnIndex, column.formula);
     }
     if (column.decision === "ambiguous" || column.code === "ambiguous_age_or_dob" || column.code === "duplicate_header") {
       return column;
@@ -344,9 +365,10 @@ export function explainDraftProjection(
   assignments: readonly ColumnAssignment[],
   lead: CampaignSheetLeadInput
 ): { cells: DraftProjectionCell[]; warnings: string[]; sheet: DraftProjectionSheet } | null {
-  const v3 = companySheetsCampaignRowValues({ ...lead, schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3 });
+  const presented = sheetPresentationLead(lead);
+  const v3 = companySheetsCampaignRowValues({ ...presented, schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3 });
   if (!v3) return null;
-  const projected = customRowProjection(assignments, lead);
+  const projected = customRowProjection(assignments, presented);
   if (!projected) return null;
   const byField = new Map(COMPANY_SHEETS_V3_COLUMNS.map((column, index) => [column.sourceField, v3[index] ?? ""]));
   const cells = assignments.map((column, index) => {
@@ -441,7 +463,8 @@ export function customRowProjection(
   assignments: readonly ColumnAssignment[],
   lead: CampaignSheetLeadInput
 ): { values: string[]; warnings: string[]; dobAge: CampaignDobAgePreview } | null {
-  const v3 = companySheetsCampaignRowValues({ ...lead, schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3 });
+  const presented = sheetPresentationLead(lead);
+  const v3 = companySheetsCampaignRowValues({ ...presented, schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3 });
   if (!v3) return null;
   const byField = new Map(COMPANY_SHEETS_V3_COLUMNS.map((column, index) => [column.sourceField, v3[index] ?? ""]));
   let filledFromReason = false;
@@ -462,13 +485,10 @@ export function customRowProjection(
     if (column.transform === "date_america_new_york") value = formatDateAmericaNewYork(value);
     return value;
   });
-  const warnings: string[] = [...projectSheetsLeadType(lead).diagnostics];
+  const warnings: string[] = [...projectSheetsLeadType(presented).diagnostics];
   if (filledFromReason) warnings.push(PRIMARY_CONCERN_FILLED_FROM_REASON);
   if (omitted) warnings.push(PRIMARY_CONCERN_OMITTED);
-  const dobAge = projectCampaignDobAge({
-    normalizedPayload: lead.normalizedPayload,
-    receivedAt: lead.receivedAt,
-  });
+  const dobAge = sheetsCampaignDobAge(presented);
   if (dobAge.conflict) warnings.push(CAMPAIGN_DOB_AGE_CONFLICT_WARNING);
   if (dobAge.ageUnavailableReason === "no_valid_reference") {
     warnings.push(CAMPAIGN_DOB_AGE_REFERENCE_UNAVAILABLE_WARNING);
@@ -628,6 +648,27 @@ function parseOperatorColumn(
       code: formula ? "formula_column_omitted" : null,
     }),
   };
+}
+
+/**
+ * New standard campaign maps write a birthday into Age/DOB.
+ * An explicit operator choice (Age, DOB, or blank) is not replaced here.
+ */
+function sheetPresentationLead(lead: CampaignSheetLeadInput): CampaignSheetLeadInput {
+  return lead.sheetsPresentation ? lead : { ...lead, sheetsPresentation: true };
+}
+
+function ageDobDefault(sheetHeader: string, columnIndex: number, formula: boolean): ColumnAssignment {
+  return assignment({
+    sheetHeader,
+    columnIndex,
+    formula,
+    target: { kind: "v3_column", header: "DOB", sourceField: "date_of_birth" },
+    transform: "date_america_new_york",
+    decision: "mapped",
+    explicit: true,
+    code: formula ? "formula_column_omitted" : null,
+  });
 }
 
 function assignment(input: ColumnAssignment): ColumnAssignment {

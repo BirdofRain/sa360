@@ -6,6 +6,7 @@ import {
   countSectionProgress,
   isGhlDestinationBlocker,
   isLegacyRoutingRuleBlocker,
+  LEGACY_ENVIRONMENT_ALLOWLIST_CAPTION,
   legacyMasterRoutingApplicability,
   legacyRoutingApplicabilityLabel,
   overallStatusBadgeClass,
@@ -60,6 +61,11 @@ function SectionCard({ section }: { section: CutoverReadinessSection }) {
           {progress.complete}/{progress.total}
         </span>
       </div>
+      {section.key === "environment" ? (
+        <p className="mt-1 text-xs text-slate-600 dark:text-slate-300" data-testid="legacy-allowlist-caption">
+          {LEGACY_ENVIRONMENT_ALLOWLIST_CAPTION}
+        </p>
+      ) : null}
       <ul className="mt-2 space-y-1">
         {section.items.map((item) => (
           <ItemRow
@@ -111,8 +117,9 @@ export function ClientCutoverReadinessPanel({
       <p className="mt-1 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
         This report is the legacy master-source cutover checklist. Its routing-rule requirement applies to that
         delivery model. It does not show that a GHL connection, workflow mapping, or Company Sheets destination is
-        misconfigured. Approvals, delivery switches, and the checklist results are unchanged. Cutover actions stay
-        manual and are not performed here.
+        misconfigured. Approvals and delivery switches are unchanged. The environment allowlist applies only to
+        legacy approve-delivery and bulk live canary. Confirmed-source-association GHL delivery and Company Sheets
+        campaign delivery are not asked to edit those lists. Cutover actions stay manual and are not performed here.
       </p>
 
       {destinationSection ? (

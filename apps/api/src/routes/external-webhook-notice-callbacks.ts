@@ -11,6 +11,9 @@ import {
 export { TWILIO_STATUS_CALLBACK_URL_ENV };
 export const TWILIO_INBOUND_CALLBACK_URL_ENV = "SA360_TWILIO_INBOUND_CALLBACK_URL";
 
+/** Empty TwiML. Twilio's inbound webhook rejects JSON, and this body has no reply. */
+export const TWILIO_EMPTY_INBOUND_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>';
+
 type CallbackOpts = {
   statusUrl?: string;
   inboundUrl?: string;
@@ -47,8 +50,8 @@ export async function externalWebhookNoticeCallbackRoutes(app: FastifyInstance, 
     if (!signed(request.headers["x-twilio-signature"], params, url, opts.authToken)) {
       return reply.code(403).send({ ok: false, error: "invalid_signature" });
     }
-    const result = await applyTwilioInboundMessage(prisma, params, opts.env ?? process.env);
-    return reply.send(result);
+    await applyTwilioInboundMessage(prisma, params, opts.env ?? process.env);
+    return reply.type("text/xml").send(TWILIO_EMPTY_INBOUND_TWIML);
   });
 }
 

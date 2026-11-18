@@ -7,7 +7,7 @@ import { PrismaClient } from "@prisma/client";
 
 import { prisma } from "../../lib/db.js";
 import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
-import { externalWebhookNoticeCallbackRoutes } from "../../routes/external-webhook-notice-callbacks.js";
+import { externalWebhookNoticeCallbackRoutes, TWILIO_EMPTY_INBOUND_TWIML } from "../../routes/external-webhook-notice-callbacks.js";
 import { discoverExternalWebhookNotices } from "./notice-discovery.js";
 import { dispatchExternalWebhookNotice, promoteStaleExternalWebhookNotices } from "./notice-dispatch.js";
 import { claimExternalWebhookNotice } from "./notice-receipt.js";
@@ -316,7 +316,7 @@ test("a crashed claim becomes uncertain, 21610 and STOP persist, and START does 
     payload: new URLSearchParams(startParams).toString(),
   });
   assert.equal(start.statusCode, 200);
-  assert.match(start.body, /gated|ignored/);
+  assertEmptyInboundTwiml(start);
   assert.equal(
     (await prisma.clientDeliveryNotificationPreference.findUniqueOrThrow({ where: { clientAccountId } })).smsSuppressionState,
     "suppressed"
@@ -332,7 +332,7 @@ test("a crashed claim becomes uncertain, 21610 and STOP persist, and START does 
       },
       payload: new URLSearchParams(startParams).toString(),
     });
-    assert.match(startAgain.body, /ignored/);
+    assertEmptyInboundTwiml(startAgain);
     assert.equal(
       (await prisma.clientDeliveryNotificationPreference.findUniqueOrThrow({ where: { clientAccountId } })).smsSuppressionState,
       "suppressed"
@@ -377,3 +377,10 @@ test("a crashed claim becomes uncertain, 21610 and STOP persist, and START does 
   assert.equal(resent.skipped, "uncertain");
   await app.close();
 });
+
+function assertEmptyInboundTwiml(response: { body: string; headers: { "content-type"?: string | string[] | number } }): void {
+  assert.equal(response.body, TWILIO_EMPTY_INBOUND_TWIML);
+  assert.equal(response.body.includes("<Message"), false);
+  const type = response.headers["content-type"];
+  assert.match(String(Array.isArray(type) ? type[0] : type), /text\/xml/);
+}

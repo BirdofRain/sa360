@@ -18,9 +18,12 @@
  */
 import { projectCampaignDobAge } from "../consumer-age/campaign-dob-age.js";
 import type { GhlDiscoveredCustomField } from "../ghl-config-discovery/ghl-config-discovery.types.js";
+import { buildAgentGhlLeadNote } from "./ghl-agent-lead-note.js";
 import {
-  buildOnboardingLeadNote,
+  ONBOARDING_LEAD_NOTE_CONTRACT,
+  ONBOARDING_LEAD_NOTE_TITLE,
   type OnboardingLeadNotePlan,
+  type StoredAnswerField,
 } from "./onboarding-lead-note.js";
 import {
   WORKFLOW_AI_READY_TAG,
@@ -713,6 +716,11 @@ export function separateDeliveryResults(
   return { contact: contactResult, note: noteResult, workflow: workflowResult };
 }
 
+/**
+ * Plans the customer-facing intake note. The body is the agent summary.
+ * Idempotency keys stay on the delivery run, so a completed note is not posted again.
+ * Onboarding test notes still use `buildOnboardingLeadNote`.
+ */
 export function planIntakeSummaryNote(input: {
   enabled: boolean;
   sourceLeadEventId: string;
@@ -724,8 +732,11 @@ export function planIntakeSummaryNote(input: {
   state?: string | null;
   leadType?: string | null;
   sourceAttributes?: Record<string, unknown> | null;
+  answerFields?: StoredAnswerField[] | null;
+  unmappedSourceFields?: Array<{ key: string; value: unknown }> | null;
   generatedAt?: string | null;
   idempotencyKey: string;
+  maxChars?: number;
 }): { enabled: false; reason: "disabled" } | { enabled: true; plan: OnboardingLeadNotePlan } | { enabled: true; error: string } {
   if (input.enabled !== true) return { enabled: false, reason: "disabled" };
   const attributes = { ...(input.sourceAttributes ?? {}) };
@@ -734,7 +745,7 @@ export function planIntakeSummaryNote(input: {
     receivedAt: input.generatedAt,
   });
   if (projected) attributes.date_of_birth = projected;
-  const built = buildOnboardingLeadNote({
+  const built = buildAgentGhlLeadNote({
     event: {
       sourceLeadEventId: input.sourceLeadEventId,
       clientAccountId: input.clientAccountId,
@@ -745,20 +756,40 @@ export function planIntakeSummaryNote(input: {
       state: input.state,
       leadType: input.leadType,
       sourceAttributes: attributes,
+      answerFields: input.answerFields,
+      unmappedSourceFields: input.unmappedSourceFields,
       generatedAt: input.generatedAt,
     },
-    clientAccountId: input.clientAccountId,
+    maxChars: input.maxChars,
   });
-  if (!built.ok) return { enabled: true, error: built.error };
   if (built.status === "note_too_long") return { enabled: true, error: "note_too_long" };
+  const parts = built.parts.map((part, index) => ({
+    part: index + 1,
+    partCount: built.parts.length,
+    title:
+      built.parts.length > 1
+        ? `${ONBOARDING_LEAD_NOTE_TITLE} (${index + 1}/${built.parts.length})`
+        : ONBOARDING_LEAD_NOTE_TITLE,
+    body: part.body,
+    continuesLine: part.continuesLine,
+    idempotencyKey: operationIdempotencyKey(input.idempotencyKey, "note", index + 1),
+  }));
   return {
     enabled: true,
     plan: {
-      ...built,
-      parts: built.parts.map((part, index) => ({
-        ...part,
-        idempotencyKey: operationIdempotencyKey(input.idempotencyKey, "note", index + 1),
-      })),
+      ok: true,
+      contractVersion: ONBOARDING_LEAD_NOTE_CONTRACT,
+      title: ONBOARDING_LEAD_NOTE_TITLE,
+      body: built.body,
+      preview: built.body,
+      answers: [],
+      keptAnswerCount: Math.max(0, built.body.split("\n").length - 1),
+      posted: false,
+      status: "ready",
+      error: null,
+      noteOverflow: "refuse",
+      maxChars: built.maxChars,
+      parts,
     },
   };
 }

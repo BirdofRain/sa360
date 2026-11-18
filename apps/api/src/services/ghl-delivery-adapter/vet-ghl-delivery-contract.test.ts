@@ -295,8 +295,27 @@ test("intake-summary notes stay off unless explicitly enabled", () => {
   assert.equal("plan" in enabled, true);
   if (!("plan" in enabled)) return;
   assert.equal(enabled.plan.parts[0]?.title, "SA360 lead");
-  assert.match(enabled.plan.parts[0]?.body ?? "", /1955-03-13|03\/13\/1955|March 13, 1955/);
+  assert.match(enabled.plan.parts[0]?.body ?? "", /DOB: 03\/13\/1955/);
+  assert.match(enabled.plan.parts[0]?.body ?? "", /Primary Reason: Family/);
+  assert.equal(enabled.plan.parts[0]?.body?.includes("1955-03-13"), false);
+  assert.equal(enabled.plan.parts[0]?.body?.includes("SA360 event"), false);
+  assert.equal(enabled.plan.parts[0]?.body?.includes("not supplied"), false);
   assert.equal(enabled.plan.parts[0]?.idempotencyKey, "run_1:note:1");
+  const repeated = planIntakeSummaryNote({
+    enabled: true,
+    sourceLeadEventId: "lead_1",
+    clientAccountId: "client_1",
+    firstName: "Sam",
+    lastName: "Veteran",
+    leadType: "VET",
+    sourceAttributes: { date_of_birth: "1955-03-13", primary_reason: "Family" },
+    generatedAt: "2026-03-13T12:00:00.000Z",
+    idempotencyKey: "run_1",
+  });
+  assert.equal("plan" in repeated, true);
+  if (!("plan" in repeated)) return;
+  assert.equal(repeated.plan.parts[0]?.idempotencyKey, enabled.plan.parts[0]?.idempotencyKey);
+  assert.equal(repeated.plan.body, enabled.plan.body);
 });
 
 test("remote outcomes retry only before a completed or ambiguous call", () => {

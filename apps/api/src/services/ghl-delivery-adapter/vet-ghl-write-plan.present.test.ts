@@ -71,6 +71,10 @@ test("an enabled note preview uses sa360_lead_note_v2 and is not posted", () => 
   assert.equal(plan.note.posted, false);
   assert.equal(plan.automationEntry.disposition, "planned_if_required_writes_succeed");
   assert.equal(plan.automationEntry.includedInThisPreviewPost, false);
-  assert.match(plan.note.preview ?? "", /Form Questions and Answers/);
+  assert.match(plan.note.preview ?? "", /^KEY INFO:/);
+  assert.match(plan.note.preview ?? "", /Lead: Sam/);
   assert.match(plan.note.preview ?? "", /Primary Reason: Family/);
+  assert.equal(plan.note.preview?.includes("Form Questions and Answers"), false);
+  assert.equal(plan.note.preview?.includes("not supplied"), false);
+  assert.equal(plan.note.preview?.includes("SA360 event"), false);
 });

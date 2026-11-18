@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildClientCutoverReadinessReport,
+  readClientControlledDeliveryPaths,
   type ClientCutoverReadinessInput,
 } from "./client-cutover-readiness.service.js";
 import type { ClientGhlDestinationDto } from "./client-onboarding.present.js";
@@ -145,14 +146,255 @@ test("clientCutoverApproved=false surfaces a delivery readiness warning (report 
   assert.equal(cutoverItem?.complete, false);
 });
 
-test("env allowlist not configured surfaces a warning and manual next step", () => {
-  const report = buildClientCutoverReadinessReport(makeInput({ envAllowlistConfigured: false }));
-  assert.ok(report.warnings.some((w) => w.includes("env allowlist is not configured")));
+function readyForLiveReviewInput(
+  overrides: Partial<ClientCutoverReadinessInput> = {}
+): ClientCutoverReadinessInput {
+  return makeInput({
+    client: {
+      clientAccountId: "pilot_client",
+      clientDisplayName: "Pilot Client",
+      status: "active",
+      portalEnabled: true,
+      portalLoginEmail: "pilot@example.test",
+    },
+    routingRules: [
+      makeRule({
+        clientCutoverApproved: true,
+        internalApprovalStatus: "approved",
+        deliveryEnabled: true,
+        deliveryMode: "live",
+      }),
+    ],
+    envAllowlistConfigured: true,
+    destinationAllowlisted: true,
+    ...overrides,
+  });
+}
+
+test("legacy env allowlist not configured is labeled and still withholds live review", () => {
+  const report = buildClientCutoverReadinessReport(
+    readyForLiveReviewInput({ envAllowlistConfigured: false, destinationAllowlisted: false })
+  );
+  assert.equal(report.overallStatus, "ready_for_shadow");
   assert.ok(
-    report.manualNextSteps.some((s) => s.includes("SA360_DIRECT_DELIVERY_ALLOWED_"))
+    report.warnings.some(
+      (w) =>
+        w.includes("Legacy approve-delivery and bulk live-canary") &&
+        w.includes("env allowlist is not configured") &&
+        w.includes("Confirmed-source-association GHL delivery and Company Sheets campaign delivery do not use these lists")
+    )
+  );
+  assert.ok(
+    report.manualNextSteps.some(
+      (s) =>
+        s.includes("Legacy approve-delivery and bulk live canary only") &&
+        s.includes("SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS") &&
+        s.includes("SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS") &&
+        s.includes("Do not add a client to these lists")
+    )
   );
   const envSection = report.sections.find((s) => s.key === "environment");
+  assert.equal(envSection?.label, "Legacy approve-delivery / bulk live-canary");
   assert.equal(envSection?.complete, false);
+});
+
+test("a legacy client absent from a configured allowlist stays off live review", () => {
+  const report = buildClientCutoverReadinessReport(
+    readyForLiveReviewInput({ envAllowlistConfigured: true, destinationAllowlisted: false })
+  );
+  assert.equal(report.overallStatus, "ready_for_shadow");
+  assert.ok(
+    report.warnings.some(
+      (w) =>
+        w.includes("Legacy approve-delivery and bulk live-canary") &&
+        w.includes("not on SA360_DIRECT_DELIVERY_ALLOWED_*")
+    )
+  );
+  assert.equal(
+    report.manualNextSteps.some((s) => s.includes("SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS")),
+    false
+  );
+});
+
+test("ongoing GHL association delivery is not told to edit the legacy allowlists", () => {
+  const before = buildClientCutoverReadinessReport(
+    readyForLiveReviewInput({ envAllowlistConfigured: false, destinationAllowlisted: false })
+  );
+  const report = buildClientCutoverReadinessReport(
+    readyForLiveReviewInput({
+      envAllowlistConfigured: false,
+      destinationAllowlisted: false,
+      ongoingGhlAssociationDelivery: true,
+    })
+  );
+  assert.equal(before.overallStatus, "ready_for_shadow");
+  assert.equal(report.overallStatus, "ready_for_live_review");
+  assert.equal(report.blockers.length, 0);
+  const warning = report.warnings.find((w) => w.includes("SA360_DIRECT_DELIVERY_ALLOWED_"));
+  assert.ok(warning);
+  assert.match(warning ?? "", /Legacy approve-delivery and bulk live-canary/);
+  assert.match(warning ?? "", /confirmed-source-association GHL delivery/);
+  assert.match(warning ?? "", /Do not add this client/);
+  assert.equal(warning?.includes("Company Sheets campaign delivery"), false);
+  assert.equal(
+    report.manualNextSteps.some((s) => s.includes("SA360_DIRECT_DELIVERY_ALLOWED_")),
+    false
+  );
+  const envSection = report.sections.find((s) => s.key === "environment");
+  assert.equal(envSection?.complete, true);
+  assert.match(envSection?.items[0]?.detail ?? "", /Not required for this client's confirmed-source-association GHL delivery/);
+  assert.match(envSection?.items[1]?.detail ?? "", /Do not add this client/);
+});
+
+test("an allowlisted ongoing client is not warned to edit the legacy lists", () => {
+  const report = buildClientCutoverReadinessReport(
+    readyForLiveReviewInput({ ongoingGhlAssociationDelivery: true, companySheetsCampaignDelivery: true })
+  );
+  assert.equal(report.overallStatus, "ready_for_live_review");
+  assert.equal(
+    report.warnings.some((w) => w.includes("SA360_DIRECT_DELIVERY_ALLOWED_")),
+    false
+  );
+  assert.equal(
+    report.manualNextSteps.some((s) => s.includes("SA360_DIRECT_DELIVERY_ALLOWED_")),
+    false
+  );
+  assert.match(
+    report.sections.find((s) => s.key === "environment")?.items[1]?.detail ?? "",
+    /not required for confirmed-source-association GHL delivery and Company Sheets campaign delivery/
+  );
+});
+
+test("Company Sheets campaign delivery is not told to edit the legacy allowlists", () => {
+  const report = buildClientCutoverReadinessReport(
+    readyForLiveReviewInput({
+      envAllowlistConfigured: false,
+      destinationAllowlisted: false,
+      companySheetsCampaignDelivery: true,
+    })
+  );
+  assert.equal(report.overallStatus, "ready_for_live_review");
+  const warning = report.warnings.find((w) => w.includes("SA360_DIRECT_DELIVERY_ALLOWED_"));
+  assert.match(warning ?? "", /Company Sheets campaign delivery/);
+  assert.match(warning ?? "", /Do not add this client/);
+  assert.equal(warning?.includes("confirmed-source-association GHL delivery"), false);
+  assert.equal(
+    report.manualNextSteps.some((s) => s.includes("SA360_DIRECT_DELIVERY_ALLOWED_")),
+    false
+  );
+  assert.equal(report.sections.find((s) => s.key === "environment")?.complete, true);
+});
+
+test("a client on both ongoing paths gets one legacy-only allowlist note", () => {
+  const report = buildClientCutoverReadinessReport(
+    readyForLiveReviewInput({
+      envAllowlistConfigured: false,
+      destinationAllowlisted: false,
+      ongoingGhlAssociationDelivery: true,
+      companySheetsCampaignDelivery: true,
+    })
+  );
+  assert.equal(report.overallStatus, "ready_for_live_review");
+  const notes = report.warnings.filter((w) => w.includes("SA360_DIRECT_DELIVERY_ALLOWED_"));
+  assert.equal(notes.length, 1);
+  assert.match(notes[0] ?? "", /confirmed-source-association GHL delivery and Company Sheets campaign delivery/);
+  assert.equal(
+    report.manualNextSteps.some((s) => s.includes("SA360_DIRECT_DELIVERY_ALLOWED_")),
+    false
+  );
+});
+
+test("ongoing delivery still withholds live review for a non-allowlist gate", () => {
+  const portalOff = buildClientCutoverReadinessReport(
+    readyForLiveReviewInput({
+      client: {
+        clientAccountId: "pilot_client",
+        clientDisplayName: "Pilot Client",
+        status: "active",
+        portalEnabled: false,
+        portalLoginEmail: null,
+      },
+      envAllowlistConfigured: false,
+      destinationAllowlisted: false,
+      ongoingGhlAssociationDelivery: true,
+    })
+  );
+  assert.equal(portalOff.overallStatus, "ready_for_shadow");
+  assert.equal(
+    portalOff.manualNextSteps.some((s) => s.includes("SA360_DIRECT_DELIVERY_ALLOWED_")),
+    false
+  );
+
+  const blocked = buildClientCutoverReadinessReport(
+    readyForLiveReviewInput({
+      routingRules: [makeRule({ internalApprovalStatus: "blocked", clientCutoverApproved: true, deliveryEnabled: true, deliveryMode: "live" })],
+      envAllowlistConfigured: false,
+      destinationAllowlisted: false,
+      companySheetsCampaignDelivery: true,
+    })
+  );
+  assert.equal(blocked.overallStatus, "blocked");
+});
+
+test("an ongoing client with no routing rule stays not_ready without an allowlist edit step", () => {
+  const report = buildClientCutoverReadinessReport(
+    makeInput({
+      routingRules: [],
+      envAllowlistConfigured: false,
+      destinationAllowlisted: false,
+      ongoingGhlAssociationDelivery: true,
+      companySheetsCampaignDelivery: true,
+    })
+  );
+  assert.equal(report.overallStatus, "not_ready");
+  assert.ok(report.blockers.some((b) => b.includes("No active routing rule")));
+  assert.equal(
+    report.manualNextSteps.some((s) => s.includes("SA360_DIRECT_DELIVERY_ALLOWED_")),
+    false
+  );
+});
+
+test("readClientControlledDeliveryPaths follows persisted GHL flags and campaign dispatch", () => {
+  const location = "LOC_ONGOING";
+  const destination = {
+    deliveryEnabled: true,
+    deliveryMode: "live",
+    clientCutoverApproved: true,
+    internalApprovalStatus: "approved",
+    destinationSubaccountIdGhl: location,
+  };
+  assert.deepEqual(
+    readClientControlledDeliveryPaths({
+      ghlDestination: destination,
+      locationId: location,
+      companySheetsCampaignDispatchEnabled: false,
+    }),
+    { ongoingGhlAssociationDelivery: true, companySheetsCampaignDelivery: false }
+  );
+  assert.deepEqual(
+    readClientControlledDeliveryPaths({
+      ghlDestination: { ...destination, deliveryEnabled: false },
+      locationId: location,
+      companySheetsCampaignDispatchEnabled: true,
+    }),
+    { ongoingGhlAssociationDelivery: false, companySheetsCampaignDelivery: true }
+  );
+  assert.deepEqual(
+    readClientControlledDeliveryPaths({
+      ghlDestination: destination,
+      locationId: "OTHER",
+      companySheetsCampaignDispatchEnabled: false,
+    }),
+    { ongoingGhlAssociationDelivery: false, companySheetsCampaignDelivery: false }
+  );
+  assert.deepEqual(
+    readClientControlledDeliveryPaths({
+      ghlDestination: null,
+      locationId: null,
+      companySheetsCampaignDispatchEnabled: false,
+    }),
+    { ongoingGhlAssociationDelivery: false, companySheetsCampaignDelivery: false }
+  );
 });
 
 test("a fully configured and approved client reaches ready_for_live_review", () => {

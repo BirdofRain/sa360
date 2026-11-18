@@ -172,3 +172,10 @@ export function isGhlDestinationBlocker(blocker: string): boolean {
 export function isLegacyRoutingRuleBlocker(blocker: string): boolean {
   return blocker.startsWith("No active routing rule");
 }
+
+/**
+ * Shown on the environment section for every client. The lists remain a legacy
+ * approve-delivery and bulk live-canary requirement.
+ */
+export const LEGACY_ENVIRONMENT_ALLOWLIST_CAPTION =
+  "Applies only to legacy approve-delivery and bulk live canary. Confirmed-source-association GHL delivery and Company Sheets campaign delivery do not use these lists.";

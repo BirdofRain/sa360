@@ -4,6 +4,7 @@ import {
   countSectionProgress,
   isGhlDestinationBlocker,
   isLegacyRoutingRuleBlocker,
+  LEGACY_ENVIRONMENT_ALLOWLIST_CAPTION,
   legacyMasterRoutingApplicability,
   legacyRoutingApplicabilityLabel,
   normalizeCutoverReadinessReport,
@@ -167,6 +168,12 @@ test("legacy routing applicability is the master-source model only when an activ
   );
   assert.equal(legacyRoutingApplicabilityLabel("legacy_master_source"), "Applies to legacy master-source routing");
   assert.equal(legacyRoutingApplicabilityLabel("unknown"), "Unknown");
+});
+
+test("the environment caption names the legacy allowlist and the paths that do not use it", () => {
+  assert.match(LEGACY_ENVIRONMENT_ALLOWLIST_CAPTION, /legacy approve-delivery and bulk live canary/);
+  assert.match(LEGACY_ENVIRONMENT_ALLOWLIST_CAPTION, /Confirmed-source-association GHL delivery/);
+  assert.match(LEGACY_ENVIRONMENT_ALLOWLIST_CAPTION, /Company Sheets campaign delivery do not use these lists/);
 });
 
 test("destination blockers stay distinct from the legacy routing-rule blocker", () => {

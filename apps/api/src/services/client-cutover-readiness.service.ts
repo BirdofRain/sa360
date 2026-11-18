@@ -3,6 +3,7 @@ import {
   isDirectLiveDeliveryEnvConfigured,
 } from "../lib/direct-demo-delivery-config.js";
 import { findClientAccountById } from "../repositories/client-account.repository.js";
+import { findCompanySheetsDestinationByClient } from "../repositories/company-sheets-destination.repository.js";
 import { listCampaignRoutingRules } from "../repositories/campaign-routing-rule.repository.js";
 import type { ClientGhlDestinationDto } from "./client-onboarding.present.js";
 import type { DestinationReadinessAssessment } from "./destination-readiness.service.js";
@@ -10,6 +11,7 @@ import {
   presentRoutingRulesWithReadinessEnriched,
   type RoutingRuleWithReadinessItem,
 } from "./delivery-readiness-admin.present.js";
+import { isPersistedLiveDestination } from "./ghl-destination-authorization.js";
 import { getClientDeliveryConfigSummary } from "./ghl-config-discovery/client-ghl-config.service.js";
 
 /**
@@ -75,11 +77,76 @@ export type ClientCutoverReadinessInput = {
   envAllowlistConfigured: boolean;
   /** True when this client/location pair is on the live delivery allowlist. */
   destinationAllowlisted: boolean;
+  /**
+   * Saved GHL destination authorizes confirmed-source-association delivery.
+   * Used only to describe this report. It does not authorize a write.
+   */
+  ongoingGhlAssociationDelivery?: boolean;
+  /**
+   * Company Sheets campaign dispatch is enabled on the client record.
+   * Used only to describe this report. It does not authorize a write.
+   */
+  companySheetsCampaignDelivery?: boolean;
 };
 
 function trimmed(value: string | null | undefined): string | null {
   const t = value?.trim();
   return t ? t : null;
+}
+
+const LEGACY_ALLOWLIST_SECTION_LABEL = "Legacy approve-delivery / bulk live-canary";
+
+const LEGACY_ALLOWLIST_UNCONFIGURED_WARNING =
+  "Legacy approve-delivery and bulk live-canary: live delivery env allowlist is not configured (SA360_DIRECT_DELIVERY_ALLOWED_*). Confirmed-source-association GHL delivery and Company Sheets campaign delivery do not use these lists.";
+
+const LEGACY_ALLOWLIST_CLIENT_WARNING =
+  "Legacy approve-delivery and bulk live-canary: this client/location is not on SA360_DIRECT_DELIVERY_ALLOWED_*. Confirmed-source-association GHL delivery and Company Sheets campaign delivery do not use these lists.";
+
+const LEGACY_ALLOWLIST_NEXT_STEP =
+  "Legacy approve-delivery and bulk live canary only: set SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS and SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS at deploy time. Do not add a client to these lists to activate confirmed-source-association GHL delivery or Company Sheets campaign delivery.";
+
+function usesClientControlledDelivery(input: ClientCutoverReadinessInput): boolean {
+  return input.ongoingGhlAssociationDelivery === true || input.companySheetsCampaignDelivery === true;
+}
+
+function clientControlledPathLabel(input: ClientCutoverReadinessInput): string {
+  const paths: string[] = [];
+  if (input.ongoingGhlAssociationDelivery === true) {
+    paths.push("confirmed-source-association GHL delivery");
+  }
+  if (input.companySheetsCampaignDelivery === true) {
+    paths.push("Company Sheets campaign delivery");
+  }
+  return paths.join(" and ");
+}
+
+function ongoingDeliveryAllowlistWarning(paths: string): string {
+  return `Legacy approve-delivery and bulk live-canary consult SA360_DIRECT_DELIVERY_ALLOWED_*. This client uses ${paths}. Do not add this client to those lists for that delivery.`;
+}
+
+/**
+ * Report classification only. Ongoing GHL uses the same persisted-destination
+ * predicate as association delivery. Campaign Sheets uses the saved dispatch flag.
+ * Neither read changes a client, an env var, or a delivery.
+ */
+export function readClientControlledDeliveryPaths(input: {
+  ghlDestination: {
+    deliveryEnabled: boolean;
+    deliveryMode: string;
+    clientCutoverApproved: boolean;
+    internalApprovalStatus: string;
+    destinationSubaccountIdGhl: string;
+  } | null;
+  locationId: string | null;
+  companySheetsCampaignDispatchEnabled: boolean;
+}): {
+  ongoingGhlAssociationDelivery: boolean;
+  companySheetsCampaignDelivery: boolean;
+} {
+  return {
+    ongoingGhlAssociationDelivery: isPersistedLiveDestination(input.ghlDestination, input.locationId),
+    companySheetsCampaignDelivery: input.companySheetsCampaignDispatchEnabled === true,
+  };
 }
 
 function buildClientAccountSection(
@@ -250,29 +317,56 @@ function buildDeliveryReadinessSection(
 function buildEnvironmentSection(
   input: ClientCutoverReadinessInput
 ): CutoverReadinessSection {
+  if (usesClientControlledDelivery(input)) {
+    const paths = clientControlledPathLabel(input);
+    return {
+      key: "environment",
+      label: LEGACY_ALLOWLIST_SECTION_LABEL,
+      complete: true,
+      items: [
+        {
+          key: "env_allowlist_configured",
+          label: "Legacy approve-delivery / bulk live-canary env allowlist",
+          complete: true,
+          detail: `Not required for this client's ${paths}. SA360_DIRECT_DELIVERY_ALLOWED_* ${
+            input.envAllowlistConfigured ? "is set for legacy routes" : "is unset"
+          }.`,
+        },
+        {
+          key: "destination_allowlisted",
+          label: "Legacy approve-delivery / bulk live-canary client allowlist",
+          complete: true,
+          detail: input.destinationAllowlisted
+            ? `This client is on the legacy list. That list is not required for ${paths}.`
+            : `This client is absent from the legacy list. Do not add this client for ${paths}.`,
+        },
+      ],
+    };
+  }
+
   const items: CutoverChecklistItem[] = [
     {
       key: "env_allowlist_configured",
-      label: "Live delivery env allowlist configured (manual deploy step)",
+      label: "Legacy approve-delivery / bulk live-canary env allowlist configured",
       complete: input.envAllowlistConfigured,
       detail: input.envAllowlistConfigured
-        ? "SA360_DIRECT_DELIVERY_ALLOWED_* set"
-        : "SA360_DIRECT_DELIVERY_ALLOWED_* not set (defaults to demo only)",
+        ? "SA360_DIRECT_DELIVERY_ALLOWED_* set for legacy approve-delivery and bulk live canary"
+        : "SA360_DIRECT_DELIVERY_ALLOWED_* not set (legacy routes default to the demo pair only)",
     },
     {
       key: "destination_allowlisted",
-      label: "Client/location on live delivery allowlist",
+      label: "Client/location on the legacy approve-delivery / bulk live-canary allowlist",
       complete: input.destinationAllowlisted,
       detail: input.locationId
         ? input.destinationAllowlisted
-          ? "on allowlist"
-          : "not on allowlist"
+          ? "on the legacy allowlist"
+          : "not on the legacy allowlist"
         : "no location to check",
     },
   ];
   return {
     key: "environment",
-    label: "Environment",
+    label: LEGACY_ALLOWLIST_SECTION_LABEL,
     complete: items.every((i) => i.complete),
     items,
   };
@@ -363,15 +457,14 @@ export function buildClientCutoverReadinessReport(
     );
   }
 
-  if (!input.envAllowlistConfigured) {
-    warnings.push(
-      "Live delivery env allowlist is not configured (SA360_DIRECT_DELIVERY_ALLOWED_*)."
-    );
-    manualNextSteps.push(
-      "Set SA360_DIRECT_DELIVERY_ALLOWED_* env vars at deploy time (manual)."
-    );
+  const legacyAllowlistGap = !input.envAllowlistConfigured || (Boolean(input.locationId) && !input.destinationAllowlisted);
+  if (usesClientControlledDelivery(input) && legacyAllowlistGap) {
+    warnings.push(ongoingDeliveryAllowlistWarning(clientControlledPathLabel(input)));
+  } else if (!input.envAllowlistConfigured) {
+    warnings.push(LEGACY_ALLOWLIST_UNCONFIGURED_WARNING);
+    manualNextSteps.push(LEGACY_ALLOWLIST_NEXT_STEP);
   } else if (input.locationId && !input.destinationAllowlisted) {
-    warnings.push("This client/location is not on the live delivery allowlist.");
+    warnings.push(LEGACY_ALLOWLIST_CLIENT_WARNING);
   }
 
   manualNextSteps.push(
@@ -383,6 +476,10 @@ export function buildClientCutoverReadinessReport(
     ghlSection.complete &&
     rulesSection.complete;
 
+  // A client on confirmed-source-association GHL delivery or Company Sheets
+  // campaign delivery has the legacy allowlist section marked complete. Absence
+  // from SA360_DIRECT_DELIVERY_ALLOWED_* is then not the sole reason this
+  // status stays off ready_for_live_review. Legacy clients still require it.
   const liveReviewReady =
     configReady &&
     deliverySection.complete &&
@@ -429,6 +526,12 @@ export async function getClientCutoverReadiness(
     deliverySummary?.locationId ??
     client.ghlDestination?.destinationSubaccountIdGhl ??
     null;
+  const sheetsDestination = await findCompanySheetsDestinationByClient(client.clientAccountId);
+  const controlledPaths = readClientControlledDeliveryPaths({
+    ghlDestination: client.ghlDestination,
+    locationId,
+    companySheetsCampaignDispatchEnabled: sheetsDestination?.campaignDispatchEnabled === true,
+  });
 
   return buildClientCutoverReadinessReport({
     client: {
@@ -444,5 +547,7 @@ export async function getClientCutoverReadiness(
     routingRules,
     envAllowlistConfigured: isDirectLiveDeliveryEnvConfigured(),
     destinationAllowlisted: isDirectDemoDestinationAllowed(client.clientAccountId, locationId),
+    ongoingGhlAssociationDelivery: controlledPaths.ongoingGhlAssociationDelivery,
+    companySheetsCampaignDelivery: controlledPaths.companySheetsCampaignDelivery,
   });
 }

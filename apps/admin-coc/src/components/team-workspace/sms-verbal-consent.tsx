@@ -107,7 +107,7 @@ export function SmsVerbalConsentPanel({
         checks the confirmation page. Portal login is not required.
       </p>
       <form className="space-y-2">
-        <input className="w-full rounded border border-slate-300 px-2 py-1 text-sm" name="phoneE164" placeholder="+1..." aria-label="Mobile number" />
+        <input className="w-full rounded border border-slate-300 px-2 py-1 text-sm" type="tel" autoComplete="tel" name="phoneE164" placeholder="(919) 555-0123" aria-label="Mobile number" />
         <textarea className="w-full rounded border border-slate-300 px-2 py-1 text-sm" name="affirmativeResponse" aria-label="Affirmative response" placeholder="The words the recipient actually said" />
         <input className="w-full rounded border border-slate-300 px-2 py-1 text-sm" name="confirmationEmail" aria-label="Confirmation email" placeholder="recipient@example.com" />
         <input className="w-full rounded border border-slate-300 px-2 py-1 text-sm" name="evidence" aria-label="Supporting evidence" placeholder="Call note or other evidence" />

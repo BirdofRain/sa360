@@ -158,6 +158,121 @@ test("named operators can issue a link and an unapproved or shared session canno
   await pub.close();
 });
 
+test("a national number stays out of storage and a second format cannot clear STOP or consent", async () => {
+  const env = routeEnv();
+  const sam = await ensureOperator({
+    email: "sam@lifeagentlaunch.com",
+    permission: "admin_coc",
+    subject: "sms-operator-sam",
+  });
+  const clientAccountId = await createClient();
+  const app = Fastify();
+  await app.register(adminSmsVerbalConsentRoutes, { prefix: "/admin/v1", env });
+  const link = `/admin/v1/team-workspace/clients/${clientAccountId}/sms-opt-in-link`;
+  const verbal = `/admin/v1/team-workspace/clients/${clientAccountId}/sms-verbal-consent`;
+  const phone = "+19193096948";
+  const consentText =
+    "Life Agent Launch may text this number when a lead is received in your GoHighLevel account. Message frequency varies. Message and data rates may apply. Reply STOP to opt out. Reply HELP for help. Privacy Policy: https://policies.lifeagentlaunch.invalid/privacy Terms: https://policies.lifeagentlaunch.invalid/terms";
+  const consentAt = new Date("2026-11-18T15:00:00.000Z");
+
+  const national = await app.inject({
+    method: "POST",
+    url: link,
+    headers: adminHeaders(sam),
+    payload: { phoneE164: "9193096948", confirmationEmail: "sandbox@lifeagentlaunch.invalid" },
+  });
+  assert.equal(national.statusCode, 400);
+  assert.equal((national.json() as { error: string }).error, "invalid_e164");
+  assert.equal(await prisma.clientDeliveryNotificationPreference.findUnique({ where: { clientAccountId } }), null);
+
+  const recorded = await app.inject({
+    method: "POST",
+    url: verbal,
+    headers: adminHeaders(sam),
+    payload: {
+      phoneE164: phone,
+      affirmativeResponse: "Yes, text me.",
+      disclosureVersion: "ghl-lead-sms-v1",
+      confirmationEmail: "sandbox@lifeagentlaunch.invalid",
+    },
+  });
+  assert.equal(recorded.statusCode, 200);
+  const again = await app.inject({
+    method: "POST",
+    url: link,
+    headers: adminHeaders(sam),
+    payload: { phoneE164: phone, confirmationEmail: "sandbox@lifeagentlaunch.invalid" },
+  });
+  assert.equal(again.statusCode, 200);
+  assert.equal(await prisma.clientDeliveryNotificationPreference.count({ where: { clientAccountId } }), 1);
+
+  await prisma.clientDeliveryNotificationPreference.update({
+    where: { clientAccountId },
+    data: {
+      smsSuppressionState: "suppressed",
+      smsSuppressedAt: consentAt,
+      smsEnabled: false,
+      smsConsentCollection: "recipient_link",
+      smsConsentRecordedAt: consentAt,
+      smsConsentVersion: "ghl-lead-sms-v1",
+      smsConsentText: consentText,
+    },
+  });
+
+  const sameFormat = await app.inject({
+    method: "POST",
+    url: link,
+    headers: adminHeaders(sam),
+    payload: { phoneE164: phone, confirmationEmail: "sandbox@lifeagentlaunch.invalid" },
+  });
+  assert.equal(sameFormat.statusCode, 409);
+  assert.equal((sameFormat.json() as { error: string }).error, "stop_suppressed");
+  const other = await app.inject({
+    method: "POST",
+    url: verbal,
+    headers: adminHeaders(sam),
+    payload: {
+      phoneE164: "+19193096949",
+      affirmativeResponse: "Yes, text me.",
+      disclosureVersion: "ghl-lead-sms-v1",
+      confirmationEmail: "sandbox@lifeagentlaunch.invalid",
+    },
+  });
+  assert.equal(other.statusCode, 409);
+  const stored = await prisma.clientDeliveryNotificationPreference.findUniqueOrThrow({ where: { clientAccountId } });
+  assert.equal(stored.recipientPhoneE164, phone);
+  assert.equal(stored.smsSuppressionState, "suppressed");
+  assert.equal(stored.smsEnabled, false);
+  assert.equal(stored.smsConsentRecordedAt?.toISOString(), consentAt.toISOString());
+  assert.equal(stored.smsConsentVersion, "ghl-lead-sms-v1");
+  assert.equal(stored.smsConsentText, consentText);
+  assert.equal(await prisma.clientDeliveryNotificationPreference.count({ where: { clientAccountId } }), 1);
+
+  const foreignClient = await createClient();
+  const foreign = await app.inject({
+    method: "POST",
+    url: `/admin/v1/team-workspace/clients/${foreignClient}/sms-opt-in-link`,
+    headers: adminHeaders(sam),
+    payload: { phoneE164: "+447911123456", confirmationEmail: "sandbox@lifeagentlaunch.invalid" },
+  });
+  assert.equal(foreign.statusCode, 200);
+  const foreignRow = await prisma.clientDeliveryNotificationPreference.findUniqueOrThrow({ where: { clientAccountId: foreignClient } });
+  assert.equal(foreignRow.recipientPhoneE164, "+447911123456");
+  assert.equal(foreignRow.smsEnabled, false);
+  assert.equal(foreignRow.smsConsentRecordedAt, null);
+  const guessed = await app.inject({
+    method: "POST",
+    url: `/admin/v1/team-workspace/clients/${foreignClient}/sms-opt-in-link`,
+    headers: adminHeaders(sam),
+    payload: { phoneE164: "447911123456", confirmationEmail: "sandbox@lifeagentlaunch.invalid" },
+  });
+  assert.equal(guessed.statusCode, 400);
+  const unchanged = await prisma.clientDeliveryNotificationPreference.findUniqueOrThrow({ where: { clientAccountId: foreignClient } });
+  assert.equal(unchanged.recipientPhoneE164, "+447911123456");
+
+  await app.close();
+});
+
 function adminHeaders(staffPrincipalId: string): Record<string, string> {
   return {
     "content-type": "application/json",

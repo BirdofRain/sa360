@@ -1009,7 +1009,7 @@ async function ensureVerbalOperator(): Promise<string> {
   return principal.id;
 }
 
-function assertEmptyInboundTwiml(response: { body: string; headers: Record<string, string | string[] | undefined> }): void {
+function assertEmptyInboundTwiml(response: { body: string; headers: { "content-type"?: string | string[] | number } }): void {
   assert.equal(response.body, TWILIO_EMPTY_INBOUND_TWIML);
   assert.equal(response.body.includes("<Message"), false);
   const type = response.headers["content-type"];

@@ -15,7 +15,7 @@ import {
   COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION,
   COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V2,
   COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3,
-  companySheetsCampaignHeader,
+  companySheetsHeaderMatchesCampaign,
 } from "../../lib/company-google-sheets-env.js";
 import { parseGoogleSpreadsheetRef } from "../../lib/google-spreadsheet-ref.js";
 import {
@@ -1032,8 +1032,7 @@ function knownSchema(header: string[]): string | null {
     COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V2,
     COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION,
   ]) {
-    const expected = companySheetsCampaignHeader(version);
-    if (expected && exactHeader(header, [...expected])) return version;
+    if (companySheetsHeaderMatchesCampaign(version, header)) return version;
   }
   return null;
 }

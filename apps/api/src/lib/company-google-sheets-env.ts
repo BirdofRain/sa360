@@ -139,6 +139,24 @@ export function companySheetsCampaignHeader(schemaVersion: string | null | undef
   if (schemaVersion === COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3) return COMPANY_SHEETS_V3_HEADER;
   return null;
 }
+
+/**
+ * A standard v3 worksheet may omit Lead Type. The other v3 headers stay in
+ * order. That sheet is still the v3 contract: Lead Type is not added back,
+ * required, or written. Any other missing or reordered header does not match.
+ */
+export function companySheetsHeaderMatchesCampaign(
+  schemaVersion: string | null | undefined,
+  actual: readonly string[] | null | undefined
+): boolean {
+  const expected = companySheetsCampaignHeader(schemaVersion);
+  if (!expected || !actual) return false;
+  if (actual.length === expected.length && expected.every((cell, index) => actual[index] === cell)) return true;
+  if (schemaVersion !== COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3) return false;
+  const withoutLeadType = expected.filter((cell) => cell !== "Lead Type");
+  if (withoutLeadType.length !== expected.length - 1) return false;
+  return actual.length === withoutLeadType.length && withoutLeadType.every((cell, index) => actual[index] === cell);
+}
 export const COMPANY_SHEETS_CANARY_SCHEMA_VERSION = "company_sheets_canary_v1";
 export const COMPANY_SHEETS_CAMPAIGN_TAB_TITLE = "Campaign Leads";
 export const COMPANY_SHEETS_AGED_TAB_TITLE = "Aged Orders";

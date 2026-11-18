@@ -1,7 +1,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 
 import {
-  companySheetsCampaignHeader,
+  companySheetsHeaderMatchesCampaign,
   isCompanyGoogleSheetsDispatchEnabled,
 } from "../../lib/company-google-sheets-env.js";
 import { findPublishedColumnMap } from "../client-onboarding-v2/column-maps.js";
@@ -9,6 +9,16 @@ import { readHeaderSnapshot } from "../../lib/sheet-header-snapshot.js";
 import { evaluateClientSheetsPersonGate } from "./client-sheets-person-gate.js";
 
 const CUSTOM_CAMPAIGN_SCHEMA = "company_sheets_campaign_custom_v1";
+
+function sheetsCampaignHoldReason(
+  tab: { setupState: string | null; worksheetId: number | null; schemaVersion: string | null } | null,
+  storedHeader: readonly string[]
+): string {
+  if (!tab || tab.worksheetId == null || tab.setupState == null || tab.setupState === "missing") return "tab_missing";
+  if (tab.setupState === "incompatible") return "tab_incompatible";
+  if (tab.setupState === "bound" && (storedHeader.length === 0 || !tab.schemaVersion)) return "tab_incompatible";
+  return "tab_missing";
+}
 
 type DispatchDb = PrismaClient | Prisma.TransactionClient;
 
@@ -36,17 +46,14 @@ export async function recordCompanySheetsCampaignIntent(
   const tab = await db.companySheetsTabContract.findUnique({
     where: { destinationId_role: { destinationId: destination.id, role: "campaign" } },
   });
-  const expectedHeader = companySheetsCampaignHeader(tab?.schemaVersion);
   const storedHeader = Array.isArray(tab?.headerContract)
     ? tab.headerContract.filter((cell): cell is string => typeof cell === "string")
     : [];
   let ready =
     tab?.setupState === "bound" &&
     tab.worksheetId != null &&
-    expectedHeader != null &&
-    storedHeader.length === expectedHeader.length &&
-    expectedHeader.every((cell, index) => storedHeader[index] === cell);
-  let reason: string | null = ready ? null : "tab_missing";
+    companySheetsHeaderMatchesCampaign(tab.schemaVersion, storedHeader);
+  let reason: string | null = ready ? null : sheetsCampaignHoldReason(tab, storedHeader);
   if (
     !ready &&
     tab?.setupState === "bound" &&

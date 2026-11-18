@@ -16,8 +16,11 @@ import {
   CAMPAIGN_LEAD_TYPE_MALFORMED_DIAGNOSTIC,
   CAMPAIGN_LEAD_TYPE_UNRESOLVED_DIAGNOSTIC,
   companySheetsCampaignRowValues,
+  companySheetsValuesForSheetHeader,
   projectSheetsLeadType,
+  sheetsCampaignDobAge,
 } from "./company-sheets-campaign-row.js";
+import { projectCampaignDobAge } from "../consumer-age/campaign-dob-age.js";
 import { customRowProjection, explainDraftProjection, type ColumnAssignment } from "./company-sheets-custom-row.js";
 
 const EXCLUDED = {
@@ -705,4 +708,77 @@ test("preview and append use the same Lead Type and phone cells", () => {
   assert.deepEqual(appended.values, ["Vet Web Form", "(202) 555-0100", "Florida"]);
   assert.equal(preview.warnings.some((warning) => warning.startsWith("campaign_lead_type_")), false);
   assert.equal(header.join(","), assignments.map((column) => column.sheetHeader).join(","));
+});
+
+test("historical DATE fills a sheets row and does not change the shared DOB projection", () => {
+  const payload = {
+    contact: { first_name: "Pat", last_name: "Example" },
+    routing: {
+      source_intake: {
+        submitted_at: "2026-10-21T12:00:00.000Z",
+        custom_fields: { DATE: "04/12/1979", date: "01/01/2000" },
+        sourceAttributes: { date: "02/02/2001" },
+      },
+    },
+  };
+  const shared = projectCampaignDobAge({ normalizedPayload: payload, receivedAt: "2026-10-21T21:00:00.000Z" });
+  assert.equal(shared.dateOfBirth, "");
+  const plain = row(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3, payload);
+  assert.ok(plain);
+  assert.equal(plain[COMPANY_SHEETS_V3_HEADER.indexOf("DOB")], "");
+  const sheets = sheetsCampaignDobAge({
+    stableRowId: "lead:client:evt",
+    clientAccountId: "client",
+    sourceLeadEventId: "evt",
+    receivedAt: "2026-10-21T21:00:00.000Z",
+    sourceLeadId: "provider-1",
+    normalizedPayload: payload,
+    sheetsPresentation: true,
+  });
+  assert.equal(sheets.dateOfBirth, "1979-04-12");
+  assert.equal(sheets.age, "47");
+  const question = sheetsCampaignDobAge({
+    stableRowId: "lead:client:evt",
+    clientAccountId: "client",
+    sourceLeadEventId: "evt",
+    receivedAt: "2026-10-21T21:00:00.000Z",
+    sourceLeadId: "provider-1",
+    normalizedPayload: {
+      routing: {
+        source_intake: {
+          submitted_at: "2026-10-21T12:00:00.000Z",
+          custom_questions: [{ key: "Date", value: "03/03/1990" }, { name: "DATE", answer: "04/12/1979" }],
+        },
+      },
+    },
+    sheetsPresentation: true,
+  });
+  assert.equal(question.dateOfBirth, "1979-04-12");
+});
+
+test("a v3 sheet without Lead Type is written in the live header order", () => {
+  const input = {
+    schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3,
+    stableRowId: "lead:client:evt",
+    clientAccountId: "client",
+    sourceLeadEventId: "evt",
+    receivedAt: "2026-10-21T21:00:00.000Z",
+    sourceLeadId: "provider-1",
+    normalizedPayload: {
+      contact: { first_name: "Pat", last_name: "Example", email: "pat@example.invalid", state: "FL" },
+      routing: { source_intake: { submitted_at: "2026-10-21T12:00:00.000Z", sourceAttributes: { date_of_birth: "1979-04-12" } } },
+    },
+    routingResultJson: { campaignLeadType: savedDecision("resolved", "vet_web_form", "Vet Web Form") },
+    sheetsPresentation: true,
+  };
+  const header = COMPANY_SHEETS_V3_HEADER.filter((cell) => cell !== "Lead Type");
+  const values = companySheetsValuesForSheetHeader(input, header);
+  assert.ok(values);
+  assert.equal(values?.length, header.length);
+  assert.equal(header.includes("Lead Type"), false);
+  assert.equal(values?.[header.indexOf("DOB")], "1979-04-12");
+  assert.equal(values?.includes("Vet Web Form"), false);
+  assert.equal(companySheetsValuesForSheetHeader(input, header.filter((cell) => cell !== "DOB")), null);
+  const withLeadType = companySheetsValuesForSheetHeader(input, [...COMPANY_SHEETS_V3_HEADER]);
+  assert.equal(withLeadType?.[COMPANY_SHEETS_V3_HEADER.indexOf("Lead Type")], "Vet Web Form");
 });

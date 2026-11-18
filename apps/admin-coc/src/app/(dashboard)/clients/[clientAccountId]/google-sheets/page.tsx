@@ -41,7 +41,7 @@ import {
   listCompanyClientSpreadsheets,
 } from "@/lib/admin-api/company-google-sheets";
 import { listOnboardingColumnMaps } from "@/lib/admin-api/client-onboarding-v2";
-import type { ColumnMapRecord } from "@/lib/clients/onboarding/types";
+import { splitColumnMaps } from "@/lib/clients/onboarding/column-map-selection";
 import { fetchAdminClientDetail, isAdminApiConfigured } from "@/lib/admin-api/server";
 
 export default async function ClientCompanyGoogleSheetsPage({
@@ -161,17 +161,3 @@ export default async function ClientCompanyGoogleSheetsPage({
   );
 }
 
-function splitColumnMaps(
-  maps: ColumnMapRecord[],
-  spreadsheetId: string | null,
-  worksheetId: number | null
-): { editor: ColumnMapRecord | null; delivery: ColumnMapRecord | null; unpublished: ColumnMapRecord | null } {
-  const active = maps.filter((map) => map.status === "draft" || map.status === "published");
-  const matched =
-    spreadsheetId && worksheetId != null
-      ? active.filter((map) => map.spreadsheetId === spreadsheetId && map.worksheetId === worksheetId)
-      : active;
-  const unpublished = matched.find((map) => map.status === "draft") ?? null;
-  const delivery = matched.find((map) => map.status === "published") ?? null;
-  return { editor: unpublished ?? delivery, delivery, unpublished };
-}

@@ -17,6 +17,27 @@ function normalizeHeader(value: string): string {
   return value.trim().toLowerCase().replace(/\s*\/\s*/g, "/").replace(/\s+/g, " ");
 }
 
+function ageDobDisplayDefault(record: ColumnMapRecord): ColumnMapRecord {
+  const target = record.targets.find((item) => item.sourceField === "date_of_birth");
+  if (!target) return record;
+  return {
+    ...record,
+    assignments: record.assignments.map((column) => {
+      if (column.explicit || column.formula || column.code === "duplicate_header") return column;
+      if (normalizeHeader(column.sheetHeader) !== "age/dob") return column;
+      if (column.decision === "mapped" && column.target) return column;
+      return {
+        ...column,
+        target: { kind: "v3_column", header: target.header, sourceField: "date_of_birth" },
+        decision: "mapped",
+        transform: "date_america_new_york",
+        explicit: false,
+        code: null,
+      };
+    }),
+  };
+}
+
 function choiceValue(column: ColumnMapAssignment): string {
   if (!column.sheetHeader.trim()) return "blank";
   if (column.formula && column.decision !== "mapped") return "skip_formula";
@@ -144,7 +165,7 @@ export function ColumnMapEditor({
   actions: Pick<OnboardingWorkspaceActions, "saveAndPublishColumnMap" | "previewColumnMap">;
   onChange: (record: ColumnMapRecord) => void;
 }) {
-  const [draft, setDraft] = useState(record);
+  const [draft, setDraft] = useState(() => ageDobDisplayDefault(record));
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [preview, setPreview] = useState<ColumnMapDraftPreview | null>(null);

@@ -9,7 +9,7 @@ import { ColumnMapEditor } from "./column-map-editor";
 
 test.afterEach(() => cleanup());
 
-test("save and publish confirms visible suggestions and keeps an unresolved Age/DOB choice", async () => {
+test("save and publish sends the Age/DOB default and keeps other suggestions unconfirmed", async () => {
   const calls: Array<{ revision: number; assignments: ColumnMapAssignment[] }> = [];
   render(
     <ColumnMapEditor
@@ -22,7 +22,10 @@ test("save and publish confirms visible suggestions and keeps an unresolved Age/
           assert.equal(name?.explicit, false);
           assert.equal(name?.target?.sourceField, "full_name");
           const age = input.assignments.find((column) => column.sheetHeader === "Age/DOB");
-          assert.equal(age?.decision, "ambiguous");
+          assert.equal(age?.decision, "mapped");
+          assert.equal(age?.explicit, false);
+          assert.equal(age?.target?.sourceField, "date_of_birth");
+          assert.equal(age?.transform, "date_america_new_york");
           return {
             ok: false,
             error: "mapping_unresolved",
@@ -71,7 +74,8 @@ test("choosing DOB publishes that choice and does not enable delivery", async ()
       onChange={() => undefined}
     />
   );
-  assert.match(screen.getByTestId("column-map-issues").textContent ?? "", /Age\/DOB is ambiguous/);
+  assert.equal((screen.getByRole("combobox", { name: "Map Age/DOB" }) as HTMLSelectElement).value, "date_of_birth");
+  assert.equal(screen.queryByText(/Age\/DOB is ambiguous/), null);
   fireEvent.change(screen.getByRole("combobox", { name: "Map Age/DOB" }), { target: { value: "date_of_birth" } });
   assert.equal(screen.queryByText(/Age\/DOB is ambiguous/), null);
   assert.match(screen.getByTestId("column-map-issues").textContent ?? "", /Confirm this suggestion or mark the column unmapped/);
@@ -83,6 +87,81 @@ test("choosing DOB publishes that choice and does not enable delivery", async ()
   assert.equal(saved.find((column) => column.sheetHeader === "Age/DOB")?.explicit, true);
   assert.equal(saved.find((column) => column.sheetHeader === "Score")?.decision, "unmapped");
   assert.equal(saved.find((column) => column.sheetHeader === "Score")?.explicit, true);
+});
+
+test("a stored Age, DOB, or blank choice is what the reloaded editor shows", () => {
+  const age = mapRecord();
+  age.assignments[2] = {
+    sheetHeader: "Age/DOB",
+    columnIndex: 2,
+    formula: false,
+    target: { kind: "v3_column", header: "Age", sourceField: "consumer_age" },
+    transform: "passthrough",
+    decision: "mapped",
+    explicit: true,
+    code: null,
+  };
+  const { unmount } = render(
+    <ColumnMapEditor record={age} campaignDispatchEnabled={false} actions={{}} onChange={() => undefined} />
+  );
+  assert.equal((screen.getByRole("combobox", { name: "Map Age/DOB" }) as HTMLSelectElement).value, "consumer_age");
+  unmount();
+
+  const dob = mapRecord();
+  dob.revision = 4;
+  dob.assignments[2] = {
+    sheetHeader: "Age/DOB",
+    columnIndex: 2,
+    formula: false,
+    target: { kind: "v3_column", header: "DOB", sourceField: "date_of_birth" },
+    transform: "date_america_new_york",
+    decision: "mapped",
+    explicit: true,
+    code: null,
+  };
+  const dobView = render(
+    <ColumnMapEditor record={dob} campaignDispatchEnabled={false} actions={{}} onChange={() => undefined} />
+  );
+  assert.equal((screen.getByRole("combobox", { name: "Map Age/DOB" }) as HTMLSelectElement).value, "date_of_birth");
+  assert.match(screen.getByTestId("column-map-state").textContent ?? "", /Draft revision 4/);
+  dobView.unmount();
+
+  const blank = mapRecord();
+  blank.assignments[2] = {
+    sheetHeader: "Age/DOB",
+    columnIndex: 2,
+    formula: false,
+    target: null,
+    transform: "blank",
+    decision: "unmapped",
+    explicit: true,
+    code: null,
+  };
+  render(<ColumnMapEditor record={blank} campaignDispatchEnabled={false} actions={{}} onChange={() => undefined} />);
+  assert.equal((screen.getByRole("combobox", { name: "Map Age/DOB" }) as HTMLSelectElement).value, "unmapped");
+});
+
+test("campaign delivery on disables the editor so a selection cannot be saved", () => {
+  let calls = 0;
+  render(
+    <ColumnMapEditor
+      record={mapRecord()}
+      campaignDispatchEnabled={true}
+      actions={{
+        saveAndPublishColumnMap: async () => {
+          calls += 1;
+          return published(mapRecord().assignments, 2);
+        },
+      }}
+      onChange={() => undefined}
+    />
+  );
+  const select = screen.getByRole("combobox", { name: "Map Age/DOB" }) as HTMLSelectElement;
+  assert.equal(select.disabled, true);
+  assert.equal(screen.getByRole("button", { name: "Save & publish mapping" }).hasAttribute("disabled"), true);
+  fireEvent.click(screen.getByRole("button", { name: "Save & publish mapping" }));
+  assert.equal(calls, 0);
+  assert.match(screen.getByText(/Pause campaign Sheets delivery/).textContent ?? "", /Pause campaign Sheets delivery/);
 });
 
 test("save and publish sends unsaved dropdown edits with the current revision", async () => {

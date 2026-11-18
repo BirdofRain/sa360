@@ -285,6 +285,7 @@ function ColumnMapping({
         </p>
       ) : null}
       {visible ? (
+        <>
         <ColumnMapEditor
           key={visible.id}
           record={visible}
@@ -300,6 +301,23 @@ function ColumnMapping({
           }}
           onChange={onMap}
         />
+        {visible.status === "draft" ? (
+          <div className="space-y-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={pending || campaignDispatchEnabled || !actions.createColumnMap}
+              onClick={() => void start()}
+            >
+              {pending ? "Reading headers…" : "Refresh headers from this worksheet"}
+            </Button>
+            <p className="text-xs text-slate-600">
+              Re-reads the current worksheet into a new draft. It does not create a spreadsheet, publish the map, or
+              change delivery. Pause campaign delivery before refreshing. An existing published map stays the delivery map.
+            </p>
+          </div>
+        ) : null}
+        </>
       ) : (
         <div className="space-y-2">
           <p className="text-sm text-slate-700">

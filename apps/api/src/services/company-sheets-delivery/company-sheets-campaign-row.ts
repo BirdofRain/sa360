@@ -5,9 +5,17 @@ import {
   COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3,
   COMPANY_SHEETS_LEAD_HEADER_V2,
   companySheetsCampaignHeader,
+  companySheetsHeaderMatchesCampaign,
 } from "../../lib/company-google-sheets-env.js";
 import { formatSheetsPhoneDisplay } from "../phone-e164.service.js";
-import { projectCampaignDobAge } from "../consumer-age/campaign-dob-age.js";
+import {
+  deriveCampaignAge,
+  formatCampaignDobSheet,
+  parseCampaignDateOfBirth,
+  projectCampaignDobAge,
+  selectCampaignAgeReference,
+  type CampaignDobAgePreview,
+} from "../consumer-age/campaign-dob-age.js";
 import { inspectCampaignLeadTypeSnapshot } from "../source-intake/campaign-lead-type.js";
 import { normalizeSourceFieldKey } from "../source-intake/source-field-alias.registry.js";
 
@@ -96,7 +104,7 @@ export function companySheetsCampaignRowValues(input: CampaignSheetLeadInput & {
       COMPANY_SHEETS_LEAD_HEADER_V2.map((key, index) => [key, extended[index] ?? ""])
     );
     byKey.lead_type = projectSheetsLeadType(input).value;
-    byKey.date_of_birth = readDateOfBirth(payload, input.receivedAt);
+    byKey.date_of_birth = sheetsCampaignDobAge(input).dateOfBirth;
     byKey.notes = unmappedNormalized(payload, "notes");
     for (const key of [
       "disability_rating",
@@ -119,6 +127,24 @@ export function companySheetsCampaignRowValues(input: CampaignSheetLeadInput & {
     return values.length === header.length ? values : null;
   }
   return extended.length === header.length ? extended : null;
+}
+
+/**
+ * Aligns a campaign row to the live header. A v3 sheet that omitted Lead Type
+ * keeps every other column and does not gain a Lead Type cell. A header that
+ * is not the schema, with or without that one omission, is not written.
+ */
+export function companySheetsValuesForSheetHeader(
+  input: CampaignSheetLeadInput & { schemaVersion: string },
+  header: readonly string[]
+): string[] | null {
+  if (!companySheetsHeaderMatchesCampaign(input.schemaVersion, header)) return null;
+  const full = companySheetsCampaignRowValues(input);
+  const expected = companySheetsCampaignHeader(input.schemaVersion);
+  if (!full || !expected || full.length !== expected.length) return null;
+  if (header.length === expected.length && expected.every((cell, index) => header[index] === cell)) return [...full];
+  const byHeader = new Map(expected.map((name, index) => [name, full[index] ?? ""]));
+  return header.map((name) => byHeader.get(name) ?? "");
 }
 
 function v2RowValues(input: CampaignSheetLeadInput): string[] | null {
@@ -145,7 +171,7 @@ function v2RowValues(input: CampaignSheetLeadInput): string[] | null {
     identity.lastName,
     readString(contact?.state ?? payload.state),
     providerLeadId(payload, input.sourceLeadId),
-    projectCampaignDobAge({ normalizedPayload: payload, receivedAt: input.receivedAt }).age,
+    sheetsCampaignDobAge(input).age,
     attribute(payload, "best_time_to_call"),
     firstText(niche?.branch_of_service, attribute(payload, "branch_of_service")),
     attribute(payload, "military_status"),
@@ -225,8 +251,109 @@ function readLegacyLeadType(payload: Record<string, unknown>): string {
   return firstText(routing?.product_type, routing?.niche_key);
 }
 
-function readDateOfBirth(payload: Record<string, unknown>, receivedAt: string): string {
-  return projectCampaignDobAge({ normalizedPayload: payload, receivedAt }).dateOfBirth;
+/**
+ * Sheets-only birthday. Canonical DOB aliases stay on `projectCampaignDobAge`.
+ * The historical custom-question key `DATE` is read only for a sheets row.
+ * A field whose key is `date` is a different answer and is not used.
+ */
+export function sheetsCampaignDobAge(input: CampaignSheetLeadInput): CampaignDobAgePreview {
+  const projected = projectCampaignDobAge({
+    normalizedPayload: input.normalizedPayload,
+    receivedAt: input.receivedAt,
+  });
+  if (!input.sheetsPresentation || projected.dateOfBirth) return projected;
+  const payload = asRecord(input.normalizedPayload);
+  const iso = historicalCustomQuestionDob(payload);
+  if (!iso) return projected;
+  const intake = payload ? sourceIntake(payload) : null;
+  const selected = selectCampaignAgeReference({
+    submittedAt: readString(intake?.submitted_at) || null,
+    receivedAt: input.receivedAt,
+  });
+  const referenceDate = projected.referenceDate || selected?.referenceDate || "";
+  const derived = referenceDate ? deriveCampaignAge(iso, referenceDate) : null;
+  const supplied = projected.ageProvenance === "supplied" ? projected.age : "";
+  const conflict = Boolean(supplied && derived && supplied !== derived);
+  const unavailable =
+    !supplied && !derived
+      ? !referenceDate
+        ? "no_valid_reference"
+        : iso > referenceDate
+          ? "future_date_of_birth"
+          : null
+      : null;
+  return {
+    ...projected,
+    age: supplied || derived || "",
+    dateOfBirth: iso,
+    dateOfBirthSheet: formatCampaignDobSheet(iso),
+    ageProvenance: supplied ? "supplied" : derived ? "derived_from_date_of_birth" : "missing",
+    dateOfBirthProvenance: "supplied",
+    derivedAge: derived ?? "",
+    referenceDate,
+    conflict,
+    ageUnavailableReason: unavailable,
+  };
+}
+
+/** Exact historical custom-question key. Normalization would collapse this into `date`. */
+const HISTORICAL_CUSTOM_QUESTION_DOB_KEY = "DATE";
+
+function historicalCustomQuestionDob(payload: Record<string, unknown> | null): string {
+  if (!payload) return "";
+  const intake = sourceIntake(payload);
+  const texts: string[] = [];
+  if (Object.prototype.hasOwnProperty.call(payload, HISTORICAL_CUSTOM_QUESTION_DOB_KEY)) {
+    pushText(texts, payload[HISTORICAL_CUSTOM_QUESTION_DOB_KEY]);
+  }
+  collectExactKey(texts, intake?.unmappedSourceFieldsJson);
+  collectExactKey(texts, payload.unmappedSourceFields);
+  collectExactKey(texts, payload.unmappedSourceFieldsJson);
+  for (const bag of [payload.custom_fields, intake?.custom_fields, asRecord(payload.contact)?.custom_fields, intake?.sourceAttributes, payload.sourceAttributes]) {
+    const record = asRecord(bag);
+    if (!record || !Object.prototype.hasOwnProperty.call(record, HISTORICAL_CUSTOM_QUESTION_DOB_KEY)) continue;
+    pushText(texts, record[HISTORICAL_CUSTOM_QUESTION_DOB_KEY]);
+  }
+  for (const list of [
+    payload.custom_questions,
+    payload.customQuestions,
+    payload.questions,
+    intake?.custom_questions,
+    intake?.customQuestions,
+    intake?.questions,
+  ]) {
+    collectQuestionList(texts, list);
+  }
+  for (const text of texts) {
+    const iso = parseCampaignDateOfBirth(text);
+    if (iso) return iso;
+  }
+  return "";
+}
+
+function collectExactKey(texts: string[], value: unknown): void {
+  if (!Array.isArray(value)) return;
+  for (const item of value) {
+    const record = asRecord(item);
+    if (record?.key !== HISTORICAL_CUSTOM_QUESTION_DOB_KEY) continue;
+    pushText(texts, record.value);
+  }
+}
+
+function collectQuestionList(texts: string[], value: unknown): void {
+  if (!Array.isArray(value)) return;
+  for (const item of value) {
+    const record = asRecord(item);
+    if (!record) continue;
+    const key = record.key ?? record.name ?? record.question ?? record.field ?? record.field_key;
+    if (key !== HISTORICAL_CUSTOM_QUESTION_DOB_KEY) continue;
+    pushText(texts, record.value ?? record.answer ?? record.response);
+  }
+}
+
+function pushText(texts: string[], value: unknown): void {
+  const text = readString(value);
+  if (text) texts.push(text);
 }
 
 function nicheAnswer(payload: Record<string, unknown>, key: string): string {

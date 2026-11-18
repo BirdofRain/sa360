@@ -477,3 +477,101 @@ test("an opportunity failure can already have posted the event tag", async () =>
   assert.equal(result.workflowResult, "skipped");
   assert.equal(result.runStatus, "failed");
 });
+
+test("a delivered intake note is readable and is not posted again on retry", async () => {
+  arm();
+  const ctx = makeCtx({
+    notes: true,
+    enrichment: {
+      sourceAttributes: {
+        date_of_birth: "1968-02-20",
+        sex: "Male",
+        marital_status: "Married",
+        primary_reason: "Cover Funeral & Burial Expenses",
+        ip_address: "203.0.113.10",
+        phone_verified: true,
+        fbclid: "IwAR123",
+      },
+      enrichmentStatus: "partial",
+      automationReadiness: "ready",
+      unmappedSourceFieldKeys: ["anura_result", "session_recording_url"],
+      sourceAttributeFieldMap: {},
+      sourceEnrichmentPolicy: { intakeSummaryNotesEnabled: true },
+      normalizedPayload: {
+        contact: { state: "Alabama" },
+        routing: {
+          source_intake: {
+            sourceAttributes: { date_of_birth: "1968-02-20", sex: "Male" },
+          },
+        },
+      },
+      receivedAt: "2026-11-18T18:04:00.000Z",
+    },
+  });
+  ctx.plan = {
+    ...ctx.plan,
+    sourcePhoneE164: "+19193003939",
+    sourceEmail: "stevetest@gmail.com",
+    steps: [
+      {
+        id: "step_names",
+        deliveryPlanId: "plan_vet",
+        stepOrder: 0,
+        stepType: "normalize_lead",
+        status: "planned",
+        title: "Names",
+        description: null,
+        targetSystem: "ghl",
+        targetId: null,
+        requestPreviewJson: { firstName: "Steve", lastName: "Test" },
+        resultPreviewJson: null,
+        warnings: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    ],
+  };
+  const first = depsFrom(okHandler);
+  const delivered = await executeLiveCanaryGhlSteps(ctx, "idem_steve_note", first.deps, {
+    emitLifecycle: async () => {},
+  });
+  const notes = first.calls.filter((call) => call.url.includes("/notes"));
+  assert.equal(notes.length, 1);
+  assert.equal(notes[0]?.body?.title, "SA360 lead");
+  const noteBody = String(notes[0]?.body?.body ?? "");
+  assert.match(noteBody, /^KEY INFO:/);
+  assert.match(noteBody, /Lead: Steve Test/);
+  assert.match(noteBody, /Phone: \+19193003939/);
+  assert.match(noteBody, /Email: stevetest@gmail.com/);
+  assert.match(noteBody, /State: Alabama/);
+  assert.match(noteBody, /DOB: 02\/20\/1968/);
+  assert.match(noteBody, /Sex: Male/);
+  assert.match(noteBody, /Marital Status: Married/);
+  assert.match(noteBody, /Primary Reason: Cover Funeral & Burial Expenses/);
+  assert.equal(noteBody.includes("SA360 event"), false);
+  assert.equal(noteBody.includes("not supplied"), false);
+  assert.equal(noteBody.includes("203.0.113.10"), false);
+  assert.equal(noteBody.includes("IwAR123"), false);
+  assert.equal(noteBody.includes("phone_verified"), false);
+  assert.equal(noteBody.includes("anura_result"), false);
+  const upsert = first.calls.find((call) => call.url.includes("/contacts/upsert"));
+  assert.equal(upsert?.body?.dateOfBirth, "1968-02-20");
+  assert.equal(delivered.noteResult, "persisted");
+  assert.equal(delivered.contactResult, "upserted");
+
+  const retry = depsFrom(okHandler);
+  const replayed = await executeLiveCanaryGhlSteps(ctx, "idem_steve_note", retry.deps, {
+    emitLifecycle: async () => {},
+    priorReceipts: [
+      {
+        operation: "note",
+        idempotencyKey: "idem_steve_note:note:1",
+        outcome: "completed",
+        externalId: "note_1",
+        httpStatus: 201,
+      },
+    ],
+  });
+  assert.equal(retry.calls.some((call) => call.url.includes("/notes")), false);
+  assert.equal(replayed.noteResult, "persisted");
+});

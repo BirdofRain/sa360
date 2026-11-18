@@ -12,7 +12,7 @@ import { adminExternalWebhookNoticeDispatchRoutes } from "../../routes/admin-ext
 import { adminSmsVerbalConsentRoutes } from "../../routes/admin-sms-verbal-consent.js";
 import { clientSmsOptInRoutes } from "../../routes/client-sms-opt-in.js";
 import { publicSmsOptInRoutes } from "../../routes/public-sms-opt-in.js";
-import { externalWebhookNoticeCallbackRoutes } from "../../routes/external-webhook-notice-callbacks.js";
+import { externalWebhookNoticeCallbackRoutes, TWILIO_EMPTY_INBOUND_TWIML } from "../../routes/external-webhook-notice-callbacks.js";
 import { discoverExternalWebhookNotices } from "./notice-discovery.js";
 import { dispatchExternalWebhookNotice } from "./notice-dispatch.js";
 import { runIsolatedSmsCanary } from "./sms-canary.js";
@@ -218,7 +218,7 @@ test("recipient opt-in keeps phone, consent, handset proof, and STOP apart", asy
     payload: new URLSearchParams(ownParams).toString(),
   });
   assert.equal(owned.statusCode, 200);
-  assert.match(owned.body, /handset_proven/);
+  assertEmptyInboundTwiml(owned);
   const proven = await prisma.clientDeliveryNotificationPreference.findUniqueOrThrow({ where: { clientAccountId } });
   assert.ok(proven.smsHandsetProvenAt);
   assert.equal(proven.smsConsentRecordedAt, null);
@@ -266,7 +266,7 @@ test("recipient opt-in keeps phone, consent, handset proof, and STOP apart", asy
     payload: new URLSearchParams(stopParams).toString(),
   });
   assert.equal(stopped.statusCode, 200);
-  assert.match(stopped.body, /suppressed/);
+  assertEmptyInboundTwiml(stopped);
   const duplicateStop = await callbacks.inject({
     method: "POST",
     url: "/integrations/twilio/external-webhook-notice/inbound",
@@ -288,7 +288,7 @@ test("recipient opt-in keeps phone, consent, handset proof, and STOP apart", asy
     payload: new URLSearchParams(startParams).toString(),
   });
   assert.equal(startedAgain.statusCode, 200);
-  assert.match(startedAgain.body, /ignored/);
+  assertEmptyInboundTwiml(startedAgain);
   const afterStart = await prisma.clientDeliveryNotificationPreference.findUniqueOrThrow({ where: { clientAccountId } });
   assert.equal(afterStart.smsSuppressionState, "suppressed");
   assert.equal(afterStart.smsEnabled, false);
@@ -1007,4 +1007,11 @@ async function ensureVerbalOperator(): Promise<string> {
     });
   }
   return principal.id;
+}
+
+function assertEmptyInboundTwiml(response: { body: string; headers: Record<string, string | string[] | undefined> }): void {
+  assert.equal(response.body, TWILIO_EMPTY_INBOUND_TWIML);
+  assert.equal(response.body.includes("<Message"), false);
+  const type = response.headers["content-type"];
+  assert.match(String(Array.isArray(type) ? type[0] : type), /text\/xml/);
 }

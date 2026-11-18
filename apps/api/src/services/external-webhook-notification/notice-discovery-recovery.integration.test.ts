@@ -7,7 +7,7 @@ import { Prisma, PrismaClient } from "@prisma/client";
 
 import { prisma } from "../../lib/db.js";
 import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
-import { externalWebhookNoticeCallbackRoutes } from "../../routes/external-webhook-notice-callbacks.js";
+import { externalWebhookNoticeCallbackRoutes, TWILIO_EMPTY_INBOUND_TWIML } from "../../routes/external-webhook-notice-callbacks.js";
 import { discoverExternalWebhookNotices } from "./notice-discovery.js";
 import { dispatchExternalWebhookNotice } from "./notice-dispatch.js";
 import {
@@ -522,7 +522,7 @@ test("a shared STOP number is suppressed for every client, and START does not cl
         payload: new URLSearchParams(stopParams).toString(),
       });
       assert.equal(stop.statusCode, 200);
-      assert.match(stop.body, /suppressed/);
+      assertEmptyInboundTwiml(stop);
       const startParams = { From: inboundPhone, Body: "START" };
       const start = await app.inject({
         method: "POST",
@@ -533,7 +533,7 @@ test("a shared STOP number is suppressed for every client, and START does not cl
         },
         payload: new URLSearchParams(startParams).toString(),
       });
-      assert.match(start.body, /ignored/);
+      assertEmptyInboundTwiml(start);
       for (const id of [inboundA, inboundB]) {
         const preference = await prisma.clientDeliveryNotificationPreference.findUniqueOrThrow({ where: { clientAccountId: id } });
         assert.equal(preference.smsSuppressionState, "suppressed");
@@ -664,3 +664,10 @@ test("two discovery calls do not double-send when the first is interrupted after
     if (sealed.length > 0) await prisma.externalWebhookNoticeChannelDecision.deleteMany({ where: { id: { in: sealed } } });
   }
 });
+
+function assertEmptyInboundTwiml(response: { body: string; headers: Record<string, string | string[] | undefined> }): void {
+  assert.equal(response.body, TWILIO_EMPTY_INBOUND_TWIML);
+  assert.equal(response.body.includes("<Message"), false);
+  const type = response.headers["content-type"];
+  assert.match(String(Array.isArray(type) ? type[0] : type), /text\/xml/);
+}

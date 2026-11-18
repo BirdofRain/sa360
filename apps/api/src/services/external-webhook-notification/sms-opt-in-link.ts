@@ -10,9 +10,9 @@ import type { PrismaClient } from "@prisma/client";
 
 import { sendTransactionalEmail, type SendTransactionalEmailResult } from "../../lib/transactional-email.js";
 import {
-  SMS_CONSENT_VERSION_V2,
+  SMS_CONSENT_VERSION_GHL,
+  ghlLeadSmsDisclosureTextIsComplete,
   readSmsDisclosure,
-  smsDisclosureTextIsComplete,
   smsOptInPublicOrigin,
   type SmsDisclosureView,
 } from "./sms-disclosure.js";
@@ -139,7 +139,7 @@ export async function recordVerbalSmsConsent(
 > {
   const affirmation = input.affirmativeResponse.trim();
   if (affirmation.length < 2 || affirmation.length > 500) return { ok: false, code: "affirmation_required" };
-  if (input.disclosureVersion !== SMS_CONSENT_VERSION_V2) return { ok: false, code: "invalid_consent" };
+  if (input.disclosureVersion !== SMS_CONSENT_VERSION_GHL) return { ok: false, code: "invalid_consent" };
   if (!input.operatorId.trim()) return { ok: false, code: "operator_required" };
   const email = input.confirmationEmail.trim().toLowerCase();
   if (!EMAIL.test(email)) return { ok: false, code: "confirmation_email_required" };
@@ -159,7 +159,7 @@ export async function recordVerbalSmsConsent(
     UPDATE "ClientDeliveryNotificationPreference"
     SET "smsConsentCollection" = 'pending_confirmation',
         "smsVerbalAffirmation" = ${affirmation},
-        "smsVerbalDisclosureVersion" = ${SMS_CONSENT_VERSION_V2},
+        "smsVerbalDisclosureVersion" = ${SMS_CONSENT_VERSION_GHL},
         "smsVerbalRecordedAt" = ${now},
         "smsVerbalOperatorId" = ${input.operatorId.trim()},
         "smsVerbalEvidence" = ${evidence},
@@ -289,7 +289,7 @@ export async function confirmSmsOptInLink(
   if (input.affirmDisclosure !== true) return { ok: false, code: "consent_not_affirmed" };
   if (!TOKEN_RE.test(input.rawToken)) return { ok: false, code: "token_invalid" };
   const disclosure = readSmsDisclosure(input.env);
-  if (!disclosure.recordable || !disclosure.text || !smsDisclosureTextIsComplete(disclosure.text)) {
+  if (!disclosure.recordable || !disclosure.text || !ghlLeadSmsDisclosureTextIsComplete(disclosure.text)) {
     return { ok: false, code: "legal_urls_missing" };
   }
   const now = input.now ?? new Date();
@@ -317,7 +317,7 @@ export async function confirmSmsOptInLink(
     if (row.disclosureHash && row.disclosureHash !== textHash) return { ok: false, code: "disclosure_mismatch" };
     const updated = await tx.$executeRaw`
       UPDATE "ClientDeliveryNotificationPreference"
-      SET "smsConsentVersion" = ${SMS_CONSENT_VERSION_V2},
+      SET "smsConsentVersion" = ${SMS_CONSENT_VERSION_GHL},
           "smsConsentText" = ${text},
           "smsConsentRecordedAt" = COALESCE("smsConsentRecordedAt", transaction_timestamp()),
           "smsSuppressionState" = 'clear'::"ExternalWebhookSmsSuppression",
@@ -335,8 +335,18 @@ export async function confirmSmsOptInLink(
         AND "smsOptInTokenExpiresAt" > ${now}
         AND "smsSuppressionState" IS DISTINCT FROM 'suppressed'
         AND "smsEnabled" = false
+        AND "smsConsentRecordedAt" IS NULL
     `;
-    if (Number(updated) !== 1) return { ok: false, code: "token_invalid" };
+    if (Number(updated) !== 1) {
+      const current = await tx.clientDeliveryNotificationPreference.findUnique({
+        where: { smsOptInTokenHash: tokenHash },
+        select: { smsConsentRecordedAt: true, smsConsentVersion: true },
+      });
+      if (current?.smsConsentRecordedAt && current.smsConsentVersion !== SMS_CONSENT_VERSION_GHL) {
+        return { ok: false, code: "prior_consent_retained" };
+      }
+      return { ok: false, code: "token_invalid" };
+    }
     return { ok: true, consentRecorded: true, smsEnabled: true };
   });
 }

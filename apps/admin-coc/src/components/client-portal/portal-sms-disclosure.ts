@@ -23,7 +23,7 @@ export type PortalSmsOptInPreview = {
 export const PORTAL_SMS_OPT_IN_PREVIEW: PortalSmsOptInPreview = {
   businessName: "Life Agent Launch",
   program: "SA360 Delivery Notifications",
-  purpose: "operational notification when a delivery webhook is accepted",
+  purpose: "operational notification when a lead is received in your GoHighLevel account",
   frequency: "Message frequency varies.",
   rates: "Message and data rates may apply.",
   stop: "Reply STOP to opt out.",

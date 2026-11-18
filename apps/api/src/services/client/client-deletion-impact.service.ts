@@ -47,6 +47,7 @@ export type ClientDeletionImpact = {
     inconsistentAssociationSnapshotRows: number;
     deliverySuccessNotifications: number;
     externalWebhookNotificationReceipts: number;
+    ghlLeadReceivedNotices: number;
   };
   /** SourceFunnel rows that name this client. A row using both fields appears once. */
   affectedRows: ClientDeletionAffectedRow[];
@@ -117,6 +118,7 @@ export async function getClientDeletionImpact(
     inconsistentSnapshots,
     deliverySuccessNotifications,
     externalWebhookNotificationReceipts,
+    ghlLeadReceivedNotices,
   ] = await Promise.all([
     countRoutingRulesForClient(id),
     prisma.ghlLocationConnection.count({ where: { clientAccountId: id } }),
@@ -140,6 +142,7 @@ export async function getClientDeletionImpact(
     listInconsistentCurrentAssociationSnapshots(id, prisma),
     prisma.deliverySuccessNotification.count({ where: { clientAccountId: id } }),
     prisma.externalWebhookNotificationReceipt.count({ where: { clientAccountId: id } }),
+    prisma.ghlLeadReceivedNotice.count({ where: { clientAccountId: id } }),
   ]);
   const funnelReferences = summarizeSourceFunnelClientReferences(id, sourceFunnels);
   const associationSnapshotRows = inconsistentSnapshots.rows.map((row) => ({
@@ -193,6 +196,11 @@ export async function getClientDeletionImpact(
       `${externalWebhookNotificationReceipts} external webhook notification receipt(s) retain this client's notice history and block deletion.`
     );
   }
+  if (ghlLeadReceivedNotices > 0) {
+    blockers.push(
+      `${ghlLeadReceivedNotices} GoHighLevel lead notice(s) retain this client's send history and block deletion.`
+    );
+  }
 
   return {
     clientAccountId: id,
@@ -216,6 +224,7 @@ export async function getClientDeletionImpact(
       inconsistentAssociationSnapshotRows: associationSnapshotRows.length,
       deliverySuccessNotifications,
       externalWebhookNotificationReceipts,
+      ghlLeadReceivedNotices,
     },
     affectedRows: funnelReferences.affectedRows,
     associationSnapshotRows,
@@ -233,6 +242,9 @@ export async function getClientDeletionImpact(
       externalWebhookNotificationReceipts > 0
         ? `${externalWebhookNotificationReceipts} external webhook notification receipt(s) block deletion and are not removed.`
         : "No external webhook notification receipt blocks deletion.",
+      ghlLeadReceivedNotices > 0
+        ? `${ghlLeadReceivedNotices} GoHighLevel lead notice(s) block deletion and are not removed.`
+        : "No GoHighLevel lead notice blocks deletion.",
     ].join(" "),
   };
 }

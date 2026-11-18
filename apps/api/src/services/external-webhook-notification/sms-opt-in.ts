@@ -7,13 +7,13 @@
 import type { PrismaClient } from "@prisma/client";
 
 import {
+  SMS_CONSENT_VERSION_GHL,
+  ghlLeadSmsDisclosureTextIsComplete,
   readSmsDisclosure,
-  smsDisclosureTextIsComplete,
   smsOptInClientAccountId,
   type SmsDisclosureView,
 } from "./sms-disclosure.js";
 import {
-  SMS_CONSENT_VERSION_V2,
   issueSmsHandsetChallenge,
   recordNotificationPhone,
   setSmsNotificationEnabled,
@@ -89,7 +89,7 @@ export async function beginRecipientSmsOptIn(
   | { ok: false; code: SmsOptInCode }
 > {
   if (input.affirmDisclosure !== true) return { ok: false, code: "consent_not_affirmed" };
-  if (input.version !== SMS_CONSENT_VERSION_V2) return { ok: false, code: "invalid_consent" };
+  if (input.version !== SMS_CONSENT_VERSION_GHL) return { ok: false, code: "invalid_consent" };
   const opened = await readRecipientSmsOptIn(db, input);
   if (!opened.ok) return opened;
   if (!opened.state.disclosure.recordable || !opened.state.disclosure.text) {
@@ -113,20 +113,21 @@ export async function beginRecipientSmsOptIn(
 }
 
 /**
- * Record v2 consent after handset proof. Leaves smsEnabled false.
- * The handset, phone, and STOP checks run on the locked row, so a phone
- * change or STOP cannot land consent on a different recipient.
+ * Record ghl-lead-sms-v1 after handset proof. Leaves smsEnabled false.
+ * A row that already stores v1 or v2 is not rewritten. The handset, phone,
+ * and STOP checks run on the locked row, so a phone change or STOP cannot
+ * land consent on a different recipient.
  */
 export async function recordRecipientSmsConsent(
   db: OptInDb,
   input: { clientAccountId: string; affirmDisclosure: boolean; version: string; env?: NodeJS.ProcessEnv }
 ): Promise<{ ok: true; state: SmsOptInState } | { ok: false; code: SmsOptInCode }> {
   if (input.affirmDisclosure !== true) return { ok: false, code: "consent_not_affirmed" };
-  if (input.version !== SMS_CONSENT_VERSION_V2) return { ok: false, code: "invalid_consent" };
+  if (input.version !== SMS_CONSENT_VERSION_GHL) return { ok: false, code: "invalid_consent" };
   const opened = await readRecipientSmsOptIn(db, input);
   if (!opened.ok) return opened;
   const text = opened.state.disclosure.text;
-  if (!opened.state.disclosure.recordable || !text || !smsDisclosureTextIsComplete(text)) {
+  if (!opened.state.disclosure.recordable || !text || !ghlLeadSmsDisclosureTextIsComplete(text)) {
     return { ok: false, code: "legal_urls_missing" };
   }
   const clientAccountId = input.clientAccountId;
@@ -147,15 +148,18 @@ export async function recordRecipientSmsConsent(
     const row = locked[0];
     if (!row) return { ok: false as const, code: "preference_missing" as const };
     if (row.suppression === "suppressed") return { ok: false as const, code: "stop_suppressed" as const };
+    if (row.consentRecordedAt && row.consentVersion !== SMS_CONSENT_VERSION_GHL) {
+      return { ok: false as const, code: "prior_consent_retained" as const };
+    }
     if (!row.phone || !row.verified) return { ok: false as const, code: "phone_not_verified" as const };
     if (!row.handsetProvenAt) return { ok: false as const, code: "handset_not_proven" as const };
     if (row.disclosureHash !== textHash) return { ok: false as const, code: "disclosure_mismatch" as const };
-    if (row.consentRecordedAt && row.consentVersion === SMS_CONSENT_VERSION_V2) {
+    if (row.consentRecordedAt && row.consentVersion === SMS_CONSENT_VERSION_GHL) {
       return { ok: true as const, code: "already_recorded" as const };
     }
     const updated = await tx.$executeRaw`
       UPDATE "ClientDeliveryNotificationPreference"
-      SET "smsConsentVersion" = ${SMS_CONSENT_VERSION_V2},
+      SET "smsConsentVersion" = ${SMS_CONSENT_VERSION_GHL},
           "smsConsentText" = ${text},
           "smsConsentRecordedAt" = transaction_timestamp(),
           "smsSuppressionState" = 'clear'::"ExternalWebhookSmsSuppression",
@@ -173,12 +177,16 @@ export async function recordRecipientSmsConsent(
     `;
     if (Number(updated) !== 1) {
       const again = await tx.clientDeliveryNotificationPreference.findUnique({ where: { clientAccountId } });
-      if (again?.smsSuppressionState === "suppressed") return { ok: false as const, code: "stop_suppressed" as const };
-      if (!again?.smsHandsetProvenAt) return { ok: false as const, code: "handset_not_proven" as const };
+      if (!again) return { ok: false as const, code: "invalid_consent" as const };
+      if (again.smsSuppressionState === "suppressed") return { ok: false as const, code: "stop_suppressed" as const };
+      if (!again.smsHandsetProvenAt) return { ok: false as const, code: "handset_not_proven" as const };
       if (again.smsHandsetDisclosureHash !== textHash) return { ok: false as const, code: "disclosure_mismatch" as const };
       if (again.recipientPhoneE164 !== row.phone) return { ok: false as const, code: "phone_not_verified" as const };
-      if (again.smsConsentRecordedAt && again.smsConsentVersion === SMS_CONSENT_VERSION_V2) {
+      if (again.smsConsentRecordedAt && again.smsConsentVersion === SMS_CONSENT_VERSION_GHL) {
         return { ok: true as const, code: "already_recorded" as const };
+      }
+      if (again.smsConsentRecordedAt && again.smsConsentVersion !== SMS_CONSENT_VERSION_GHL) {
+        return { ok: false as const, code: "prior_consent_retained" as const };
       }
       return { ok: false as const, code: "invalid_consent" as const };
     }

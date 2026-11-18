@@ -45,8 +45,9 @@ test("migration directory includes the external webhook foundation and the prior
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .sort();
-  assert.equal(dirs.length, 116);
+  assert.equal(dirs.length, 123);
   assert.ok(dirs.includes("20261113223000_external_webhook_notification_receipts"));
+  assert.ok(dirs.includes("20261117223000_ghl_lead_received_notice"));
   assert.ok(dirs.includes("20261116193000_external_webhook_destination_config_request"));
   assert.ok(dirs.includes("20261113194500_external_webhook_destination_foundation"));
   assert.ok(dirs.includes("20261113213000_external_webhook_attempt_sending"));

@@ -25,7 +25,7 @@ const verbalSchema = z
   .object({
     phoneE164: z.string().regex(E164),
     affirmativeResponse: z.string().trim().min(2).max(500),
-    disclosureVersion: z.literal("external-webhook-sms-v2"),
+    disclosureVersion: z.literal("ghl-lead-sms-v1"),
     confirmationEmail: z.string().trim().email().max(320),
     evidence: z.string().trim().max(500).optional(),
   })

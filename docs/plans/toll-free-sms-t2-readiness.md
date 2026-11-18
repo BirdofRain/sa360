@@ -27,9 +27,11 @@ be enabled.
 | Path | What it does | SMS |
 | --- | --- | --- |
 | One-time link | `GET/POST /public/sms-opt-in/:token`. No portal session. The page checkbox starts unchecked. Consent is recorded only when the recipient submits `affirmDisclosure: true` and both legal URLs are configured. | Turns on only after that submit |
-| Verbal note | `POST /admin/v1/team-workspace/clients/:clientAccountId/sms-verbal-consent`. Matt, Alex, or Aaron, identified by a verified staff assertion. Stores the words, disclosure version `external-webhook-sms-v2`, timestamp, operator id, phone, and evidence as `pending_confirmation`. | Stays off |
+| Verbal note | `POST /admin/v1/team-workspace/clients/:clientAccountId/sms-verbal-consent`. Matt, Alex, or Aaron, identified by a verified staff assertion. A new note stores disclosure version `ghl-lead-sms-v1`, the words, timestamp, operator id, phone, and evidence as `pending_confirmation`. A row that already stores `external-webhook-sms-v2` is not rewritten. | Stays off |
 | Link only | `POST /admin/v1/team-workspace/clients/:clientAccountId/sms-opt-in-link`. Same operators. Does not claim a verbal yes. | Stays off until the recipient submits the link |
-| Optional portal | `/portal/sms-notifications` and `/client/v1/sms-opt-in`. A signed-in client may use it. It is not required. | Same v2 record |
+| Optional portal | `/portal/sms-notifications` and `/client/v1/sms-opt-in`. A signed-in client may use it. It is not required. | New confirmation stores `ghl-lead-sms-v1`. An existing v1 or v2 row stays as recorded |
+
+New opt-in copy is the GoHighLevel lead-received disclosure. The sample message and the NO-GO checklist are in `docs/plans/ghl-lead-sms-notice.md`. Previously recorded `external-webhook-sms-v1` and `external-webhook-sms-v2` rows still authorize only the external-webhook notice. They do not authorize `ghl_lead_received`.
 
 The public page source is `apps/admin-coc/src/app/portal/sms-opt-in/[token]/page.tsx`.
 That file is not a published URL. Do not give Twilio a production opt-in URL

@@ -16,10 +16,10 @@ import { externalWebhookNoticeCallbackRoutes } from "../../routes/external-webho
 import { discoverExternalWebhookNotices } from "./notice-discovery.js";
 import { dispatchExternalWebhookNotice } from "./notice-dispatch.js";
 import { runIsolatedSmsCanary } from "./sms-canary.js";
-import { confirmSmsHandsetInbound, recordNotificationPhone, suppressSmsLocally } from "./sms-consent.js";
+import { confirmSmsHandsetInbound, recordNotificationPhone, recordSmsConsent, setSmsNotificationEnabled, suppressSmsLocally, SMS_CONSENT_VERSION_V2 } from "./sms-consent.js";
 import { beginRecipientSmsOptIn, recordRecipientSmsConsent, setRecipientSmsEnabled } from "./sms-opt-in.js";
 import { confirmSmsOptInLink, issueSmsOptInLink, readSmsConsentStatus } from "./sms-opt-in-link.js";
-import { SMS_CONSENT_VERSION_V2 } from "./sms-disclosure.js";
+import { SMS_CONSENT_VERSION_GHL, composeSmsConsentText } from "./sms-disclosure.js";
 import { twilioRequestSignature } from "./twilio-signature.js";
 import { readTwilioMessagingConfig } from "./twilio-programmable-messaging.js";
 
@@ -143,7 +143,7 @@ test("recipient opt-in keeps phone, consent, handset proof, and STOP apart", asy
     method: "POST",
     url: "/sms-opt-in",
     headers: { ...portalHeaders(clientAccountId), "content-type": "application/json" },
-    payload: { phoneE164: phone, affirmDisclosure: false, version: SMS_CONSENT_VERSION_V2 },
+    payload: { phoneE164: phone, affirmDisclosure: false, version: SMS_CONSENT_VERSION_GHL },
   });
   assert.equal(unchecked.statusCode, 400);
   assert.match(unchecked.body, /consent_not_affirmed/);
@@ -156,7 +156,7 @@ test("recipient opt-in keeps phone, consent, handset proof, and STOP apart", asy
     method: "POST",
     url: "/sms-opt-in",
     headers: { ...portalHeaders(clientAccountId), "content-type": "application/json" },
-    payload: { phoneE164: phone, affirmDisclosure: true, version: SMS_CONSENT_VERSION_V2 },
+    payload: { phoneE164: phone, affirmDisclosure: true, version: SMS_CONSENT_VERSION_GHL },
   });
   assert.equal(missing.statusCode, 409);
   assert.match(missing.body, /legal_urls_missing/);
@@ -167,7 +167,7 @@ test("recipient opt-in keeps phone, consent, handset proof, and STOP apart", asy
     method: "POST",
     url: "/sms-opt-in",
     headers: { ...portalHeaders(clientAccountId), "content-type": "application/json" },
-    payload: { phoneE164: phone, affirmDisclosure: true, version: SMS_CONSENT_VERSION_V2 },
+    payload: { phoneE164: phone, affirmDisclosure: true, version: SMS_CONSENT_VERSION_GHL },
   });
   assert.equal(begun.statusCode, 200);
   const started = begun.json() as {
@@ -228,16 +228,16 @@ test("recipient opt-in keeps phone, consent, handset proof, and STOP apart", asy
     method: "POST",
     url: "/sms-opt-in/consent",
     headers: { ...portalHeaders(clientAccountId), "content-type": "application/json" },
-    payload: { affirmDisclosure: true, version: SMS_CONSENT_VERSION_V2 },
+    payload: { affirmDisclosure: true, version: SMS_CONSENT_VERSION_GHL },
   });
   assert.equal(consented.statusCode, 200);
   const consentBody = consented.json() as { consentRecorded: boolean; smsEnabled: boolean; consentVersion: string };
   assert.equal(consentBody.consentRecorded, true);
   assert.equal(consentBody.smsEnabled, false);
-  assert.equal(consentBody.consentVersion, SMS_CONSENT_VERSION_V2);
+  assert.equal(consentBody.consentVersion, SMS_CONSENT_VERSION_GHL);
   const consentedRow = await prisma.clientDeliveryNotificationPreference.findUniqueOrThrow({ where: { clientAccountId } });
   assert.ok(consentedRow.smsConsentRecordedAt);
-  assert.equal(consentedRow.smsConsentVersion, SMS_CONSENT_VERSION_V2);
+  assert.equal(consentedRow.smsConsentVersion, SMS_CONSENT_VERSION_GHL);
   assert.match(consentedRow.smsConsentText ?? "", /Life Agent Launch/);
   assert.match(consentedRow.smsConsentText ?? "", /Message and data rates may apply/);
   assert.match(consentedRow.smsConsentText ?? "", /Reply STOP to opt out/);
@@ -316,7 +316,7 @@ test("a canary cannot discover history or send email, and it places at most one 
     method: "POST",
     url: "/sms-opt-in",
     headers: { ...portalHeaders(sandbox), "content-type": "application/json" },
-    payload: { phoneE164: phone, affirmDisclosure: true, version: SMS_CONSENT_VERSION_V2 },
+    payload: { phoneE164: phone, affirmDisclosure: true, version: SMS_CONSENT_VERSION_GHL },
   });
   const code = (begun.json() as { challengeCode: string }).challengeCode;
   const callbacks = Fastify();
@@ -340,7 +340,7 @@ test("a canary cannot discover history or send email, and it places at most one 
     method: "POST",
     url: "/sms-opt-in/consent",
     headers: { ...portalHeaders(sandbox), "content-type": "application/json" },
-    payload: { affirmDisclosure: true, version: SMS_CONSENT_VERSION_V2 },
+    payload: { affirmDisclosure: true, version: SMS_CONSENT_VERSION_GHL },
   });
   assert.equal(consented.statusCode, 200);
   const enabled = await portal.inject({
@@ -350,6 +350,10 @@ test("a canary cannot discover history or send email, and it places at most one 
     payload: { enabled: true },
   });
   assert.equal(enabled.statusCode, 200);
+  const ghlConsent = await prisma.clientDeliveryNotificationPreference.findUniqueOrThrow({
+    where: { clientAccountId: sandbox },
+  });
+  assert.equal(ghlConsent.smsConsentVersion, SMS_CONSENT_VERSION_GHL);
 
   const attempt = await accept(sandbox, "canary_lead");
   const oldAttempt = await accept(historical, "historical_lead");
@@ -393,9 +397,30 @@ test("a canary cannot discover history or send email, and it places at most one 
 
   let smsCalls = 0;
   let emailCalls = 0;
-  const first = await runIsolatedSmsCanary(prisma, {
+  const refused = await runIsolatedSmsCanary(prisma, {
     attemptId: attempt.id,
     env: canaryEnv,
+    twilioConfig: twilioReady,
+    sms: async () => {
+      smsCalls += 1;
+      throw new Error("ghl_consent_must_not_send_webhook_sms");
+    },
+  });
+  assert.equal(refused.smsCalls, 0);
+  assert.equal(refused.skipped, "recipient_not_ready");
+  assert.equal(smsCalls, 0);
+  const webhookClient = await createClient();
+  await enroll(webhookClient, "+15555551922");
+  const webhookAttempt = await accept(webhookClient, "webhook_canary_lead");
+  const webhookEnv = {
+    ...env,
+    SA360_SMS_CANARY_CLIENT_ACCOUNT_ID: webhookClient,
+    SA360_SMS_CANARY_ATTEMPT_ID: webhookAttempt.id,
+    SA360_SMS_CANARY_RECIPIENT_E164: "+15555551922",
+  };
+  const first = await runIsolatedSmsCanary(prisma, {
+    attemptId: webhookAttempt.id,
+    env: webhookEnv,
     twilioConfig: twilioReady,
     sms: async () => {
       smsCalls += 1;
@@ -418,8 +443,8 @@ test("a canary cannot discover history or send email, and it places at most one 
   assert.equal(await prisma.externalWebhookNotificationReceipt.count({ where: { attemptId: attempt.id, channel: "email" } }), 0);
 
   const second = await runIsolatedSmsCanary(prisma, {
-    attemptId: attempt.id,
-    env: canaryEnv,
+    attemptId: webhookAttempt.id,
+    env: webhookEnv,
     twilioConfig: twilioReady,
     sms: async () => {
       smsCalls += 1;
@@ -615,51 +640,16 @@ function canaryEnvFor(clientAccountId: string, attemptId: string, phone: string)
 }
 
 async function enroll(clientAccountId: string, phone: string) {
-  const portal = Fastify();
-  const env = optInEnv(clientAccountId);
-  await portal.register(clientSmsOptInRoutes, { env });
-  const begun = await portal.inject({
-    method: "POST",
-    url: "/sms-opt-in",
-    headers: { ...portalHeaders(clientAccountId), "content-type": "application/json" },
-    payload: { phoneE164: phone, affirmDisclosure: true, version: SMS_CONSENT_VERSION_V2 },
+  const recordedPhone = await recordNotificationPhone(prisma, { clientAccountId, phoneE164: phone });
+  assert.equal(recordedPhone.ok, true);
+  const consent = await recordSmsConsent(prisma, {
+    clientAccountId,
+    version: SMS_CONSENT_VERSION_V2,
+    text: composeSmsConsentText({ privacyPolicyUrl: PRIVACY, termsUrl: TERMS }),
   });
-  assert.equal(begun.statusCode, 200);
-  const code = (begun.json() as { challengeCode: string }).challengeCode;
-  const callbacks = Fastify();
-  await callbacks.register(externalWebhookNoticeCallbackRoutes, {
-    statusUrl: STATUS_URL,
-    inboundUrl: INBOUND_URL,
-    authToken: TOKEN,
-    env,
-  });
-  const ownParams = { From: phone, Body: `OWN ${code}` };
-  const owned = await callbacks.inject({
-    method: "POST",
-    url: "/integrations/twilio/external-webhook-notice/inbound",
-    headers: {
-      "content-type": "application/x-www-form-urlencoded",
-      "x-twilio-signature": twilioRequestSignature(INBOUND_URL, ownParams, TOKEN),
-    },
-    payload: new URLSearchParams(ownParams).toString(),
-  });
-  assert.equal(owned.statusCode, 200);
-  const consented = await portal.inject({
-    method: "POST",
-    url: "/sms-opt-in/consent",
-    headers: { ...portalHeaders(clientAccountId), "content-type": "application/json" },
-    payload: { affirmDisclosure: true, version: SMS_CONSENT_VERSION_V2 },
-  });
-  assert.equal(consented.statusCode, 200);
-  const enabled = await portal.inject({
-    method: "POST",
-    url: "/sms-opt-in/enabled",
-    headers: { ...portalHeaders(clientAccountId), "content-type": "application/json" },
-    payload: { enabled: true },
-  });
-  assert.equal(enabled.statusCode, 200);
-  await portal.close();
-  await callbacks.close();
+  assert.equal(consent.ok, true);
+  const enabled = await setSmsNotificationEnabled(prisma, { clientAccountId, enabled: true });
+  assert.equal(enabled.ok, true);
 }
 
 test("a one-time link records consent without portal login, and a verbal note stays pending", async () => {
@@ -709,7 +699,7 @@ test("a one-time link records consent without portal login, and a verbal note st
   assert.equal((confirmed.json() as { smsEnabled: boolean }).smsEnabled, true);
   const stored = await prisma.clientDeliveryNotificationPreference.findUniqueOrThrow({ where: { clientAccountId } });
   assert.equal(stored.smsConsentCollection, "recipient_link");
-  assert.equal(stored.smsConsentVersion, SMS_CONSENT_VERSION_V2);
+  assert.equal(stored.smsConsentVersion, SMS_CONSENT_VERSION_GHL);
   assert.equal(stored.smsOptInTokenHash, null);
   const reused = await app.inject({
     method: "POST",
@@ -799,7 +789,7 @@ test("token confirmation is atomic across replacement, replay, STOP, and a phone
   const stored = await prisma.clientDeliveryNotificationPreference.findUniqueOrThrow({ where: { clientAccountId } });
   assert.equal(stored.recipientPhoneE164, phone);
   assert.equal(stored.smsEnabled, true);
-  assert.equal(stored.smsConsentVersion, SMS_CONSENT_VERSION_V2);
+  assert.equal(stored.smsConsentVersion, SMS_CONSENT_VERSION_GHL);
   assert.equal(stored.smsOptInTokenHash, null);
   assert.equal(stored.smsHandsetProvenAt, null);
 
@@ -874,7 +864,7 @@ test("portal consent stays off the wrong phone when STOP, a phone change, or a s
     clientAccountId,
     phoneE164: phone,
     affirmDisclosure: true,
-    version: SMS_CONSENT_VERSION_V2,
+    version: SMS_CONSENT_VERSION_GHL,
     env,
   });
   assert.equal(begun.ok, true);
@@ -890,14 +880,14 @@ test("portal consent stays off the wrong phone when STOP, a phone change, or a s
     clientAccountId: phoneClient,
     phoneE164: original,
     affirmDisclosure: true,
-    version: SMS_CONSENT_VERSION_V2,
+    version: SMS_CONSENT_VERSION_GHL,
     env: phoneEnv,
   });
   assert.equal(phoneBegun.ok, true);
   if (!phoneBegun.ok) return;
   assert.equal((await confirmSmsHandsetInbound(prisma, { phoneE164: original, code: phoneBegun.challengeCode })).ok, true);
   await Promise.all([
-    recordRecipientSmsConsent(prisma, { clientAccountId: phoneClient, affirmDisclosure: true, version: SMS_CONSENT_VERSION_V2, env: phoneEnv }),
+    recordRecipientSmsConsent(prisma, { clientAccountId: phoneClient, affirmDisclosure: true, version: SMS_CONSENT_VERSION_GHL, env: phoneEnv }),
     recordNotificationPhone(prisma, { clientAccountId: phoneClient, phoneE164: moved }),
   ]);
   const phoneRow = await prisma.clientDeliveryNotificationPreference.findUniqueOrThrow({ where: { clientAccountId: phoneClient } });
@@ -914,7 +904,7 @@ test("portal consent stays off the wrong phone when STOP, a phone change, or a s
     clientAccountId: stopClient,
     phoneE164: stopPhone,
     affirmDisclosure: true,
-    version: SMS_CONSENT_VERSION_V2,
+    version: SMS_CONSENT_VERSION_GHL,
     env: stopEnv,
   });
   assert.equal(stopBegun.ok, true);
@@ -923,7 +913,7 @@ test("portal consent stays off the wrong phone when STOP, a phone change, or a s
   const recorded = await recordRecipientSmsConsent(prisma, {
     clientAccountId: stopClient,
     affirmDisclosure: true,
-    version: SMS_CONSENT_VERSION_V2,
+    version: SMS_CONSENT_VERSION_GHL,
     env: stopEnv,
   });
   assert.equal(recorded.ok, true);
@@ -945,14 +935,14 @@ test("portal consent stays off the wrong phone when STOP, a phone change, or a s
   const duplicate = await recordRecipientSmsConsent(prisma, {
     clientAccountId,
     affirmDisclosure: true,
-    version: SMS_CONSENT_VERSION_V2,
+    version: SMS_CONSENT_VERSION_GHL,
     env,
   });
   assert.equal(duplicate.ok, true);
   const duplicateAgain = await recordRecipientSmsConsent(prisma, {
     clientAccountId,
     affirmDisclosure: true,
-    version: SMS_CONSENT_VERSION_V2,
+    version: SMS_CONSENT_VERSION_GHL,
     env,
   });
   assert.equal(duplicateAgain.ok, true);
@@ -976,7 +966,7 @@ function verbalBody(phone: string) {
   return {
     phoneE164: phone,
     affirmativeResponse: "Yes, text this number.",
-    disclosureVersion: SMS_CONSENT_VERSION_V2,
+    disclosureVersion: SMS_CONSENT_VERSION_GHL,
     confirmationEmail: "recipient@lifeagentlaunch.invalid",
     evidence: "Operator call note in the local test.",
   };

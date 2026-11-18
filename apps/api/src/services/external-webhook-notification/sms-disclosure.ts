@@ -14,11 +14,12 @@ export const SMS_TERMS_URL_ENV = "SA360_SMS_TERMS_URL";
 export const SMS_OPT_IN_CLIENT_ENV = "SA360_SMS_OPT_IN_CLIENT_ACCOUNT_ID";
 export const SMS_OPT_IN_PUBLIC_ORIGIN_ENV = "SA360_SMS_OPT_IN_PUBLIC_ORIGIN";
 
-/** Named Team Workspace operators. A mailbox outside this list cannot record verbal consent. */
+/** Named SMS consent operators. A mailbox outside this list cannot issue a link or record a verbal note. */
 export const SMS_VERBAL_OPERATOR_EMAILS = [
   "matt@lifeagentlaunch.com",
   "alex@lifeagentlaunch.com",
   "aaron@lifeagentlaunch.com",
+  "sam@lifeagentlaunch.com",
 ] as const;
 
 export const SMS_DISCLOSURE = {

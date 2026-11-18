@@ -1,6 +1,6 @@
 /**
  * Team Workspace verbal SMS note.
- * Only Matt, Alex, and Aaron, identified by a verified staff assertion, may record one.
+ * Only Matt, Alex, Aaron, and Sam, identified by a verified staff assertion, may record one.
  * The note stays pending_confirmation. It does not enable SMS.
  */
 

@@ -3,9 +3,16 @@
 import { adminRequestJson } from "@/lib/admin-api/server";
 import { requireStaffWorkspacePermission } from "@/lib/admin-coc-session-guard";
 import { normalizeTeamWorkspaceClientId } from "@/lib/team-workspace/contract";
+import { tryNormalizeSmsConsentPhone } from "@/lib/sms-consent-phone";
 import type { SmsConsentStatusResult, SmsEmailResult, SmsVerbalActionResult } from "@/components/team-workspace/sms-verbal-consent";
 
 const E164 = /^\+[1-9]\d{7,14}$/;
+
+function canonicalSmsPhone(raw: string): string | null {
+  const normalized = tryNormalizeSmsConsentPhone(raw);
+  if (!normalized.ok || !E164.test(normalized.e164)) return null;
+  return normalized.e164;
+}
 
 export async function recordVerbalSmsConsentAction(input: {
   clientAccountId: string;
@@ -16,14 +23,15 @@ export async function recordVerbalSmsConsentAction(input: {
 }): Promise<SmsVerbalActionResult> {
   await requireStaffWorkspacePermission("team_workspace");
   const id = normalizeTeamWorkspaceClientId(input.clientAccountId);
-  if (!id || !E164.test(input.phoneE164.trim())) return { ok: false, error: "That mobile number is not valid." };
+  const phoneE164 = canonicalSmsPhone(input.phoneE164);
+  if (!id || !phoneE164) return { ok: false, error: "That mobile number is not valid." };
   const saved = await adminRequestJson<{
     status?: string;
     smsEnabled?: boolean;
     consentRecorded?: boolean;
     email?: string;
   }>("POST", `/admin/v1/team-workspace/clients/${encodeURIComponent(id)}/sms-verbal-consent`, {
-    phoneE164: input.phoneE164.trim(),
+    phoneE164,
     affirmativeResponse: input.affirmativeResponse,
     disclosureVersion: "ghl-lead-sms-v1",
     confirmationEmail: input.confirmationEmail.trim(),
@@ -42,12 +50,13 @@ export async function issueSmsOptInLinkAction(input: {
 }): Promise<SmsVerbalActionResult> {
   await requireStaffWorkspacePermission("team_workspace");
   const id = normalizeTeamWorkspaceClientId(input.clientAccountId);
-  if (!id || !E164.test(input.phoneE164.trim())) return { ok: false, error: "That mobile number is not valid." };
+  const phoneE164 = canonicalSmsPhone(input.phoneE164);
+  if (!id || !phoneE164) return { ok: false, error: "That mobile number is not valid." };
   const saved = await adminRequestJson<{ smsEnabled?: boolean; consentRecorded?: boolean; email?: string }>(
     "POST",
     `/admin/v1/team-workspace/clients/${encodeURIComponent(id)}/sms-opt-in-link`,
     {
-      phoneE164: input.phoneE164.trim(),
+      phoneE164,
       confirmationEmail: input.confirmationEmail.trim() || undefined,
     }
   );

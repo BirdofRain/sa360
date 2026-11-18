@@ -27,6 +27,10 @@ test("Team Workspace shows the email result and retries only when it was not acc
     }),
   };
   render(<SmsVerbalConsentPanel clientAccountId="client_a" actions={actions} />);
+  const phone = screen.getByLabelText("Mobile number");
+  assert.equal(phone.getAttribute("type"), "tel");
+  assert.equal(phone.getAttribute("autocomplete"), "tel");
+  assert.equal(phone.getAttribute("placeholder"), "(919) 555-0123");
   fireEvent.click(screen.getByRole("button", { name: "Check confirmation status" }));
   assert.match((await screen.findByText(/Recipient consent is not confirmed/)).textContent ?? "", /Texts are off/);
   assert.match(document.body.textContent ?? "", /does not send a message/);

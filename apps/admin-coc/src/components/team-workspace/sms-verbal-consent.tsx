@@ -102,7 +102,7 @@ export function SmsVerbalConsentPanel({
     <div className="mt-4 space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
       <h4 className="text-sm font-semibold text-slate-950">SMS confirmation</h4>
       <p className="text-sm text-slate-700">
-        A verbal note from Matt, Alex, or Aaron stays pending confirmation. The mobile number is staff-supplied. Saving
+        A verbal note from an authorized operator stays pending confirmation. The mobile number is staff-supplied. Saving
         it does not prove handset ownership and does not record recipient consent. Texts stay off until the recipient
         checks the confirmation page. Portal login is not required.
       </p>

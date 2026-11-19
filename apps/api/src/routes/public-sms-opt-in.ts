@@ -7,7 +7,12 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
 import { prisma } from "../lib/db.js";
-import { confirmSmsOptInLink, readSmsOptInLink, type SmsLinkCode } from "../services/external-webhook-notification/sms-opt-in-link.js";
+import {
+  confirmSmsOptInLink,
+  confirmSupersedingGhlConsent,
+  readSmsOptInLink,
+  type SmsLinkCode,
+} from "../services/external-webhook-notification/sms-opt-in-link.js";
 
 const TOKEN = /^[A-Za-z0-9_-]{43}$/;
 const confirmSchema = z.object({ affirmDisclosure: z.literal(true) }).strict();
@@ -45,8 +50,28 @@ export async function publicSmsOptInRoutes(app: FastifyInstance, opts: { env?: N
       recipientConsentConfirmed: read.recipientConsentConfirmed,
       handsetOwnershipProven: read.handsetOwnershipProven,
       consentRecorded: read.consentRecorded,
-      smsEnabled: false,
+      smsEnabled: read.smsEnabled,
       pendingConfirmation: read.pendingConfirmation,
+      priorProgram: read.priorProgram,
+      portalLoginRequired: false,
+    });
+  });
+
+  app.post("/public/sms-opt-in/:token/ghl-program", async (request, reply) => {
+    const token = pathToken(request);
+    if (!token) return reply.status(404).send({ ok: false, error: "token_invalid" });
+    const parsed = confirmSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.status(400).send({ ok: false, error: "consent_not_affirmed" });
+    const confirmed = await confirmSupersedingGhlConsent(prisma, { rawToken: token, affirmDisclosure: true, env });
+    if (!confirmed.ok) return reply.status(STATUS[confirmed.code] ?? 409).send({ ok: false, error: confirmed.code });
+    return reply.send({
+      ok: true,
+      consentRecorded: true,
+      smsEnabled: true,
+      priorProgram: confirmed.priorProgram,
+      phoneSource: "staff_supplied",
+      recipientConsentConfirmed: true,
+      handsetOwnershipProven: false,
       portalLoginRequired: false,
     });
   });

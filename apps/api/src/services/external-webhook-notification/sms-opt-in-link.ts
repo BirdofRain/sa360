@@ -4,19 +4,25 @@
  * The link is the recipient's own unchecked confirmation. Portal login is not required.
  */
 
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 
 import type { PrismaClient } from "@prisma/client";
 
 import { sendTransactionalEmail, type SendTransactionalEmailResult } from "../../lib/transactional-email.js";
 import {
   SMS_CONSENT_VERSION_GHL,
+  SMS_CONSENT_VERSION_V2,
   ghlLeadSmsDisclosureTextIsComplete,
   readSmsDisclosure,
   smsOptInPublicOrigin,
   type SmsDisclosureView,
 } from "./sms-disclosure.js";
-import { recordNotificationPhone, smsDisclosureHash, type SmsConsentCode } from "./sms-consent.js";
+import {
+  SMS_CONSENT_VERSION,
+  recordNotificationPhone,
+  smsDisclosureHash,
+  type SmsConsentCode,
+} from "./sms-consent.js";
 
 const TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -257,8 +263,9 @@ export async function readSmsOptInLink(
       recipientConsentConfirmed: boolean;
       handsetOwnershipProven: boolean;
       consentRecorded: boolean;
-      smsEnabled: false;
+      smsEnabled: boolean;
       pendingConfirmation: boolean;
+      priorProgram: PriorWebhookConsentVersion | null;
     }
   | { ok: false; code: SmsLinkCode }
 > {
@@ -272,9 +279,202 @@ export async function readSmsOptInLink(
     recipientConsentConfirmed: row.consentRecorded,
     handsetOwnershipProven: row.handsetProven,
     consentRecorded: row.consentRecorded,
-    smsEnabled: false,
+    smsEnabled: row.smsEnabled,
     pendingConfirmation: row.collection === "pending_confirmation",
+    priorProgram: row.priorProgram,
   };
+}
+
+export type PriorWebhookConsentVersion = typeof SMS_CONSENT_VERSION | typeof SMS_CONSENT_VERSION_V2;
+
+/**
+ * Put a one-time token on a row that already stores webhook consent.
+ * Does not change the stored version, text, timestamp, STOP state, or SMS switch.
+ */
+export async function issueSupersedingGhlConsentLink(
+  db: LinkDb,
+  input: {
+    clientAccountId: string;
+    phoneE164: string;
+    confirmationEmail?: string | null;
+    env?: NodeJS.ProcessEnv;
+    now?: Date;
+    mail?: Mailer;
+  }
+): Promise<
+  | {
+      ok: true;
+      rawToken: string;
+      expiresAt: Date;
+      path: string;
+      url: string | null;
+      email: SmsLinkOffer;
+      smsEnabled: boolean;
+      consentRecorded: true;
+      priorProgram: PriorWebhookConsentVersion;
+    }
+  | { ok: false; code: SmsLinkCode }
+> {
+  const phone = input.phoneE164.trim();
+  if (!/^\+[1-9]\d{7,14}$/.test(phone)) return { ok: false, code: "invalid_e164" };
+  const disclosure = readSmsDisclosure(input.env);
+  if (!disclosure.recordable || !disclosure.text || !ghlLeadSmsDisclosureTextIsComplete(disclosure.text)) {
+    return { ok: false, code: "legal_urls_missing" };
+  }
+  const now = input.now ?? new Date();
+  const rawToken = randomBytes(32).toString("base64url");
+  const tokenHash = hashOptInToken(rawToken);
+  const expiresAt = new Date(now.getTime() + OPT_IN_TTL_MS);
+  const disclosureHash = smsDisclosureHash(disclosure.text);
+  const clientAccountId = input.clientAccountId.trim();
+  const updated = await db.$executeRaw`
+    UPDATE "ClientDeliveryNotificationPreference"
+    SET "smsOptInTokenHash" = ${tokenHash},
+        "smsOptInTokenExpiresAt" = ${expiresAt},
+        "smsHandsetDisclosureHash" = ${disclosureHash},
+        "revision" = "revision" + 1,
+        "updatedAt" = transaction_timestamp()
+    WHERE "clientAccountId" = ${clientAccountId}
+      AND "recipientPhoneE164" = ${phone}
+      AND "smsSuppressionState" IS DISTINCT FROM 'suppressed'
+      AND "smsConsentRecordedAt" IS NOT NULL
+      AND "smsConsentVersion" IN (${SMS_CONSENT_VERSION}, ${SMS_CONSENT_VERSION_V2})
+  `;
+  if (Number(updated) !== 1) {
+    const row = await db.clientDeliveryNotificationPreference.findUnique({ where: { clientAccountId } });
+    if (row?.smsSuppressionState === "suppressed") return { ok: false, code: "stop_suppressed" };
+    if (!row?.smsConsentRecordedAt || (row.smsConsentVersion !== SMS_CONSENT_VERSION && row.smsConsentVersion !== SMS_CONSENT_VERSION_V2)) {
+      return { ok: false, code: "invalid_consent" };
+    }
+    return { ok: false, code: "phone_not_verified" };
+  }
+  const row = await db.clientDeliveryNotificationPreference.findUnique({ where: { clientAccountId } });
+  if (
+    !row ||
+    row.smsOptInTokenHash !== tokenHash ||
+    (row.smsConsentVersion !== SMS_CONSENT_VERSION && row.smsConsentVersion !== SMS_CONSENT_VERSION_V2)
+  ) {
+    return { ok: false, code: "invalid_consent" };
+  }
+  const priorProgram = row.smsConsentVersion as PriorWebhookConsentVersion;
+  const path = `/portal/sms-opt-in/${rawToken}`;
+  const origin = smsOptInPublicOrigin(input.env);
+  const url = origin ? `${origin}${path}` : null;
+  const email = await offerLinkByEmail({
+    to: input.confirmationEmail ?? "",
+    url,
+    disclosure,
+    env: input.env,
+    mail: input.mail,
+    idempotencyKey: `sms-ghl-program:${tokenHash}`,
+  });
+  return {
+    ok: true,
+    rawToken,
+    expiresAt,
+    path,
+    url,
+    email,
+    smsEnabled: row.smsEnabled,
+    consentRecorded: true,
+    priorProgram,
+  };
+}
+
+/**
+ * Archive webhook consent and store ghl-lead-sms-v1 after a new checkbox submit.
+ * The ordinary link confirm does not call this. STOP is not cleared.
+ */
+export async function confirmSupersedingGhlConsent(
+  db: LinkDb,
+  input: { rawToken: string; affirmDisclosure: boolean; env?: NodeJS.ProcessEnv; now?: Date }
+): Promise<{ ok: true; consentRecorded: true; smsEnabled: true; priorProgram: PriorWebhookConsentVersion } | { ok: false; code: SmsLinkCode }> {
+  if (input.affirmDisclosure !== true) return { ok: false, code: "consent_not_affirmed" };
+  if (!TOKEN_RE.test(input.rawToken)) return { ok: false, code: "token_invalid" };
+  const disclosure = readSmsDisclosure(input.env);
+  if (!disclosure.recordable || !disclosure.text || !ghlLeadSmsDisclosureTextIsComplete(disclosure.text)) {
+    return { ok: false, code: "legal_urls_missing" };
+  }
+  const now = input.now ?? new Date();
+  const tokenHash = hashOptInToken(input.rawToken);
+  const text = disclosure.text;
+  const textHash = smsDisclosureHash(text);
+  try {
+    return await db.$transaction(async (tx) => {
+      const locked = await tx.$queryRaw<SupersedeLockRow[]>`
+        SELECT "clientAccountId" AS "clientAccountId",
+               "recipientPhoneE164" AS "phone",
+               "smsConsentVersion" AS "version",
+               "smsConsentText" AS "consentText",
+               "smsConsentRecordedAt" AS "recordedAt",
+               "smsConsentCollection" AS "collection",
+               "smsVerbalAffirmation" AS "verbalAffirmation",
+               "smsVerbalDisclosureVersion" AS "verbalVersion",
+               "smsVerbalRecordedAt" AS "verbalRecordedAt",
+               "smsVerbalOperatorId" AS "verbalOperatorId",
+               "smsVerbalEvidence" AS "verbalEvidence",
+               "smsSuppressionState" AS "suppression",
+               "smsSuppressedAt" AS "suppressedAt",
+               "smsHandsetDisclosureHash" AS "disclosureHash",
+               "smsOptInTokenExpiresAt" AS "expiresAt"
+        FROM "ClientDeliveryNotificationPreference"
+        WHERE "smsOptInTokenHash" = ${tokenHash}
+        FOR UPDATE
+      `;
+      const row = locked[0];
+      if (!row?.phone || !row.expiresAt || !row.version || !row.consentText || !row.recordedAt) {
+        return { ok: false, code: "token_invalid" };
+      }
+      if (row.suppression === "suppressed" || row.suppressedAt) return { ok: false, code: "stop_suppressed" };
+      if (new Date(row.expiresAt).getTime() <= now.getTime()) return { ok: false, code: "token_expired" };
+      if (row.version !== SMS_CONSENT_VERSION && row.version !== SMS_CONSENT_VERSION_V2) {
+        return { ok: false, code: "invalid_consent" };
+      }
+      if (row.disclosureHash && row.disclosureHash !== textHash) return { ok: false, code: "disclosure_mismatch" };
+      const priorProgram = row.version;
+      await tx.$executeRaw`
+        INSERT INTO "ClientDeliverySmsConsentHistory" (
+          "id", "clientAccountId", "smsConsentVersion", "smsConsentText", "smsConsentRecordedAt",
+          "smsConsentCollection", "smsVerbalAffirmation", "smsVerbalDisclosureVersion",
+          "smsVerbalRecordedAt", "smsVerbalOperatorId", "smsVerbalEvidence",
+          "recipientPhoneE164", "archivedAt", "supersedingVersion", "createdAt"
+        ) VALUES (
+          ${randomUUID()}, ${row.clientAccountId}, ${priorProgram}, ${row.consentText}, ${row.recordedAt},
+          ${row.collection}, ${row.verbalAffirmation}, ${row.verbalVersion},
+          ${row.verbalRecordedAt}, ${row.verbalOperatorId}, ${row.verbalEvidence},
+          ${row.phone}, transaction_timestamp(), ${SMS_CONSENT_VERSION_GHL}, transaction_timestamp()
+        )
+      `;
+      const updated = await tx.$executeRaw`
+        UPDATE "ClientDeliveryNotificationPreference"
+        SET "smsConsentVersion" = ${SMS_CONSENT_VERSION_GHL},
+            "smsConsentText" = ${text},
+            "smsConsentRecordedAt" = transaction_timestamp(),
+            "smsConsentCollection" = 'recipient_link',
+            "smsEnabled" = true,
+            "smsEnabledAt" = COALESCE("smsEnabledAt", transaction_timestamp()),
+            "smsOptInTokenHash" = NULL,
+            "smsOptInTokenExpiresAt" = NULL,
+            "revision" = "revision" + 1,
+            "updatedAt" = transaction_timestamp()
+        WHERE "smsOptInTokenHash" = ${tokenHash}
+          AND "recipientPhoneE164" = ${row.phone}
+          AND "smsConsentVersion" = ${priorProgram}
+          AND "smsConsentText" = ${row.consentText}
+          AND "smsConsentRecordedAt" = ${row.recordedAt}
+          AND "smsSuppressionState" IS DISTINCT FROM 'suppressed'
+          AND "smsSuppressedAt" IS NULL
+          AND "smsOptInTokenExpiresAt" > ${now}
+      `;
+      if (Number(updated) !== 1) throw new Error("supersede_not_applied");
+      return { ok: true as const, consentRecorded: true as const, smsEnabled: true as const, priorProgram };
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === "supersede_not_applied") {
+      return { ok: false, code: "invalid_consent" };
+    }
+    throw error;
+  }
 }
 
 /**
@@ -364,6 +564,8 @@ async function findToken(
       disclosureHash: string | null;
       consentRecorded: boolean;
       handsetProven: boolean;
+      smsEnabled: boolean;
+      priorProgram: PriorWebhookConsentVersion | null;
     }
   | { ok: false; code: SmsLinkCode }
 > {
@@ -372,7 +574,11 @@ async function findToken(
   if (!row?.recipientPhoneE164 || !row.smsOptInTokenExpiresAt) return { ok: false, code: "token_invalid" };
   if (row.smsSuppressionState === "suppressed") return { ok: false, code: "stop_suppressed" };
   if (row.smsOptInTokenExpiresAt.getTime() <= now.getTime()) return { ok: false, code: "token_expired" };
-  if (row.smsConsentRecordedAt && row.smsEnabled) return { ok: false, code: "token_invalid" };
+  const priorProgram =
+    row.smsConsentVersion === SMS_CONSENT_VERSION || row.smsConsentVersion === SMS_CONSENT_VERSION_V2
+      ? row.smsConsentVersion
+      : null;
+  if (row.smsConsentRecordedAt && row.smsEnabled && !priorProgram) return { ok: false, code: "token_invalid" };
   return {
     ok: true,
     clientAccountId: row.clientAccountId,
@@ -381,8 +587,28 @@ async function findToken(
     disclosureHash: row.smsHandsetDisclosureHash,
     consentRecorded: Boolean(row.smsConsentRecordedAt),
     handsetProven: Boolean(row.smsHandsetProvenAt),
+    smsEnabled: row.smsEnabled,
+    priorProgram,
   };
 }
+
+type SupersedeLockRow = {
+  clientAccountId: string;
+  phone: string | null;
+  version: string | null;
+  consentText: string | null;
+  recordedAt: Date | null;
+  collection: string | null;
+  verbalAffirmation: string | null;
+  verbalVersion: string | null;
+  verbalRecordedAt: Date | null;
+  verbalOperatorId: string | null;
+  verbalEvidence: string | null;
+  suppression: string | null;
+  suppressedAt: Date | null;
+  disclosureHash: string | null;
+  expiresAt: Date | null;
+};
 
 type TokenLockRow = {
   phone: string | null;

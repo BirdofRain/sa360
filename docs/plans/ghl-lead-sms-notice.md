@@ -132,13 +132,16 @@ The opt-in link, the portal recorder, and verbal confirmation write
 already stored, they return `prior_consent_retained` and do not change
 `smsConsentVersion`, `smsConsentText`, or `smsConsentRecordedAt`.
 
-There is no workflow that keeps the historical sentence and records a new
-affirmative GHL consent beside it. That needs a separate migration: preserve
-the old version, text, and recorded time in new columns or a consent-history
-table, then require a new affirmative act before storing `ghl-lead-sms-v1`.
-Do not clear or delete the old row to make the current link succeed. Until
-that workflow exists, customer activation is NO-GO for anyone who already
-confirmed v1 or v2.
+`ClientDeliverySmsConsentHistory` is the archive for that move. The migration
+only creates the empty table. It does not copy or rewrite a stored row.
+A named operator can issue a separate link. The ordinary confirmation link
+still returns `prior_consent_retained` and writes no history. The recipient
+must check a second box on `POST /public/sms-opt-in/:token/ghl-program`.
+That submit copies the old version, text, timestamp, and operator evidence
+into the archive, then stores `ghl-lead-sms-v1`. A suppressed row is refused
+and is not archived. Customer activation stays NO-GO until this migration is
+reviewed and applied in production and each affected recipient completes that
+new checkbox. Do not clear a stored row to make the ordinary link succeed.
 
 ## Verification checklist
 
@@ -167,4 +170,6 @@ Do not enable either flag. Do not set `SA360_TWILIO_SMS_FROM`. Do not submit
 toll-free verification. Do not send a live SMS. People with stored v1 or v2
 consent are not enrolled in this message. Activating them requires a new
 affirmative `ghl-lead-sms-v1` record that preserves the historical consent
-evidence. That workflow is not in this change.
+evidence. The archive table and the separate checkbox are in the consent-history
+change. They do not run in production until that migration is applied, and they
+do not enroll anyone by themselves.

@@ -18,6 +18,8 @@ export type PortalSmsOptInPreview = {
   portalLoginRequired?: boolean;
   /** False when this page could not read whether consent is stored. */
   statusKnown?: boolean;
+  /** Set only when earlier webhook consent is still the stored program. */
+  priorProgram?: "external-webhook-sms-v1" | "external-webhook-sms-v2" | null;
 };
 
 export const PORTAL_SMS_OPT_IN_PREVIEW: PortalSmsOptInPreview = {

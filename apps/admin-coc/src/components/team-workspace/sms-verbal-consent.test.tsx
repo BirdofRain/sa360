@@ -16,6 +16,13 @@ test("Team Workspace shows the email result and retries only when it was not acc
       sends += 1;
       return { ok: true, status: "link_only", smsEnabled: false, consentRecorded: false, email: sends > 2 ? "sent" : "email_not_configured" };
     },
+    issueGhlProgramLink: async () => ({
+      ok: true,
+      status: "program_link",
+      smsEnabled: false,
+      consentRecorded: true,
+      email: "not_sent",
+    }),
     readStatus: async () => ({
       ok: true,
       recipientConsentConfirmed: false,

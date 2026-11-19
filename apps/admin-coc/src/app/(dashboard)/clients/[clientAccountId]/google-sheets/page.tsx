@@ -5,6 +5,7 @@ import { WarningBanner } from "@/components/dashboard/warning-banner";
 import {
   activateCompanySheetsDispatchAction,
   prepareCompanySheetsHistoryAction,
+  adoptPublishedMapForCampaignLeadAction,
   recoverCompanySheetsPersonHoldAction,
   releaseCompanySheetsPersonReservationAction,
   bindCompanySheetsTabAction,
@@ -141,6 +142,7 @@ export default async function ClientCompanyGoogleSheetsPage({
             bindTab: bindCompanySheetsTabAction,
             createTab: createCompanySheetsTabAction,
             setDispatch: activateCompanySheetsDispatchAction,
+            adoptPublishedMap: adoptPublishedMapForCampaignLeadAction,
             recoverPersonHold: recoverCompanySheetsPersonHoldAction,
             releasePersonReservation: releaseCompanySheetsPersonReservationAction,
             prepareSheetsHistory: prepareCompanySheetsHistoryAction,

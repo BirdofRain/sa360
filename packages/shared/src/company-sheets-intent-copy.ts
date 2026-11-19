@@ -102,6 +102,14 @@ export function companySheetsIntentOperatorCopy(input: {
       recovered: false,
     };
   }
+  if (input.status === "retryable" && reason === "published_map_adopted") {
+    return {
+      headline: "Retry scheduled",
+      detail: "The published map was copied onto this job. The drain appends it. Not delivered yet.",
+      delivered: false,
+      recovered: false,
+    };
+  }
   if (input.status === "retryable") {
     return {
       headline: "Retryable",

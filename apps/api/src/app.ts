@@ -24,6 +24,7 @@ import { adminDeliveryPlanRoutes } from "./routes/admin-delivery-plan.js";
 import { adminDeliveryReadinessRoutes } from "./routes/admin-delivery-readiness.js";
 import { adminClientsRoutes } from "./routes/admin-clients.js";
 import { adminSourceFunnelRoutes } from "./routes/admin-source-funnels.js";
+import { adminClientCampaignInventoryRoutes } from "./routes/admin-client-campaign-inventory.js";
 import { adminFacebookCaptureRoutes } from "./routes/admin-facebook-capture.js";
 import { adminFacebookAssociationCorrectionPreviewRoutes } from "./routes/admin-facebook-association-correction-preview.js";
 import { adminFacebookSourceResolutionRoutes } from "./routes/admin-facebook-source-resolution.js";
@@ -149,6 +150,7 @@ export async function buildApp() {
   await app.register(adminDeliveryReadinessRoutes, { prefix: "/admin/v1" });
   await app.register(adminClientsRoutes, { prefix: "/admin/v1" });
   await app.register(adminSourceFunnelRoutes, { prefix: "/admin/v1" });
+  await app.register(adminClientCampaignInventoryRoutes, { prefix: "/admin/v1" });
   await app.register(adminFacebookCaptureRoutes, { prefix: "/admin/v1" });
   await app.register(adminFacebookSourceResolutionRoutes, { prefix: "/admin/v1" });
   await app.register(adminFacebookAssociationCorrectionPreviewRoutes, { prefix: "/admin/v1" });

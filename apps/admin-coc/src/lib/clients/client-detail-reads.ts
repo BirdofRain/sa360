@@ -86,6 +86,12 @@ export const CLIENT_DETAIL_DIAGNOSTIC_READS: readonly ClientDetailReadSpec[] = [
     blocksInitialRender: false,
     essentialForClientSetup: false,
   },
+  {
+    operation: "campaign_inventory",
+    endpoint: "GET /admin/v1/clients/:id/campaign-inventory",
+    blocksInitialRender: false,
+    essentialForClientSetup: false,
+  },
 ];
 
 const specs = new Map(

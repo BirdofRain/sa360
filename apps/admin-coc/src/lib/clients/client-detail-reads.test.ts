@@ -26,6 +26,10 @@ test("client setup does not wait on diagnostic reads", () => {
     CLIENT_DETAIL_DIAGNOSTIC_READS.some((read) => read.operation === "onboarding_summary"),
     true
   );
+  const campaignInventory = CLIENT_DETAIL_DIAGNOSTIC_READS.find((read) => read.operation === "campaign_inventory");
+  assert.equal(campaignInventory?.endpoint, "GET /admin/v1/clients/:id/campaign-inventory");
+  assert.equal(campaignInventory?.blocksInitialRender, false);
+  assert.equal(campaignInventory?.essentialForClientSetup, false);
   assert.equal(
     CLIENT_DETAIL_CRITICAL_READS.find((read) => read.operation === "client_detail")?.blocksInitialRender,
     true

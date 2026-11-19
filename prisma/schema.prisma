@@ -1089,6 +1089,10 @@ model ClientAccount {
   /// Intended Company Sheets spreadsheet and worksheet. Restrict so account deletion cannot erase them.
   /// Not a CompanySheetsDestination and not read by delivery, dispatch, or routing.
   companySheetsDestinationConfigurationRequests CompanySheetsDestinationConfigurationRequest[]
+  /// Request-only campaign registry. Not a routing rule and not read by delivery.
+  clientCampaigns ClientCampaign[]
+  clientCampaignSourceIdentities ClientCampaignSourceIdentity[]
+  clientCampaignRegistryCommands ClientCampaignRegistryCommand[]
   /// One send record per source lead. Restrict so account deletion cannot erase send history.
   deliverySuccessNotifications DeliverySuccessNotification[]
 
@@ -1185,6 +1189,8 @@ model ClientGhlDestination {
   deliveryEnabled                  Boolean       @default(false)
   clientCutoverApproved            Boolean       @default(false)
   internalApprovalStatus           String        @default("not_reviewed")
+  /// Request-only campaign selections. They do not change this destination.
+  clientCampaignDestinationSelections ClientCampaignDestinationSelection[]
   createdAt                        DateTime      @default(now())
   updatedAt                        DateTime      @updatedAt
 }
@@ -1238,6 +1244,8 @@ model SourceFunnel {
   /// No database default and no backfill. Routing reads it only from the
   /// source association that won; it is not inferred from URL, niche, or product.
   leadTypeKey              String?
+  /// Request-only registry links. Saving a binding does not confirm origin.
+  clientCampaignSourceBindings ClientCampaignSourceBinding[]
   createdAt                DateTime                       @default(now())
   updatedAt                DateTime                       @updatedAt
 
@@ -1325,6 +1333,8 @@ model CampaignRoutingRule {
   updatedAt                     DateTime                 @updatedAt
 
   clientAccountRef ClientAccount? @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Restrict)
+  /// Request-only registry links. A binding does not create or activate a rule.
+  clientCampaignSourceBindings ClientCampaignSourceBinding[]
 
   @@index([masterClientAccountId, active, priority])
   @@index([readinessStatus])
@@ -1876,6 +1886,8 @@ model CompanySheetsDestination {
   createdAt                    DateTime                    @default(now())
   updatedAt                    DateTime                    @updatedAt
 
+  /// Request-only campaign selections. They do not change this destination or its tab contract.
+  clientCampaignDestinationSelections ClientCampaignDestinationSelection[]
   deliveryJobs CompanySheetsDeliveryJob[]
   tabContracts CompanySheetsTabContract[]
 
@@ -4958,4 +4970,184 @@ model StaffManagementEvent {
   createdAt             DateTime                  @default(now())
 
   @@index([staffPrincipalId, createdAt])
+}
+
+/// Nonoperational campaign configuration status.
+/// `draft`, `review`, and `ready` are the only values the registry API writes.
+/// `active`, `paused`, and `retired` exist so a later phase can store them.
+/// None of these values arm routing, pause delivery, or change a destination.
+enum ClientCampaignConfigurationStatus {
+  draft
+  review
+  ready
+  active
+  paused
+  retired
+}
+
+/// Stored request state for one source binding.
+/// `approved` means the exact-identity request was accepted for storage.
+/// It does not confirm a SourceFunnel, create a CampaignRoutingRule, or arm delivery.
+/// A disputed identity is not stored as a binding. The API returns REVIEW_REQUIRED instead.
+enum ClientCampaignSourceBindingStatus {
+  suggested
+  recorded
+  approved
+  superseded
+}
+
+enum ClientCampaignIdentifierKind {
+  provider_funnel_id
+  parent_url_key
+  campaign_id
+  form_id
+  adset_id
+  ad_id
+}
+
+enum ClientCampaignRegistryAction {
+  create
+  update
+  save_bindings
+  save_destination
+}
+
+/// One client's saved campaign configuration.
+/// This is not a CampaignRoutingRule and not an inventory key from the read-only inventory.
+/// Routing, ingestion, GoHighLevel, and Company Sheets do not read this table.
+model ClientCampaign {
+  id              String                            @id @default(cuid())
+  clientAccountId String
+  clientAccount   ClientAccount                     @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Restrict, onUpdate: Restrict)
+  /// Stable within the client. Display name, niche, and product are not the identity.
+  slug            String
+  displayName     String
+  nicheKey        String
+  productType     String
+  status          ClientCampaignConfigurationStatus @default(draft)
+  revision        Int                               @default(1)
+  createdByActor  String
+  updatedByActor  String
+  createdAt       DateTime                          @default(now())
+  updatedAt       DateTime                          @updatedAt
+
+  bindings    ClientCampaignSourceBinding[]
+  identities  ClientCampaignSourceIdentity[]
+  destination ClientCampaignDestinationSelection?
+  commands    ClientCampaignRegistryCommand[]
+
+  @@unique([clientAccountId, slug])
+  @@index([clientAccountId, updatedAt])
+}
+
+/// Requested source evidence for one campaign.
+/// Several bindings may belong to one campaign. An exact identity is not approved twice.
+model ClientCampaignSourceBinding {
+  id                    String                            @id @default(cuid())
+  clientCampaignId      String
+  clientCampaign        ClientCampaign                    @relation(fields: [clientCampaignId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  bindingKey            String
+  sourceFunnelId        String?
+  sourceFunnel          SourceFunnel?                     @relation(fields: [sourceFunnelId], references: [id], onDelete: SetNull, onUpdate: Restrict)
+  campaignRoutingRuleId String?
+  campaignRoutingRule   CampaignRoutingRule?              @relation(fields: [campaignRoutingRuleId], references: [id], onDelete: SetNull, onUpdate: Restrict)
+  /// Recorded note or label. Never a join key.
+  evidenceJson          Json                              @default("{}")
+  status                ClientCampaignSourceBindingStatus
+  revision              Int                               @default(1)
+  actor                 String
+  createdAt             DateTime                          @default(now())
+  updatedAt             DateTime                          @updatedAt
+
+  identities ClientCampaignSourceIdentity[]
+
+  @@unique([clientCampaignId, bindingKey])
+  @@index([sourceFunnelId])
+  @@index([campaignRoutingRuleId])
+  @@index([clientCampaignId, status])
+}
+
+/// One exact identifier attached to a binding.
+/// Conflicts are compared on provider + kind + value. A form id does not equal a provider funnel id.
+/// The partial unique index ClientCampaignSourceIdentity_one_approved_key is SQL-only.
+/// Prisma 6 cannot model that filter. Do not drop the index in a later diff.
+model ClientCampaignSourceIdentity {
+  id               String                            @id @default(cuid())
+  bindingId        String
+  binding          ClientCampaignSourceBinding       @relation(fields: [bindingId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  clientCampaignId String
+  clientCampaign   ClientCampaign                    @relation(fields: [clientCampaignId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  clientAccountId  String
+  clientAccount    ClientAccount                     @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Restrict, onUpdate: Restrict)
+  provider         SourceLeadProvider
+  kind             ClientCampaignIdentifierKind
+  normalizedValue  String
+  active           Boolean                           @default(true)
+  /// Copied from the binding so the approved identity can be unique in SQL.
+  bindingStatus    ClientCampaignSourceBindingStatus
+  createdAt        DateTime                          @default(now())
+
+  @@index([provider, kind, normalizedValue, active])
+  @@index([clientCampaignId, active])
+  @@index([bindingId])
+  @@index([clientAccountId])
+}
+
+/// Intended workflow and worksheet for one campaign.
+/// The location and spreadsheet stay on the client's existing destination rows.
+/// workflowLiveVerified and mapPublished stay false. This row is not a tab contract.
+model ClientCampaignDestinationSelection {
+  id                         String                    @id @default(cuid())
+  clientCampaignId           String                    @unique
+  clientCampaign             ClientCampaign            @relation(fields: [clientCampaignId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  clientGhlDestinationId     String?
+  clientGhlDestination       ClientGhlDestination?     @relation(fields: [clientGhlDestinationId], references: [id], onDelete: SetNull, onUpdate: Restrict)
+  /// Copied from the client's existing location. Not a new location.
+  ghlLocationId              String?
+  workflowIdGhl              String?
+  workflowTriggerMode        String?
+  /// Always false. This request does not call GoHighLevel.
+  workflowLiveVerified       Boolean                   @default(false)
+  companySheetsDestinationId String?
+  companySheetsDestination   CompanySheetsDestination? @relation(fields: [companySheetsDestinationId], references: [id], onDelete: SetNull, onUpdate: Restrict)
+  /// Copied from the client's existing spreadsheet. Not a new spreadsheet.
+  spreadsheetId              String?
+  worksheetId                Int?
+  /// Operator label only. Not a CompanySheetsTabContract title.
+  worksheetTitle             String?
+  /// Always false. This request does not publish a ClientSheetColumnMap.
+  mapPublished               Boolean                   @default(false)
+  readinessWarnings          Json                      @default("[]")
+  revision                   Int                       @default(1)
+  actor                      String
+  createdAt                  DateTime                  @default(now())
+  updatedAt                  DateTime                  @updatedAt
+
+  @@index([clientGhlDestinationId])
+  @@index([companySheetsDestinationId])
+}
+
+/// Idempotency and audit log for one registry command.
+/// requestId is the idempotency key. A repeat of the same id and payload returns resultJson.
+/// A different payload for that id conflicts. Routing and delivery do not read this table.
+model ClientCampaignRegistryCommand {
+  id                        String                       @id @default(cuid())
+  requestId                 String                       @unique
+  clientAccountId           String
+  clientAccount             ClientAccount                @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Restrict, onUpdate: Restrict)
+  /// Client id at insert. A later rename does not rewrite it.
+  historicalClientAccountId String
+  clientCampaignId          String?
+  clientCampaign            ClientCampaign?              @relation(fields: [clientCampaignId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  action                    ClientCampaignRegistryAction
+  expectedRevision          Int
+  payloadHash               String
+  /// Immutable result of the command, including a stored REVIEW_REQUIRED refusal.
+  resultJson                Json
+  /// ADMIN for the shared admin key. A named staff write stores StaffPrincipal.id.
+  actor                     String
+  createdAt                 DateTime                     @default(now())
+
+  @@index([clientAccountId, createdAt])
+  @@index([clientCampaignId, createdAt])
 }

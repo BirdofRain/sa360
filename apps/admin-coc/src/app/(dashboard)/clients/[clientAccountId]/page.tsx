@@ -10,6 +10,7 @@ import {
   listClientSourceFunnelsAction,
   reassignClientSourceFunnelAction,
 } from "@/app/actions/source-funnels";
+import { ClientCampaignInventorySection } from "@/components/clients/client-campaign-inventory-section";
 import { ClientDetailPanel } from "@/components/clients/client-detail-panel";
 import {
   ClientDetailLayout,
@@ -23,6 +24,7 @@ import { LeadCaptureSourcesSection } from "@/components/clients/leadcapture-sour
 import { ClientFolderEvidence, OnboardingDiscoveryPanel } from "@/components/clients/onboarding-discovery-panel";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { Badge } from "@/components/ui/badge";
+import { fetchAdminClientCampaignInventory } from "@/lib/admin-api/campaign-inventory-server";
 import { fetchOnboardingSummary } from "@/lib/admin-api/client-onboarding-v2";
 import {
   fetchCompanyGoogleConnection,
@@ -38,6 +40,7 @@ import {
   isNativeClientSetupEnabled,
 } from "@/lib/admin-api/server";
 import { fetchAdminClientSourceFunnels } from "@/lib/admin-api/source-funnels-server";
+import { parseClientCampaignInventory } from "@/lib/clients/campaign-inventory";
 import { clientDetailDiscoveryInput } from "@/lib/clients/client-detail-discovery";
 import { timeClientDetailRead } from "@/lib/clients/client-detail-reads";
 import { buildOnboardingDiscovery } from "@/lib/clients/onboarding-discovery";
@@ -108,6 +111,9 @@ export default async function ClientDetailPage({
   const folderListingPromise = timeClientDetailRead("folder_spreadsheets", () =>
     readStored(listCompanyClientSpreadsheets(id))
   );
+  const campaignInventoryPromise = timeClientDetailRead("campaign_inventory", () =>
+    fetchAdminClientCampaignInventory(id)
+  );
 
   return (
     <ClientDetailLayout
@@ -134,6 +140,7 @@ export default async function ClientDetailPage({
             sheetsDispatchPromise={sheetsDispatchPromise}
             onboardingSummaryPromise={onboardingSummaryPromise}
             folderListingPromise={folderListingPromise}
+            campaignInventoryPromise={campaignInventoryPromise}
           />
         </Suspense>
       }
@@ -211,6 +218,7 @@ async function ClientDiagnosticsRegion({
   sheetsDispatchPromise,
   onboardingSummaryPromise,
   folderListingPromise,
+  campaignInventoryPromise,
 }: {
   client: ClientAccountDetail;
   clientAccountId: string;
@@ -223,8 +231,9 @@ async function ClientDiagnosticsRegion({
   sheetsDispatchPromise: Promise<Awaited<ReturnType<typeof fetchCompanySheetsDispatch>> | null>;
   onboardingSummaryPromise: Promise<Awaited<ReturnType<typeof fetchOnboardingSummary>> | null>;
   folderListingPromise: Promise<Awaited<ReturnType<typeof listCompanyClientSpreadsheets>> | null>;
+  campaignInventoryPromise: ReturnType<typeof fetchAdminClientCampaignInventory>;
 }) {
-  const [readiness, sources, setup, sheetsDestination, googleConnection, sheetsDispatch, onboardingSummary] =
+  const [readiness, sources, setup, sheetsDestination, googleConnection, sheetsDispatch, onboardingSummary, campaignInventory] =
     await Promise.all([
       readinessPromise,
       sourcesPromise,
@@ -233,8 +242,10 @@ async function ClientDiagnosticsRegion({
       googleConnectionPromise,
       sheetsDispatchPromise,
       onboardingSummaryPromise,
+      campaignInventoryPromise,
     ]);
   const cutoverReport = normalizeCutoverReadinessReport(readiness.data?.report);
+  const campaignView = campaignInventory.data ? parseClientCampaignInventory(campaignInventory.data) : null;
   return (
     <>
       {cutoverReport ? (
@@ -268,6 +279,13 @@ async function ClientDiagnosticsRegion({
           {readiness.error} This is not a finding that the client is unconfigured.
         </WarningBanner>
       ) : null}
+      <ClientCampaignInventorySection
+        inventory={campaignView}
+        loadError={
+          campaignInventory.error ??
+          (campaignInventory.data && !campaignView ? "Campaign inventory could not be read." : null)
+        }
+      />
       <StoredRecordsSection>
         <OnboardingDiscoveryPanel
           clientAccountId={clientAccountId}

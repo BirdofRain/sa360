@@ -100,5 +100,58 @@ Multiple GHL locations per client, multiple spreadsheet destinations per client,
 - Enable in an isolated demo/client test only after matching shadow decisions and verifying exact target workflow/worksheet.
 - Provide a per-campaign pause/rollback, before-state capture, after-readback, and operational cutover receipt.
 
+## PR A outcome and PR B contract
+
+PR A is a read-only inventory. `GET /admin/v1/clients/:clientAccountId/campaign-inventory` groups confirmed sources, suggested sources, and routing rules for one client. The Admin C.O.C. client page shows that inventory. It does not persist a campaign, confirm a source, create a routing rule, or change a delivery flag.
+
+Grouping uses exact identifiers only:
+
+- `campaign_id`, `adset_id`, `ad_id`, and `form_id` on an exact-tier routing rule
+- a source `providerFunnelId` or `parentUrlKey` when it equals a `campaign_id`
+- a source `providerFunnelId` when it equals a `form_id`
+
+Display names, UTM text, keyword patterns, niche, product, Lead Type, and the client account's niche list are shown and are not join keys. UTM and keyword rules stay in their own candidates. `ClientOnboardingSetup` and the open `SourceCampaignAssociationRequest` are evidence. They are not operational links, and one of each cannot represent every candidate.
+
+`evidenceQuality` describes identity evidence. Destination gaps are separate conflict codes because GoHighLevel and Company Sheets are still one client-level destination. The single `CompanySheetsTabContract` campaign role and the single published `ClientSheetColumnMap` are not assigned to a candidate. Inventory keys are ephemeral strings of source and rule ids. They must not be stored as campaign ids.
+
+Unresolved in PR A, and intentionally left unresolved:
+
+- A quiet candidate's last source event can fall outside the latest 100 matching events, or outside the first 40 exact identifiers. `sourceEventLookupCapped` reports that bound.
+- A form id and a provider funnel id join on string equality. They are not checked as the same provider namespace beyond that equality.
+- Historical events keep their stored routing snapshot. This read does not reinterpret them.
+- Live GoHighLevel workflow existence and live spreadsheet headers are not checked. Only stored rows are shown.
+
+### What PR B must add
+
+PR B is the request-only campaign registry. It needs an Auth/Account migration review. PR A does not authorize that migration.
+
+Persist, additively:
+
+- `ClientCampaign`: client account, stable slug unique per client, display name, niche, product, nonoperational status (`draft`, `review`, `ready`, `active`, `paused`, `retired` stored but not armed), revision, actor, audit.
+- `ClientCampaignSourceBinding`: campaign, optional source funnel, optional routing rule, optional exact source campaign id, provider, evidence, status. At least one exact identifier is required before the binding can leave draft: provider funnel id, parent URL key, campaign id, form id, ad set id, or ad id.
+- `ClientCampaignDestinationSelection`: optional workflow id and optional worksheet id inside the client's existing `ClientGhlDestination` and `CompanySheetsDestination`. Do not create a second location, spreadsheet, or Google connection. Do not change the unique `(destinationId, role)` campaign tab in PR B. Record the intended worksheet as a nonoperational selection and leave the tab-contract change to PR E.
+
+API behavior:
+
+- Idempotent create and update, with a request id, expected revision, and payload hash, following `SourceCampaignAssociationRequest`.
+- Several draft campaigns per client, including two in the same niche and two in different niches.
+- A new exact-true feature flag, default off. Off means the existing single-campaign setup and request APIs stay the only write path.
+- Keep the current one-row `ClientOnboardingSetup` source fields and the current association-request chain working for clients that do not use the flag.
+- Reject a binding whose only evidence is a display name, UTM value, keyword, niche, product, or Lead Type.
+- Reject a UTM or keyword rule as the sole binding.
+- A suggested source may be named on a draft. Saving the draft must not confirm it.
+- The same exact identifier on two campaigns for one client, or on another client, returns a review-required result and does not write a second live binding.
+- Creating or editing a draft must not call `confirmSourceFunnelOrigin`, `reassignSourceFunnelOrigin`, `createRoutingRuleAdmin`, or any GoHighLevel, Google, Meta, or delivery writer.
+- Do not change routing precedence, `SourceLeadEvent` snapshots, Sheets or GHL writers, payment, orders, or PPL eligibility.
+- Do not copy an inventory key from PR A into `ClientCampaign.id`. An operator or a saved request chooses the campaign. The inventory only shows what already exists.
+
+Tests PR B needs before it is reviewable:
+
+- Two drafts in one niche stay distinct.
+- Two drafts in different niches stay distinct.
+- An overlapping exact id is review-required and writes neither a routing rule nor a source confirmation.
+- A legacy client with one setup request is unchanged when the flag is off.
+- Draft creation leaves routing-rule count, source confirmation count, and delivery flags unchanged.
+
 ## Relevant merged baseline PRs
 #302 guided onboarding; #308/#310 source/campaign requests; #322 evidence-driven setup status; #324 client niche/product catalog; #344 stored sources/destinations; #347 Lead Type at intake; #349 Sheets Lead Type projection; #359 DOB/optional Lead Type map; #360 correct cutover allowlist labels; #361 GHL notes; #362/#363 Sheets header recovery.

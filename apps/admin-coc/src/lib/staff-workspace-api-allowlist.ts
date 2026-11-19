@@ -6,6 +6,7 @@
 
 const CLIENT_ID = "[A-Za-z0-9][A-Za-z0-9_-]{0,127}";
 const REQUEST_ID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
+const CAMPAIGN_ID = "c[a-z0-9]{24}";
 
 const WORKSPACE_READS = [
   /^\/admin\/v1\/clients$/,
@@ -22,6 +23,8 @@ const WORKSPACE_READS = [
   new RegExp(`^/admin/v1/team-workspace/clients/${CLIENT_ID}$`),
   new RegExp(`^/admin/v1/team-workspace/clients/${CLIENT_ID}/sms-consent-status$`),
   new RegExp(`^/admin/v1/team-workspace/clients/${CLIENT_ID}/source-campaign-review$`),
+  new RegExp(`^/admin/v1/clients/${CLIENT_ID}/campaigns$`),
+  new RegExp(`^/admin/v1/clients/${CLIENT_ID}/campaigns/${CAMPAIGN_ID}$`),
 ];
 
 const SMS_WRITES: Array<{ method: string; pattern: RegExp }> = [
@@ -38,6 +41,10 @@ const MANAGER_WRITES: Array<{ method: string; pattern: RegExp }> = [
   { method: "POST", pattern: new RegExp(`^/admin/v1/clients/${CLIENT_ID}/company-sheets-destination-configuration$`) },
   { method: "PUT", pattern: new RegExp(`^/admin/v1/clients/${CLIENT_ID}/external-webhook$`) },
   { method: "POST", pattern: new RegExp(`^/admin/v1/clients/${CLIENT_ID}/external-webhook/preflight$`) },
+  { method: "POST", pattern: new RegExp(`^/admin/v1/clients/${CLIENT_ID}/campaigns$`) },
+  { method: "POST", pattern: new RegExp(`^/admin/v1/clients/${CLIENT_ID}/campaigns/${CAMPAIGN_ID}$`) },
+  { method: "POST", pattern: new RegExp(`^/admin/v1/clients/${CLIENT_ID}/campaigns/${CAMPAIGN_ID}/source-bindings$`) },
+  { method: "POST", pattern: new RegExp(`^/admin/v1/clients/${CLIENT_ID}/campaigns/${CAMPAIGN_ID}/destination-selection$`) },
 ];
 
 export type WorkspaceApiPermission = "team_workspace" | "team_manager" | "team_operations";

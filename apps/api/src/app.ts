@@ -85,6 +85,7 @@ import { adminSupportTicketRoutes } from "./routes/admin-support-tickets.js";
 import { adminClientOnboardingV2ReadRoutes } from "./routes/admin-client-onboarding-v2-read.js";
 import { adminTeamWorkspaceRoutes } from "./routes/admin-team-workspace.js";
 import { adminSourceCampaignRequestRoutes } from "./routes/admin-source-campaign-request.js";
+import { adminClientCampaignRegistryRoutes } from "./routes/admin-client-campaign-registry.js";
 import { adminGhlDestinationConfigRequestRoutes } from "./routes/admin-ghl-destination-config-request.js";
 import { adminCompanySheetsConfigRequestRoutes } from "./routes/admin-company-sheets-config-request.js";
 import { adminOnboardingAttributionRoutes } from "./routes/admin-onboarding-attribution.js";
@@ -202,6 +203,9 @@ export async function buildApp() {
   await app.register(adminSmsVerbalConsentRoutes, { prefix: "/admin/v1" });
   // Proposal only. This route does not confirm a source or write a routing rule.
   await app.register(adminSourceCampaignRequestRoutes, { prefix: "/admin/v1" });
+  // Request-only campaign registry. Off unless the exact-true flag is set.
+  // It does not confirm a source, write a routing rule, or arm delivery.
+  await app.register(adminClientCampaignRegistryRoutes, { prefix: "/admin/v1" });
   // Configuration request only. This route does not write ClientGhlDestination or arm delivery.
   await app.register(adminGhlDestinationConfigRequestRoutes, { prefix: "/admin/v1" });
   // Configuration request only. This route does not write CompanySheetsDestination or arm delivery.

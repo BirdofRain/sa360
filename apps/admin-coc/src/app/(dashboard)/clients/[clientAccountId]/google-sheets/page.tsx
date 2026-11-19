@@ -30,6 +30,7 @@ import {
 import {
   createOnboardingColumnMapAction,
   previewOnboardingColumnMapAction,
+  retireOnboardingColumnMapAction,
   saveAndPublishOnboardingColumnMapAction,
   saveOnboardingSheetsTargetAction,
 } from "@/app/actions/client-onboarding-v2";
@@ -145,6 +146,7 @@ export default async function ClientCompanyGoogleSheetsPage({
             prepareSheetsHistory: prepareCompanySheetsHistoryAction,
             saveSheetsTarget: saveOnboardingSheetsTargetAction,
             createColumnMap: createOnboardingColumnMapAction,
+            retireColumnMap: retireOnboardingColumnMapAction,
             saveAndPublishColumnMap: saveAndPublishOnboardingColumnMapAction,
             previewColumnMap: previewOnboardingColumnMapAction,
           }}

@@ -776,6 +776,14 @@ async function requestColumnMapWrite(
   return { ok: true, data, published: true, deliveryEnabled: false };
 }
 
+export function retireOnboardingColumnMap(
+  clientAccountId: string,
+  mapId: string,
+  input: { requestId: string }
+): Promise<OnboardingActionResult<ColumnMapRecord>> {
+  return request("POST", clientPath(clientAccountId, `/column-maps/${encodeURIComponent(mapId)}/retire`), input, projectColumnMap);
+}
+
 export function publishOnboardingColumnMap(
   clientAccountId: string,
   mapId: string,

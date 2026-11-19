@@ -250,6 +250,86 @@ export function suggestColumnAssignments(header: readonly string[], sampleRow: r
   });
 }
 
+/**
+ * Builds a replacement draft from a published map and the live header.
+ * Unchanged headers keep their published decision, including Age/DOB → DOB.
+ * Deleted headers, including an optional Lead Type column, are omitted.
+ * A renamed, added, or duplicate header is left unresolved. Nothing is guessed
+ * back onto lead_type, and the worksheet is not written.
+ */
+export function reconcilePublishedColumnAssignments(
+  published: readonly ColumnAssignment[],
+  header: readonly string[],
+  sampleRow: readonly string[] = []
+): ColumnAssignment[] {
+  const formulas = new Set(formulaColumnIndexes(header, sampleRow));
+  const publishedKeys = published.map((column) => normalizeSheetHeader(column.sheetHeader));
+  const nextKeys = header.map((cell) => normalizeSheetHeader(cell));
+  const publishedCounts = headerCounts(publishedKeys);
+  const nextCounts = headerCounts(nextKeys);
+  const publishedByKey = new Map<string, ColumnAssignment>();
+  published.forEach((column, index) => {
+    const key = publishedKeys[index] ?? "";
+    if (!key || (publishedCounts.get(key) ?? 0) !== 1) return;
+    publishedByKey.set(key, column);
+  });
+  const deletedPublishedHeader = [...publishedCounts.entries()].some(
+    ([key, count]) => count === 1 && key.length > 0 && (nextCounts.get(key) ?? 0) === 0
+  );
+  return header.map((sheetHeader, columnIndex) => {
+    const key = nextKeys[columnIndex] ?? "";
+    const formula = formulas.has(columnIndex);
+    if (!key) {
+      return assignment({
+        sheetHeader,
+        columnIndex,
+        formula,
+        target: null,
+        transform: "blank",
+        decision: "unmapped",
+        explicit: false,
+        code: "blank_header",
+      });
+    }
+    if ((nextCounts.get(key) ?? 0) > 1) {
+      return assignment({
+        sheetHeader,
+        columnIndex,
+        formula,
+        target: null,
+        transform: "blank",
+        decision: "ambiguous",
+        explicit: false,
+        code: "duplicate_header",
+      });
+    }
+    const prior = publishedByKey.get(key);
+    if (prior) return carryPublishedColumn(prior, sheetHeader, columnIndex, formula);
+    if (formula) {
+      return assignment({
+        sheetHeader,
+        columnIndex,
+        formula,
+        target: null,
+        transform: "blank",
+        decision: "unmapped",
+        explicit: true,
+        code: "formula_column_omitted",
+      });
+    }
+    return assignment({
+      sheetHeader,
+      columnIndex,
+      formula,
+      target: null,
+      transform: "blank",
+      decision: "unmapped",
+      explicit: false,
+      code: deletedPublishedHeader ? "renamed_header" : null,
+    });
+  });
+}
+
 export function columnMapIssues(columns: readonly ColumnAssignment[]): ColumnMapIssue[] {
   return sheetsColumnMapIssues(columns);
 }
@@ -289,11 +369,12 @@ export function applyOperatorAssignments(
 /**
  * Confirms every visible selection.
  * A non-explicit Age/DOB column becomes canonical DOB. An explicit Age, DOB,
- * or blank choice is kept. Duplicate headers stay unresolved. Blank headers
- * and formula columns become an explicit skip.
+ * or blank choice is kept. A renamed header stays unresolved. Duplicate headers
+ * stay unresolved. Blank headers and formula columns become an explicit skip.
  */
 export function confirmVisibleSelections(assignments: readonly ColumnAssignment[]): ColumnAssignment[] {
   return assignments.map((column) => {
+    if (column.code === "renamed_header" && !column.explicit) return column;
     if (!column.sheetHeader.trim()) {
       return assignment({
         ...column,
@@ -608,7 +689,16 @@ function parseOperatorColumn(
     if (decision === "unmapped" && transform !== "blank") {
       return { ok: false, statusCode: 422, error: "mapping_unresolved", detail: "An unmapped column uses a blank transform." };
     }
-    const code = normalized === "age/dob" && decision === "ambiguous" ? "ambiguous_age_or_dob" : decision === "ambiguous" ? "duplicate_header" : formula ? "formula_column_omitted" : null;
+    const renamed = record.code === "renamed_header" && decision === "unmapped" && !explicit;
+    const code = normalized === "age/dob" && decision === "ambiguous"
+      ? "ambiguous_age_or_dob"
+      : decision === "ambiguous"
+        ? "duplicate_header"
+        : renamed
+          ? "renamed_header"
+          : formula
+            ? "formula_column_omitted"
+            : null;
     return {
       ok: true,
       assignment: assignment({ sheetHeader, columnIndex, formula, target: null, transform: decision === "unmapped" ? "blank" : transform, decision, explicit, code }),
@@ -656,6 +746,42 @@ function parseOperatorColumn(
  */
 function sheetPresentationLead(lead: CampaignSheetLeadInput): CampaignSheetLeadInput {
   return lead.sheetsPresentation ? lead : { ...lead, sheetsPresentation: true };
+}
+
+function carryPublishedColumn(
+  prior: ColumnAssignment,
+  sheetHeader: string,
+  columnIndex: number,
+  formula: boolean
+): ColumnAssignment {
+  if (formula && (prior.decision !== "mapped" || !prior.target)) {
+    return assignment({
+      sheetHeader,
+      columnIndex,
+      formula,
+      target: null,
+      transform: "blank",
+      decision: "unmapped",
+      explicit: true,
+      code: "formula_column_omitted",
+    });
+  }
+  return assignment({
+    ...prior,
+    sheetHeader,
+    columnIndex,
+    formula,
+    code: formula ? "formula_column_omitted" : prior.code,
+  });
+}
+
+function headerCounts(keys: readonly string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const key of keys) {
+    if (!key) continue;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
 }
 
 function ageDobDefault(sheetHeader: string, columnIndex: number, formula: boolean): ColumnAssignment {

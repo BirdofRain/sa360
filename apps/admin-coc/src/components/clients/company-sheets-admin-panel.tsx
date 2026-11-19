@@ -196,6 +196,10 @@ export type CompanySheetsAdminActions = {
     mapId: string,
     input: { expectedRevision: number; assignments: ColumnMapAssignment[]; previewToken: string }
   ) => Promise<OnboardingActionResult<ColumnMapDraftPreview>>;
+  retireColumnMap?: (
+    clientAccountId: string,
+    mapId: string
+  ) => Promise<{ ok: true; data: ColumnMapRecord } | { ok: false; error: string; detail?: string }>;
 };
 
 function controlLabel(basis: string): string {
@@ -236,8 +240,10 @@ function ColumnMapping({
   campaignDispatchEnabled,
   boundSchemaVersion,
   columnMap,
+  deliveryMap,
   actions,
   onMap,
+  onRetired,
 }: {
   clientAccountId: string;
   spreadsheetId: string;
@@ -245,33 +251,69 @@ function ColumnMapping({
   campaignDispatchEnabled: boolean;
   boundSchemaVersion: string | null;
   columnMap: ColumnMapRecord | null;
+  deliveryMap: ColumnMapRecord | null;
   actions: CompanySheetsAdminActions;
   onMap: (map: ColumnMapRecord | null) => void;
+  onRetired: (map: ColumnMapRecord) => void;
 }) {
-  const [pending, setPending] = useState(false);
+  const [pending, setPending] = useState<"refresh" | "retire" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const visible =
     columnMap && columnMap.spreadsheetId === spreadsheetId && columnMap.worksheetId === worksheetId ? columnMap : null;
+  const deliveryPublished =
+    deliveryMap &&
+    deliveryMap.status === "published" &&
+    deliveryMap.spreadsheetId === spreadsheetId &&
+    deliveryMap.worksheetId === worksheetId
+      ? deliveryMap
+      : null;
 
   async function start() {
     if (!spreadsheetId || worksheetId == null || !actions.createColumnMap || campaignDispatchEnabled) return;
-    setPending(true);
+    setPending("refresh");
     setError(null);
-    if (actions.saveSheetsTarget) {
+    if (actions.saveSheetsTarget && !deliveryPublished) {
       const target = await actions.saveSheetsTarget(clientAccountId, { spreadsheetId, worksheetId });
       if (!target.ok) {
-        setPending(false);
+        setPending(null);
         setError(target.detail || actionErrorCopy(target.error));
         return;
       }
     }
     const created = await actions.createColumnMap(clientAccountId, { spreadsheetId, worksheetId });
-    setPending(false);
+    setPending(null);
     if (!created.ok) {
       setError(created.detail || actionErrorCopy(created.error));
       return;
     }
     onMap(created.data);
+  }
+
+  async function refreshPublishedHeaders() {
+    if (!spreadsheetId || worksheetId == null || !actions.createColumnMap || campaignDispatchEnabled) return;
+    if (visible?.status !== "published") return;
+    setPending("refresh");
+    setError(null);
+    const created = await actions.createColumnMap(clientAccountId, { spreadsheetId, worksheetId });
+    setPending(null);
+    if (!created.ok) {
+      setError(created.detail || actionErrorCopy(created.error));
+      return;
+    }
+    onMap(created.data);
+  }
+
+  async function retirePublished() {
+    if (!deliveryPublished || !actions.retireColumnMap || campaignDispatchEnabled) return;
+    setPending("retire");
+    setError(null);
+    const retired = await actions.retireColumnMap(clientAccountId, deliveryPublished.id);
+    setPending(null);
+    if (!retired.ok) {
+      setError(retired.detail || actionErrorCopy(retired.error));
+      return;
+    }
+    onRetired(retired.data);
   }
 
   if (!actions.createColumnMap && !visible) {
@@ -306,17 +348,51 @@ function ColumnMapping({
             <Button
               type="button"
               variant="outline"
-              disabled={pending || campaignDispatchEnabled || !actions.createColumnMap}
+              disabled={pending !== null || campaignDispatchEnabled || !actions.createColumnMap}
               onClick={() => void start()}
             >
-              {pending ? "Reading headers…" : "Refresh headers from this worksheet"}
+              {pending === "refresh" ? "Reading headers…" : "Refresh headers from this worksheet"}
             </Button>
             <p className="text-xs text-slate-600">
-              Re-reads the current worksheet into a new draft. It does not create a spreadsheet, publish the map, or
-              change delivery. Pause campaign delivery before refreshing. An existing published map stays the delivery map.
+              {deliveryPublished
+                ? "Re-reads the worksheet into another replacement draft from the published map. It does not save the target, retire the published map, publish, or turn delivery on."
+                : "Re-reads the current worksheet into a new draft. It does not create a spreadsheet, publish the map, or change delivery. Pause campaign delivery before refreshing. An existing published map stays the delivery map."}
+            </p>
+            {deliveryPublished ? (
+              <div className="space-y-2" data-testid="retire-published-map">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={pending !== null || campaignDispatchEnabled || !actions.retireColumnMap}
+                  onClick={() => void retirePublished()}
+                >
+                  {pending === "retire" ? "Retiring published map…" : `Retire published map version ${deliveryPublished.mapVersion}`}
+                </Button>
+                <p className="text-xs text-slate-600">
+                  Retire is required before this draft can be published. It keeps the destination, cutoff, jobs,
+                  reservations, and delivered rows. It does not rewrite headers or turn delivery on. Then use Save &
+                  publish mapping.
+                </p>
+              </div>
+            ) : null}
+          </div>
+        ) : campaignDispatchEnabled ? null : (
+          <div className="space-y-2" data-testid="refresh-published-headers">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={pending !== null || campaignDispatchEnabled || !actions.createColumnMap}
+              onClick={() => void refreshPublishedHeaders()}
+            >
+              {pending === "refresh" ? "Reading headers…" : "Refresh worksheet headers"}
+            </Button>
+            <p className="text-xs text-slate-600">
+              Reads the current worksheet into a replacement draft from this published map. Unchanged columns keep
+              their mapping. Deleted columns are removed. A renamed column stays unresolved until you choose it. The
+              published map stays the delivery map. The sheet, cutoff, and delivery switch are not changed.
             </p>
           </div>
-        ) : null}
+        )}
         </>
       ) : (
         <div className="space-y-2">
@@ -325,8 +401,8 @@ function ColumnMapping({
               ? `Selected spreadsheet ${spreadsheetId}, worksheet gid ${worksheetId}. Mapping reads the existing headers and does not rewrite them.`
               : "Choose a spreadsheet and worksheet first. Mapping does not create a tab."}
           </p>
-          <Button type="button" variant="outline" disabled={pending || campaignDispatchEnabled || !spreadsheetId || worksheetId == null || !actions.createColumnMap} onClick={() => void start()}>
-            {pending ? "Reading headers…" : "Map columns"}
+          <Button type="button" variant="outline" disabled={pending !== null || campaignDispatchEnabled || !spreadsheetId || worksheetId == null || !actions.createColumnMap} onClick={() => void start()}>
+            {pending === "refresh" ? "Reading headers…" : "Map columns"}
           </Button>
         </div>
       )}
@@ -563,6 +639,7 @@ export function CompanySheetsAdminPanel({
   const [deliveryMap, setDeliveryMap] = useState<ColumnMapRecord | null>(
     initialDeliveryMap ?? (initialColumnMap?.status === "published" ? initialColumnMap : null)
   );
+  const [replacementNotice, setReplacementNotice] = useState<string | null>(null);
   const [unpublishedMap, setUnpublishedMap] = useState<ColumnMapRecord | null>(
     initialUnpublishedMap ?? (initialColumnMap?.status === "draft" ? initialColumnMap : null)
   );
@@ -1293,8 +1370,26 @@ export function CompanySheetsAdminPanel({
         </p>
         {unpublishedMap ? (
           <p className="text-sm text-amber-900" data-testid="unpublished-map-state">
-            Unpublished changes: draft revision {unpublishedMap.revision} is not the delivery map.
+            Unpublished changes: draft revision {unpublishedMap.revision} is not the delivery map. Review it, retire the
+            published map, then save and publish. Automatic delivery stays off.
           </p>
+        ) : null}
+        {replacementNotice ? (
+          <p className="text-sm text-slate-800" data-testid="replacement-map-notice" role="status">
+            {replacementNotice}
+          </p>
+        ) : null}
+        {!deliveryOn && deliveryMap ? (
+          <div className="space-y-1 text-sm text-slate-700" data-testid="published-map-readiness">
+            <p>
+              Published map version {deliveryMap.mapVersion}, revision {deliveryMap.revision} is the delivery map.
+              Header fingerprint {deliveryMap.headerFingerprint}. Automatic delivery is off.
+            </p>
+            <p>
+              Send Test Row writes one synthetic row and does not enable delivery. Enable campaign delivery is a
+              separate control and does not move an existing cutoff earlier.
+            </p>
+          </div>
         ) : null}
         <ColumnMapping
           clientAccountId={clientAccountId}
@@ -1303,11 +1398,19 @@ export function CompanySheetsAdminPanel({
           campaignDispatchEnabled={deliveryOn}
           boundSchemaVersion={campaignTab?.schemaVersion ?? null}
           columnMap={columnMap}
+          deliveryMap={deliveryMap}
           actions={actions}
+          onRetired={(map) => {
+            setDeliveryMap((current) => (current && current.id === map.id ? null : current));
+            setReplacementNotice(
+              `Published map version ${map.mapVersion} is retired. Automatic delivery is still off. Save and publish the replacement draft when every column is reviewed. Send Test Row and Enable campaign delivery stay separate and do not move the cutoff.`
+            );
+          }}
           onMap={(map) => {
             setColumnMap(map);
             if (!map) return;
             if (map.status === "published") {
+              setReplacementNotice(null);
               setDeliveryMap(map);
               setUnpublishedMap((current) =>
                 current && current.spreadsheetId === map.spreadsheetId && current.worksheetId === map.worksheetId ? null : current
@@ -1372,6 +1475,12 @@ export function CompanySheetsAdminPanel({
         ) : (
           <p className="text-sm text-slate-600">Aged delivery is off.</p>
         )}
+        {!deliveryOn && unpublishedMap ? (
+          <p className="text-sm text-amber-800" data-testid="replacement-delivery-hold">
+            Automatic delivery stays off while replacement draft revision {unpublishedMap.revision} is open. Retire the
+            published map and save and publish the draft before enabling campaign delivery. This page does not move the cutoff.
+          </p>
+        ) : null}
         <div className="flex flex-wrap gap-2">
           {actions.setDispatch && destination ? (
             deliveryOn ? (
@@ -1394,11 +1503,12 @@ export function CompanySheetsAdminPanel({
             ) : (
               <Button
                 type="button"
-                disabled={busy("delivery")}
+                disabled={busy("delivery") || Boolean(unpublishedMap)}
                 onClick={() =>
                   void run("delivery", async () => {
                     const setDispatch = actions.setDispatch;
                     if (!setDispatch) return { ok: false, error: "Delivery controls are unavailable." };
+                    if (unpublishedMap) return { ok: false, error: "Publish the replacement map before enabling campaign delivery." };
                     const result = await setDispatch(clientAccountId, { campaignEnabled: true });
                     if (!result.ok) return result;
                     return {

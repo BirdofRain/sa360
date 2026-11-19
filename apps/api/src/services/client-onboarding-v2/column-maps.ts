@@ -36,6 +36,7 @@ import {
   mappableColumnTargets,
   publishBlocker,
   sourceFunnelIdFromLead,
+  reconcilePublishedColumnAssignments,
   suggestColumnAssignments,
   syntheticCustomCampaignLead,
   type ColumnAssignment,
@@ -144,8 +145,16 @@ export async function createColumnMapDraft(
   const paused = assertPaused(destination.campaignDispatchEnabled);
   if (paused) return paused;
   const before = switchSnapshot(destination);
-  const assignments = suggestColumnAssignments(input.snapshot.header, input.snapshot.sampleRow);
   const created = await db.$transaction(async (tx) => {
+    const published = await tx.clientSheetColumnMap.findFirst({
+      where: {
+        clientAccountId: input.clientAccountId,
+        sourceScope: scope.sourceScope,
+        spreadsheetId: input.snapshot.spreadsheetId,
+        worksheetId: input.snapshot.worksheetId,
+        status: "published",
+      },
+    });
     const latest = await tx.clientSheetColumnMap.findFirst({
       where: {
         clientAccountId: input.clientAccountId,
@@ -155,6 +164,12 @@ export async function createColumnMapDraft(
       },
       orderBy: { mapVersion: "desc" },
     });
+    const publishedAssignments = Array.isArray(published?.assignments)
+      ? (published.assignments as ColumnAssignment[])
+      : [];
+    const assignments = published
+      ? reconcilePublishedColumnAssignments(publishedAssignments, input.snapshot.header, input.snapshot.sampleRow)
+      : suggestColumnAssignments(input.snapshot.header, input.snapshot.sampleRow);
     const row = await tx.clientSheetColumnMap.create({
       data: {
         clientAccountId: input.clientAccountId,
@@ -170,7 +185,14 @@ export async function createColumnMapDraft(
       },
     });
     await tx.clientOnboardingV2AuditEvent.create({
-      data: audit(input, "column_map_draft", { mapId: row.id, mapVersion: row.mapVersion, headerFingerprint: headerFingerprint(input.snapshot.header) }),
+      data: audit(input, "column_map_draft", {
+        mapId: row.id,
+        mapVersion: row.mapVersion,
+        headerFingerprint: headerFingerprint(input.snapshot.header),
+        replacedFromMapId: published?.id ?? null,
+        headerRewritten: false,
+        deliveryEnabled: false,
+      }),
     });
     return row;
   });

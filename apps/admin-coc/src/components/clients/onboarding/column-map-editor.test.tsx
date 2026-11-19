@@ -425,6 +425,47 @@ test("a DOB column shows the sheet cell and lead-detail age status, and a source
   assert.match(screen.getByTestId("column-map-dob-age").textContent ?? "", /Missing DOB \/ reference information/);
 });
 
+test("a paused published map stays locked and a renamed Age/DOB column is not guessed", () => {
+  const publishedRecord = { ...mapRecord(), status: "published", revision: 3, mapVersion: 1 };
+  publishedRecord.assignments = publishedRecord.assignments.map((column) =>
+    column.sheetHeader === "Age/DOB"
+      ? {
+          ...column,
+          decision: "mapped" as const,
+          explicit: true,
+          transform: "date_america_new_york" as const,
+          target: { kind: "v3_column" as const, header: "DOB", sourceField: "date_of_birth" },
+          code: null,
+        }
+      : column
+  );
+  const publishedView = render(
+    <ColumnMapEditor record={publishedRecord} campaignDispatchEnabled={false} actions={{}} onChange={() => undefined} />
+  );
+  assert.equal((screen.getByRole("combobox", { name: "Map Age/DOB" }) as HTMLSelectElement).disabled, true);
+  assert.equal((screen.getByRole("combobox", { name: "Map Age/DOB" }) as HTMLSelectElement).value, "date_of_birth");
+  assert.match(screen.getByTestId("published-map-locked").textContent ?? "", /Refresh worksheet headers/);
+  assert.equal(screen.queryByText(/Pause campaign Sheets delivery/), null);
+  assert.equal((screen.getByRole("button", { name: "Published" }) as HTMLButtonElement).disabled, true);
+  publishedView.unmount();
+
+  const renamed = mapRecord();
+  renamed.assignments[2] = {
+    sheetHeader: "Age/DOB",
+    columnIndex: 2,
+    formula: false,
+    target: null,
+    transform: "blank",
+    decision: "unmapped",
+    explicit: false,
+    code: "renamed_header",
+  };
+  render(<ColumnMapEditor record={renamed} campaignDispatchEnabled={false} actions={{}} onChange={() => undefined} />);
+  assert.equal((screen.getByRole("combobox", { name: "Map Age/DOB" }) as HTMLSelectElement).value, "");
+  assert.match(screen.getByTestId("column-map-editor").textContent ?? "", /does not match the published map/);
+  assert.match(screen.getByTestId("column-map-editor").textContent ?? "", /was not guessed/);
+});
+
 test("preview names whether it used the unpublished draft or the published delivery map", async () => {
   const record = mapRecord();
   render(

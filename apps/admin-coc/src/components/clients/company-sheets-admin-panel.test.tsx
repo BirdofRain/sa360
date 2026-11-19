@@ -477,6 +477,104 @@ describe("CompanySheetsAdminPanel", () => {
     assert.match(within(mapping).getByTestId("column-map-state").textContent ?? "", /Draft revision 4/);
   });
 
+  it("refreshes a paused published map into a replacement draft and retires only that map", async () => {
+    let targetCalls = 0;
+    let created = 0;
+    let retired = 0;
+    render(
+      <CompanySheetsAdminPanel
+        clientAccountId="acme"
+        clientDisplayName="Acme Insurance"
+        connection={connection}
+        destination={destination}
+        dispatch={{
+          ok: true,
+          configured: true,
+          dispatchFlagEnabled: true,
+          campaignDispatchEnabled: false,
+          campaignDispatchNotBefore: "2026-10-27T14:43:39.233Z",
+          agedDispatchEnabled: false,
+          agedDispatchNotBefore: null,
+          intents: [],
+          lastCampaignDelivery: {
+            jobId: "job_retry",
+            status: "retryable",
+            spreadsheetId: "sheet1",
+            worksheetId: 0,
+            worksheetTitle: "Leads",
+            createdAt: "2026-11-19T13:00:00.000Z",
+            finishedAt: null,
+            appendStartedAt: null,
+            uncertainReason: null,
+          },
+        }}
+        notice={null}
+        actions={{
+          ...idleActions(),
+          saveSheetsTarget: async () => {
+            targetCalls += 1;
+            return { ok: true };
+          },
+          createColumnMap: async () => {
+            created += 1;
+            return { ok: true, data: columnMap("draft", 1, 2) };
+          },
+          retireColumnMap: async () => {
+            retired += 1;
+            return { ok: true, data: { ...columnMap("published", 4, 1), status: "retired" } };
+          },
+          setDispatch: async () => ({ ok: false, error: "delivery must stay paused" }),
+        }}
+        initialColumnMap={columnMap("published", 3, 1)}
+      />
+    );
+    const mapping = screen.getByRole("region", { name: "Column mapping" });
+    assert.match(within(mapping).getByTestId("published-map-locked").textContent ?? "", /locked/);
+    assert.match(within(mapping).getByTestId("published-map-readiness").textContent ?? "", /Automatic delivery is off/);
+    assert.match(within(mapping).getByTestId("published-map-readiness").textContent ?? "", /Send Test Row/);
+    assert.equal(within(mapping).queryByRole("button", { name: "Refresh headers from this worksheet" }), null);
+    fireEvent.click(within(mapping).getByRole("button", { name: "Refresh worksheet headers" }));
+    assert.match((await within(mapping).findByText(/Draft revision 1/)).textContent ?? "", /Draft revision 1/);
+    assert.equal(created, 1);
+    assert.equal(targetCalls, 0);
+    assert.equal((screen.getByRole("button", { name: "Enable campaign delivery" }) as HTMLButtonElement).disabled, true);
+    assert.match(screen.getByTestId("replacement-delivery-hold").textContent ?? "", /stays off/);
+    assert.match(within(mapping).getByTestId("delivery-map-state").textContent ?? "", /version 1, revision 3/);
+    fireEvent.click(within(mapping).getByRole("button", { name: "Retire published map version 1" }));
+    assert.match((await within(mapping).findByTestId("replacement-map-notice")).textContent ?? "", /Automatic delivery is still off/);
+    assert.match(within(mapping).getByTestId("delivery-map-state").textContent ?? "", /No published map is used for delivery/);
+    assert.equal(retired, 1);
+    assert.match(within(mapping).getByTestId("column-map-state").textContent ?? "", /Draft revision 1/);
+  });
+
+  it("hides header refresh while campaign delivery is on", () => {
+    render(
+      <CompanySheetsAdminPanel
+        clientAccountId="acme"
+        clientDisplayName="Acme Insurance"
+        connection={connection}
+        destination={destination}
+        dispatch={{
+          ok: true,
+          configured: true,
+          dispatchFlagEnabled: true,
+          campaignDispatchEnabled: true,
+          campaignDispatchNotBefore: "2026-10-27T14:43:39.233Z",
+          agedDispatchEnabled: false,
+          agedDispatchNotBefore: null,
+          intents: [],
+          lastCampaignDelivery: null,
+        }}
+        notice={null}
+        actions={{ ...idleActions(), createColumnMap: async () => ({ ok: false, error: "delivery_not_paused" }) }}
+        initialColumnMap={columnMap("published", 3, 1)}
+      />
+    );
+    const mapping = screen.getByRole("region", { name: "Column mapping" });
+    assert.equal(within(mapping).queryByRole("button", { name: "Refresh worksheet headers" }), null);
+    assert.match(mapping.textContent ?? "", /Pause campaign Sheets delivery/);
+  });
+
   it("prepares one history batch without treating counts as proof", async () => {
     let calls = 0;
     render(

@@ -10,6 +10,7 @@ import {
   columnLabel,
   confirmVisibleSelections,
   customAppendSegments,
+  reconcilePublishedColumnAssignments,
   customRowProjection,
   customRowValues,
   exactHeader,
@@ -410,4 +411,74 @@ test("explicit Age, DOB, and blank choices survive confirmation", () => {
   assert.equal(keptBlank[1]?.decision, "unmapped");
   assert.equal(keptBlank[1]?.target, null);
   assert.equal(keptBlank[1]?.explicit, true);
+});
+
+test("a published map keeps unchanged columns, drops a deleted Lead Type, and leaves a rename unresolved", () => {
+  const publishedHeader = ["Full Name", "Phone Number", "E-mail", "Age/DOB", "Lead Type", "Notes", "Score"];
+  const published = suggestColumnAssignments(publishedHeader).map((column) =>
+    column.decision === "mapped" ? { ...column, explicit: true } : { ...column, decision: "unmapped" as const, explicit: true, transform: "blank" as const, target: null }
+  );
+  const age = published.find((column) => column.sheetHeader === "Age/DOB");
+  assert.equal(age?.target?.sourceField, "date_of_birth");
+  assert.equal(age?.explicit, true);
+  const removed = reconcilePublishedColumnAssignments(
+    published,
+    ["Full Name", "Phone Number", "E-mail", "Age / DOB", "Notes", "Score"]
+  );
+  assert.deepEqual(
+    removed.map((column) => column.sheetHeader),
+    ["Full Name", "Phone Number", "E-mail", "Age / DOB", "Notes", "Score"]
+  );
+  assert.equal(removed.some((column) => column.sheetHeader === "Lead Type" || column.target?.sourceField === "lead_type"), false);
+  const keptDob = removed.find((column) => column.sheetHeader === "Age / DOB");
+  assert.equal(keptDob?.target?.sourceField, "date_of_birth");
+  assert.equal(keptDob?.transform, "date_america_new_york");
+  assert.equal(keptDob?.explicit, true);
+  assert.equal(keptDob?.columnIndex, 3);
+  assert.equal(removed.find((column) => column.sheetHeader === "Notes")?.target?.sourceField, "notes");
+  assert.equal(removed.find((column) => column.sheetHeader === "Phone Number")?.target?.sourceField, "phone");
+
+  const explicitAge = published.map((column) =>
+    column.sheetHeader === "Age/DOB"
+      ? {
+          ...column,
+          target: { kind: "v3_column" as const, header: "Age", sourceField: "consumer_age" },
+          transform: "passthrough" as const,
+          explicit: true,
+        }
+      : column
+  );
+  const keptAge = reconcilePublishedColumnAssignments(explicitAge, ["Age/DOB"]);
+  assert.equal(keptAge[0]?.target?.sourceField, "consumer_age");
+
+  const renamed = reconcilePublishedColumnAssignments(published, [
+    "Full Name",
+    "Phone Number",
+    "E-mail",
+    "Age / DOB",
+    "Comments",
+    "Score",
+  ]);
+  const comments = renamed.find((column) => column.sheetHeader === "Comments");
+  assert.equal(comments?.code, "renamed_header");
+  assert.equal(comments?.explicit, false);
+  assert.equal(comments?.target, null);
+  assert.equal(renamed.some((column) => column.target?.sourceField === "lead_type"), false);
+  assert.equal(renamed.find((column) => column.sheetHeader === "Age / DOB")?.target?.sourceField, "date_of_birth");
+  const blocked = publishBlocker(renamed);
+  assert.equal(blocked.ok, false);
+  const confirmed = confirmVisibleSelections(renamed);
+  assert.equal(confirmed.find((column) => column.sheetHeader === "Comments")?.target, null);
+  assert.equal(confirmed.find((column) => column.sheetHeader === "Comments")?.explicit, false);
+  assert.equal(confirmed.find((column) => column.sheetHeader === "Age / DOB")?.target?.sourceField, "date_of_birth");
+
+  const addedOnly = reconcilePublishedColumnAssignments(
+    published.filter((column) => column.sheetHeader !== "Lead Type"),
+    ["Full Name", "Phone Number", "E-mail", "Age/DOB", "Notes", "Score", "Lead Type"]
+  );
+  assert.equal(addedOnly.find((column) => column.sheetHeader === "Lead Type")?.target, null);
+  assert.equal(addedOnly.find((column) => column.sheetHeader === "Lead Type")?.code, null);
+
+  const duplicated = reconcilePublishedColumnAssignments(published, ["Phone Number", "Phone Number"]);
+  assert.equal(duplicated.every((column) => column.code === "duplicate_header" && column.target == null), true);
 });

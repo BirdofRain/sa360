@@ -31,6 +31,7 @@ import {
   createOnboardingColumnMap,
   previewOnboardingColumnMap,
   publishOnboardingColumnMap,
+  retireOnboardingColumnMap,
   saveAndPublishOnboardingColumnMap,
   saveOnboardingSheetsTarget,
   updateOnboardingColumnMap,
@@ -496,6 +497,21 @@ export async function publishOnboardingColumnMapAction(
   const saved = await publishOnboardingColumnMap(clientAccountId, mapId.trim(), {
     requestId: crypto.randomUUID(),
     expectedRevision,
+  });
+  if (saved.ok) refresh(clientAccountId);
+  return saved;
+}
+
+export async function retireOnboardingColumnMapAction(
+  clientAccountId: string,
+  mapId: string
+): Promise<OnboardingActionResult<ColumnMapRecord>> {
+  await requireAdminCocAdminSession();
+  const rejected = rejectClient(clientAccountId);
+  if (rejected) return rejected;
+  if (!mapId.trim()) return { ok: false, error: "invalid_body", status: 400 };
+  const saved = await retireOnboardingColumnMap(clientAccountId, mapId.trim(), {
+    requestId: crypto.randomUUID(),
   });
   if (saved.ok) refresh(clientAccountId);
   return saved;

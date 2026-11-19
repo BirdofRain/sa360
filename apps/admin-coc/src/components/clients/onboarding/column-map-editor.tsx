@@ -23,7 +23,7 @@ function ageDobDisplayDefault(record: ColumnMapRecord): ColumnMapRecord {
   return {
     ...record,
     assignments: record.assignments.map((column) => {
-      if (column.explicit || column.formula || column.code === "duplicate_header") return column;
+      if (column.explicit || column.formula || column.code === "duplicate_header" || column.code === "renamed_header") return column;
       if (normalizeHeader(column.sheetHeader) !== "age/dob") return column;
       if (column.decision === "mapped" && column.target) return column;
       return {
@@ -264,6 +264,12 @@ export function ColumnMapEditor({
           Pause campaign Sheets delivery before changing the target or the column map.
         </p>
       ) : null}
+      {shown.status === "published" && !paused ? (
+        <p className="text-xs text-slate-700" data-testid="published-map-locked">
+          This published map is locked. Refresh worksheet headers to open a replacement draft from it. Campaign
+          delivery stays off until you enable it.
+        </p>
+      ) : null}
       <p className="text-xs text-slate-600">
         Appends add a new row only. The header row is not rewritten. Existing data rows are not rewritten. A column
         whose header or row-2 cell starts with = is omitted, so the existing formula stays. The new row leaves that
@@ -314,6 +320,11 @@ export function ColumnMapEditor({
               </label>
               {blank ? <p className="mt-1 text-slate-600">A blank header cannot be mapped. It stays an empty cell on the new row only.</p> : null}
               {column.formula ? <p className="mt-1 text-slate-600">Formula column. Appends skip it. Existing formulas stay.</p> : null}
+              {column.code === "renamed_header" ? (
+                <p className="mt-1 text-amber-800">
+                  This header does not match the published map. Choose a field or leave it unmapped. The previous column was not guessed.
+                </p>
+              ) : null}
               {column.decision === "ambiguous" ? (
                 <p className="mt-1 text-amber-800">This column is unresolved. Choose a field or leave it unmapped.</p>
               ) : null}

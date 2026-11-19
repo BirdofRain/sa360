@@ -51,6 +51,14 @@ export function sheetsColumnMapIssues(columns: readonly SheetsColumnMapIssueInpu
           "This header is duplicated. Map one column explicitly and leave the other unmapped, or choose different fields."
         )
       );
+    } else if (column.code === "renamed_header") {
+      issues.push(
+        issue(
+          column,
+          "renamed_header",
+          "This header does not match the published map. Choose a field or leave it unmapped. The previous column was not guessed."
+        )
+      );
     } else if (column.code === "ambiguous_age_or_dob" || (column.decision === "ambiguous" && normalizeSheetHeader(column.sheetHeader) === "age/dob")) {
       issues.push(
         issue(column, "ambiguous_age_or_dob", "Age/DOB is ambiguous. Choose Age, DOB, or leave it blank. Age is not calculated from DOB.")

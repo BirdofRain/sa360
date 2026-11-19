@@ -23,6 +23,7 @@ import {
   saveExistingSheetsTarget,
   type ExistingWorksheetSnapshot,
 } from "./column-maps.js";
+import { SHEETS_PERSON_POLICY } from "../company-sheets-dispatch/client-sheets-person-gate.js";
 import { suggestColumnAssignments, type ColumnAssignment } from "../company-sheets-delivery/company-sheets-custom-row.js";
 
 const integrationUrlRaw = process.env.SA360_TEST_DATABASE_URL?.trim() || "";
@@ -71,6 +72,8 @@ describe("existing tab column maps", { skip: !runIntegration }, () => {
   const cutoff = new Date("2026-10-27T14:43:39.233Z");
   let connectionId = "";
   let historicalJobId = "";
+  const extraClientIds: string[] = [];
+  const extraSheetIds: string[] = [];
 
   before(async () => {
     const url = assertSafeTestDatabaseUrl(integrationUrlRaw);
@@ -912,10 +915,380 @@ describe("existing tab column maps", { skip: !runIntegration }, () => {
     }
   });
 
+  it("refreshes a paused published map after an optional column is deleted without touching delivery history", async () => {
+    const diego = `sheets_replace_${suffix}`;
+    const sheet = `replaceSheet${suffix}`;
+    const cutoffAt = new Date("2026-10-27T14:43:39.233Z");
+    const oldHeader = ["Full Name", "Phone Number", "E-mail", "Age/DOB", "Lead Type", "Notes", "Score"];
+    const liveHeader = ["Full Name", "Phone Number", "E-mail", "Age / DOB", "Comments", "Score"];
+    extraClientIds.push(diego);
+    extraSheetIds.push(sheet);
+    await db.clientAccount.create({ data: { clientAccountId: diego, clientDisplayName: "Diego Diaz", status: "active" } });
+    const destination = await db.companySheetsDestination.create({
+      data: {
+        clientAccountId: diego,
+        companyConnectionId: connectionId,
+        spreadsheetId: sheet,
+        spreadsheetTitle: "Diego workbook",
+        spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${sheet}`,
+        worksheetId: 42,
+        worksheetTitle: "VET Web Form",
+        controlBasis: "drive_owner_verified",
+        accessStatus: "readable",
+        sharingStatus: "missing_recipient",
+        enabled: false,
+        campaignDispatchEnabled: true,
+        campaignDispatchNotBefore: cutoffAt,
+        agedDispatchEnabled: false,
+        destinationRevision: 4,
+        writeReadiness: "verified",
+      },
+    });
+    await db.companySheetsTabContract.create({
+      data: {
+        destinationId: destination.id,
+        role: "campaign",
+        setupState: "bound",
+        worksheetId: 42,
+        worksheetTitle: "VET Web Form",
+        schemaVersion: "company_sheets_campaign_custom_v1",
+        headerContract: oldHeader,
+        boundAt: new Date(),
+      },
+    });
+    const delivered = await db.companySheetsDeliveryJob.create({
+      data: {
+        kind: "lead",
+        status: "succeeded",
+        clientAccountId: diego,
+        companyConnectionId: connectionId,
+        destinationId: destination.id,
+        spreadsheetId: sheet,
+        spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${sheet}`,
+        worksheetId: 42,
+        worksheetTitle: "VET Web Form",
+        controlBasis: "drive_owner_verified",
+        destinationUpdatedAt: destination.updatedAt,
+        headerContract: oldHeader,
+        schemaVersion: "company_sheets_campaign_custom_v1",
+        destinationRevision: 4,
+        idempotencyKey: `lead:${diego}:delivered`,
+        rowsTotal: 1,
+        rowsWritten: 1,
+        finishedAt: new Date("2026-11-18T15:00:00.000Z"),
+      },
+    });
+    const deliveredRow = await db.companySheetsDeliveryRow.create({
+      data: {
+        jobId: delivered.id,
+        spreadsheetId: sheet,
+        worksheetId: 42,
+        stableRowId: `row:${diego}:1`,
+        ordinal: 1,
+        valuesJson: ["historical"],
+        status: "written",
+      },
+    });
+    const retryable = await db.companySheetsDeliveryJob.create({
+      data: {
+        kind: "lead",
+        status: "retryable",
+        clientAccountId: diego,
+        companyConnectionId: connectionId,
+        destinationId: destination.id,
+        spreadsheetId: sheet,
+        spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${sheet}`,
+        worksheetId: 42,
+        worksheetTitle: "VET Web Form",
+        controlBasis: "drive_owner_verified",
+        destinationUpdatedAt: destination.updatedAt,
+        headerContract: oldHeader,
+        schemaVersion: "company_sheets_campaign_custom_v1",
+        destinationRevision: 4,
+        idempotencyKey: `lead:${diego}:header-changed`,
+        rowsTotal: 1,
+        rowsWritten: 0,
+        lastError: "header_changed",
+      },
+    });
+    await db.companySheetsWorksheetLock.create({
+      data: { spreadsheetId: sheet, worksheetId: 42, ownerJobId: delivered.id, lockedAt: new Date("2026-11-18T15:00:00.000Z") },
+    });
+    const admission = await db.clientSheetsPersonAdmission.create({
+      data: {
+        clientAccountId: diego,
+        kind: "email",
+        normalizedValue: `diego-${suffix}@example.invalid`,
+        fingerprint: `fp-${suffix}`,
+        status: "reserved",
+        policy: SHEETS_PERSON_POLICY,
+        origin: "live_reservation",
+      },
+    });
+    const ghl = await db.clientGhlDestination.create({
+      data: {
+        clientAccountId: diego,
+        destinationSubaccountIdGhl: `loc_${suffix}`,
+        deliveryMode: "shadow",
+        deliveryEnabled: false,
+        workflowTriggerMode: "tag_trigger",
+        destinationWorkflowIdGhl: "workflow_diego",
+      },
+    });
+
+    const pausedSnapshot = {
+      ...legacySnapshot(sheet, oldHeader),
+      worksheetId: 42,
+      sampleRow: oldHeader.map(() => ""),
+    };
+    const refused = await createColumnMapDraft(
+      {
+        clientAccountId: diego,
+        requestId: randomUUID(),
+        spreadsheetId: sheet,
+        worksheetId: 42,
+        sourceScope: "shared",
+        baseSchemaVersion: "legacy_custom",
+        snapshot: pausedSnapshot,
+      },
+      db
+    );
+    assert.equal(refused.ok, false);
+    if (refused.ok) return;
+    assert.equal(refused.error, "delivery_not_paused");
+    assert.equal(await db.clientSheetColumnMap.count({ where: { clientAccountId: diego } }), 0);
+
+    await db.companySheetsDestination.update({ where: { clientAccountId: diego }, data: { campaignDispatchEnabled: false } });
+    const draft = await createColumnMapDraft(
+      {
+        clientAccountId: diego,
+        requestId: randomUUID(),
+        spreadsheetId: sheet,
+        worksheetId: 42,
+        sourceScope: "shared",
+        baseSchemaVersion: "legacy_custom",
+        snapshot: pausedSnapshot,
+      },
+      db
+    );
+    assert.equal(draft.ok, true);
+    if (!draft.ok) return;
+    const published = await saveAndPublishColumnMap(
+      {
+        clientAccountId: diego,
+        mapId: draft.map.id,
+        requestId: randomUUID(),
+        expectedRevision: draft.map.revision,
+        assignments: confirm(oldHeader),
+        snapshot: pausedSnapshot,
+      },
+      db
+    );
+    assert.equal(published.ok, true);
+    if (!published.ok) return;
+    assert.equal(published.published, true);
+    assert.equal(published.deliveryEnabled, false);
+    assert.equal(published.map.mapVersion, 1);
+    assert.equal(published.map.assignments.find((column) => column.sheetHeader === "Age/DOB")?.target?.sourceField, "date_of_birth");
+    assert.equal(published.map.assignments.find((column) => column.sheetHeader === "Lead Type")?.target?.sourceField, "lead_type");
+    const locked = await patchColumnMap(
+      {
+        clientAccountId: diego,
+        mapId: published.map.id,
+        requestId: randomUUID(),
+        expectedRevision: published.map.revision,
+        assignments: published.map.assignments,
+      },
+      db
+    );
+    assert.equal(locked.ok, false);
+    if (locked.ok) return;
+    assert.equal(locked.error, "revision_conflict");
+
+    const liveSnapshot = { ...pausedSnapshot, header: liveHeader, sampleRow: liveHeader.map(() => "") };
+    const replacement = await createColumnMapDraft(
+      {
+        clientAccountId: diego,
+        requestId: randomUUID(),
+        spreadsheetId: sheet,
+        worksheetId: 42,
+        sourceScope: "shared",
+        baseSchemaVersion: "legacy_custom",
+        snapshot: liveSnapshot,
+      },
+      db
+    );
+    assert.equal(replacement.ok, true);
+    if (!replacement.ok) return;
+    assert.equal(replacement.map.status, "draft");
+    assert.equal(replacement.map.mapVersion, 2);
+    assert.deepEqual(replacement.map.headerSnapshot, liveHeader);
+    assert.equal(replacement.map.headerFingerprint, headerFingerprint(liveHeader));
+    assert.notEqual(replacement.map.headerFingerprint, published.map.headerFingerprint);
+    assert.equal(replacement.map.assignments.find((column) => column.sheetHeader === "Age / DOB")?.target?.sourceField, "date_of_birth");
+    assert.equal(replacement.map.assignments.find((column) => column.sheetHeader === "Age / DOB")?.explicit, true);
+    assert.equal(replacement.map.assignments.some((column) => column.sheetHeader === "Lead Type" || column.target?.sourceField === "lead_type"), false);
+    assert.equal(replacement.map.assignments.find((column) => column.sheetHeader === "Comments")?.code, "renamed_header");
+    assert.equal(replacement.map.assignments.find((column) => column.sheetHeader === "Comments")?.target, null);
+    assert.equal(replacement.map.assignments.find((column) => column.sheetHeader === "Phone Number")?.target?.sourceField, "phone");
+    const afterDraft = await db.companySheetsDestination.findUniqueOrThrow({
+      where: { id: destination.id },
+      include: { tabContracts: true },
+    });
+    assert.equal(afterDraft.campaignDispatchEnabled, false);
+    assert.equal(afterDraft.campaignDispatchNotBefore?.toISOString(), cutoffAt.toISOString());
+    assert.equal(afterDraft.spreadsheetId, sheet);
+    assert.deepEqual(afterDraft.tabContracts.find((tab) => tab.role === "campaign")?.headerContract, oldHeader);
+    assert.equal(afterDraft.tabContracts.find((tab) => tab.role === "campaign")?.setupState, "bound");
+
+    const unresolved = await saveAndPublishColumnMap(
+      {
+        clientAccountId: diego,
+        mapId: replacement.map.id,
+        requestId: randomUUID(),
+        expectedRevision: replacement.map.revision,
+        assignments: replacement.map.assignments,
+        snapshot: liveSnapshot,
+      },
+      db
+    );
+    assert.equal(unresolved.ok, false);
+    if (unresolved.ok) return;
+    assert.equal(unresolved.error, "mapping_unresolved");
+    assert.equal(unresolved.published, false);
+    assert.equal(unresolved.deliveryEnabled, false);
+    const reviewed = (unresolved.map?.assignments ?? []).map((column) =>
+      column.sheetHeader === "Comments" || column.sheetHeader === "Score"
+        ? { ...column, decision: "unmapped" as const, explicit: true, transform: "blank" as const, target: null, code: null }
+        : column
+    );
+    const staleRevision = unresolved.map?.revision ?? 0;
+    const [firstEdit, secondEdit] = await Promise.all([
+      patchColumnMap(
+        { clientAccountId: diego, mapId: replacement.map.id, requestId: randomUUID(), expectedRevision: staleRevision, assignments: reviewed },
+        db
+      ),
+      patchColumnMap(
+        { clientAccountId: diego, mapId: replacement.map.id, requestId: randomUUID(), expectedRevision: staleRevision, assignments: reviewed },
+        db
+      ),
+    ]);
+    const edits = [firstEdit, secondEdit];
+    assert.equal(edits.filter((edit) => edit.ok).length, 1);
+    assert.equal(edits.filter((edit) => !edit.ok && edit.error === "revision_conflict").length, 1);
+    const current = await db.clientSheetColumnMap.findUniqueOrThrow({ where: { id: replacement.map.id } });
+    assert.equal(current.status, "draft");
+    assert.equal(current.revision, staleRevision + 1);
+    const stalePublish = await publishColumnMap(
+      {
+        clientAccountId: diego,
+        mapId: replacement.map.id,
+        requestId: randomUUID(),
+        expectedRevision: staleRevision,
+        snapshot: liveSnapshot,
+      },
+      db
+    );
+    assert.equal(stalePublish.ok, false);
+    if (stalePublish.ok) return;
+    assert.equal(stalePublish.error, "revision_conflict");
+    const blockedByPublished = await publishColumnMap(
+      {
+        clientAccountId: diego,
+        mapId: replacement.map.id,
+        requestId: randomUUID(),
+        expectedRevision: current.revision,
+        snapshot: liveSnapshot,
+      },
+      db
+    );
+    assert.equal(blockedByPublished.ok, false);
+    if (blockedByPublished.ok) return;
+    assert.equal(blockedByPublished.error, "published_map_exists");
+    assert.equal((await db.clientSheetColumnMap.findUniqueOrThrow({ where: { id: published.map.id } })).status, "published");
+
+    const retired = await retireColumnMap({ clientAccountId: diego, mapId: published.map.id, requestId: randomUUID() }, db);
+    assert.equal(retired.ok, true);
+    if (!retired.ok) return;
+    assert.equal(retired.map.status, "retired");
+    const retiredRow = await db.clientSheetColumnMap.findUniqueOrThrow({ where: { id: published.map.id } });
+    assert.deepEqual(retiredRow.headerSnapshot, oldHeader);
+    const duringRetire = await db.companySheetsDestination.findUniqueOrThrow({ where: { id: destination.id } });
+    assert.equal(duringRetire.campaignDispatchEnabled, false);
+    assert.equal(duringRetire.campaignDispatchNotBefore?.toISOString(), cutoffAt.toISOString());
+    assert.equal(duringRetire.spreadsheetId, sheet);
+
+    const replaced = await saveAndPublishColumnMap(
+      {
+        clientAccountId: diego,
+        mapId: replacement.map.id,
+        requestId: randomUUID(),
+        expectedRevision: current.revision,
+        assignments: reviewed,
+        snapshot: liveSnapshot,
+      },
+      db
+    );
+    assert.equal(replaced.ok, true);
+    if (!replaced.ok) return;
+    assert.equal(replaced.published, true);
+    assert.equal(replaced.deliveryEnabled, false);
+    assert.equal(replaced.map.status, "published");
+    assert.equal(replaced.map.mapVersion, 2);
+    assert.deepEqual(replaced.map.headerSnapshot, liveHeader);
+    assert.equal(replaced.map.headerFingerprint, headerFingerprint(liveHeader));
+    assert.equal(replaced.map.assignments.find((column) => column.sheetHeader === "Age / DOB")?.target?.sourceField, "date_of_birth");
+    assert.equal(replaced.map.assignments.some((column) => column.target?.sourceField === "lead_type"), false);
+    const after = await db.companySheetsDestination.findUniqueOrThrow({
+      where: { id: destination.id },
+      include: { tabContracts: true },
+    });
+    assert.equal(after.spreadsheetId, sheet);
+    assert.equal(after.worksheetId, 42);
+    assert.equal(after.campaignDispatchEnabled, false);
+    assert.equal(after.agedDispatchEnabled, false);
+    assert.equal(after.enabled, false);
+    assert.equal(after.campaignDispatchNotBefore?.toISOString(), cutoffAt.toISOString());
+    const tab = after.tabContracts.find((item) => item.role === "campaign");
+    assert.equal(tab?.setupState, "bound");
+    assert.equal(tab?.schemaVersion, "company_sheets_campaign_custom_v1");
+    assert.deepEqual(tab?.headerContract, liveHeader);
+    const jobs = await db.companySheetsDeliveryJob.findMany({ where: { clientAccountId: diego }, orderBy: { idempotencyKey: "asc" } });
+    assert.equal(jobs.length, 2);
+    const keptDelivered = jobs.find((job) => job.id === delivered.id);
+    const keptRetry = jobs.find((job) => job.id === retryable.id);
+    assert.equal(keptDelivered?.status, "succeeded");
+    assert.deepEqual(keptDelivered?.headerContract, oldHeader);
+    assert.equal(keptRetry?.status, "retryable");
+    assert.equal(keptRetry?.lastError, "header_changed");
+    assert.deepEqual(keptRetry?.headerContract, oldHeader);
+    const row = await db.companySheetsDeliveryRow.findUniqueOrThrow({ where: { id: deliveredRow.id } });
+    assert.equal(row.status, "written");
+    assert.deepEqual(row.valuesJson, ["historical"]);
+    const keptAdmission = await db.clientSheetsPersonAdmission.findUniqueOrThrow({ where: { id: admission.id } });
+    assert.equal(keptAdmission.status, "reserved");
+    assert.equal(await db.clientSheetsPersonRelease.count({ where: { clientAccountId: diego } }), 0);
+    const lock = await db.companySheetsWorksheetLock.findUniqueOrThrow({
+      where: { spreadsheetId_worksheetId: { spreadsheetId: sheet, worksheetId: 42 } },
+    });
+    assert.equal(lock.ownerJobId, delivered.id);
+    const keptGhl = await db.clientGhlDestination.findUniqueOrThrow({ where: { id: ghl.id } });
+    assert.equal(keptGhl.destinationSubaccountIdGhl, ghl.destinationSubaccountIdGhl);
+    assert.equal(keptGhl.deliveryEnabled, false);
+    assert.equal(keptGhl.deliveryMode, "shadow");
+    assert.equal(keptGhl.workflowTriggerMode, "tag_trigger");
+    assert.equal(keptGhl.destinationWorkflowIdGhl, "workflow_diego");
+    assert.equal(keptGhl.updatedAt.toISOString(), ghl.updatedAt.toISOString());
+  });
+
   async function cleanup() {
-    const ids = [clientAccountId, otherClient];
+    const ids = [clientAccountId, otherClient, ...extraClientIds];
     await db.sourceLeadEvent.deleteMany({ where: { clientAccountIdResolved: { in: ids } } });
     await db.clientOnboardingActivationIntent.deleteMany({ where: { clientAccountId: { in: ids } } });
+    await db.clientSheetsPersonRelease.deleteMany({ where: { clientAccountId: { in: ids } } });
+    await db.clientSheetsPersonAdmission.deleteMany({ where: { clientAccountId: { in: ids } } });
+    await db.clientGhlDestination.deleteMany({ where: { clientAccountId: { in: ids } } });
+    await db.companySheetsWorksheetLock.deleteMany({ where: { spreadsheetId: { in: extraSheetIds } } });
     await db.companySheetsDeliveryJob.deleteMany({ where: { clientAccountId: { in: ids } } });
     await db.clientSheetColumnMap.deleteMany({ where: { clientAccountId: { in: ids } } });
     await db.companySheetsDestination.deleteMany({ where: { clientAccountId: { in: ids } } });

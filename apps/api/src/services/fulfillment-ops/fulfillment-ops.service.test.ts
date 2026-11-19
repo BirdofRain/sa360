@@ -29,8 +29,14 @@ test("client lead orders reject noncanonical states", async () => {
 test("safety posture is simulation-only with live disabled by default", () => {
   const prevExec = process.env.SA360_LF2_EXECUTION_ENABLED;
   const prevCanary = process.env.SA360_LF2_GHL_CANARY_ENABLED;
+  const prevReview = process.env.SA360_PPL_OPERATOR_REVIEW_ENABLED;
+  const prevReceiptImport = process.env.SA360_PPL_EXTERNAL_RECEIPT_IMPORT_ENABLED;
+  const prevReceiptSuppression = process.env.SA360_PPL_EXTERNAL_RECEIPT_SUPPRESSION_ENABLED;
   delete process.env.SA360_LF2_EXECUTION_ENABLED;
   delete process.env.SA360_LF2_GHL_CANARY_ENABLED;
+  delete process.env.SA360_PPL_OPERATOR_REVIEW_ENABLED;
+  delete process.env.SA360_PPL_EXTERNAL_RECEIPT_IMPORT_ENABLED;
+  delete process.env.SA360_PPL_EXTERNAL_RECEIPT_SUPPRESSION_ENABLED;
 
   try {
     const safety = buildFulfillmentOpsSafetyPosture();
@@ -41,6 +47,7 @@ test("safety posture is simulation-only with live disabled by default", () => {
     assert.equal(safety.lf2GhlCanaryEnabled, false);
     assert.equal(safety.safetyMessage, FULFILLMENT_OPS_SAFETY_MESSAGE);
     assert.equal(safety.flags.SA360_LF2_EXECUTION_ENABLED, false);
+    assert.equal(safety.flags.SA360_PPL_OPERATOR_REVIEW_ENABLED, false);
     assert.equal(safety.flags.SA360_PPL_EXTERNAL_RECEIPT_IMPORT_ENABLED, false);
     assert.equal(safety.flags.SA360_PPL_EXTERNAL_RECEIPT_SUPPRESSION_ENABLED, true);
   } finally {
@@ -48,6 +55,15 @@ test("safety posture is simulation-only with live disabled by default", () => {
     else process.env.SA360_LF2_EXECUTION_ENABLED = prevExec;
     if (prevCanary === undefined) delete process.env.SA360_LF2_GHL_CANARY_ENABLED;
     else process.env.SA360_LF2_GHL_CANARY_ENABLED = prevCanary;
+    if (prevReview === undefined) delete process.env.SA360_PPL_OPERATOR_REVIEW_ENABLED;
+    else process.env.SA360_PPL_OPERATOR_REVIEW_ENABLED = prevReview;
+    if (prevReceiptImport === undefined) delete process.env.SA360_PPL_EXTERNAL_RECEIPT_IMPORT_ENABLED;
+    else process.env.SA360_PPL_EXTERNAL_RECEIPT_IMPORT_ENABLED = prevReceiptImport;
+    if (prevReceiptSuppression === undefined) {
+      delete process.env.SA360_PPL_EXTERNAL_RECEIPT_SUPPRESSION_ENABLED;
+    } else {
+      process.env.SA360_PPL_EXTERNAL_RECEIPT_SUPPRESSION_ENABLED = prevReceiptSuppression;
+    }
   }
 });
 

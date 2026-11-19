@@ -6,18 +6,15 @@
 import type { LeadInventoryAgeBand } from "../lead-inventory/lead-inventory.constants.js";
 import { calculateInventoryAgeDays, resolveAgeBandKey } from "../lead-inventory/lead-inventory-age.js";
 import {
-  adaptMasterRow,
-  assertMasterHeaders,
-} from "./aged-inventory-bulk-adapters.js";
-import {
   RollingSetFingerprint,
   emptyCheckpointCounts,
   type AgedBulkCheckpointCounts,
 } from "./aged-inventory-bulk-checkpoint.js";
 import {
+  assertAgedBulkHeaders,
   createIdentityConflictIndex,
   isAcceptDisposition,
-  normalizeMasterRow,
+  parseAgedBulkNormalizedRow,
   type IdentityConflictIndex,
 } from "./aged-inventory-bulk-normalize.js";
 import { streamCsvFile } from "./aged-inventory-bulk-stream.js";
@@ -28,6 +25,9 @@ export type RescanResult = {
   counts: AgedBulkCheckpointCounts;
   byState: Record<string, number>;
   byAgeBand: Record<string, number>;
+  byBlocker: Record<string, number>;
+  earliestGeneratedAt: string | null;
+  latestGeneratedAt: string | null;
   acceptedFp: RollingSetFingerprint;
   quarantinedFp: RollingSetFingerprint;
   rejectedFp: RollingSetFingerprint;
@@ -71,6 +71,9 @@ function emptyRescan(resultBase: {
     ...resultBase,
     byState: {},
     byAgeBand: {},
+    byBlocker: {},
+    earliestGeneratedAt: null,
+    latestGeneratedAt: null,
     rowsScanned: 0,
   };
 }
@@ -95,7 +98,11 @@ export async function rescanSourceRowsForResume(input: {
   const rejectedFp = new RollingSetFingerprint();
   const byState: Record<string, number> = {};
   const byAgeBand: Record<string, number> = {};
+  const byBlocker: Record<string, number> = {};
+  let earliestGeneratedAt: string | null = null;
+  let latestGeneratedAt: string | null = null;
   let headerIndex: Map<string, number> | null = null;
+  let sourceHeaders: string[] = [];
   let rowsScanned = 0;
 
   if (input.endExclusive <= 1) {
@@ -106,21 +113,20 @@ export async function rescanSourceRowsForResume(input: {
     startRowNumber: 1,
     endRowNumberExclusive: input.endExclusive,
     onHeader: (headers) => {
-      const asserted = assertMasterHeaders(headers, input.sourceFormat);
+      const asserted = assertAgedBulkHeaders(headers, input.sourceFormat);
       if (!asserted.ok) throw new Error(asserted.error);
       headerIndex = asserted.index;
+      sourceHeaders = headers;
     },
     onRow: async (rowNumber, cols) => {
       if (!headerIndex) throw new Error("missing_header_index");
       rowsScanned += 1;
-      const raw = adaptMasterRow({
+      const normalized = parseAgedBulkNormalizedRow({
         rowNumber,
         cols,
+        headers: sourceHeaders,
         index: headerIndex,
         sourceFormat: input.sourceFormat,
-      });
-      const normalized = normalizeMasterRow({
-        raw,
         nicheKey: input.nicheKey,
         identityIndex,
         evaluatedAt: input.evaluatedAt,
@@ -129,6 +135,14 @@ export async function rescanSourceRowsForResume(input: {
         statusRaw: normalized.statusRaw,
         usedByPresent: normalized.usedByPresent,
       });
+      for (const code of normalized.blockerCodes) {
+        byBlocker[code] = (byBlocker[code] ?? 0) + 1;
+      }
+      if (normalized.generatedAt.getTime() > 0) {
+        const iso = normalized.generatedAt.toISOString();
+        if (!earliestGeneratedAt || iso < earliestGeneratedAt) earliestGeneratedAt = iso;
+        if (!latestGeneratedAt || iso > latestGeneratedAt) latestGeneratedAt = iso;
+      }
       if (isAcceptDisposition(normalized.disposition)) {
         acceptedFp.update(normalized.sourceLeadId);
         if (normalized.state) byState[normalized.state] = (byState[normalized.state] ?? 0) + 1;
@@ -152,6 +166,9 @@ export async function rescanSourceRowsForResume(input: {
     counts,
     byState,
     byAgeBand,
+    byBlocker,
+    earliestGeneratedAt,
+    latestGeneratedAt,
     acceptedFp,
     quarantinedFp,
     rejectedFp,

@@ -7,9 +7,12 @@ import { AdminCocForbiddenError, readAdminCocAccess } from "@/lib/admin-coc-sess
 import { loadTeamWorkspaceClient } from "@/lib/team-workspace/load";
 import { parseGuideStep } from "@/lib/team-workspace/onboarding-guide";
 
+import { CampaignManager } from "@/components/team-workspace/campaign-manager";
 import { GuidedOnboarding } from "@/components/team-workspace/guided-onboarding";
 import { TeamWorkspaceBoard } from "@/components/team-workspace/workspace-board";
 import { TeamWorkspaceDisabled, TeamWorkspaceIntro, TeamWorkspaceMessage } from "@/components/team-workspace/workspace-states";
+import { isClientCampaignManagerEnabled } from "@/lib/team-workspace/client-campaign-manager-env";
+import { loadClientCampaignManager } from "@/lib/team-workspace/client-campaign-manager-load";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Team Workspace" };
@@ -28,8 +31,10 @@ export default async function TeamWorkspaceClientPage({
   const step = parseGuideStep(requested) ?? "information";
   try {
     const access = await readAdminCocAccess();
+    const canMutate =
+      access.kind === "admin" || (access.kind === "staff_workspace" && access.permissions.includes("team_manager"));
     const webhookAccess = {
-      canPrepare: access.kind === "admin" || (access.kind === "staff_workspace" && access.permissions.includes("team_manager")),
+      canPrepare: canMutate,
       canActivate: access.kind === "admin",
     };
     const model = await loadTeamWorkspaceClient(clientAccountId);
@@ -69,8 +74,10 @@ export default async function TeamWorkspaceClientPage({
         </div>
       );
     }
+    const campaignManager = isClientCampaignManagerEnabled() ? await loadClientCampaignManager(clientAccountId) : null;
     return (
       <div className="space-y-8">
+        {campaignManager ? <CampaignManager clientAccountId={clientAccountId} model={campaignManager} canMutate={canMutate} /> : null}
         {model.guide ? (
           <>
             <TeamWorkspaceIntro />

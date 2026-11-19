@@ -71,6 +71,11 @@ test("admin can open the workspace and every other session is denied", () => {
   assert.equal(isObserverAdminApiGetAllowed("/admin/v1/team-workspace/clients/alex_gross"), false);
   assert.equal(isObserverAdminApiGetAllowed("/admin/v1/team-workspace/clients/alex_gross/source-campaign-review"), false);
   assert.equal(isObserverAdminApiGetAllowed("/admin/v1/clients/alex_gross/source-campaign-requests"), false);
+  assert.equal(isObserverAdminApiGetAllowed("/admin/v1/clients/alex_gross/campaigns"), false);
+  assert.equal(
+    isObserverAdminApiGetAllowed("/admin/v1/clients/alex_gross/campaigns/c123456789012345678901234"),
+    false
+  );
   assert.equal(
     isObserverAdminApiGetAllowed("/admin/v1/clients/alex_gross/delivery-notification-recipient"),
     false
@@ -122,6 +127,11 @@ test("workspace files do not collect a recipient, send mail, or arm delivery", (
     new URL("./company-sheets-config-request-env.ts", import.meta.url),
     new URL("../../components/team-workspace/company-sheets-config-request-panel.tsx", import.meta.url),
     new URL("../../app/actions/team-workspace-company-sheets-config.ts", import.meta.url),
+    new URL("./client-campaign-manager.ts", import.meta.url),
+    new URL("./client-campaign-manager-env.ts", import.meta.url),
+    new URL("./client-campaign-manager-load.ts", import.meta.url),
+    new URL("../../app/actions/client-campaign-manager.ts", import.meta.url),
+    new URL("../../components/team-workspace/campaign-manager.tsx", import.meta.url),
   ];
   const source = files.map((file) => readFileSync(file, "utf8")).join("\n");
   assert.equal(source.includes("/team\""), false);

@@ -453,6 +453,22 @@ export function fetchCompanySheetsDispatch(clientAccountId: string) {
   return adminRequestJson<CompanySheetsDispatchView>("GET", clientPath(clientAccountId, "dispatch"));
 }
 
+export function adoptPublishedMapForCampaignLead(clientAccountId: string, sourceLeadEventId: string) {
+  return adminRequestJson<{
+    ok: true;
+    jobId: string;
+    googleCalled: false;
+    delivered: false;
+    appended: false;
+    headline: string;
+    detail: string;
+  }>(
+    "POST",
+    `${clientPath(clientAccountId, "campaign-leads")}/${encodeURIComponent(sourceLeadEventId)}/adopt-published-map`,
+    {}
+  );
+}
+
 export function recoverCompanySheetsPersonHold(clientAccountId: string, sourceLeadEventId: string) {
   return adminRequestJson<{
     ok: true;

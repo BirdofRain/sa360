@@ -160,6 +160,10 @@ export type CompanySheetsAdminActions = {
     clientAccountId: string,
     input: { role: "campaign" | "aged" | "canary"; exportPackageId?: string; schemaVersion?: string }
   ) => Promise<{ ok: true } | { ok: false; error: string }>;
+  adoptPublishedMap?: (
+    clientAccountId: string,
+    sourceLeadEventId: string
+  ) => Promise<{ ok: true; message: string } | { ok: false; error: string }>;
   recoverPersonHold?: (
     clientAccountId: string,
     sourceLeadEventId: string
@@ -497,6 +501,7 @@ function SheetsIntentList({
   clientAccountId,
   intents,
   busy,
+  adoptPublishedMap,
   recover,
   release,
   onRun,
@@ -504,6 +509,7 @@ function SheetsIntentList({
   clientAccountId: string;
   intents: NonNullable<CompanySheetsDispatchView["intents"]>;
   busy: boolean;
+  adoptPublishedMap?: CompanySheetsAdminActions["adoptPublishedMap"];
   recover?: CompanySheetsAdminActions["recoverPersonHold"];
   release?: CompanySheetsAdminActions["releasePersonReservation"];
   onRun: (task: () => Promise<{ ok: true; message?: string } | { ok: false; error: string }>) => void;
@@ -515,6 +521,11 @@ function SheetsIntentList({
     <ul className="space-y-2" data-testid="sheets-intent-list">
       {intents.slice(0, 8).map((intent) => {
         const held = intent.status === "duplicate_held" || intent.status === "review_held" || intent.status === "assessment_held" || intent.status === "assessment_failed";
+        const headerHold =
+          intent.kind === "campaign_lead" &&
+          intent.status === "retryable" &&
+          intent.lastError === "header_changed" &&
+          Boolean(intent.sourceLeadEventId);
         return (
           <li key={intent.id} className="rounded-lg border border-slate-200 px-3 py-2 text-sm">
             <p className="font-medium text-slate-900">{intent.headline}</p>
@@ -525,6 +536,29 @@ function SheetsIntentList({
               {intent.lastError ? ` · ${intent.lastError}` : ""}
               {intent.delivered ? "" : " · not delivered"}
             </p>
+            {headerHold && adoptPublishedMap && intent.sourceLeadEventId ? (
+              <div className="mt-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={busy}
+                  data-testid="retry-header-changed-job"
+                  onClick={() =>
+                    onRun(async () => {
+                      const result = await adoptPublishedMap(clientAccountId, intent.sourceLeadEventId as string);
+                      return result.ok ? { ok: true, message: result.message } : result;
+                    })
+                  }
+                >
+                  Retry with published map
+                </Button>
+                <p className="mt-1 text-xs text-slate-600">
+                  Copies the current published map onto this held job. It does not create a lead, release a reservation,
+                  or call Google. The next drain appends the same row when the worksheet header matches.
+                </p>
+              </div>
+            ) : null}
             {held && intent.sourceLeadEventId && (recover || release) ? (
               <div className="mt-2 flex flex-wrap gap-2">
                 {recover ? (
@@ -1456,6 +1490,7 @@ export function CompanySheetsAdminPanel({
           clientAccountId={clientAccountId}
           intents={dispatch?.intents ?? []}
           busy={busy("delivery")}
+          adoptPublishedMap={actions.adoptPublishedMap}
           recover={actions.recoverPersonHold}
           release={actions.releasePersonReservation}
           onRun={(task) => void run("delivery", task)}

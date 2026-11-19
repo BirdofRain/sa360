@@ -4,6 +4,7 @@ import { verifyAdminApiKey } from "../lib/admin-auth.js";
 import { prisma } from "../lib/db.js";
 import { requireAuthenticatedPortalTenant } from "../lib/client-portal-session-assertion.js";
 import {
+  adoptPublishedMapForRetryableCampaignLead,
   enqueueAuthorizedAgedReleaseSheetsDelivery,
   enqueueCompanySheetsCanary,
   enqueueConfirmedLeadSheetsDelivery,
@@ -312,6 +313,25 @@ export const adminCompanySheetsDeliveryRoutes: FastifyPluginAsync<CompanySheetsD
     if (!result.ok) return sendFailure(reply, result);
     return reply.send({ ...result, googleCalled: false });
   });
+
+  app.post(
+    "/clients/:clientAccountId/google-sheets/campaign-leads/:sourceLeadEventId/adopt-published-map",
+    async (request, reply) => {
+      if (!(await verifyAdminApiKey(request, reply))) return;
+      const { clientAccountId, sourceLeadEventId } = request.params as {
+        clientAccountId: string;
+        sourceLeadEventId: string;
+      };
+      const result = await adoptPublishedMapForRetryableCampaignLead(clientAccountId, sourceLeadEventId, deps);
+      if (!result.ok) return sendFailure(reply, result);
+      const copy = companySheetsIntentOperatorCopy({
+        status: "retryable",
+        reason: "published_map_adopted",
+        lastError: null,
+      });
+      return reply.send({ ...result, headline: copy.headline, detail: copy.detail });
+    }
+  );
 
   app.post("/clients/:clientAccountId/google-sheets/person-holds/:sourceLeadEventId/recover", async (request, reply) => {
     if (!(await verifyAdminApiKey(request, reply))) return;

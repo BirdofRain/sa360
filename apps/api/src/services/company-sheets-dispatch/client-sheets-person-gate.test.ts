@@ -191,6 +191,14 @@ test("pending and scheduled intents are not called recovered or delivered", () =
   });
   assert.match(duplicate.headline, /Duplicate hold/);
   assert.match(duplicate.detail, /person_duplicate/);
+  const adopted = companySheetsIntentOperatorCopy({
+    status: "retryable",
+    reason: "published_map_adopted",
+    lastError: null,
+  });
+  assert.equal(adopted.delivered, false);
+  assert.equal(adopted.headline, "Retry scheduled");
+  assert.match(adopted.detail, /Not delivered yet/);
 });
 
 test("assessment failures split transient transport errors from operator review", () => {

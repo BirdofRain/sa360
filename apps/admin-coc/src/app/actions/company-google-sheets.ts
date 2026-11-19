@@ -17,6 +17,7 @@ import {
   saveCompanySheetsDestination,
   startCompanyGoogleOAuth,
   activateCompanySheetsDispatch,
+  adoptPublishedMapForCampaignLead,
   recoverCompanySheetsPersonHold,
   releaseCompanySheetsPersonReservation,
   prepareSheetsHistory,
@@ -302,6 +303,20 @@ export async function reviewCompanySheetsColumnsAction(
   const res = await reviewCompanySheetsColumns(clientAccountId, input);
   if (!res.ok) return { ok: false, error: fail(res.body) };
   return { ok: true, data: res.data };
+}
+
+export async function adoptPublishedMapForCampaignLeadAction(
+  clientAccountId: string,
+  sourceLeadEventId: string
+): Promise<{ ok: true; message: string } | { ok: false; error: string }> {
+  await requireAdminCocAdminSession();
+  const res = await adoptPublishedMapForCampaignLead(clientAccountId, sourceLeadEventId);
+  if (!res.ok) return { ok: false, error: fail(res.body) };
+  refresh(clientAccountId);
+  return {
+    ok: true,
+    message: `${res.data.headline}. ${res.data.detail} Google was not called and no new lead was created.`,
+  };
 }
 
 export async function recoverCompanySheetsPersonHoldAction(

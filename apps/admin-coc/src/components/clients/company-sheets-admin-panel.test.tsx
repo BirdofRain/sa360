@@ -8,6 +8,7 @@ import { CompanySheetsAdminPanel } from "./company-sheets-admin-panel.tsx";
 import type {
   CompanyGoogleConnectionView,
   CompanySheetsDestinationView,
+  CompanySheetsDispatchView,
   SheetsReleaseCensusView,
 } from "@/lib/admin-api/company-google-sheets";
 import type { ColumnMapRecord } from "@/lib/clients/onboarding/types";
@@ -690,6 +691,70 @@ function census(input: {
     incomplete: ["Unimported Zap deliveries are not counted. Imported Zap history is historical_baseline and is separate from SA360 delivery_index history."],
   };
 }
+
+it("offers a published-map retry only for a retryable header_changed campaign lead", async () => {
+  let called: string | null = null;
+  const dispatch: CompanySheetsDispatchView = {
+    ok: true,
+    configured: true,
+    dispatchFlagEnabled: true,
+    campaignDispatchEnabled: true,
+    campaignDispatchNotBefore: "2026-11-18T21:08:00.000Z",
+    agedDispatchEnabled: false,
+    agedDispatchNotBefore: null,
+    lastCampaignDelivery: null,
+    intents: [
+      {
+        id: "intent-held",
+        kind: "campaign_lead",
+        status: "retryable",
+        reason: "header_changed",
+        lastError: "header_changed",
+        sourceLeadEventId: "lead-held",
+        jobId: "job-held",
+        headline: "Retryable",
+        detail: "The drain can try again. Not delivered. Code: header_changed.",
+        delivered: false,
+        recovered: false,
+      },
+      {
+        id: "intent-done",
+        kind: "campaign_lead",
+        status: "completed",
+        reason: null,
+        lastError: null,
+        sourceLeadEventId: "lead-done",
+        jobId: "job-done",
+        headline: "Sheets job succeeded",
+        detail: "The campaign job finished as succeeded.",
+        delivered: true,
+        recovered: false,
+      },
+    ],
+  };
+  render(
+    <CompanySheetsAdminPanel
+      clientAccountId="acme"
+      clientDisplayName="Acme Insurance"
+      connection={connection}
+      destination={destination}
+      dispatch={dispatch}
+      notice={null}
+      actions={{
+        ...idleActions(),
+        adoptPublishedMap: async (_clientAccountId, sourceLeadEventId) => {
+          called = sourceLeadEventId;
+          return { ok: true, message: "Retry scheduled. The drain appends it. Not delivered yet." };
+        },
+      }}
+    />
+  );
+  const buttons = screen.getAllByTestId("retry-header-changed-job");
+  assert.equal(buttons.length, 1);
+  fireEvent.click(buttons[0]!);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(called, "lead-held");
+});
 
 function idleActions() {
   return {

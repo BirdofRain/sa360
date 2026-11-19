@@ -504,6 +504,141 @@ export async function enqueueConfirmedLeadSheetsDelivery(
   return { ok: true, job, created: !before };
 }
 
+/**
+ * Copies the current published campaign map onto one pre-append lead job.
+ * The drain keeps replaying a `header_changed` job with the header frozen at
+ * enqueue, so a later map correction never reaches that job. This does not
+ * call Google, release a reservation, move the cutoff, or create a lead.
+ */
+export async function adoptPublishedMapForRetryableCampaignLead(
+  clientAccountId: string,
+  sourceLeadEventId: string,
+  deps: CompanySheetsDeliveryDeps = {}
+): Promise<{ ok: true; jobId: string; googleCalled: false; delivered: false; appended: false } | DeliveryFailure> {
+  const db = deps.db ?? prisma;
+  const env = deps.env ?? process.env;
+  const clientId = clientAccountId.trim();
+  const eventId = sourceLeadEventId.trim();
+  if (!clientId || !eventId) return fail("lead_not_found", 404);
+  const intent = await db.companySheetsDispatchIntent.findUnique({
+    where: { idempotencyKey: `campaign:${clientId}:${eventId}` },
+  });
+  if (!intent || intent.clientAccountId !== clientId || intent.kind !== "campaign_lead" || intent.sourceLeadEventId !== eventId) {
+    return fail("intent_not_found", 404);
+  }
+  if (intent.status !== "retryable" || intent.lastError !== "header_changed" || !intent.jobId) {
+    return fail("not_retryable_header_hold", 409);
+  }
+  const job = await db.companySheetsDeliveryJob.findUnique({ where: { id: intent.jobId } });
+  if (!job || job.clientAccountId !== clientId || job.sourceLeadEventId !== eventId || job.idempotencyKey !== `lead:${clientId}:${eventId}`) {
+    return fail("job_not_found", 404);
+  }
+  if (job.kind !== "lead" || job.status !== "retryable" || job.lastError !== "header_changed") {
+    return fail("not_retryable_header_hold", 409);
+  }
+  if (job.appendStartedAt != null || job.rowsWritten !== 0 || job.uncertainReason) {
+    return fail("append_already_started", 409);
+  }
+  const pending = await db.companySheetsDeliveryRow.findMany({ where: { jobId: job.id } });
+  if (pending.length !== 1 || pending[0]?.status !== "pending" || pending[0].stableRowId !== job.idempotencyKey) {
+    return fail("append_already_started", 409);
+  }
+  const siblings = await db.companySheetsDeliveryJob.findMany({
+    where: {
+      clientAccountId: clientId,
+      sourceLeadEventId: eventId,
+      spreadsheetId: job.spreadsheetId,
+      worksheetId: job.worksheetId,
+      id: { not: job.id },
+    },
+    select: { status: true, rowsWritten: true, appendStartedAt: true },
+  });
+  if (
+    siblings.some(
+      (other) =>
+        other.status === "succeeded" ||
+        other.status === "uncertain" ||
+        other.status === "running" ||
+        other.rowsWritten > 0 ||
+        other.appendStartedAt != null
+    )
+  ) {
+    return fail("event_write_already_recorded", 409);
+  }
+  const lead = await db.sourceLeadEvent.findUnique({ where: { id: eventId } });
+  if (!lead || lead.clientAccountIdResolved !== clientId) return fail("lead_not_found", 404);
+  const destination = await snapshotDestination(clientId, db);
+  if (!("spreadsheetId" in destination)) return destination;
+  if (destination.id !== job.destinationId || destination.spreadsheetId !== job.spreadsheetId) {
+    return fail("destination_not_configured", 409);
+  }
+  const contract = await loadBoundContract(db, destination, "campaign");
+  if (!("worksheetId" in contract)) return contract;
+  if (contract.worksheetId !== job.worksheetId) return fail("tab_incompatible", 409);
+  const resolved = await resolveCampaignWrite(db, env, destination, contract, {
+    stableRowId: pending[0].stableRowId,
+    clientAccountId: clientId,
+    sourceLeadEventId: lead.id,
+    receivedAt: lead.receivedAt.toISOString(),
+    sourceLeadId: lead.sourceLeadId,
+    normalizedPayload: lead.normalizedPayloadJson,
+    routingResultJson: lead.routingResultJson,
+    sheetsPresentation: true,
+    sourceFunnelId: sourceFunnelIdFromLead(lead),
+  });
+  if (!resolved.ok) return resolved;
+  const availableAt = deps.now?.() ?? new Date();
+  try {
+    await db.$transaction(async (tx) => {
+      const jobUpdate = await tx.companySheetsDeliveryJob.updateMany({
+        where: {
+          id: job.id,
+          status: "retryable",
+          lastError: "header_changed",
+          appendStartedAt: null,
+          rowsWritten: 0,
+        },
+        data: {
+          headerContract: resolved.header,
+          schemaVersion: resolved.schemaVersion,
+          contentSha256: resolved.contentSha256,
+          destinationRevision: contract.destinationRevision,
+          destinationUpdatedAt: destination.updatedAt,
+          lastError: null,
+          uncertainReason: null,
+        },
+      });
+      if (jobUpdate.count !== 1) throw new AdoptMapConflict();
+      const rowUpdate = await tx.companySheetsDeliveryRow.updateMany({
+        where: { id: pending[0].id, jobId: job.id, status: "pending" },
+        data: { valuesJson: resolved.values },
+      });
+      if (rowUpdate.count !== 1) throw new AdoptMapConflict();
+      const intentUpdate = await tx.companySheetsDispatchIntent.updateMany({
+        where: { id: intent.id, status: "retryable", lastError: "header_changed", jobId: job.id },
+        data: {
+          status: "retryable",
+          lastError: null,
+          reason: "published_map_adopted",
+          availableAt,
+        },
+      });
+      if (intentUpdate.count !== 1) throw new AdoptMapConflict();
+    });
+  } catch (err) {
+    if (err instanceof AdoptMapConflict) return fail("not_retryable_header_hold", 409);
+    throw err;
+  }
+  return { ok: true, jobId: job.id, googleCalled: false, delivered: false, appended: false };
+}
+
+class AdoptMapConflict extends Error {
+  constructor() {
+    super("adopt_map_conflict");
+    this.name = "AdoptMapConflict";
+  }
+}
+
 export async function enqueueAuthorizedAgedReleaseSheetsDelivery(
   exportPackageId: string,
   deps: CompanySheetsDeliveryDeps = {}

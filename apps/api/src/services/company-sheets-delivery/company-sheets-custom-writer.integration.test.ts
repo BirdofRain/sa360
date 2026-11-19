@@ -26,6 +26,7 @@ import { createPrismaCapturedTestStore } from "../client-onboarding-v2/onboardin
 import { capturedEventTestKey } from "../client-onboarding-v2/custom-captured-sheet.js";
 import { formatGenerationTimestamp } from "./company-sheets-campaign-row.js";
 import {
+  adoptPublishedMapForRetryableCampaignLead,
   enqueueConfirmedLeadSheetsDelivery,
   executeCompanySheetsDeliveryJob,
   releaseCompanySheetsDeliveryHold,
@@ -1261,12 +1262,207 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
     });
   }
 
+  it("copies the published map onto a pre-append header_changed lead without appending until that same job runs", async () => {
+    const leadId = await admitFixture("adopt");
+    const destination = await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId: customClient } });
+    const cutoffBefore = destination.campaignDispatchNotBefore?.toISOString() ?? null;
+    const dispatchBefore = destination.campaignDispatchEnabled;
+    const ghl = await db.clientGhlDestination.create({
+      data: { clientAccountId: customClient, destinationSubaccountIdGhl: `ghl_${suffix}` },
+    });
+    const admissionsBefore = await db.clientSheetsPersonAdmission.count({ where: { clientAccountId: customClient } });
+    const nextHeader = ["Full Name", "Phone Number", "DOB", "E-mail"];
+    const nextSample = ["Ada Fixture", "5551110000", "01/02/1980", "ada@example.invalid"];
+    const appendsBefore = appends.filter((item) => item.spreadsheetId === customSheet).length;
+    const idempotencyKey = `lead:${customClient}:${leadId}`;
+    const executing = {
+      ...deps(),
+      env: { ...env(true), SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED: "true" },
+    };
+    const job = await db.companySheetsDeliveryJob.create({
+      data: {
+        kind: "lead",
+        status: "retryable",
+        lastError: "header_changed",
+        clientAccountId: customClient,
+        sourceLeadEventId: leadId,
+        companyConnectionId: connectionId,
+        destinationId: destination.id,
+        spreadsheetId: customSheet,
+        spreadsheetUrl: destination.spreadsheetUrl,
+        worksheetId: GID,
+        worksheetTitle: "VET Web Form",
+        controlBasis: destination.controlBasis,
+        destinationUpdatedAt: destination.updatedAt,
+        headerContract: HEADER,
+        schemaVersion: COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA,
+        destinationRevision: destination.destinationRevision,
+        idempotencyKey,
+        contentSha256: "column-map:stale:v1",
+        rowsTotal: 1,
+        rowsWritten: 0,
+        rows: {
+          create: {
+            spreadsheetId: customSheet,
+            worksheetId: GID,
+            stableRowId: idempotencyKey,
+            ordinal: 0,
+            valuesJson: ["Ada", "5551110000", "01/02/1980", "", "ada@example.invalid"],
+            status: "pending",
+          },
+        },
+      },
+    });
+    await db.companySheetsDispatchIntent.create({
+      data: {
+        idempotencyKey: `campaign:${customClient}:${leadId}`,
+        kind: "campaign_lead",
+        status: "retryable",
+        clientAccountId: customClient,
+        sourceLeadEventId: leadId,
+        jobId: job.id,
+        lastError: "header_changed",
+        reason: "header_changed",
+        availableAt: new Date("2026-11-19T13:00:00.000Z"),
+      },
+    });
+    try {
+      await db.companySheetsDeliveryJob.update({ where: { id: job.id }, data: { appendStartedAt: new Date() } });
+      const started = await adoptPublishedMapForRetryableCampaignLead(customClient, leadId, deps());
+      assert.equal(started.ok, false);
+      if (started.ok) return;
+      assert.equal(started.code, "append_already_started");
+      await db.companySheetsDeliveryJob.update({ where: { id: job.id }, data: { appendStartedAt: null } });
+      const sibling = await db.companySheetsDeliveryJob.create({
+        data: {
+          kind: "lead",
+          status: "uncertain",
+          clientAccountId: customClient,
+          sourceLeadEventId: leadId,
+          companyConnectionId: connectionId,
+          destinationId: destination.id,
+          spreadsheetId: customSheet,
+          spreadsheetUrl: destination.spreadsheetUrl,
+          worksheetId: GID,
+          worksheetTitle: "VET Web Form",
+          controlBasis: destination.controlBasis,
+          destinationUpdatedAt: destination.updatedAt,
+          headerContract: HEADER,
+          schemaVersion: COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA,
+          destinationRevision: destination.destinationRevision,
+          idempotencyKey: `lead:${customClient}:${leadId}:sibling`,
+          rowsTotal: 1,
+          appendStartedAt: new Date(),
+        },
+      });
+      const blocked = await adoptPublishedMapForRetryableCampaignLead(customClient, leadId, deps());
+      assert.equal(blocked.ok, false);
+      if (blocked.ok) return;
+      assert.equal(blocked.code, "event_write_already_recorded");
+      await db.companySheetsDeliveryJob.delete({ where: { id: sibling.id } });
+      await db.companySheetsDeliveryJob.deleteMany({
+        where: {
+          spreadsheetId: customSheet,
+          worksheetId: GID,
+          id: { not: job.id },
+          status: { in: ["uncertain", "running"] },
+        },
+      });
+      await db.companySheetsWorksheetLock.deleteMany({ where: { spreadsheetId: customSheet, worksheetId: GID } });
+
+      const map = await db.clientSheetColumnMap.findFirstOrThrow({
+        where: { clientAccountId: customClient, status: "published" },
+      });
+      await db.clientSheetColumnMap.update({
+        where: { id: map.id },
+        data: { headerSnapshot: nextHeader, assignments: confirm(nextHeader, nextSample) },
+      });
+      await db.companySheetsTabContract.update({
+        where: { destinationId_role: { destinationId: destination.id, role: "campaign" } },
+        data: { headerContract: nextHeader },
+      });
+      rows[0] = nextHeader.slice();
+      const drifted = await executeCompanySheetsDeliveryJob(job.id, executing);
+      assert.equal(drifted.ok, false);
+      if (drifted.ok) return;
+      assert.equal(drifted.code, "header_changed");
+      assert.equal(appends.filter((item) => item.spreadsheetId === customSheet).length, appendsBefore);
+
+      const adopted = await adoptPublishedMapForRetryableCampaignLead(customClient, leadId, deps());
+      assert.equal(adopted.ok, true);
+      if (!adopted.ok) return;
+      assert.equal(adopted.jobId, job.id);
+      assert.equal(adopted.googleCalled, false);
+      assert.equal(adopted.delivered, false);
+      assert.equal(adopted.appended, false);
+      assert.equal(appends.filter((item) => item.spreadsheetId === customSheet).length, appendsBefore);
+      const stored = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: job.id } });
+      assert.deepEqual(stored.headerContract, nextHeader);
+      assert.equal(stored.status, "retryable");
+      assert.equal(stored.lastError, null);
+      assert.equal(stored.appendStartedAt, null);
+      assert.equal(stored.rowsWritten, 0);
+      assert.equal(stored.idempotencyKey, idempotencyKey);
+      assert.match(stored.contentSha256 ?? "", new RegExp(`^column-map:${map.id}:v${map.mapVersion}$`));
+      const row = await db.companySheetsDeliveryRow.findFirstOrThrow({ where: { jobId: job.id } });
+      assert.equal(row.status, "pending");
+      assert.equal(Array.isArray(row.valuesJson) ? row.valuesJson.length : 0, nextHeader.length);
+      const intent = await db.companySheetsDispatchIntent.findUniqueOrThrow({
+        where: { idempotencyKey: `campaign:${customClient}:${leadId}` },
+      });
+      assert.equal(intent.status, "retryable");
+      assert.equal(intent.reason, "published_map_adopted");
+      assert.equal(intent.lastError, null);
+      assert.equal(intent.jobId, job.id);
+      const ghlAfter = await db.clientGhlDestination.findUniqueOrThrow({ where: { id: ghl.id } });
+      assert.equal(ghlAfter.updatedAt.toISOString(), ghl.updatedAt.toISOString());
+      assert.equal(await db.clientSheetsPersonAdmission.count({ where: { clientAccountId: customClient } }), admissionsBefore);
+      const destinationAfter = await db.companySheetsDestination.findUniqueOrThrow({ where: { id: destination.id } });
+      assert.equal(destinationAfter.campaignDispatchNotBefore?.toISOString() ?? null, cutoffBefore);
+      assert.equal(destinationAfter.campaignDispatchEnabled, dispatchBefore);
+
+      const delivered = await executeCompanySheetsDeliveryJob(job.id, executing);
+      assert.equal(delivered.ok, true);
+      if (!delivered.ok) return;
+      assert.equal(delivered.status, "succeeded");
+      assert.equal(delivered.rowsWritten, 1);
+      assert.equal(appends.filter((item) => item.spreadsheetId === customSheet).length, appendsBefore + 1);
+      const finished = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: job.id } });
+      assert.equal(finished.status, "succeeded");
+      assert.equal(await db.companySheetsDeliveryJob.count({ where: { sourceLeadEventId: leadId } }), 1);
+      const again = await adoptPublishedMapForRetryableCampaignLead(customClient, leadId, deps());
+      assert.equal(again.ok, false);
+      if (again.ok) return;
+      assert.equal(again.code, "not_retryable_header_hold");
+    } finally {
+      rows.splice(0, rows.length, HEADER.slice(), HISTORICAL.slice());
+      const map = await db.clientSheetColumnMap.findFirst({
+        where: { clientAccountId: customClient, status: "published" },
+      });
+      if (map) {
+        await db.clientSheetColumnMap.update({
+          where: { id: map.id },
+          data: { headerSnapshot: HEADER, assignments },
+        });
+      }
+      await db.companySheetsTabContract.updateMany({
+        where: { destinationId: destination.id, role: "campaign" },
+        data: { headerContract: HEADER },
+      });
+      await db.clientGhlDestination.deleteMany({ where: { clientAccountId: customClient } });
+      await db.companySheetsDispatchIntent.deleteMany({ where: { clientAccountId: customClient } });
+      await db.companySheetsDeliveryJob.deleteMany({ where: { sourceLeadEventId: leadId } });
+    }
+  });
+
   async function cleanup() {
     const ids = [customClient, v3Client, reorderClient, capturedClient];
     const spreadsheets = [customSheet, v3Sheet, reorderSheet, capturedSheet];
     await db.clientOnboardingTestRun.deleteMany({ where: { clientAccountId: { in: ids } } });
     await db.clientSheetsPersonAdmission.deleteMany({ where: { clientAccountId: { in: ids } } });
     await db.clientSheetsDedupeDecision.deleteMany({ where: { clientAccountId: { in: ids } } });
+    await db.companySheetsDispatchIntent.deleteMany({ where: { clientAccountId: { in: ids } } });
+    await db.clientGhlDestination.deleteMany({ where: { clientAccountId: { in: ids } } });
     await db.companySheetsDeliveryJob.deleteMany({ where: { clientAccountId: { in: ids } } });
     await db.sourceLeadEvent.deleteMany({ where: { clientAccountIdResolved: { in: ids } } });
     await db.companySheetsWorksheetLock.deleteMany({ where: { spreadsheetId: { in: spreadsheets } } });

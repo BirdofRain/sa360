@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   duplicateIdentityInSet,
+  funnelIdentifierConsistent,
   identityKey,
   isCampaignNicheKey,
   isCampaignProductType,
@@ -90,6 +91,77 @@ test("UTM and keyword rules are loose matches", () => {
   assert.equal(isLooseRoutingMatch("keyword_fallback"), true);
   assert.equal(isLooseRoutingMatch("form_id_utm_campaign"), false);
   assert.equal(isLooseRoutingMatch("campaign_id"), false);
+});
+
+test("approval requires the funnel's stored identifier and a missing value is not a match", () => {
+  const supplied = {
+    provider: "leadcapture_io" as const,
+    kind: "provider_funnel_id" as const,
+    normalizedValue: "funnel-supplied",
+  };
+  assert.equal(
+    funnelIdentifierConsistent({
+      requestedStatus: "approved",
+      identities: [supplied],
+      providerFunnelId: null,
+      parentUrlKey: "my.leadcapture.io/p/vet-a",
+    }),
+    false
+  );
+  assert.equal(
+    funnelIdentifierConsistent({
+      requestedStatus: "recorded",
+      identities: [supplied],
+      providerFunnelId: null,
+      parentUrlKey: "my.leadcapture.io/p/vet-a",
+    }),
+    true
+  );
+  assert.equal(
+    funnelIdentifierConsistent({
+      requestedStatus: "approved",
+      identities: [supplied],
+      providerFunnelId: "funnel-stored",
+      parentUrlKey: "my.leadcapture.io/p/vet-a",
+    }),
+    false
+  );
+  assert.equal(
+    funnelIdentifierConsistent({
+      requestedStatus: "recorded",
+      identities: [{ ...supplied, normalizedValue: "funnel-stored" }],
+      providerFunnelId: "funnel-stored",
+      parentUrlKey: null,
+    }),
+    true
+  );
+  assert.equal(
+    funnelIdentifierConsistent({
+      requestedStatus: "approved",
+      identities: [
+        { ...supplied, normalizedValue: "funnel-stored" },
+        { provider: "leadcapture_io", kind: "form_id", normalizedValue: "funnel-stored" },
+      ],
+      providerFunnelId: "funnel-stored",
+      parentUrlKey: "https://my.leadcapture.io/p/vet-a?utm_campaign=veteran",
+    }),
+    true
+  );
+  assert.equal(
+    funnelIdentifierConsistent({
+      requestedStatus: "approved",
+      identities: [
+        {
+          provider: "leadcapture_io",
+          kind: "parent_url_key",
+          normalizedValue: "my.leadcapture.io/p/vet-a",
+        },
+      ],
+      providerFunnelId: null,
+      parentUrlKey: "https://my.leadcapture.io/p/vet-a?utm_campaign=veteran",
+    }),
+    true
+  );
 });
 
 function draft(overrides: Partial<Parameters<typeof prepareBinding>[0]> = {}): Parameters<typeof prepareBinding>[0] {

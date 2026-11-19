@@ -170,6 +170,36 @@ export function prepareBinding(input: BindingDraft): { ok: true; binding: Prepar
   };
 }
 
+/**
+ * A funnel reference corroborates only the identifier kinds that funnel stores.
+ * Approval requires the stored value to be present and equal.
+ * A recorded binding may keep a supplied id when the funnel has not stored that kind.
+ * A stored value that differs is inconsistent for every status.
+ * Form, campaign, ad set, and ad ids are not compared to the funnel.
+ */
+export function funnelIdentifierConsistent(input: {
+  requestedStatus: BindingRequestStatus;
+  identities: IdentityDraft[];
+  providerFunnelId: string | null;
+  parentUrlKey: string | null;
+}): boolean {
+  for (const identity of input.identities) {
+    const stored =
+      identity.kind === "provider_funnel_id"
+        ? storedProviderFunnelId(input.providerFunnelId)
+        : identity.kind === "parent_url_key"
+          ? storedParentUrlKey(input.parentUrlKey)
+          : undefined;
+    if (stored === undefined) continue;
+    if (input.requestedStatus === "approved") {
+      if (!stored || stored !== identity.normalizedValue) return false;
+    } else if (stored && stored !== identity.normalizedValue) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function duplicateIdentityInSet(bindings: PreparedBinding[]): boolean {
   const seen = new Set<string>();
   for (const binding of bindings) {
@@ -198,6 +228,17 @@ export function normalizeParentUrlIdentity(value: string): string | null {
   if (!normalized) return null;
   if (normalized.parentUrlKey.length > 500) return null;
   return normalized.parentUrlKey;
+}
+
+function storedProviderFunnelId(value: string | null): string | null {
+  const trimmed = value?.trim() ?? "";
+  return trimmed ? trimmed : null;
+}
+
+function storedParentUrlKey(value: string | null): string | null {
+  const trimmed = value?.trim() ?? "";
+  if (!trimmed) return null;
+  return normalizeParentUrlIdentity(trimmed) ?? trimmed;
 }
 
 function blank(value: string | null): string | null {

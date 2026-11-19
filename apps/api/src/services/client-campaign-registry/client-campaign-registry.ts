@@ -23,6 +23,7 @@ import { isClientCampaignRegistryEnabled } from "../../lib/client-campaign-regis
 import { acceptedOnboardingActor } from "../../lib/onboarding-staff-actor.js";
 import {
   duplicateIdentityInSet,
+  funnelIdentifierConsistent,
   identityKey,
   isCampaignNicheKey,
   isCampaignProductType,
@@ -828,15 +829,12 @@ function referenceProblem(
 }
 
 function consistentWithFunnel(binding: PreparedBinding, funnel: FunnelRow): boolean {
-  for (const identity of binding.identities) {
-    if (identity.kind === "provider_funnel_id" && funnel.providerFunnelId && identity.normalizedValue !== funnel.providerFunnelId) {
-      return false;
-    }
-    if (identity.kind === "parent_url_key" && funnel.parentUrlKey && identity.normalizedValue !== funnel.parentUrlKey) {
-      return false;
-    }
-  }
-  return true;
+  return funnelIdentifierConsistent({
+    requestedStatus: binding.requestedStatus,
+    identities: binding.identities,
+    providerFunnelId: funnel.providerFunnelId,
+    parentUrlKey: funnel.parentUrlKey,
+  });
 }
 
 function exactRuleIdentity(rule: RuleRow): { kind: IdentifierKind; value: string } | null {

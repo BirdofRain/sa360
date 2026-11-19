@@ -5069,8 +5069,10 @@ model ClientCampaignSourceBinding {
 
 /// One exact identifier attached to a binding.
 /// Conflicts are compared on provider + kind + value. A form id does not equal a provider funnel id.
+/// An active row copies the binding status. A deferred SQL trigger rejects a mismatch
+/// and a client id that differs from the campaign.
 /// The partial unique index ClientCampaignSourceIdentity_one_approved_key is SQL-only.
-/// Prisma 6 cannot model that filter. Do not drop the index in a later diff.
+/// Prisma 6 cannot model that filter. Do not drop the index or the identity triggers in a later diff.
 model ClientCampaignSourceIdentity {
   id               String                            @id @default(cuid())
   bindingId        String

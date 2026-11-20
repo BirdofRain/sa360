@@ -8,11 +8,16 @@ import {
 } from "@/lib/admin-coc-session-guard";
 
 import {
+  fetchAdminCampaignShadow,
   fetchAdminSourceLeadDetail,
   postAdminMetaLeadgenRequeueFetch,
   postAdminSourceLeadApproveDelivery,
   postAdminSourceLeadRequeue,
 } from "@/lib/admin-api/server";
+import {
+  parseCampaignShadowView,
+  type CampaignShadowView,
+} from "@/lib/source-intake/campaign-shadow";
 import { SOURCE_LEAD_APPROVE_CONFIRMATION } from "@/lib/source-intake/types";
 import type { SourceLeadApproveMode, SourceLeadDetail } from "@/lib/source-intake/types";
 
@@ -23,6 +28,18 @@ export async function loadSourceLeadDetailAction(id: string): Promise<{
   await requireAdminCocReadSession();
   const { item, error } = await fetchAdminSourceLeadDetail(id);
   return { detail: item, error };
+}
+
+export async function loadCampaignShadowAction(id: string): Promise<{
+  view: CampaignShadowView | null;
+  error: string | null;
+}> {
+  await requireAdminCocReadSession();
+  const { payload, error } = await fetchAdminCampaignShadow(id);
+  if (error) return { view: null, error };
+  const view = parseCampaignShadowView(payload);
+  if (!view) return { view: null, error: "Shadow decision could not be read." };
+  return { view, error: null };
 }
 
 export async function approveSourceLeadAction(

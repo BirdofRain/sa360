@@ -1798,6 +1798,17 @@ export async function patchAdminLeadOrder(opts: {
   return { item: res.data.item, error: null };
 }
 
+export async function fetchAdminCampaignShadow(id: string): Promise<{
+  payload: unknown | null;
+  error: string | null;
+}> {
+  const res = await adminFetchJson<unknown>(
+    `/admin/v1/source-leads/${encodeURIComponent(id)}/campaign-shadow`
+  );
+  if (!res.ok) return { payload: null, error: formatError(res) };
+  return { payload: res.data, error: null };
+}
+
 export async function fetchAdminSourceLeadDetail(id: string): Promise<{
   item: SourceLeadDetail | null;
   error: string | null;

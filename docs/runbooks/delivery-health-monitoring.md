@@ -18,13 +18,17 @@ Pilot membership is `SA360_DELIVERY_HEALTH_PILOT_CLIENT_IDS`: comma-separated `c
 | Job or intent code is `unauthorized`, `google_reconnect_required`, or `google_not_connected` | `google_authorization` | critical immediately |
 | Job or intent code is `access_denied` or `insufficient_capability` | `google_permission` | critical immediately |
 | Job or intent code is a terminal configuration code and the intent is not an expected hold | `google_configuration` | critical immediately |
-| Job status `uncertain`, or `uncertainReason` is set | `uncertain_append` | critical immediately |
-| Job status `succeeded` but the canonical receipt fails | `sheets_receipt_unverified` | critical immediately |
+| Job status `uncertain`, or `uncertainReason` is set, and no later canonical receipt exists for that lead | `uncertain_append` | critical immediately |
+| Job status `succeeded` but the canonical receipt fails, and no later canonical receipt exists for that lead | `sheets_receipt_unverified` | critical immediately |
 | Routed, eligible lead with no campaign dispatch intent | `missing_dispatch` | warning at 2 minutes, critical at 15 |
 | Dispatch or retryable job with no canonical receipt | `sheets_receipt_delayed` | warning at 5 minutes, critical at 15 |
 | Webhook audit `stored` or `captured` with HTTP 2xx, plus a matched `RoutingDryRunDecision`, and no `SourceLeadEvent` | `missing_intake` | warning at 2 minutes, critical at 15 |
 
 One open incident exists per client account and failure class. `affectedCount` is the number of subjects. A repeat scan updates `lastSeenAt` and does not insert a second open row.
+
+A later canonical receipt for the same lead clears an older failed, uncertain, or unverified job. A newer uncertain append, permission failure, or unverified success still pages. The monitor does not replay either job.
+
+An open `missing_intake` incident is reloaded by its routing decision id and webhook id after those rows age out of the lookback. The incident stays open until a later scan sees the source event, or the client is paused or campaign dispatch is disabled. Leaving the lookback window is not recovery.
 
 ## What it keeps quiet
 
@@ -50,7 +54,11 @@ Mail uses `sendTransactionalEmail` (Resend). Recipients are `SA360_DELIVERY_HEAL
 
 The scanner heartbeat is `DeliveryHealthMonitorHeartbeat` id `delivery_health_sheets`. A thrown scan still updates `lastFailedAt` and `consecutiveFailures` when the incident write did not run. The monitor notice is separate from delivery incidents. Keys are `dh-monitor:scanner_failed:{bucket}`, `dh-monitor:heartbeat_stale:{bucket}`, and `dh-monitor:recovered:{failure timestamp}`.
 
-A dead worker does not run this check. After the monitor is enabled, an operator can alarm on `lastSucceededAt` from outside the process. The stale window is `SA360_DELIVERY_HEALTH_HEARTBEAT_STALE_SECONDS` (default 300).
+`lastMonitorNotificationKey` and `lastMonitorNotifiedAt` are written together, and only after Resend accepts that key. A newer notice that fails to send leaves the previous accepted key in place. The old timestamp is not proof that the new key was sent, so the next scan retries the unsent key. Recovery keeps being offered until the recovered key itself is accepted.
+
+A dead worker does not run this check. After the monitor is enabled, an operator can alarm on `lastSucceededAt` from outside the process. The stale window is `SA360_DELIVERY_HEALTH_HEARTBEAT_STALE_SECONDS` (default 300). `consecutiveFailures` and `lastFailedAt` move when the API records a failed scan, including an enabled monitor whose pilot list is empty (`pilot_unconfigured`).
+
+With the worker flag on, a missing `ADMIN_API_KEY`, an API body of `skipped: "flag_off"`, or a body that did not query a pilot fails the BullMQ job. HTTP 200 alone is not a healthy scan. The worker flag itself off still returns before any HTTP call, and the schedule sync removes the repeat. A missing admin key or an API flag mismatch does not write a new heartbeat success, so `lastSucceededAt` stops advancing.
 
 ## Configuration
 
@@ -60,7 +68,7 @@ Set these on the API process that serves `/admin/v1/delivery-health/internal/sca
 | --- | --- | --- |
 | `SA360_DELIVERY_HEALTH_MONITOR_ENABLED` | off | Exact `true` registers the worker repeat and allows the scan route. |
 | `SA360_DELIVERY_HEALTH_NOTIFY_ENABLED` | off | Exact `true` allows Resend. Off is a dry run: incidents are written, mail is not. |
-| `SA360_DELIVERY_HEALTH_PILOT_CLIENT_IDS` | empty | `clientAccountId` list. Empty scans nobody. |
+| `SA360_DELIVERY_HEALTH_PILOT_CLIENT_IDS` | empty | `clientAccountId` list. With the monitor flag on, an empty list fails the scan and records `pilot_unconfigured`. |
 | `SA360_DELIVERY_HEALTH_NOTIFY_RECIPIENTS` | empty | Internal inbox list. Required before notify can send. |
 | `SA360_DELIVERY_HEALTH_MONITOR_INTERVAL_SECONDS` | 60 | Worker repeat. Allowed 15–3600. |
 | `SA360_DELIVERY_HEALTH_LOOKBACK_HOURS` | 48 | Allowed 1–168. Open incident subjects are reloaded after they age out of this window. |
@@ -79,7 +87,7 @@ Do this only after the migration is applied and this change is the reviewed buil
 2. Confirm the account status is `active` and `CompanySheetsDestination.campaignDispatchEnabled` is true with `campaignDispatchNotBefore` set. If either is false, delay pages stay quiet on purpose.
 3. Set `SA360_DELIVERY_HEALTH_PILOT_CLIENT_IDS` to that single id.
 4. Set `SA360_DELIVERY_HEALTH_NOTIFY_RECIPIENTS` to the internal inboxes that will review the dry run. Leave `SA360_DELIVERY_HEALTH_NOTIFY_ENABLED` unset.
-5. Set `SA360_DELIVERY_HEALTH_MONITOR_ENABLED=true` on the API and the worker. Restart the worker so it upserts one repeatable job named `scan-delivery-health`.
+5. Set `SA360_DELIVERY_HEALTH_MONITOR_ENABLED=true` on the API and the worker only after the pilot id is present. An empty list records heartbeat failure `pilot_unconfigured` and the worker job fails. Restart the worker so it upserts one repeatable job named `scan-delivery-health`.
 6. Call the internal scan once, or wait for the worker tick. Expect `dryRun: true` and `notificationSkipped: "notify_disabled"`.
 7. Read `DeliveryHealthIncident` for that client account. Confirm `evidenceJson` has ids and machine codes only. Confirm no `SourceLeadEvent`, `CompanySheetsDeliveryJob`, `CompanySheetsDispatchIntent`, or destination row changed. Confirm the API log line `delivery_health.scan` has counts only.
 8. Compare any open class with the delivery job screen before treating it as a customer-facing outage. `uncertain_append` means the append outcome is unknown. Leave reconciliation to the existing Sheets writer. Do not replay the job by hand from this monitor.
@@ -92,7 +100,7 @@ Do this only after the migration is applied and this change is the reviewed buil
 - [ ] `DeliveryHealthIncident_open_client_class_key` exists (partial unique index). Do not drop it in a later Prisma diff.
 - [ ] Pilot value is a `clientAccountId`, not a person or company name.
 - [ ] Monitor flag reviewed. Notify flag still unset for the first scans.
-- [ ] Dry-run response saved: `dryRun`, `findings`, `failureClasses`, `heartbeat`.
+- [ ] Dry-run response saved: `dryRun`, `queried: true`, `pilotClients` at least 1, `findings`, `failureClasses`, and `heartbeat` other than `failed`. HTTP 200 with `skipped: "flag_off"` or `pilotClients: 0` is a configuration failure.
 - [ ] Incident evidence reviewed for ids and codes only.
 - [ ] Delivery rows, routing rows, and Google sheets confirmed unchanged by the scan.
 - [ ] Recipient list reviewed by the operator who will receive mail.

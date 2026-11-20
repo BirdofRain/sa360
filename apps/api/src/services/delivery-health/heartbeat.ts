@@ -31,6 +31,28 @@ const HEARTBEAT_SELECT = {
   lastMonitorNotificationKey: true,
 } as const;
 
+/**
+ * A timestamp proves a send only for the key stored with it.
+ * An older successful notice is not proof that a different key was accepted.
+ */
+export function monitorNoticeAlreadySent(
+  snapshot: DeliveryHealthHeartbeatSnapshot | null,
+  key: string
+): boolean {
+  return snapshot?.lastMonitorNotificationKey === key && snapshot.lastMonitorNotifiedAt != null;
+}
+
+function lastSentMonitorReason(
+  snapshot: DeliveryHealthHeartbeatSnapshot
+): MonitorFollowUp | null {
+  if (!snapshot.lastMonitorNotifiedAt || !snapshot.lastMonitorNotificationKey) return null;
+  const key = snapshot.lastMonitorNotificationKey;
+  if (key.startsWith("dh-monitor:scanner_failed:")) return "scanner_failed";
+  if (key.startsWith("dh-monitor:heartbeat_stale:")) return "heartbeat_stale";
+  if (key.startsWith("dh-monitor:recovered:")) return "recovered";
+  return null;
+}
+
 export function monitorFollowUp(input: {
   prior: DeliveryHealthHeartbeatSnapshot | null;
   now: Date;
@@ -42,8 +64,8 @@ export function monitorFollowUp(input: {
   if (!prior) return null;
   const anchor = prior.lastSucceededAt ?? prior.lastStartedAt;
   const stale = anchor != null && input.now.getTime() - anchor.getTime() > input.staleMs;
-  const failed = prior.consecutiveFailures > 0;
-  if ((failed || stale) && prior.lastMonitorNotifiedAt) return "recovered";
+  const sent = lastSentMonitorReason(prior);
+  if (sent === "scanner_failed" || sent === "heartbeat_stale") return "recovered";
   if (stale) return "heartbeat_stale";
   return null;
 }
@@ -104,13 +126,13 @@ export async function recordDeliveryHealthHeartbeatFailure(
 
 export async function recordDeliveryHealthMonitorNotice(
   db: PrismaClient,
-  input: { key: string; notifiedAt: Date | null }
+  input: { key: string; notifiedAt: Date }
 ): Promise<void> {
   await db.deliveryHealthMonitorHeartbeat.update({
     where: { id: DELIVERY_HEALTH_HEARTBEAT_ID },
     data: {
       lastMonitorNotificationKey: input.key,
-      ...(input.notifiedAt ? { lastMonitorNotifiedAt: input.notifiedAt } : {}),
+      lastMonitorNotifiedAt: input.notifiedAt,
     },
   });
 }

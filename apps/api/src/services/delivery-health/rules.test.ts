@@ -175,6 +175,94 @@ test("an uncertain append is critical immediately", () => {
   assert.equal(found[0]?.subjects[0]?.code, "append_outcome_unknown");
 });
 
+test("a later canonical receipt clears an older failed or uncertain job", () => {
+  const rows = [
+    { jobId: "job_old", status: "pending" },
+    { jobId: "job_new", status: "written" },
+  ];
+  const reconciled = intent({ status: "completed", jobId: "job_new", lastError: "access_denied" });
+  const olderUncertain = job({
+    id: "job_old",
+    status: "uncertain",
+    uncertainReason: "append_outcome_unknown",
+    appendStartedAt: minutesAgo(10),
+    finishedAt: null,
+    rowsWritten: 0,
+    createdAt: minutesAgo(10),
+  });
+  const newerReceipt = job({ id: "job_new", createdAt: minutesAgo(2) });
+  assert.deepEqual(
+    classes(snapshot({
+      leads: [lead(12)],
+      intents: [reconciled],
+      jobs: [olderUncertain, newerReceipt],
+      rows,
+    })),
+    []
+  );
+  const olderDenied = job({
+    id: "job_old",
+    status: "retryable",
+    lastError: "access_denied",
+    rowsWritten: 0,
+    finishedAt: null,
+    createdAt: minutesAgo(10),
+  });
+  assert.deepEqual(
+    classes(snapshot({
+      leads: [lead(12)],
+      intents: [reconciled],
+      jobs: [olderDenied, newerReceipt],
+      rows,
+    })),
+    []
+  );
+  const olderUnverified = job({
+    id: "job_old",
+    status: "succeeded",
+    rowsWritten: 0,
+    finishedAt: minutesAgo(9),
+    createdAt: minutesAgo(10),
+  });
+  assert.deepEqual(
+    classes(snapshot({
+      leads: [lead(12)],
+      intents: [reconciled],
+      jobs: [olderUnverified, newerReceipt],
+      rows: [
+        { jobId: "job_old", status: "pending" },
+        { jobId: "job_new", status: "written" },
+      ],
+    })),
+    []
+  );
+  const newerUncertain = job({
+    id: "job_new",
+    status: "uncertain",
+    uncertainReason: "append_outcome_unknown",
+    appendStartedAt: minutesAgo(1),
+    finishedAt: null,
+    rowsWritten: 0,
+    createdAt: minutesAgo(1),
+  });
+  const olderReceipt = job({ id: "job_old", createdAt: minutesAgo(8) });
+  const stillOpen = evaluateDeliveryHealth(
+    snapshot({
+      leads: [lead(12)],
+      intents: [intent({ status: "scheduled", jobId: "job_new" })],
+      jobs: [olderReceipt, newerUncertain],
+      rows: [
+        { jobId: "job_old", status: "written" },
+        { jobId: "job_new", status: "pending" },
+      ],
+    }),
+    NOW
+  );
+  assert.equal(stillOpen[0]?.failureClass, "uncertain_append");
+  assert.equal(stillOpen[0]?.severity, "critical");
+  assert.equal(stillOpen[0]?.subjects[0]?.jobId, "job_new");
+});
+
 test("a permissions error is critical immediately", () => {
   const found = evaluateDeliveryHealth(
     snapshot({

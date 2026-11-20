@@ -218,34 +218,39 @@ function classifyLead(
       reference.getTime() < client.destination.campaignDispatchNotBefore.getTime()
   );
   const delaysOff = delayMonitoringSuppressed(client) || beforeCutoff;
+  const receipt = latestCanonicalJob(production, snapshot, intent, client);
+  const unresolved = jobsUnresolvedAfterReceipt(production, receipt, snapshot, intent, client);
+  const intentForCodes = intentCodesForUnresolved(intent, receipt, unresolved);
 
-  const uncertain = production.find(isUncertainJob);
+  const uncertain = unresolved.find(isUncertainJob);
   if (uncertain) return leadDraft(lead, intent, uncertain, "uncertain_append", "critical", uncertain.uncertainReason ?? uncertain.status);
 
-  const permission = firstCode(production, intent, PERMISSION_CODES);
+  const permission = firstCode(unresolved, intentForCodes, PERMISSION_CODES);
   if (permission) return leadDraft(lead, intent, permission.job, "google_permission", "critical", permission.code);
-  const auth = firstCode(production, intent, AUTH_CODES);
+  const auth = firstCode(unresolved, intentForCodes, AUTH_CODES);
   if (auth) return leadDraft(lead, intent, auth.job, "google_authorization", "critical", auth.code);
 
-  const unverified = production.find((job) => job.status === "succeeded" && !isCanonical(job, snapshot, intent, client));
+  const unverified = unresolved.find((job) => job.status === "succeeded" && !isCanonical(job, snapshot, intent, client));
   if (unverified) return leadDraft(lead, intent, unverified, "sheets_receipt_unverified", "critical", "rows_not_confirmed");
 
-  if (production.some((job) => isCanonical(job, snapshot, intent, client))) return null;
+  // A later canonical receipt closes older failed, uncertain, and unverified attempts.
+  // A newer uncertain or terminal job stays unresolved and was returned above.
+  if (receipt) return null;
   if (delaysOff) return null;
-  if (production.length === 0 && testJobs.length > 0) return null;
+  if (unresolved.length === 0 && testJobs.length > 0) return null;
   if (intent && EXPECTED_HOLDS.has(intent.status)) return null;
-  if (suppressedCode(intent, production)) return null;
+  if (suppressedCode(intent, unresolved)) return null;
 
-  const config = firstCode(production, intent && EXPECTED_HOLDS.has(intent.status) ? null : intent, CONFIG_CODES);
+  const config = firstCode(unresolved, intent && EXPECTED_HOLDS.has(intent.status) ? null : intent, CONFIG_CODES);
   if (config) return leadDraft(lead, intent, config.job, "google_configuration", "critical", config.code);
 
   const age = Math.max(0, now.getTime() - reference.getTime());
-  if (production.length === 0 && !intent) {
+  if (unresolved.length === 0 && !intent) {
     if (age < DELIVERY_HEALTH_DISPATCH_WARNING_MS) return null;
     return leadDraft(lead, null, null, "missing_dispatch", timedSeverity(age), "missing_dispatch");
   }
   if (age < DELIVERY_HEALTH_RECEIPT_WARNING_MS) return null;
-  return leadDraft(lead, intent, newest(production), "sheets_receipt_delayed", timedSeverity(age), "sheets_receipt_delayed");
+  return leadDraft(lead, intent, newest(unresolved), "sheets_receipt_delayed", timedSeverity(age), "sheets_receipt_delayed");
 }
 
 function classifyIntake(
@@ -323,8 +328,43 @@ function isUncertainJob(job: DeliveryHealthJob): boolean {
 
 function newest(jobs: readonly DeliveryHealthJob[]): DeliveryHealthJob | null {
   const copy = [...jobs];
-  copy.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  copy.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || b.id.localeCompare(a.id));
   return copy[0] ?? null;
+}
+
+function latestCanonicalJob(
+  jobs: readonly DeliveryHealthJob[],
+  snapshot: DeliveryHealthSnapshot,
+  intent: DeliveryHealthIntent | null,
+  client: DeliveryHealthClient
+): DeliveryHealthJob | null {
+  return newest(jobs.filter((job) => isCanonical(job, snapshot, intent, client)));
+}
+
+/** Jobs that a later canonical receipt has not already reconciled. */
+function jobsUnresolvedAfterReceipt(
+  jobs: readonly DeliveryHealthJob[],
+  receipt: DeliveryHealthJob | null,
+  snapshot: DeliveryHealthSnapshot,
+  intent: DeliveryHealthIntent | null,
+  client: DeliveryHealthClient
+): DeliveryHealthJob[] {
+  if (!receipt) return [...jobs];
+  const at = receipt.createdAt.getTime();
+  return jobs.filter((job) => {
+    if (job.id === receipt.id || isCanonical(job, snapshot, intent, client)) return false;
+    return job.createdAt.getTime() >= at;
+  });
+}
+
+function intentCodesForUnresolved(
+  intent: DeliveryHealthIntent | null,
+  receipt: DeliveryHealthJob | null,
+  unresolved: readonly DeliveryHealthJob[]
+): DeliveryHealthIntent | null {
+  if (!receipt) return intent;
+  if (intent?.jobId && unresolved.some((job) => job.id === intent.jobId)) return intent;
+  return null;
 }
 
 function firstCode(

@@ -40,8 +40,8 @@ export async function processDeliveryHealthMonitorJob(
   }
   const adminKey = env.ADMIN_API_KEY?.trim();
   if (!adminKey) {
-    logger.error("delivery_health.skipped", { reason: "admin_key_missing" });
-    return { ok: true, skipped: "admin_key_missing" };
+    logger.error("delivery_health.scan", { outcome: "config_error", reason: "admin_key_missing" });
+    throw new Error("delivery_health_config_error:admin_key_missing");
   }
   const apiBase = env.SA360_API_INTERNAL_URL?.trim() || "http://127.0.0.1:3001";
   const post = options.postImpl ?? postCompanySheetsDrain;
@@ -52,9 +52,16 @@ export async function processDeliveryHealthMonitorJob(
       body: "{}",
       timeoutMs: options.timeoutMs ?? SCAN_TIMEOUT_MS,
     });
-    if (res.status < 200 || res.status >= 300) {
-      logger.error("delivery_health.scan", { outcome: "http_error", statusCode: res.status });
-      throw new Error("delivery_health_http_error");
+    const failure = scanResponseFailure(res.status, res.body);
+    if (failure) {
+      const configuration = failure === "api_flag_off" || failure === "pilot_unconfigured" || failure === "heartbeat_failed";
+      logger.error("delivery_health.scan", {
+        outcome: configuration ? "config_error" : "http_error",
+        reason: failure,
+        statusCode: res.status,
+      });
+      const kind = configuration ? "delivery_health_config_error" : "delivery_health_http_error";
+      throw new Error(`${kind}:${failure}`);
     }
   } catch (err) {
     const timedOut =
@@ -64,4 +71,45 @@ export async function processDeliveryHealthMonitorJob(
     throw err;
   }
   return { ok: true };
+}
+
+type ScanBody = {
+  ok?: boolean;
+  skipped?: string;
+  queried?: boolean;
+  pilotClients?: number;
+  error?: string;
+  heartbeat?: string;
+};
+
+/** HTTP 200 is not a healthy scan. The body must show a configured pilot that ran. */
+export function scanResponseFailure(status: number, body: string): string | null {
+  const parsed = parseScanBody(body);
+  if (status < 200 || status >= 300) return parsed?.error ?? "http_error";
+  if (!parsed) return "body_unreadable";
+  if (parsed.skipped === "flag_off") return "api_flag_off";
+  if (parsed.ok !== true) return parsed.error ?? "scan_not_ok";
+  if (parsed.queried !== true || typeof parsed.pilotClients !== "number" || parsed.pilotClients < 1) {
+    return "pilot_unconfigured";
+  }
+  if (parsed.heartbeat === "failed") return parsed.error ?? "heartbeat_failed";
+  return null;
+}
+
+function parseScanBody(body: string): ScanBody | null {
+  try {
+    const value = JSON.parse(body) as unknown;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const record = value as Record<string, unknown>;
+    return {
+      ok: typeof record.ok === "boolean" ? record.ok : undefined,
+      skipped: typeof record.skipped === "string" ? record.skipped : undefined,
+      queried: typeof record.queried === "boolean" ? record.queried : undefined,
+      pilotClients: typeof record.pilotClients === "number" ? record.pilotClients : undefined,
+      error: typeof record.error === "string" ? record.error : undefined,
+      heartbeat: typeof record.heartbeat === "string" ? record.heartbeat : undefined,
+    };
+  } catch {
+    return null;
+  }
 }

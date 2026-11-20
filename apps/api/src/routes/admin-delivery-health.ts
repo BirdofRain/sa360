@@ -40,7 +40,7 @@ export async function adminDeliveryHealthRoutes(app: FastifyInstance, opts: Rout
     }
     try {
       const result = await run({ env, db: prisma });
-      if (!result.ok) return reply.code(500).send({ ok: false, error: "scan_failed" });
+      if (!result.ok) return reply.code(500).send({ ok: false, error: result.error ?? "scan_failed" });
       return reply.send({
         ok: true,
         dryRun: result.dryRun,

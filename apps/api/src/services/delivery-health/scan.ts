@@ -23,6 +23,7 @@ import { readDeliveryHealthConfig, type DeliveryHealthConfig } from "./config.js
 import { deliveryHealthEvidenceDocument, scrubDeliveryHealthText, type DeliveryHealthSubject } from "./evidence.js";
 import {
   monitorFollowUp,
+  monitorNoticeAlreadySent,
   monitorNoticeKey,
   readDeliveryHealthHeartbeat,
   recordDeliveryHealthHeartbeatFailure,
@@ -68,6 +69,7 @@ export type DeliveryHealthRunResult = {
   failureClasses: string[];
   truncated: boolean;
   heartbeat: "ok" | "failed" | "stale" | "skipped";
+  error?: "scan_failed" | "pilot_unconfigured";
 };
 
 export type DeliveryHealthLoader = (
@@ -147,10 +149,24 @@ export async function runDeliveryHealthMonitor(deps: DeliveryHealthScanDeps): Pr
   }
 
   try {
-    const loaded =
-      config.pilotClientIds.length === 0
-        ? { snapshot: emptySnapshot(), truncated: false }
-        : await (deps.loadSnapshot ?? loadDeliveryHealthSnapshot)(deps.db, config, now);
+    if (config.pilotClientIds.length === 0) {
+      const detail = "pilot_unconfigured";
+      await recordDeliveryHealthHeartbeatFailure(deps.db, now, detail);
+      try {
+        await deliverMonitorNotice(deps.db, prior, "scanner_failed", detail, config, send, now);
+      } catch {
+        /* A mail failure must not hide the configuration failure. */
+      }
+      logger.error("delivery_health.scan_failed", { error: detail });
+      return {
+        ...emptyResult(config),
+        ok: false,
+        queried: false,
+        heartbeat: "failed",
+        error: "pilot_unconfigured",
+      };
+    }
+    const loaded = await (deps.loadSnapshot ?? loadDeliveryHealthSnapshot)(deps.db, config, now);
     const findings = evaluateDeliveryHealth(loaded.snapshot, now);
     const persisted = await persistScan(deps.db, loaded.snapshot, findings, loaded.truncated, config, now);
     await recordDeliveryHealthHeartbeatSuccess(deps.db, now);
@@ -202,6 +218,7 @@ export async function runDeliveryHealthMonitor(deps: DeliveryHealthScanDeps): Pr
       ok: false,
       queried: true,
       heartbeat: "failed",
+      error: "scan_failed",
     };
   }
 }
@@ -220,6 +237,8 @@ export async function loadDeliveryHealthSnapshot(
     select: { evidenceJson: true },
   });
   const extraLeadIds = [...new Set(open.flatMap((row) => subjectLeadIds(row.evidenceJson)))];
+  const extraDecisionIds = [...new Set(open.flatMap((row) => subjectDecisionIds(row.evidenceJson)))];
+  const extraWebhookIds = [...new Set(open.flatMap((row) => subjectWebhookIds(row.evidenceJson)))];
 
   const recentLeads = await db.sourceLeadEvent.findMany({
     where: { clientAccountIdResolved: { in: pilotIds }, receivedAt: { gte: lookback } },
@@ -284,20 +303,22 @@ export async function loadDeliveryHealthSnapshot(
 
   const decisions = await db.routingDryRunDecision.findMany({
     where: { destinationClientAccountId: { in: pilotIds }, matched: true, createdAt: { gte: lookback } },
-    select: {
-      id: true,
-      destinationClientAccountId: true,
-      matched: true,
-      attributionSnapshot: true,
-    },
+    select: DECISION_SELECT,
     orderBy: { createdAt: "desc" },
     take: SCAN_CAP + 1,
   });
   if (decisions.length > SCAN_CAP) truncated = true;
-  const decisionPage = decisions.slice(0, SCAN_CAP);
+  const extraDecisions =
+    extraDecisionIds.length === 0
+      ? []
+      : await db.routingDryRunDecision.findMany({
+          where: { id: { in: extraDecisionIds }, destinationClientAccountId: { in: pilotIds } },
+          select: DECISION_SELECT,
+        });
+  const decisionPage = uniqueById([...decisions.slice(0, SCAN_CAP), ...extraDecisions]);
   const decisionIds = decisionPage.map((decision) => decision.id);
 
-  const webhooks =
+  const recentWebhooks =
     decisionIds.length === 0
       ? []
       : await db.webhookRequestLog.findMany({
@@ -310,7 +331,15 @@ export async function loadDeliveryHealthSnapshot(
           orderBy: { receivedAt: "desc" },
           take: SCAN_CAP + 1,
         });
-  if (webhooks.length > SCAN_CAP) truncated = true;
+  if (recentWebhooks.length > SCAN_CAP) truncated = true;
+  const extraWebhooks =
+    extraWebhookIds.length === 0
+      ? []
+      : await db.webhookRequestLog.findMany({
+          where: { id: { in: extraWebhookIds }, clientAccountId: { in: pilotIds } },
+          select: WEBHOOK_SELECT,
+        });
+  const webhooks = uniqueById([...recentWebhooks.slice(0, SCAN_CAP), ...extraWebhooks]);
 
   const webhookEventIds = webhooks.flatMap((row) => (row.sourceLeadEventId ? [row.sourceLeadEventId] : []));
   const [linkedEvents, webhookEvents] = await Promise.all([
@@ -334,7 +363,7 @@ export async function loadDeliveryHealthSnapshot(
 
   const destinationByClient = new Map(destinations.map((row) => [row.clientAccountId, row]));
   const decisionById = new Map(decisionPage.map((row) => [row.id, row]));
-  const intake = webhooks.slice(0, SCAN_CAP).flatMap((webhook) => {
+  const intake = webhooks.flatMap((webhook) => {
     const decisionId = webhook.routingDryRunDecisionId;
     if (!decisionId || !webhook.clientAccountId) return [];
     const decision = decisionById.get(decisionId);
@@ -387,6 +416,7 @@ async function persistScan(
     select: INCIDENT_SELECT,
   });
   const clients = new Map(snapshot.clients.map((client) => [client.clientAccountId, client]));
+  const observedIntake = new Set(snapshot.intake.map((candidate) => candidate.routingDryRunDecisionId));
   const findingKeys = new Set(findings.map((finding) => `${finding.clientAccountId}|${finding.failureClass}`));
   let opened = 0;
   let updated = 0;
@@ -427,6 +457,7 @@ async function persistScan(
   if (!truncated) {
     for (const row of open) {
       if (findingKeys.has(`${row.clientAccountId}|${row.failureClass}`)) continue;
+      if (!missingIntakeObserved(row, observedIntake)) continue;
       const closure =
         isDelayFailureClass(row.failureClass) && delayMonitoringSuppressed(clients.get(row.clientAccountId))
           ? "suppressed"
@@ -553,8 +584,7 @@ async function deliverMonitorNotice(
   if (!config.notifyEnabled || config.recipients.length === 0) return;
   const key = monitorNoticeKey({ reason, now, cooldownMs: config.cooldownMs, prior });
   const current = (await readDeliveryHealthHeartbeat(db)) ?? prior;
-  if (current?.lastMonitorNotificationKey === key && current.lastMonitorNotifiedAt) return;
-  await recordDeliveryHealthMonitorNotice(db, { key, notifiedAt: null });
+  if (monitorNoticeAlreadySent(current, key)) return;
   const email = composeMonitorHeartbeatEmail({
     reason,
     consecutiveFailures: reason === "scanner_failed" ? (prior?.consecutiveFailures ?? 0) + 1 : (prior?.consecutiveFailures ?? 0),
@@ -690,6 +720,23 @@ function subjectLeadIds(value: Prisma.JsonValue): string[] {
   return subjectsFromEvidence(value).flatMap((subject) => (subject.sourceLeadEventId ? [subject.sourceLeadEventId] : []));
 }
 
+function subjectDecisionIds(value: Prisma.JsonValue): string[] {
+  return subjectsFromEvidence(value).flatMap((subject) =>
+    subject.routingDryRunDecisionId ? [subject.routingDryRunDecisionId] : []
+  );
+}
+
+function subjectWebhookIds(value: Prisma.JsonValue): string[] {
+  return subjectsFromEvidence(value).flatMap((subject) => (subject.webhookRequestLogId ? [subject.webhookRequestLogId] : []));
+}
+
+/** Aging out of the lookback is not recovery. Resolve missing intake only after this scan reloaded it. */
+function missingIntakeObserved(row: IncidentRow, observedDecisions: Set<string>): boolean {
+  if (row.failureClass !== "missing_intake") return true;
+  const decisionIds = subjectDecisionIds(row.evidenceJson);
+  return decisionIds.length > 0 && decisionIds.every((id) => observedDecisions.has(id));
+}
+
 function emptySnapshot(): DeliveryHealthSnapshot {
   return { clients: [], leads: [], intents: [], jobs: [], rows: [], onboardingTestAttemptKeys: [], intake: [] };
 }
@@ -775,6 +822,13 @@ const JOB_SELECT = {
   lastError: true,
   uncertainReason: true,
   createdAt: true,
+} as const;
+
+const DECISION_SELECT = {
+  id: true,
+  destinationClientAccountId: true,
+  matched: true,
+  attributionSnapshot: true,
 } as const;
 
 const WEBHOOK_SELECT = {

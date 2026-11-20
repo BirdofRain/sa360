@@ -514,4 +514,180 @@ describe("delivery health scan", { concurrency: 1 }, () => {
     const incidents = await db.deliveryHealthIncident.count({ where: { clientAccountId: world.clientAccountId } });
     assert.equal(incidents, 0);
   });
+
+  test("missing intake stays open after the lookback and recovers when the source event exists", async () => {
+    await resetHeartbeat();
+    const world = await createClient("intake-age");
+    const decision = await db.routingDryRunDecision.create({
+      data: {
+        masterClientAccountId: world.clientAccountId,
+        destinationClientAccountId: world.clientAccountId,
+        sourceLeadUid: `uid_${world.clientAccountId}`,
+        matched: true,
+        confidence: "high",
+        matchReason: "rule",
+        routingEventNameInternal: "lead.received",
+        createdAt: minutesAgo(4),
+      },
+    });
+    const webhook = await db.webhookRequestLog.create({
+      data: {
+        requestId: `wh_${decision.id}`,
+        source: "leadcapture_io",
+        route: "/webhooks/leadcapture",
+        processingStatus: "stored",
+        httpStatus: 200,
+        clientAccountId: world.clientAccountId,
+        routingDryRunDecisionId: decision.id,
+        completedAt: minutesAgo(3),
+        requestBodyRedacted: { email: PII_EMAIL, phone: PII_PHONE },
+      },
+    });
+    const sent: Sent[] = [];
+    const send = mailer(sent);
+    const opened = await runDeliveryHealthMonitor({
+      db,
+      env: envFor(world.clientAccountId, true),
+      now: SCAN_NOW,
+      send,
+    });
+    assert.deepEqual(opened.failureClasses, ["missing_intake"]);
+    assert.equal(sent.length, 1);
+    const aged = new Date(SCAN_NOW.getTime() - 72 * 60 * 60 * 1000);
+    await db.routingDryRunDecision.update({ where: { id: decision.id }, data: { createdAt: aged } });
+    await db.webhookRequestLog.update({ where: { id: webhook.id }, data: { receivedAt: aged } });
+    const expired = await runDeliveryHealthMonitor({
+      db,
+      env: envFor(world.clientAccountId, true),
+      now: SCAN_NOW,
+      send,
+    });
+    assert.deepEqual(expired.failureClasses, ["missing_intake"]);
+    assert.equal(expired.resolved, 0);
+    assert.equal(sent.length, 1);
+    const open = await db.deliveryHealthIncident.findFirstOrThrow({
+      where: { clientAccountId: world.clientAccountId, failureClass: "missing_intake", resolvedAt: null },
+    });
+    assertNoPii(JSON.stringify(open.evidenceJson));
+    await db.sourceLeadEvent.create({
+      data: {
+        sourceProvider: "leadcapture_io",
+        sourceSystem: "leadcapture_io_nextgen",
+        sourceType: "webhook",
+        status: "routing_matched",
+        clientAccountIdResolved: world.clientAccountId,
+        routingDryRunDecisionId: decision.id,
+        routedAt: minutesAgo(1),
+        receivedAt: minutesAgo(1),
+        rawPayloadJson: { email: PII_EMAIL, phone: PII_PHONE },
+      },
+    });
+    const recovered = await runDeliveryHealthMonitor({
+      db,
+      env: envFor(world.clientAccountId, true),
+      now: SCAN_NOW,
+      send,
+    });
+    assert.equal(recovered.resolved, 1);
+    assert.equal(recovered.findings, 0);
+    assert.equal(sent.length, 2);
+    assert.equal(sent[1]?.idempotencyKey?.includes("recovered"), true);
+    assertNoPii(sent.map((message) => message.text).join("\n"));
+    const closed = await db.deliveryHealthIncident.findFirstOrThrow({
+      where: { clientAccountId: world.clientAccountId, failureClass: "missing_intake" },
+    });
+    assert.equal(closed.resolvedAt?.toISOString(), SCAN_NOW.toISOString());
+  });
+
+  test("a failed newer heartbeat notice is retried and recovery still sends", async () => {
+    await resetHeartbeat();
+    const world = await createClient("heartbeat-mail");
+    const env = {
+      ...envFor(world.clientAccountId, true),
+      SA360_DELIVERY_HEALTH_NOTIFY_COOLDOWN_SECONDS: "60",
+    };
+    const sent: Sent[] = [];
+    let failNext = false;
+    const send = async (input: SendTransactionalEmailInput) => {
+      if (failNext) {
+        failNext = false;
+        return { ok: false as const, error: "send_failed" };
+      }
+      sent.push({ subject: input.subject, text: input.text, idempotencyKey: input.idempotencyKey });
+      return { ok: true as const, id: "mail_test" };
+    };
+    const explode = async () => {
+      throw new Error("scanner_failed");
+    };
+    const firstAt = SCAN_NOW;
+    await runDeliveryHealthMonitor({ db, env, now: firstAt, send, loadSnapshot: explode });
+    const firstBeat = await db.deliveryHealthMonitorHeartbeat.findUniqueOrThrow({
+      where: { id: DELIVERY_HEALTH_HEARTBEAT_ID },
+    });
+    assert.match(firstBeat.lastMonitorNotificationKey ?? "", /scanner_failed/);
+    assert.equal(firstBeat.lastMonitorNotifiedAt?.toISOString(), firstAt.toISOString());
+    const firstKey = firstBeat.lastMonitorNotificationKey;
+    const secondAt = new Date(firstAt.getTime() + 60_000);
+    failNext = true;
+    const failedSend = await runDeliveryHealthMonitor({ db, env, now: secondAt, send, loadSnapshot: explode });
+    assert.equal(failedSend.ok, false);
+    const afterFailure = await db.deliveryHealthMonitorHeartbeat.findUniqueOrThrow({
+      where: { id: DELIVERY_HEALTH_HEARTBEAT_ID },
+    });
+    assert.equal(afterFailure.lastMonitorNotificationKey, firstKey);
+    assert.equal(afterFailure.lastMonitorNotifiedAt?.toISOString(), firstAt.toISOString());
+    assert.equal(sent.length, 1);
+    const retried = await runDeliveryHealthMonitor({ db, env, now: secondAt, send, loadSnapshot: explode });
+    assert.equal(retried.heartbeat, "failed");
+    const afterRetry = await db.deliveryHealthMonitorHeartbeat.findUniqueOrThrow({
+      where: { id: DELIVERY_HEALTH_HEARTBEAT_ID },
+    });
+    assert.notEqual(afterRetry.lastMonitorNotificationKey, firstKey);
+    assert.match(afterRetry.lastMonitorNotificationKey ?? "", /scanner_failed/);
+    assert.equal(afterRetry.lastMonitorNotifiedAt?.toISOString(), secondAt.toISOString());
+    assert.equal(sent.length, 2);
+    const emptySnapshot = {
+      snapshot: {
+        clients: [],
+        leads: [],
+        intents: [],
+        jobs: [],
+        rows: [],
+        onboardingTestAttemptKeys: [],
+        intake: [],
+      },
+      truncated: false,
+    };
+    failNext = true;
+    const recoveryFailed = await runDeliveryHealthMonitor({
+      db,
+      env,
+      now: secondAt,
+      send,
+      loadSnapshot: async () => emptySnapshot,
+    });
+    assert.equal(recoveryFailed.ok, true);
+    const stillFailedNotice = await db.deliveryHealthMonitorHeartbeat.findUniqueOrThrow({
+      where: { id: DELIVERY_HEALTH_HEARTBEAT_ID },
+    });
+    assert.equal(stillFailedNotice.lastMonitorNotificationKey, afterRetry.lastMonitorNotificationKey);
+    assert.equal(stillFailedNotice.consecutiveFailures, 0);
+    assert.equal(sent.length, 2);
+    const recovered = await runDeliveryHealthMonitor({
+      db,
+      env,
+      now: secondAt,
+      send,
+      loadSnapshot: async () => emptySnapshot,
+    });
+    assert.equal(recovered.heartbeat, "ok");
+    assert.equal(sent.length, 3);
+    assert.match(sent[2]?.idempotencyKey ?? "", /dh-monitor:recovered:/);
+    assertNoPii(sent.map((message) => message.text).join("\n"));
+    const beat = await db.deliveryHealthMonitorHeartbeat.findUniqueOrThrow({
+      where: { id: DELIVERY_HEALTH_HEARTBEAT_ID },
+    });
+    assert.match(beat.lastMonitorNotificationKey ?? "", /dh-monitor:recovered:/);
+    assert.equal(beat.lastSucceededAt?.toISOString(), secondAt.toISOString());
+  });
 });

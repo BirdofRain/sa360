@@ -3,7 +3,12 @@ import test from "node:test";
 
 import { readDeliveryHealthConfig } from "./config.js";
 import { scrubDeliveryHealthText } from "./evidence.js";
-import { monitorFollowUp, monitorNoticeKey, type DeliveryHealthHeartbeatSnapshot } from "./heartbeat.js";
+import {
+  monitorFollowUp,
+  monitorNoticeAlreadySent,
+  monitorNoticeKey,
+  type DeliveryHealthHeartbeatSnapshot,
+} from "./heartbeat.js";
 import { composeDeliveryHealthEmail, composeMonitorHeartbeatEmail, planDeliveryHealthNotice } from "./notify.js";
 
 const NOW = new Date("2026-11-20T18:00:00.000Z");
@@ -185,9 +190,44 @@ test("a stale heartbeat is independent of a fresh success", () => {
     consecutiveFailures: 2,
     lastFailedAt: new Date(NOW.getTime() - 30_000),
     lastMonitorNotifiedAt: new Date(NOW.getTime() - 30_000),
+    lastMonitorNotificationKey: "dh-monitor:scanner_failed:1",
   });
   assert.equal(monitorFollowUp({ prior: failed, now: NOW, staleMs: 300_000, succeeded: true }), "recovered");
   assert.equal(monitorFollowUp({ prior: failed, now: NOW, staleMs: 300_000, succeeded: false }), "scanner_failed");
   const key = monitorNoticeKey({ reason: "scanner_failed", now: NOW, cooldownMs: 3_600_000, prior: failed });
   assert.equal(monitorNoticeKey({ reason: "scanner_failed", now: NOW, cooldownMs: 3_600_000, prior: failed }), key);
+  const timestampOnly = prior({
+    consecutiveFailures: 2,
+    lastMonitorNotifiedAt: new Date(NOW.getTime() - 30_000),
+    lastMonitorNotificationKey: "dh-monitor:scanner_failed:1",
+  });
+  assert.equal(monitorNoticeAlreadySent(timestampOnly, "dh-monitor:scanner_failed:2"), false);
+  assert.equal(monitorNoticeAlreadySent(timestampOnly, "dh-monitor:scanner_failed:1"), true);
+  assert.equal(
+    monitorFollowUp({
+      prior: prior({
+        consecutiveFailures: 0,
+        lastFailedAt: new Date(NOW.getTime() - 60_000),
+        lastMonitorNotifiedAt: new Date(NOW.getTime() - 60_000),
+        lastMonitorNotificationKey: "dh-monitor:scanner_failed:1",
+      }),
+      now: NOW,
+      staleMs: 300_000,
+      succeeded: true,
+    }),
+    "recovered"
+  );
+  assert.equal(
+    monitorFollowUp({
+      prior: prior({
+        consecutiveFailures: 0,
+        lastMonitorNotifiedAt: NOW,
+        lastMonitorNotificationKey: "dh-monitor:recovered:2026-11-20T17:59:00.000Z",
+      }),
+      now: NOW,
+      staleMs: 300_000,
+      succeeded: true,
+    }),
+    null
+  );
 });

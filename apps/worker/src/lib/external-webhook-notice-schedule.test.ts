@@ -12,7 +12,7 @@ import { syncExternalWebhookNoticeScheduleOnWorkerStart } from "./external-webho
 import { redis } from "./redis.js";
 
 after(async () => {
-  await redis.quit();
+  await redis.quit().catch(() => undefined);
 });
 
 function discoverJobs(jobs: Array<{ name: string; every?: string | number | null; id?: string | null; key: string }>) {

@@ -824,11 +824,14 @@ describe("delivery health scan", { concurrency: 1 }, () => {
     const incidentMails = () => sent.filter((message) => message.idempotencyKey?.startsWith("dh:"));
     const originalUpdate = db.deliveryHealthIncident.update.bind(db.deliveryHealthIncident);
     let failAcceptedWrite = true;
-    db.deliveryHealthIncident.update = (async (args: Parameters<typeof originalUpdate>[0]) => {
-      const data = args.data as { lastNotifiedAt?: Date | null };
-      if (failAcceptedWrite && data?.lastNotifiedAt) throw new Error("accepted_notice_write_failed");
-      return originalUpdate(args);
-    }) as typeof db.deliveryHealthIncident.update;
+    const incidentWrites = db.deliveryHealthIncident as unknown as {
+      update: (args: { data?: { lastNotifiedAt?: Date | null } }) => Promise<unknown>;
+    };
+    const previousUpdate = incidentWrites.update;
+    incidentWrites.update = async (args) => {
+      if (failAcceptedWrite && args.data?.lastNotifiedAt) throw new Error("accepted_notice_write_failed");
+      return originalUpdate(args as never);
+    };
     try {
       const env = envFor(world.clientAccountId, true);
       const first = await runDeliveryHealthMonitor({ db, env, now: SCAN_NOW, send });
@@ -857,7 +860,7 @@ describe("delivery health scan", { concurrency: 1 }, () => {
       assert.equal(third.notified, 0);
       assert.equal(incidentMails().length, 2);
     } finally {
-      db.deliveryHealthIncident.update = originalUpdate;
+      incidentWrites.update = previousUpdate;
     }
   });
 

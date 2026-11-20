@@ -86,6 +86,7 @@ import { adminClientOnboardingV2ReadRoutes } from "./routes/admin-client-onboard
 import { adminTeamWorkspaceRoutes } from "./routes/admin-team-workspace.js";
 import { adminSourceCampaignRequestRoutes } from "./routes/admin-source-campaign-request.js";
 import { adminClientCampaignRegistryRoutes } from "./routes/admin-client-campaign-registry.js";
+import { adminClientCampaignShadowRoutes } from "./routes/admin-client-campaign-shadow.js";
 import { adminGhlDestinationConfigRequestRoutes } from "./routes/admin-ghl-destination-config-request.js";
 import { adminCompanySheetsConfigRequestRoutes } from "./routes/admin-company-sheets-config-request.js";
 import { adminOnboardingAttributionRoutes } from "./routes/admin-onboarding-attribution.js";
@@ -206,6 +207,8 @@ export async function buildApp() {
   // Request-only campaign registry. Off unless the exact-true flag is set.
   // It does not confirm a source, write a routing rule, or arm delivery.
   await app.register(adminClientCampaignRegistryRoutes, { prefix: "/admin/v1" });
+  // Read-only shadow decision. This route does not resolve or deliver.
+  await app.register(adminClientCampaignShadowRoutes, { prefix: "/admin/v1" });
   // Configuration request only. This route does not write ClientGhlDestination or arm delivery.
   await app.register(adminGhlDestinationConfigRequestRoutes, { prefix: "/admin/v1" });
   // Configuration request only. This route does not write CompanySheetsDestination or arm delivery.

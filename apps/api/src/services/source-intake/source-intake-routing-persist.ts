@@ -32,6 +32,7 @@ import {
 } from "../ghl-association-dispatch/ghl-association-dispatch.js";
 import { enqueueExternalWebhookAttempt } from "../external-webhook/external-webhook-queue.js";
 import { recordExternalWebhookAttempt } from "../external-webhook/external-webhook-schedule.js";
+import { observeClientCampaignShadow } from "../client-campaign-shadow/observe-client-campaign-shadow.js";
 
 /**
  * Shared source-intake routing + duplicate-risk + enrichment persistence.
@@ -284,6 +285,18 @@ export async function persistRoutingAndDuplicate(
     logger.warn("lead_proof.persist.unexpected_error", {
       sourceEventId,
       error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // Shadow campaign resolution reads the committed routing snapshot.
+  // It writes only its own decision row, and only when its flag is exactly true.
+  // A failure stays here and does not change the live lead result.
+  try {
+    await observeClientCampaignShadow(sourceEventId);
+  } catch (err) {
+    logger.warn("client_campaign_shadow.failed", {
+      sourceLeadEventId: sourceEventId,
+      errorName: err instanceof Error ? err.name : "Error",
     });
   }
 

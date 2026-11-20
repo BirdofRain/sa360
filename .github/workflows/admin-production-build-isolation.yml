@@ -1,0 +1,43 @@
+# Diagnostic only. Compares the DigitalOcean Admin C.O.C. production build
+# command on the current master SHA and on PR #286's exact head.
+# This workflow is not a merge gate and does not change either application.
+name: Admin production build isolation
+
+on:
+  push:
+    branches: [cursor/admin-build-isolation-692c]
+
+jobs:
+  build-admin-master:
+    name: master 48e5bf8 admin build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout master baseline
+        uses: actions/checkout@v4
+        with:
+          ref: 48e5bf8fce6a4192c00040a6c07d2be52a950f91
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.4
+
+      - name: Production Admin C.O.C. build
+        run: export CI=true NODE_ENV=production && corepack enable && corepack prepare pnpm@10.32.1 --activate && pnpm install --frozen-lockfile && pnpm build:admin-coc
+
+  build-admin-pr:
+    name: PR 286 f69cad7 admin build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: f69cad7f50a168116a97f28653192937d00a5f65
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.4
+
+      - name: Production Admin C.O.C. build
+        run: export CI=true NODE_ENV=production && corepack enable && corepack prepare pnpm@10.32.1 --activate && pnpm install --frozen-lockfile && pnpm build:admin-coc

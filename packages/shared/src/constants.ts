@@ -133,6 +133,16 @@ export const GHL_LEAD_NOTICE_DISPATCH_JOB = "dispatch-ghl-lead-notice";
 export const GHL_LEAD_NOTICE_DISCOVER_JOB = "discover-ghl-lead-notices";
 export const GHL_LEAD_NOTICE_DISCOVER_JOB_ID = "ghl-lead-notice-discover";
 
+/**
+ * Read-only Google Sheets delivery-health scan.
+ * The processor no-ops unless SA360_DELIVERY_HEALTH_MONITOR_ENABLED is the
+ * exact string true. Notifications stay off unless
+ * SA360_DELIVERY_HEALTH_NOTIFY_ENABLED is the exact string true.
+ */
+export const DELIVERY_HEALTH_MONITOR_QUEUE = "delivery-health-monitor";
+export const DELIVERY_HEALTH_MONITOR_JOB = "scan-delivery-health";
+export const DELIVERY_HEALTH_MONITOR_JOB_ID = "delivery-health-monitor-singleton";
+
 /** Guarded lead inventory review & activation (stacked on aged ingestion). */
 export const LEAD_INVENTORY_REVIEW_MAKE_AVAILABLE_CONFIRMATION =
   "MAKE REVIEWED INVENTORY AVAILABLE" as const;

@@ -8,6 +8,7 @@ import { signStaffAssertion, STAFF_ASSERTION_HEADER } from "@sa360/shared/staff-
 import { prisma } from "../../lib/db.js";
 import { adminClientCampaignGhlExecutionRoutes } from "../../routes/admin-client-campaign-ghl-execution.js";
 import { SA360_REQUIRED_GHL_CUSTOM_FIELD_KEYS } from "../ghl-config-discovery/ghl-config-discovery.types.js";
+import { campaignGhlConfigurationHash, frozenScopeFromShadow } from "./campaign-ghl-frozen-shadow.js";
 import { issueCampaignGhlExecutionGrant } from "./campaign-ghl-execution-grant.js";
 import {
   claimCampaignGhlOperation,
@@ -440,6 +441,109 @@ describe("campaign GHL execution foundation", { concurrency: 1 }, () => {
     });
     assert.equal(withoutClaim.ok, false);
   });
+
+  test("unresolved and conflicted shadows cannot be granted, even with a retained campaign id", async () => {
+    const clientAccountId = await createClient("eligibility");
+    const matched = await seedLane(clientAccountId, "vet-east", "VET", "wf-a", []);
+    const missing = await seedLane(clientAccountId, "vet-west", "VET", "wf-b", [], {
+      nicheClassificationStatus: "MISSING",
+      reasonCodes: ["incoming_niche_missing"],
+    });
+    const review = await seedLane(clientAccountId, "vet-review", "VET", "wf-review", [], {
+      status: "REVIEW_REQUIRED",
+    });
+    const conflict = await seedLane(clientAccountId, "nurse-conflict", "NURSE", "wf-c", [], {
+      status: "REVIEW_REQUIRED",
+      nicheClassificationStatus: "CONFLICT",
+      reasonCodes: ["niche_classification_conflict"],
+    });
+    const unresolved = await seedLane(clientAccountId, "vet-open", "VET", "wf-open", [], {
+      status: "UNRESOLVED",
+      nicheClassificationStatus: "UNRESOLVED",
+    });
+    const crossed = await seedLane(clientAccountId, "vet-cross", "VET", "wf-cross", [], {
+      status: "REVIEW_REQUIRED",
+      reasonCodes: ["cross_client_identity_conflict"],
+    });
+    const unmatched = await seedLane(clientAccountId, "vet-route", "VET", "wf-route", [], {
+      routingMatched: false,
+    });
+
+    const issued = await issueFor(clientAccountId, matched);
+    const missingGrant = await issueFor(clientAccountId, missing);
+    assert.equal(issued.ok, true, issued.error ?? "");
+    assert.equal(missingGrant.ok, true, missingGrant.error ?? "");
+    assert.equal(issued.executionStarted, false);
+    assert.equal(issued.externalCall, false);
+
+    for (const [lane, error] of [
+      [review, "shadow_review_required"],
+      [conflict, "niche_conflict"],
+      [unresolved, "shadow_unresolved"],
+      [crossed, "source_ownership_conflict"],
+      [unmatched, "authoritative_client_invalid"],
+    ] as const) {
+      const denied = await issueFor(clientAccountId, lane);
+      assert.equal(denied.ok, false, lane.slug);
+      assert.equal(denied.error, error, lane.slug);
+      assert.equal(denied.executionStarted, false);
+      assert.equal(denied.externalCall, false);
+      assert.equal(await prisma.campaignGhlExecutionGrant.count({ where: { sourceLeadEventId: lane.eventId } }), 0);
+    }
+
+    const shadow = await prisma.clientCampaignShadowDecision.findUniqueOrThrow({
+      where: { sourceLeadEventId_decisionVersion: { sourceLeadEventId: conflict.eventId, decisionVersion: 1 } },
+    });
+    const scope = frozenScopeFromShadow(shadow, conflict.eventId);
+    assert.ok(scope);
+    assert.equal(shadow.clientCampaignId, conflict.campaignId);
+    const planted = await prisma.campaignGhlExecutionGrant.create({
+      data: {
+        requestId: randomUUID(),
+        payloadHash: "planted-invalid-grant",
+        sourceLeadEventId: conflict.eventId,
+        shadowDecisionId: shadow.id,
+        clientAccountId,
+        clientCampaignId: conflict.campaignId,
+        decisionVersion: 1,
+        campaignRevision: scope.campaignRevision,
+        ghlLocationId: scope.ghlLocationId,
+        workflowIdGhl: scope.workflowIdGhl,
+        configurationHash: campaignGhlConfigurationHash(scope),
+        status: "active",
+        authorizedByActor: "ADMIN",
+      },
+    });
+    const prepared = await prepareCampaignGhlDelivery(prisma, {
+      clientAccountId,
+      sourceLeadEventId: conflict.eventId,
+      env: ON,
+      readEvidence: async () => {
+        throw new Error("ineligible shadow must not discover");
+      },
+    });
+    assert.equal(prepared.grantState, "stale");
+    assert.equal(prepared.grantId, planted.id);
+    assert.equal(prepared.plan.reasonCodes.includes("execution_grant_stale"), true);
+    assert.equal(prepared.plan.selectedWorkflowIdGhl, null);
+    assert.equal(prepared.plan.liveExternalCallAuthorized, false);
+    assert.equal(prepared.externalHttpAttempted, false);
+    assert.equal(await prisma.campaignGhlExecutionReceipt.count({ where: { sourceLeadEventId: conflict.eventId } }), 0);
+
+    const revoked = await prisma.campaignGhlExecutionGrant.update({
+      where: { id: planted.id },
+      data: { status: "revoked", revokedAt: new Date(), revokedByActor: "ADMIN", revocationReason: "invalid shadow" },
+    });
+    assert.equal(revoked.status, "revoked");
+    const after = await prepareCampaignGhlDelivery(prisma, {
+      clientAccountId,
+      sourceLeadEventId: conflict.eventId,
+      env: ON,
+      readEvidence: async () => publishedEvidence(),
+    });
+    assert.equal(after.grantState, "revoked");
+    assert.equal(after.plan.liveExternalCallAuthorized, false);
+  });
 });
 
 type Lane = {
@@ -477,7 +581,14 @@ async function seedLane(
   slug: string,
   nicheKey: string,
   workflowId: string,
-  tags: string[]
+  tags: string[],
+  shadow: {
+    status?: "MATCHED" | "UNRESOLVED" | "REVIEW_REQUIRED";
+    nicheClassificationStatus?: "MATCH" | "MISSING" | "CONFLICT" | "UNRESOLVED";
+    reasonCodes?: string[];
+    reviewCandidateCampaignIds?: string[];
+    routingMatched?: boolean;
+  } = {}
 ): Promise<Lane> {
   const campaign = await prisma.clientCampaign.create({
     data: {
@@ -507,7 +618,10 @@ async function seedLane(
         email: "ada@example.com",
         tags,
       },
-      routingResultJson: { matched: true, routingAuthority: "confirmed_source_association" },
+      routingResultJson: {
+        matched: shadow.routingMatched !== false,
+        routingAuthority: "confirmed_source_association",
+      },
     },
   });
   eventIds.push(event.id);
@@ -515,7 +629,7 @@ async function seedLane(
     data: {
       sourceLeadEventId: event.id,
       decisionVersion: 1,
-      status: "MATCHED",
+      status: shadow.status ?? "MATCHED",
       clientAccountId,
       clientCampaignId: campaign.id,
       campaignRevision: 3,
@@ -526,11 +640,11 @@ async function seedLane(
       configuredProductType: "life_insurance",
       winningRoutingAuthority: "confirmed_source_association",
       matchedBindingIds: [],
-      reviewCandidateCampaignIds: [],
-      reasonCodes: [],
+      reviewCandidateCampaignIds: shadow.reviewCandidateCampaignIds ?? [],
+      reasonCodes: shadow.reasonCodes ?? [],
       sourceEvidenceJson: [],
       incomingNicheJson: { trustedProvenance: "none" },
-      nicheClassificationStatus: "MATCH",
+      nicheClassificationStatus: shadow.nicheClassificationStatus ?? "MATCH",
       leadTypeDecisionJson: { absent: true },
       proposedTagsJson: {
         authorized: false,

@@ -10,6 +10,7 @@ import { resolveCampaignGhlGrantActor } from "../../lib/campaign-ghl-grant-actor
 import { SA360_REQUIRED_GHL_CUSTOM_FIELD_KEYS } from "../ghl-config-discovery/ghl-config-discovery.types.js";
 import { auditCampaignTagTriggers } from "./campaign-ghl-tag-trigger-audit.js";
 import { verifyCampaignWorkflow } from "./campaign-ghl-workflow-verification.js";
+import { campaignGrantBlockReason } from "./campaign-ghl-execution-grant.js";
 import {
   planCampaignGhlDelivery,
   type CampaignGhlPlanningFacts,
@@ -101,6 +102,45 @@ test("tag audit is SAFE only when every trigger list is present and clean", () =
   assert.equal(safe.outcome, "SAFE");
   assert.equal(safe.legacyEntryListener, false);
   assert.equal(safe.directApiEnrollmentEliminatesCollisions, false);
+});
+
+test("a retained campaign id does not make an unresolved shadow grantable", () => {
+  const base = facts().snapshot;
+  assert.equal(campaignGrantBlockReason(base), null);
+  assert.equal(
+    campaignGrantBlockReason({
+      ...base,
+      nicheClassificationStatus: "MISSING",
+      reasonCodes: ["incoming_niche_missing"],
+    }),
+    null
+  );
+  assert.equal(campaignGrantBlockReason({ ...base, status: "REVIEW_REQUIRED" }), "shadow_review_required");
+  assert.equal(
+    campaignGrantBlockReason({
+      ...base,
+      status: "REVIEW_REQUIRED",
+      nicheClassificationStatus: "CONFLICT",
+      reasonCodes: ["niche_classification_conflict"],
+    }),
+    "niche_conflict"
+  );
+  assert.equal(
+    campaignGrantBlockReason({ ...base, status: "UNRESOLVED", nicheClassificationStatus: "UNRESOLVED" }),
+    "shadow_unresolved"
+  );
+  assert.equal(
+    campaignGrantBlockReason({
+      ...base,
+      status: "REVIEW_REQUIRED",
+      reasonCodes: ["cross_client_identity_conflict"],
+    }),
+    "source_ownership_conflict"
+  );
+  assert.equal(
+    campaignGrantBlockReason({ ...base, reviewCandidateCampaignIds: ["camp-other"] }),
+    "competing_campaigns"
+  );
 });
 
 test("planner withholds tags on collision and fails closed on unknown workflow evidence", () => {

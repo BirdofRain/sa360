@@ -19,7 +19,7 @@ import { CLIENT_CAMPAIGN_SHADOW_DECISION_VERSION } from "../client-campaign-shad
 import { resolveDeliveryRuntimeMode } from "../delivery-runtime-mode.service.js";
 import type { LiveDestinationRecord } from "../ghl-destination-authorization.js";
 import { validateLocationCustomFieldTargets } from "../ghl-delivery-adapter/vet-ghl-delivery-contract.js";
-import { loadEffectiveCampaignGhlGrant } from "./campaign-ghl-execution-grant.js";
+import { campaignGrantBlockReason, loadEffectiveCampaignGhlGrant } from "./campaign-ghl-execution-grant.js";
 import {
   ensurePlannedCampaignReceipts,
   listCampaignReceipts,
@@ -119,10 +119,12 @@ export async function prepareCampaignGhlDelivery(
     ? contactPresence(event?.normalizedPayloadJson, event?.rawPayloadJson)
     : { name: false, phone: false, email: false };
   const existingContactTags = owned ? contactTags(event?.normalizedPayloadJson, event?.rawPayloadJson) : [];
-  const evidence =
-    locationId && sameClient
-      ? await (input.readEvidence ?? readCampaignWorkflowEvidence)(locationId)
-      : unavailableEvidence();
+  const routing = asRecord(event?.routingResultJson);
+  const mayInspect =
+    owned && routing?.matched === true && campaignGrantBlockReason(snapshot) === null && Boolean(locationId);
+  const evidence = mayInspect
+    ? await (input.readEvidence ?? readCampaignWorkflowEvidence)(locationId)
+    : unavailableEvidence();
   const nicheTag = snapshot.configuredNicheKey ? `SA360::NICHE::${snapshot.configuredNicheKey}` : "";
   const campaignTag = snapshot.campaignSlug ? `SA360::CAMPAIGN::${snapshot.campaignSlug}` : "";
   const verification = verifyCampaignWorkflow({
@@ -144,11 +146,10 @@ export async function prepareCampaignGhlDelivery(
     now
   );
   const scope = receiptScope(input.clientAccountId, input.sourceLeadEventId, snapshot);
-  if (scope) await ensurePlannedCampaignReceipts(db, scope);
+  if (scope && effective.state === "active") await ensurePlannedCampaignReceipts(db, scope);
   const receipts = scope ? await listCampaignReceipts(db, scope) : [];
   const runtime = await resolveDeliveryRuntimeMode();
   const duplicate = asRecord(event?.duplicateRiskJson);
-  const routing = asRecord(event?.routingResultJson);
   const fieldMap = fieldMapFrom(destination?.sa360CustomFieldIdMapJson);
   const fieldValues = stringRecord(asRecord(event?.normalizedPayloadJson)?.customFields);
   const fieldCheck = validateLocationCustomFieldTargets({

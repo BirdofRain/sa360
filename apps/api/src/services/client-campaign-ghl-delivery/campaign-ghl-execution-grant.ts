@@ -2,10 +2,11 @@
  * Durable operator grant for one frozen campaign GHL operation.
  *
  * The shared admin key or a live admin_coc staff principal can issue or revoke
- * a grant. Registry status, a MATCHED shadow row, and a browser actor label
- * cannot. Issuing a grant does not update the shadow row and does not call
- * GoHighLevel. A grant for one event, campaign, workflow, or location does
- * not authorize another.
+ * a grant. Registry status and a browser actor label cannot. A shadow row
+ * must be MATCHED, with niche MATCH or MISSING, and with no ownership
+ * conflict. REVIEW_REQUIRED, UNRESOLVED, and a niche conflict are refused
+ * even when they still carry a campaign id. Issuing a grant does not update
+ * the shadow row and does not call GoHighLevel.
  */
 
 import { createHash } from "node:crypto";
@@ -19,7 +20,11 @@ import {
   snapshotFromShadowRow,
   type FrozenCampaignScope,
 } from "./campaign-ghl-frozen-shadow.js";
-import type { CampaignGrantReadStatus } from "./plan-campaign-ghl-delivery.js";
+import {
+  OWNERSHIP_CONFLICTS,
+  type CampaignDeliverySnapshot,
+  type CampaignGrantReadStatus,
+} from "./plan-campaign-ghl-delivery.js";
 
 const ACTOR = /^(?:ADMIN|c[a-z0-9]{24})$/;
 
@@ -75,10 +80,11 @@ export async function issueCampaignGhlExecutionGrant(
 
   const event = await db.sourceLeadEvent.findUnique({
     where: { id: input.sourceLeadEventId },
-    select: { id: true, clientAccountIdResolved: true },
+    select: { id: true, clientAccountIdResolved: true, routingResultJson: true },
   });
   if (!event) return refused("event_not_found");
   if (event.clientAccountIdResolved !== input.clientAccountId) return refused("client_mismatch");
+  if (!authoritativeRouting(event.routingResultJson)) return refused("authoritative_client_invalid");
 
   const shadow = await db.clientCampaignShadowDecision.findUnique({
     where: {
@@ -90,7 +96,8 @@ export async function issueCampaignGhlExecutionGrant(
   });
   if (!shadow) return refused("missing_shadow_row");
   const snapshot = snapshotFromShadowRow(shadow);
-  if (snapshot.executionAuthorized !== false) return refused("shadow_not_a_grant");
+  const blocked = campaignGrantBlockReason(snapshot);
+  if (blocked) return refused(blocked);
   if (snapshot.clientAccountId !== input.clientAccountId) return refused("client_mismatch");
   if (snapshot.clientCampaignId !== input.clientCampaignId) return refused("campaign_mismatch");
   if (input.expectedDecisionVersion !== shadow.decisionVersion) return refused("decision_version_mismatch");
@@ -219,15 +226,26 @@ export async function loadEffectiveCampaignGhlGrant(
   now = new Date()
 ): Promise<EffectiveCampaignGrant> {
   if (!input.clientCampaignId) return { state: "absent", grantId: null, scope: null };
-  const shadow = await db.clientCampaignShadowDecision.findUnique({
-    where: {
-      sourceLeadEventId_decisionVersion: {
-        sourceLeadEventId: input.sourceLeadEventId,
-        decisionVersion: CLIENT_CAMPAIGN_SHADOW_DECISION_VERSION,
+  const [shadow, event] = await Promise.all([
+    db.clientCampaignShadowDecision.findUnique({
+      where: {
+        sourceLeadEventId_decisionVersion: {
+          sourceLeadEventId: input.sourceLeadEventId,
+          decisionVersion: CLIENT_CAMPAIGN_SHADOW_DECISION_VERSION,
+        },
       },
-    },
-  });
+    }),
+    db.sourceLeadEvent.findUnique({
+      where: { id: input.sourceLeadEventId },
+      select: { clientAccountIdResolved: true, routingResultJson: true },
+    }),
+  ]);
   const scope = shadow ? frozenScopeFromShadow(shadow, input.sourceLeadEventId) : null;
+  const eligible =
+    shadow !== null &&
+    event?.clientAccountIdResolved === input.clientAccountId &&
+    authoritativeRouting(event.routingResultJson) &&
+    campaignGrantBlockReason(snapshotFromShadowRow(shadow)) === null;
   const rows = await db.campaignGhlExecutionGrant.findMany({
     where: {
       sourceLeadEventId: input.sourceLeadEventId,
@@ -253,6 +271,7 @@ export async function loadEffectiveCampaignGhlGrant(
     if (active.expiresAt && active.expiresAt.getTime() <= now.getTime()) {
       return { state: "expired", grantId: active.id, scope };
     }
+    if (!eligible) return { state: "stale", grantId: active.id, scope };
     return { state: "active", grantId: active.id, scope };
   }
   const drifted = rows.find((row) => row.status === "active");
@@ -264,6 +283,37 @@ export async function loadEffectiveCampaignGhlGrant(
     return { state: "revoked", grantId: rows[0]?.id ?? null, scope };
   }
   return { state: "absent", grantId: null, scope };
+}
+
+/**
+ * A retained campaign id is not permission. MATCHED plus MATCH or MISSING is
+ * the only shadow that can be granted. REVIEW_REQUIRED, UNRESOLVED, a niche
+ * conflict, competing candidates, and source-ownership conflicts are refused.
+ */
+export function campaignGrantBlockReason(snapshot: CampaignDeliverySnapshot): string | null {
+  if (snapshot.executionAuthorized !== false) return "shadow_not_a_grant";
+  if (snapshot.decisionVersion !== CLIENT_CAMPAIGN_SHADOW_DECISION_VERSION) return "decision_version_unsupported";
+  if (snapshot.reviewCandidateCampaignIds.length > 0) return "competing_campaigns";
+  if (snapshot.reasonCodes.some((code) => OWNERSHIP_CONFLICTS.has(code))) return "source_ownership_conflict";
+  if (
+    snapshot.nicheClassificationStatus === "CONFLICT" ||
+    snapshot.reasonCodes.includes("niche_classification_conflict")
+  ) {
+    return "niche_conflict";
+  }
+  if (snapshot.status === "REVIEW_REQUIRED") return "shadow_review_required";
+  if (snapshot.status === "UNRESOLVED") return "shadow_unresolved";
+  if (snapshot.status !== "MATCHED") return "shadow_not_matched";
+  if (snapshot.nicheClassificationStatus !== "MATCH" && snapshot.nicheClassificationStatus !== "MISSING") {
+    return "niche_unresolved";
+  }
+  if (!snapshot.clientAccountId?.trim() || !snapshot.clientCampaignId?.trim()) return "campaign_mismatch";
+  return null;
+}
+
+function authoritativeRouting(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return (value as Record<string, unknown>).matched === true;
 }
 
 function granted(grantId: string, replayed: boolean): CampaignGrantIssueResult {

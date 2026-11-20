@@ -74,7 +74,7 @@ export const CAMPAIGN_GHL_LIVE_BLOCKERS = [
 
 const CAMPAIGN_TAG_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
-const OWNERSHIP_CONFLICTS = new Set([
+export const OWNERSHIP_CONFLICTS = new Set([
   "no_authoritative_client",
   "provider_missing",
   "no_exact_source_evidence",

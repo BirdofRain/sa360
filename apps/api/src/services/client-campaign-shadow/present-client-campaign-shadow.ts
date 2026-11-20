@@ -6,11 +6,13 @@
 import type { ClientCampaignShadowDecision as ShadowRow } from "@prisma/client";
 
 import { readCampaignLeadTypeDecision } from "../source-intake/campaign-lead-type.js";
-import { SHADOW_ANALYSIS_BANNER } from "./resolve-client-campaign-shadow.js";
+import { SHADOW_ANALYSIS_BANNER, SHADOW_EXECUTION_AUTHORIZED } from "./resolve-client-campaign-shadow.js";
 
 export type CampaignShadowRead = {
   ok: true;
   banner: typeof SHADOW_ANALYSIS_BANNER;
+  /** Always false. A campaign id in decision is not a delivery grant. */
+  executionAuthorized: typeof SHADOW_EXECUTION_AUTHORIZED;
   shadowEnabled: boolean;
   evaluation: "stored" | "not_evaluated";
   decision: {
@@ -54,6 +56,7 @@ export function presentClientCampaignShadow(input: {
     return {
       ok: true,
       banner: SHADOW_ANALYSIS_BANNER,
+      executionAuthorized: SHADOW_EXECUTION_AUTHORIZED,
       shadowEnabled: input.shadowEnabled,
       evaluation: "not_evaluated",
       decision: null,
@@ -64,6 +67,7 @@ export function presentClientCampaignShadow(input: {
   return {
     ok: true,
     banner: SHADOW_ANALYSIS_BANNER,
+    executionAuthorized: SHADOW_EXECUTION_AUTHORIZED,
     shadowEnabled: input.shadowEnabled,
     evaluation: "stored",
     decision: {

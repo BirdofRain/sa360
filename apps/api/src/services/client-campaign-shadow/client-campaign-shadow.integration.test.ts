@@ -195,7 +195,9 @@ describe("client campaign shadow resolution", { concurrency: 1 }, () => {
     assert.equal(body.evaluation, "stored");
     assert.match(body.banner, /Shadow analysis only/);
     assert.equal(body.decision.clientCampaignId, vetA.id);
+    assert.equal(body.executionAuthorized, false);
     assert.equal(body.decision.deliveryExecuted, false);
+    assert.equal(body.decision.proposedTags.executionAuthorized, false);
     assert.equal(body.decision.proposedTags.nicheTag, "SA360::NICHE::VET");
     const empty = await app.inject({
       method: "GET",

@@ -13,6 +13,7 @@ const banner = "Shadow analysis only — no campaign-specific delivery executed.
 function view(overrides: Partial<NonNullable<CampaignShadowView["decision"]>> = {}): CampaignShadowView {
   return {
     banner,
+    executionAuthorized: false,
     evaluation: "stored",
     shadowEnabled: true,
     decision: {
@@ -56,6 +57,7 @@ test("the shadow panel shows a matched campaign and withholds nothing the decisi
   assert.match(screen.getByTestId("campaign-shadow-panel").textContent ?? "", /Vet Web Form/);
   assert.match(screen.getByTestId("campaign-shadow-panel").textContent ?? "", /wf_vet/);
   assert.equal(screen.getByTestId("campaign-shadow-evaluation").textContent, "Evaluation: stored");
+  assert.equal(screen.getByTestId("campaign-shadow-delivery").textContent, "Delivery authorized: no");
 });
 
 test("a conflict shows no authorized campaign tag", () => {
@@ -82,7 +84,7 @@ test("a conflict shows no authorized campaign tag", () => {
 test("an event without a stored decision does not invent one", () => {
   render(
     <CampaignShadowPanel
-      view={{ banner, evaluation: "not_evaluated", shadowEnabled: false, decision: null }}
+      view={{ banner, executionAuthorized: false, evaluation: "not_evaluated", shadowEnabled: false, decision: null }}
     />
   );
   assert.equal(

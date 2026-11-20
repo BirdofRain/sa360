@@ -34,6 +34,14 @@ export const CLIENT_CAMPAIGN_SHADOW_DECISION_VERSION = 1 as const;
 export const SHADOW_ANALYSIS_BANNER =
   "Shadow analysis only — no campaign-specific delivery executed." as const;
 
+/**
+ * PR E guard. A stored clientCampaignId, MATCHED status, niche tag, or
+ * destination copy never authorizes a workflow, a tag write, or a sheet row.
+ * Execution requires a separate delivery decision that names the event,
+ * the frozen decision version, and an explicit operator or policy grant.
+ */
+export const SHADOW_EXECUTION_AUTHORIZED = false as const;
+
 export type ShadowResolutionStatus = "MATCHED" | "UNRESOLVED" | "REVIEW_REQUIRED";
 
 export type ShadowBindingCandidate = {
@@ -82,6 +90,7 @@ export type ProposedShadowTags = {
   existingTagPlansPreserved: true;
   contactTagRemovalSafe: false;
   deliveryExecuted: false;
+  executionAuthorized: typeof SHADOW_EXECUTION_AUTHORIZED;
 };
 
 export type ShadowDestinationSelection = {
@@ -159,6 +168,7 @@ function blankTags(reason: string): ProposedShadowTags {
     existingTagPlansPreserved: true,
     contactTagRemovalSafe: false,
     deliveryExecuted: false,
+    executionAuthorized: SHADOW_EXECUTION_AUTHORIZED,
   };
 }
 
@@ -174,6 +184,7 @@ function authorizedTags(nicheKey: string, slug: string): ProposedShadowTags {
     existingTagPlansPreserved: true,
     contactTagRemovalSafe: false,
     deliveryExecuted: false,
+    executionAuthorized: SHADOW_EXECUTION_AUTHORIZED,
   };
 }
 

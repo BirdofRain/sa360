@@ -5,6 +5,8 @@
 
 export type CampaignShadowView = {
   banner: string;
+  /** A stored campaign id is not permission to deliver. */
+  executionAuthorized: false;
   evaluation: "stored" | "not_evaluated";
   shadowEnabled: boolean;
   decision: null | {
@@ -60,6 +62,7 @@ export function parseCampaignShadowView(payload: unknown): CampaignShadowView | 
   if (evaluation !== "stored" || !decision) {
     return {
       banner: text(root.banner) ?? "Shadow analysis only — no campaign-specific delivery executed.",
+      executionAuthorized: false,
       evaluation: "not_evaluated",
       shadowEnabled: root.shadowEnabled === true,
       decision: null,
@@ -74,6 +77,7 @@ export function parseCampaignShadowView(payload: unknown): CampaignShadowView | 
   const evidence = Array.isArray(decision.sourceEvidence) ? decision.sourceEvidence : [];
   return {
     banner: text(root.banner) ?? "Shadow analysis only — no campaign-specific delivery executed.",
+    executionAuthorized: false,
     evaluation: "stored",
     shadowEnabled: root.shadowEnabled === true,
     decision: {

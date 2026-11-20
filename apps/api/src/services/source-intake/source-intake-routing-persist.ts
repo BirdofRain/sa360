@@ -32,7 +32,10 @@ import {
 } from "../ghl-association-dispatch/ghl-association-dispatch.js";
 import { enqueueExternalWebhookAttempt } from "../external-webhook/external-webhook-queue.js";
 import { recordExternalWebhookAttempt } from "../external-webhook/external-webhook-schedule.js";
-import { observeClientCampaignShadow } from "../client-campaign-shadow/observe-client-campaign-shadow.js";
+import {
+  observeClientCampaignShadow,
+  shadowFailureLogFields,
+} from "../client-campaign-shadow/observe-client-campaign-shadow.js";
 
 /**
  * Shared source-intake routing + duplicate-risk + enrichment persistence.
@@ -288,17 +291,13 @@ export async function persistRoutingAndDuplicate(
     });
   }
 
-  // Shadow campaign resolution reads the committed routing snapshot.
-  // It writes only its own decision row, and only when its flag is exactly true.
-  // A failure stays here and does not change the live lead result.
-  try {
-    await observeClientCampaignShadow(sourceEventId);
-  } catch (err) {
-    logger.warn("client_campaign_shadow.failed", {
-      sourceLeadEventId: sourceEventId,
-      errorName: err instanceof Error ? err.name : "Error",
-    });
-  }
+  // Shadow resolution starts after the routing transaction, Sheets intent,
+  // and GHL association have finished. The live result does not wait on it.
+  // The flag check inside observe returns before any registry query when off.
+  // A failure is logged without the error message, which can echo lead fields.
+  void observeClientCampaignShadow(sourceEventId).catch((err) => {
+    logger.warn("client_campaign_shadow.failed", shadowFailureLogFields(sourceEventId, err));
+  });
 
   return { routing, duplicateRiskJson: duplicateRisk, status, normalizedWithEnrichment };
 }

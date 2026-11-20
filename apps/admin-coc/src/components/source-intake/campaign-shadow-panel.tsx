@@ -17,6 +17,7 @@ export function CampaignShadowPanel({ view }: { view: CampaignShadowView | null 
       <p className="font-medium">Campaign shadow</p>
       <p data-testid="campaign-shadow-banner">{view.banner}</p>
       <p data-testid="campaign-shadow-evaluation">Evaluation: {view.evaluation}</p>
+      <p data-testid="campaign-shadow-delivery">Delivery authorized: no</p>
       {decision ? (
         <div className="grid grid-cols-2 gap-2">
           {line("Resolution", decision.status)}

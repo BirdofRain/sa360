@@ -202,6 +202,20 @@ async function loadBindings(
   return { bindings: [...byBinding.values()], campaigns: [...campaigns.values()] };
 }
 
+/**
+ * Failure log for the intake hook. The message is omitted because Prisma and
+ * driver errors can repeat query values, including lead fields.
+ */
+export function shadowFailureLogFields(
+  sourceLeadEventId: string,
+  err: unknown
+): { sourceLeadEventId: string; errorName: string } {
+  return {
+    sourceLeadEventId,
+    errorName: err instanceof Error ? err.name : "Error",
+  };
+}
+
 export async function observeClientCampaignShadow(
   sourceLeadEventId: string,
   env: NodeJS.ProcessEnv = process.env,

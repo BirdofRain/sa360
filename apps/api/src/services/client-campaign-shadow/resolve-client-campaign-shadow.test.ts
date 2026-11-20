@@ -487,4 +487,21 @@ test("shadow code does not call delivery writers and live tag builders stay unto
   assert.equal(/^GRANT ALL/m.test(migration), false);
   assert.equal(/GRANT SELECT, INSERT, UPDATE/.test(migration), false);
   assert.match(migration, /GRANT SELECT, INSERT ON TABLE/);
+  assert.match(migration, /ON DELETE RESTRICT/);
+  assert.match(migration, /SET LOCAL lock_timeout = '3s'/);
+  const persist = readFileSync(
+    path.join(apiSrc, "services/source-intake/source-intake-routing-persist.ts"),
+    "utf8"
+  );
+  assert.equal(persist.includes("await observeClientCampaignShadow"), false);
+  assert.match(persist, /void observeClientCampaignShadow\(sourceEventId\)/);
+  const shadowHook = persist.slice(persist.indexOf("void observeClientCampaignShadow"));
+  assert.equal(shadowHook.includes("err.message"), false);
+  assert.match(shadowHook, /shadowFailureLogFields/);
+  const bulkImport = readFileSync(
+    path.join(apiSrc, "services/bulk-import/bulk-import-row-normalize.service.ts"),
+    "utf8"
+  );
+  assert.equal(bulkImport.includes("observeClientCampaignShadow"), false);
+  assert.equal(bulkImport.includes("client-campaign-shadow"), false);
 });

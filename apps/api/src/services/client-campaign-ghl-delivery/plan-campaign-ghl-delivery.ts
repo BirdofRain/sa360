@@ -59,12 +59,16 @@ import {
 
 export const CAMPAIGN_GHL_PLAN_PHASE = "E1" as const;
 
-/** Live HTTP stays off in this phase. These are the blockers a later phase must close. */
+/**
+ * Live HTTP stays off. A durable grant and a prepared plan do not close these.
+ * Direct API enrollment is not proven by the workflow list. Attribution tags
+ * stay withheld until a trigger audit is SAFE. The executor is not wired.
+ */
 export const CAMPAIGN_GHL_LIVE_BLOCKERS = [
-  "no_durable_campaign_execution_grant",
-  "workflow_live_verified_constraint_stays_false",
+  "durable_grant_does_not_start_execution",
+  "direct_api_enrollment_not_proven_by_list_discovery",
   "campaign_plan_not_wired_to_ghl_executor",
-  "tag_trigger_cannot_select_a_shared_contact",
+  "tag_collision_unknown_blocks_attribution_tags",
   "production_activation_not_authorized",
 ] as const;
 
@@ -94,6 +98,9 @@ const TAG_BLOCKERS = new Set([
   "frozen_niche_missing",
   "campaign_slug_invalid",
   "execution_grant_missing",
+  "execution_grant_revoked",
+  "execution_grant_expired",
+  "execution_grant_stale",
   "execution_grant_mismatch",
   "shadow_row_is_not_a_delivery_grant",
 ]);
@@ -120,18 +127,25 @@ const REASON_ORDER = [
   "campaign_slug_invalid",
   "shadow_row_is_not_a_delivery_grant",
   "execution_grant_missing",
+  "execution_grant_revoked",
+  "execution_grant_expired",
+  "execution_grant_stale",
   "execution_grant_mismatch",
   "client_delivery_not_permitted",
   "destination_not_authorized_for_campaign",
   "workflow_not_validated",
   "workflow_missing_or_ineligible",
+  "workflow_status_unknown",
   "workflow_location_mismatch",
+  "direct_api_enrollment_unverified",
   "workflow_trigger_mode_unsupported",
   "tag_trigger_cross_fire_risk",
   "required_custom_fields_missing",
   "contact_identity_invalid",
   "required_values_missing",
   "legacy_automation_conflict",
+  "legacy_automation_unverified",
+  "tag_trigger_collision",
   "duplicate_blocked",
   "compliance_blocked",
   "delivery_blocked",
@@ -184,6 +198,8 @@ export type CampaignDeliverySnapshot = {
   } | null;
 };
 
+export type CampaignGrantReadStatus = "active" | "revoked" | "expired" | "stale" | "absent";
+
 export type CampaignExecutionGrantInput = {
   granted: boolean;
   grantKind: string;
@@ -193,7 +209,19 @@ export type CampaignExecutionGrantInput = {
   campaignRevision: number;
   workflowIdGhl: string;
   ghlLocationId: string;
+  /** Present when the grant was loaded from the durable table. */
+  clientAccountId?: string;
+  /**
+   * Omitted on the E1 fixture grant. A revoked, expired, stale, or absent
+   * status fails closed even when granted is true.
+   */
+  status?: CampaignGrantReadStatus;
 };
+
+export type WorkflowTriState = "eligible" | "ineligible" | "unknown";
+export type EnrollmentTriState = "supported" | "unsupported" | "unknown";
+export type LegacyAutomationTriState = "safe" | "conflict" | "unknown";
+export type TagTriggerCollision = "SAFE" | "CONFLICT" | "UNKNOWN";
 
 export type WorkflowValidationEvidence = {
   checked: boolean;
@@ -245,6 +273,15 @@ export type CampaignGhlPlanningFacts = {
   priorReceipts: readonly CampaignGhlPriorReceipt[];
   existingContactTags: readonly string[];
   contactId: string | null;
+  /**
+   * Server discovery tri-states. When set, a caller boolean cannot upgrade
+   * unknown or ineligible evidence to eligible.
+   */
+  workflowEligibility?: WorkflowTriState;
+  directApiEnrollment?: EnrollmentTriState;
+  legacyAutomation?: LegacyAutomationTriState;
+  /** Omitted keeps the E1 tag proposal. CONFLICT and UNKNOWN withhold tags. */
+  tagTriggerCollision?: TagTriggerCollision;
 };
 
 export type CampaignGhlOptOut = {
@@ -262,6 +299,9 @@ export type CampaignGhlTagPlan = {
   /** This phase never posts. A proposal is not a write. */
   postAuthorized: false;
   applied: false;
+  posting: "not_proposed" | "proposed_unsent" | "withheld_conflict" | "withheld_unknown";
+  /** Direct API enrollment does not prove that a tag post is trigger-safe. */
+  directApiEnrollmentEliminatesCollisions: false;
   automationEntryTags: readonly [];
   withheldAutomationEntryTags: readonly [
     typeof AUTOMATION_ENTRY_EVENT_TAG,
@@ -465,7 +505,11 @@ function planOptedIn(facts: CampaignGhlPlanningFacts): CampaignGhlDeliveryPlan {
   if (snapshot.executionAuthorized !== false || SHADOW_EXECUTION_AUTHORIZED !== false) {
     reasons.push("shadow_row_is_not_a_delivery_grant");
   }
-  if (!facts.grant) reasons.push("execution_grant_missing");
+  const grantStatus = facts.grant?.status;
+  if (!facts.grant || grantStatus === "absent") reasons.push("execution_grant_missing");
+  else if (grantStatus === "revoked") reasons.push("execution_grant_revoked");
+  else if (grantStatus === "expired") reasons.push("execution_grant_expired");
+  else if (grantStatus === "stale") reasons.push("execution_grant_stale");
   else if (!grantMatches(facts, workflowId, locationId)) reasons.push("execution_grant_mismatch");
   if (!isPersistedLiveDestination(facts.clientDestination, locationId)) {
     reasons.push("client_delivery_not_permitted");
@@ -485,9 +529,17 @@ function planOptedIn(facts: CampaignGhlPlanningFacts): CampaignGhlDeliveryPlan {
     if (validation.legacyAutomationWouldDoubleSend) reasons.push("legacy_automation_conflict");
     if (!validation.destinationAuthorizedForCampaign) reasons.push("destination_not_authorized_for_campaign");
   }
+  if (facts.workflowEligibility === "unknown") reasons.push("workflow_status_unknown");
+  else if (facts.workflowEligibility === "ineligible") reasons.push("workflow_missing_or_ineligible");
+  if (facts.directApiEnrollment === "unknown") reasons.push("direct_api_enrollment_unverified");
+  else if (facts.directApiEnrollment === "unsupported") reasons.push("workflow_trigger_mode_unsupported");
+  if (facts.legacyAutomation === "unknown") reasons.push("legacy_automation_unverified");
+  else if (facts.legacyAutomation === "conflict") reasons.push("legacy_automation_conflict");
   if (!workflowId) reasons.push("workflow_missing_or_ineligible");
   if (triggerMode === "tag_trigger") reasons.push("tag_trigger_cross_fire_risk");
   else if (triggerMode !== "direct_api") reasons.push("workflow_trigger_mode_unsupported");
+  const collision = facts.tagTriggerCollision ?? null;
+  if (collision === "CONFLICT" || collision === "UNKNOWN") reasons.push("tag_trigger_collision");
 
   if (facts.routing.duplicateBlocked) reasons.push("duplicate_blocked");
   if (facts.routing.complianceBlocked) reasons.push("compliance_blocked");
@@ -500,9 +552,10 @@ function planOptedIn(facts: CampaignGhlPlanningFacts): CampaignGhlDeliveryPlan {
   if (!facts.runtimeGates.ongoingGhlDeliveryEnabled) reasons.push("ongoing_delivery_gate_closed");
 
   const ordered = orderReasons(reasons);
-  const blocking = ordered.filter((code) => code !== "uncertain_outcome_hold");
+  const blocking = ordered.filter((code) => code !== "uncertain_outcome_hold" && code !== "tag_trigger_collision");
+  const visible = ordered.filter((code) => code !== "uncertain_outcome_hold");
   const identityReady = blocking.every((code) => !TAG_BLOCKERS.has(code));
-  const withReceipts: CampaignGhlReasonCode[] = [...blocking];
+  const withReceipts: CampaignGhlReasonCode[] = [...visible];
 
   const canScope =
     Boolean(snapshot.clientCampaignId?.trim()) &&
@@ -538,8 +591,15 @@ function planOptedIn(facts: CampaignGhlPlanningFacts): CampaignGhlDeliveryPlan {
   }
 
   const selected = disposition === "simulated_ready";
+  const tagsBlocked = collision === "CONFLICT" || collision === "UNKNOWN";
   const proposal =
-    selected && identityReady && nicheTag && slugTag && !isAutomationEntryTag(nicheTag) && !isAutomationEntryTag(slugTag)
+    selected &&
+    !tagsBlocked &&
+    identityReady &&
+    nicheTag &&
+    slugTag &&
+    !isAutomationEntryTag(nicheTag) &&
+    !isAutomationEntryTag(slugTag)
       ? { nicheTag, campaignTag: slugTag }
       : null;
   return planShell({
@@ -564,7 +624,7 @@ function planOptedIn(facts: CampaignGhlPlanningFacts): CampaignGhlDeliveryPlan {
       workflowIdGhl: workflowId || null,
       workflowTriggerMode: triggerMode || null,
     },
-    tags: tagPlan(proposal, facts.existingContactTags),
+    tags: tagPlan(proposal, facts.existingContactTags, collision),
     operations,
     automationEntryBlockReason: enrollmentGate.allowed ? null : enrollmentGate.reason,
     contactId: facts.contactId,
@@ -575,7 +635,9 @@ function grantMatches(facts: CampaignGhlPlanningFacts, workflowId: string, locat
   const grant = facts.grant;
   const snapshot = facts.snapshot;
   if (!grant || grant.granted !== true || grant.grantKind !== "explicit_operator") return false;
+  if (grant.status && grant.status !== "active") return false;
   if (!workflowId || !locationId || !snapshot.clientCampaignId) return false;
+  if (grant.clientAccountId && grant.clientAccountId.trim() !== snapshot.clientAccountId) return false;
   return (
     grant.sourceLeadEventId.trim() === facts.sourceLeadEventId.trim() &&
     grant.decisionVersion === snapshot.decisionVersion &&
@@ -650,8 +712,16 @@ function isAutomationEntryTag(tag: string): boolean {
 
 function tagPlan(
   proposal: { nicheTag: string; campaignTag: string } | null,
-  preservedExistingTags: readonly string[]
+  preservedExistingTags: readonly string[],
+  collision: TagTriggerCollision | null
 ): CampaignGhlTagPlan {
+  const posting = proposal
+    ? "proposed_unsent"
+    : collision === "CONFLICT"
+      ? "withheld_conflict"
+      : collision === "UNKNOWN"
+        ? "withheld_unknown"
+        : "not_proposed";
   return {
     proposal,
     addOnly: true,
@@ -660,6 +730,8 @@ function tagPlan(
     maySelectWorkflow: false,
     postAuthorized: false,
     applied: false,
+    posting,
+    directApiEnrollmentEliminatesCollisions: false,
     automationEntryTags: [],
     withheldAutomationEntryTags: WITHHELD_AUTOMATION_ENTRY_TAGS,
     preservedExistingTags: [...preservedExistingTags],
@@ -667,7 +739,7 @@ function tagPlan(
 }
 
 function emptyTags(): CampaignGhlTagPlan {
-  return tagPlan(null, []);
+  return tagPlan(null, [], null);
 }
 
 function planShell(input: {

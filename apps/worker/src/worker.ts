@@ -7,6 +7,7 @@ import {
   EXTERNAL_WEBHOOK_DELIVERY_QUEUE,
   EXTERNAL_WEBHOOK_NOTICE_QUEUE,
   GHL_LEAD_NOTICE_QUEUE,
+  DELIVERY_HEALTH_MONITOR_QUEUE,
   CONSUMER_AGE_BIRTHDAY_SWEEP_QUEUE,
   FACETS_SUPPLY_REBUILD_QUEUE,
   FULFILLMENT_SHADOW_QUEUE,
@@ -28,6 +29,7 @@ import { processGhlAssociationDispatchJob } from "./processors/ghl-association-d
 import { processExternalWebhookDeliveryJob } from "./processors/external-webhook-delivery.processor.js";
 import { processExternalWebhookNoticeJob } from "./processors/external-webhook-notice.processor.js";
 import { processGhlLeadNoticeJob } from "./processors/ghl-lead-notice.processor.js";
+import { processDeliveryHealthMonitorJob } from "./processors/delivery-health-monitor.processor.js";
 import { logBulkImportWorkerStartupDiagnostics } from "./lib/bulk-import-worker-diagnostics.js";
 import { syncFacetsSupplyRebuildScheduleOnWorkerStart } from "./lib/facets-supply-rebuild-schedule.js";
 import { syncConsumerAgeBirthdaySweepScheduleOnWorkerStart } from "./lib/consumer-age-birthday-sweep-schedule.js";
@@ -36,6 +38,7 @@ import { syncGhlAssociationDispatchScheduleOnWorkerStart } from "./lib/ghl-assoc
 import { syncExternalWebhookDeliveryScheduleOnWorkerStart } from "./lib/external-webhook-delivery-schedule.js";
 import { syncExternalWebhookNoticeScheduleOnWorkerStart } from "./lib/external-webhook-notice-schedule.js";
 import { syncGhlLeadNoticeScheduleOnWorkerStart } from "./lib/ghl-lead-notice-schedule.js";
+import { syncDeliveryHealthMonitorScheduleOnWorkerStart } from "./lib/delivery-health-monitor-schedule.js";
 
 dotenv.config();
 
@@ -150,6 +153,15 @@ const ghlLeadNoticeWorker = new Worker(
   }
 );
 
+const deliveryHealthMonitorWorker = new Worker(
+  DELIVERY_HEALTH_MONITOR_QUEUE,
+  (job) => processDeliveryHealthMonitorJob(job),
+  {
+    connection: redis,
+    concurrency: 1,
+  }
+);
+
 const worker = metaWorker;
 
 worker.on("completed", (job) => {
@@ -237,6 +249,17 @@ externalWebhookNoticeWorker.on("failed", (job, err) => {
   });
 });
 
+deliveryHealthMonitorWorker.on("completed", (job) => {
+  logger.info("Delivery health monitor job completed", { jobId: job.id });
+});
+
+deliveryHealthMonitorWorker.on("failed", (job, err) => {
+  logger.error("Delivery health monitor job failed", {
+    jobId: job?.id,
+    error: err.message,
+  });
+});
+
 worker.on("failed", (job, err) => {
   const job_id = String(job?.id ?? "unknown");
   const request_id = `worker:${job_id}`;
@@ -306,6 +329,11 @@ void syncGhlLeadNoticeScheduleOnWorkerStart().catch((err) => {
     error: err instanceof Error ? err.message : String(err),
   });
 });
+void syncDeliveryHealthMonitorScheduleOnWorkerStart().catch((err) => {
+  logger.error("Delivery health monitor schedule sync failed", {
+    error: err instanceof Error ? err.message : String(err),
+  });
+});
 
 async function shutdown(signal: string) {
   stopRuntimeDiagnostics();
@@ -321,6 +349,7 @@ async function shutdown(signal: string) {
   await externalWebhookDeliveryWorker.close();
   await externalWebhookNoticeWorker.close();
   await ghlLeadNoticeWorker.close();
+  await deliveryHealthMonitorWorker.close();
   await flushLogger();
   process.exit(0);
 }

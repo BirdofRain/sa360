@@ -5156,6 +5156,53 @@ model ClientCampaignRegistryCommand {
   @@index([clientCampaignId, createdAt])
 }
 
+/// Read-only Google Sheets delivery-health incident.
+/// One open row per client account and failure class. The partial unique index
+/// DeliveryHealthIncident_open_client_class_key is declared in SQL because
+/// Prisma 6 does not model the filter. Do not drop it in a later diff.
+/// evidenceJson stores internal ids and machine codes only.
+/// This table is not read by routing, dispatch, or the Sheets writer.
+model DeliveryHealthIncident {
+  id                   String    @id @default(cuid())
+  clientAccountId      String
+  failureClass         String
+  /// warning | critical
+  severity             String
+  /// open | acknowledged | resolved
+  status               String    @default("open")
+  firstSeenAt          DateTime
+  lastSeenAt           DateTime
+  lastNotifiedAt       DateTime?
+  /// opened | escalated | reminder | recovered
+  lastNotificationKind String?
+  lastNotificationKey  String?
+  /// warning | critical accepted on the last notice
+  lastNotifiedSeverity String?
+  affectedCount        Int       @default(0)
+  acknowledgedAt       DateTime?
+  resolvedAt           DateTime?
+  evidenceJson         Json
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([clientAccountId, failureClass, resolvedAt], map: "DeliveryHealthIncident_client_class_idx")
+  @@index([status, lastSeenAt], map: "DeliveryHealthIncident_status_seen_idx")
+}
+
+/// Scanner heartbeat. Independent of DeliveryHealthIncident so a failed scan
+/// still has a durable record when incident writes do not run.
+model DeliveryHealthMonitorHeartbeat {
+  id                         String    @id
+  lastStartedAt              DateTime?
+  lastSucceededAt            DateTime?
+  lastFailedAt               DateTime?
+  consecutiveFailures        Int       @default(0)
+  lastError                  String?
+  lastMonitorNotifiedAt      DateTime?
+  lastMonitorNotificationKey String?
+  updatedAt                  DateTime  @updatedAt
+}
+
 /// Observational status for one frozen campaign shadow decision.
 /// MATCHED is identity agreement only. It does not arm delivery.
 enum ClientCampaignShadowStatus {

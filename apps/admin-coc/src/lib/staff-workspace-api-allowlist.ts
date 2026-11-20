@@ -30,6 +30,7 @@ const WORKSPACE_READS = [
 const SMS_WRITES: Array<{ method: string; pattern: RegExp }> = [
   { method: "POST", pattern: new RegExp(`^/admin/v1/team-workspace/clients/${CLIENT_ID}/sms-verbal-consent$`) },
   { method: "POST", pattern: new RegExp(`^/admin/v1/team-workspace/clients/${CLIENT_ID}/sms-opt-in-link$`) },
+  { method: "POST", pattern: new RegExp(`^/admin/v1/team-workspace/clients/${CLIENT_ID}/sms-ghl-program-link$`) },
 ];
 
 const MANAGER_WRITES: Array<{ method: string; pattern: RegExp }> = [

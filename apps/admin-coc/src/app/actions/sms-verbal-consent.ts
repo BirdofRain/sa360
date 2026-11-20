@@ -66,6 +66,36 @@ export async function issueSmsOptInLinkAction(input: {
   return { ok: true, status: "link_only", smsEnabled: false, consentRecorded: false, email: emailResult(saved.data.email) };
 }
 
+export async function issueGhlProgramLinkAction(input: {
+  clientAccountId: string;
+  phoneE164: string;
+  confirmationEmail: string;
+}): Promise<SmsVerbalActionResult> {
+  await requireStaffWorkspacePermission("team_workspace");
+  const id = normalizeTeamWorkspaceClientId(input.clientAccountId);
+  const phoneE164 = canonicalSmsPhone(input.phoneE164);
+  if (!id || !phoneE164) return { ok: false, error: "That mobile number is not valid." };
+  const saved = await adminRequestJson<{
+    smsEnabled?: boolean;
+    consentRecorded?: boolean;
+    consentReplaced?: boolean;
+    email?: string;
+  }>("POST", `/admin/v1/team-workspace/clients/${encodeURIComponent(id)}/sms-ghl-program-link`, {
+    phoneE164,
+    confirmationEmail: input.confirmationEmail.trim() || undefined,
+  });
+  if (!saved.ok || saved.data.consentReplaced === true || saved.data.consentRecorded !== true) {
+    return { ok: false, error: "The new-program link was not issued. Earlier consent was not replaced." };
+  }
+  return {
+    ok: true,
+    status: "program_link",
+    smsEnabled: saved.data.smsEnabled === true,
+    consentRecorded: true,
+    email: emailResult(saved.data.email),
+  };
+}
+
 export async function readSmsConsentStatusAction(input: { clientAccountId: string }): Promise<SmsConsentStatusResult> {
   await requireStaffWorkspacePermission("team_workspace");
   const id = normalizeTeamWorkspaceClientId(input.clientAccountId);

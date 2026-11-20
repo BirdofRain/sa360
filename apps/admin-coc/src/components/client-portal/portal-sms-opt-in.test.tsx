@@ -26,6 +26,30 @@ test("the SMS opt-in form starts unchecked and does not invent legal links", () 
   cleanup();
 });
 
+test("an earlier webhook consent needs its own unchecked affirmation", () => {
+  render(
+    <PortalSmsOptInForm
+      preview={{
+        ...PORTAL_SMS_OPT_IN_PREVIEW,
+        recordable: true,
+        smsEnabled: true,
+        consentRecorded: true,
+        priorProgram: "external-webhook-sms-v2",
+        privacyPolicyUrl: "https://policies.lifeagentlaunch.invalid/privacy",
+        termsUrl: "https://policies.lifeagentlaunch.invalid/terms",
+      }}
+    />
+  );
+  const box = screen.getByRole("checkbox") as HTMLInputElement;
+  const button = screen.getByRole("button", { name: "Continue" }) as HTMLButtonElement;
+  assert.equal(box.checked, false);
+  assert.equal(button.disabled, true);
+  assert.match(document.body.textContent ?? "", /earlier delivery-webhook consent stays on file/);
+  fireEvent.click(box);
+  assert.equal(button.disabled, false);
+  cleanup();
+});
+
 test("a published disclosure can be affirmed and still does not claim consent", () => {
   render(
     <PortalSmsOptInForm

@@ -6,6 +6,7 @@ export type SmsEmailResult = "sent" | "email_not_configured" | "origin_unconfigu
 
 export type SmsVerbalActionResult =
   | { ok: true; status: "pending_confirmation" | "link_only"; smsEnabled: false; consentRecorded: false; email: SmsEmailResult }
+  | { ok: true; status: "program_link"; smsEnabled: boolean; consentRecorded: true; email: SmsEmailResult }
   | { ok: false; error: string };
 
 export type SmsConsentStatusResult =
@@ -34,6 +35,11 @@ export type SmsVerbalActions = {
     phoneE164: string;
     confirmationEmail: string;
   }) => Promise<SmsVerbalActionResult>;
+  issueGhlProgramLink: (input: {
+    clientAccountId: string;
+    phoneE164: string;
+    confirmationEmail: string;
+  }) => Promise<SmsVerbalActionResult>;
 };
 
 export function SmsVerbalConsentPanel({
@@ -47,6 +53,7 @@ export function SmsVerbalConsentPanel({
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [email, setEmail] = useState<SmsEmailResult | null>(null);
   const [draft, setDraft] = useState<{ phoneE164: string; confirmationEmail: string } | null>(null);
+  const [retryKind, setRetryKind] = useState<"link" | "program">("link");
   const [pending, setPending] = useState(false);
 
   async function onVerbal(formData: FormData) {
@@ -70,6 +77,7 @@ export function SmsVerbalConsentPanel({
     const phoneE164 = String(formData.get("phoneE164") ?? "");
     const confirmationEmail = String(formData.get("confirmationEmail") ?? "");
     setDraft({ phoneE164, confirmationEmail });
+    setRetryKind("link");
     setPending(true);
     const result = await actions.issueLink({
       clientAccountId,
@@ -79,6 +87,26 @@ export function SmsVerbalConsentPanel({
     setPending(false);
     setEmail(result.ok ? result.email : null);
     setMessage(result.ok ? emailFeedback("A confirmation link is on file. It does not record verbal consent and texts stay off.", result.email) : result.error);
+  }
+
+  async function onGhlProgram(formData: FormData) {
+    const phoneE164 = String(formData.get("phoneE164") ?? "");
+    const confirmationEmail = String(formData.get("confirmationEmail") ?? "");
+    setDraft({ phoneE164, confirmationEmail });
+    setRetryKind("program");
+    setPending(true);
+    const result = await actions.issueGhlProgramLink({
+      clientAccountId,
+      phoneE164,
+      confirmationEmail,
+    });
+    setPending(false);
+    setEmail(result.ok ? result.email : null);
+    setMessage(
+      result.ok
+        ? emailFeedback("A new-program link is on file. Earlier consent was not replaced and no text was sent.", result.email)
+        : result.error
+    );
   }
 
   async function onStatus() {
@@ -92,7 +120,10 @@ export function SmsVerbalConsentPanel({
   async function onRetry() {
     if (!draft || pending) return;
     setPending(true);
-    const result = await actions.issueLink({ clientAccountId, ...draft });
+    const result = await (retryKind === "program" ? actions.issueGhlProgramLink : actions.issueLink)({
+      clientAccountId,
+      ...draft,
+    });
     setPending(false);
     setEmail(result.ok ? result.email : null);
     setMessage(result.ok ? emailFeedback("The confirmation email was tried again. Texts stay off.", result.email) : result.error);
@@ -117,6 +148,9 @@ export function SmsVerbalConsentPanel({
           </button>
           <button className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 disabled:bg-slate-100" type="submit" formAction={onLink} disabled={pending}>
             Send confirmation link only
+          </button>
+          <button className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 disabled:bg-slate-100" type="submit" formAction={onGhlProgram} disabled={pending}>
+            Send GoHighLevel consent link
           </button>
         </div>
       </form>

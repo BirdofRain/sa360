@@ -4423,6 +4423,31 @@ model ClientDeliveryNotificationPreference {
   revision                  Int                               @default(1)
   createdAt                 DateTime                          @default(now())
   updatedAt                 DateTime                          @updatedAt
+  smsConsentHistory         ClientDeliverySmsConsentHistory[]
+}
+
+/// Archived SMS consent. Written only when a recipient affirmatively replaces
+/// external-webhook-sms-v1 or external-webhook-sms-v2 with ghl-lead-sms-v1.
+/// A migration does not insert these rows, and STOP is not cleared here.
+model ClientDeliverySmsConsentHistory {
+  id                         String                              @id @default(cuid())
+  clientAccountId            String
+  preference                 ClientDeliveryNotificationPreference @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Restrict)
+  smsConsentVersion          String
+  smsConsentText             String
+  smsConsentRecordedAt       DateTime
+  smsConsentCollection       String?
+  smsVerbalAffirmation       String?
+  smsVerbalDisclosureVersion String?
+  smsVerbalRecordedAt        DateTime?
+  smsVerbalOperatorId        String?
+  smsVerbalEvidence          String?
+  recipientPhoneE164         String
+  archivedAt                 DateTime                            @default(now())
+  supersedingVersion         String
+  createdAt                  DateTime                            @default(now())
+
+  @@index([clientAccountId, archivedAt])
 }
 
 /// One external-webhook notice per accepted attempt, channel, and recipient.

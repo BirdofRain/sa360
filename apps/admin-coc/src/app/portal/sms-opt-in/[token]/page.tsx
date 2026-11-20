@@ -35,7 +35,8 @@ export default async function PublicSmsOptInPage({ params }: { params: Promise<{
       return { ok: false, outcome: "unknown", message: SMS_OPT_IN_UNKNOWN_MESSAGE };
     }
     try {
-      const response = await fetch(`${base}/public/sms-opt-in/${encodeURIComponent(token)}`, {
+      const path = preview.priorProgram ? "ghl-program" : "";
+    const response = await fetch(`${base}/public/sms-opt-in/${encodeURIComponent(token)}${path ? `/${path}` : ""}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ affirmDisclosure: true }),
@@ -129,6 +130,7 @@ async function loadPublicOptIn(token: string): Promise<PortalSmsOptInPreview> {
       handsetOwnershipProven?: boolean;
       consentRecorded?: boolean;
       smsEnabled?: boolean;
+      priorProgram?: string | null;
     };
     const disclosure = body.disclosure;
     if (!disclosure?.businessName || !disclosure.frequency || !disclosure.rates || !disclosure.stop || !disclosure.help) {
@@ -145,6 +147,7 @@ async function loadPublicOptIn(token: string): Promise<PortalSmsOptInPreview> {
       phoneMasked: body.phoneMasked ?? null,
       phoneSource: body.phoneSource === "staff_supplied" ? "staff_supplied" : "not_recorded",
       handsetProven: body.handsetOwnershipProven === true,
+      priorProgram: body.priorProgram === "external-webhook-sms-v1" || body.priorProgram === "external-webhook-sms-v2" ? body.priorProgram : null,
       portalLoginRequired: false,
     };
   } catch {

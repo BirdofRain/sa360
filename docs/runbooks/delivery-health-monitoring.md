@@ -30,6 +30,10 @@ A later canonical receipt for the same lead clears an older failed, uncertain, o
 
 An open `missing_intake` incident is reloaded by its routing decision id and webhook id after those rows age out of the lookback. The incident stays open until a later scan sees the source event, or the client is paused or campaign dispatch is disabled. Leaving the lookback window is not recovery.
 
+Stored evidence keeps every subject id for that incident. The email lists at most 10. `affectedCount` is the full count. A lead that is still failing is reloaded after the lookback even when more than 20 leads share the incident. Error text stored on the heartbeat is scrubbed of email addresses and phone numbers before it is saved or mailed.
+
+The runtime role `sa360_app` receives `SELECT`, `INSERT`, and `UPDATE` on `DeliveryHealthIncident` and `DeliveryHealthMonitorHeartbeat` from `20261120190000_delivery_health_sa360_app_grants`. That migration does not grant `DELETE`, does not grant to `PUBLIC`, and does not create the role. On a non-loopback database the migration fails if `sa360_app` is absent. Loopback databases skip the grant until the role exists.
+
 ## What it keeps quiet
 
 - Expected holds: `awaiting_setup`, `needs_explicit_schedule`, `duplicate_held`, `review_held`, `assessment_held`, `assessment_failed`, and duplicate person-gate codes.
@@ -50,7 +54,7 @@ Mail uses `sendTransactionalEmail` (Resend). Recipients are `SA360_DELIVERY_HEAL
 - Recovery uses `dh:{incidentId}:recovered` after a notice was sent and the condition clears.
 - An acknowledged incident (`acknowledgedAt` set) skips reminders. Escalation and recovery still send. Phase 1 has no acknowledge route; set the column only in a reviewed database session.
 
-`lastNotifiedAt` is set only after Resend accepts the message. A failed send keeps the same idempotency key for the next scan.
+`lastNotificationKey`, `lastNotificationKind`, `lastNotifiedSeverity`, and `lastNotifiedAt` change together, and only after Resend accepts that message. A failed opening, escalation, or recovery leaves the last accepted notice in place and retries the same idempotency key. A failed recovery does not resolve the incident. A dry run with notifications off still resolves a cleared condition without sending mail.
 
 The scanner heartbeat is `DeliveryHealthMonitorHeartbeat` id `delivery_health_sheets`. A thrown scan still updates `lastFailedAt` and `consecutiveFailures` when the incident write did not run. The monitor notice is separate from delivery incidents. Keys are `dh-monitor:scanner_failed:{bucket}`, `dh-monitor:heartbeat_stale:{bucket}`, and `dh-monitor:recovered:{failure timestamp}`.
 

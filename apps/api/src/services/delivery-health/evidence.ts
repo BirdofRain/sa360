@@ -45,6 +45,10 @@ export function scrubDeliveryHealthText(value: string, max = 4000): string {
   const limit = Number.isFinite(max) && max > 0 ? Math.trunc(max) : 4000;
   return value
     .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[redacted]")
+    .replace(/\+\d{10,15}\b/g, "[redacted]")
+    .replace(/\(\d{3}\)\s*\d{3}[-.\s]?\d{4}\b/g, "[redacted]")
+    .replace(/\b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b/g, "[redacted]")
+    .replace(/\b\d{10}\b/g, "[redacted]")
     .replace(/\bBearer\s+\S+/gi, "Bearer [redacted]")
     .replace(/\b(token|secret|api[_-]?key)\b\s*[:=]?\s*\S+/gi, "[redacted]")
     .slice(0, limit);
@@ -54,10 +58,11 @@ export function deliveryHealthEvidenceDocument(
   subjects: readonly DeliveryHealthSubject[],
   affectedCount: number
 ): { affectedCount: number; subjects: DeliveryHealthSubject[] } {
+  // Every subject id is stored. The email lists a sample. Dropping ids here
+  // would let a lead outside the lookback recover without being rechecked.
   const subjectsOut = subjects
     .map(sanitizeDeliveryHealthSubject)
-    .sort((a, b) => subjectSortKey(a).localeCompare(subjectSortKey(b)))
-    .slice(0, 20);
+    .sort((a, b) => subjectSortKey(a).localeCompare(subjectSortKey(b)));
   return { affectedCount, subjects: subjectsOut };
 }
 

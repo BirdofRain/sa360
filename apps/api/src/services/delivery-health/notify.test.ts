@@ -159,9 +159,16 @@ test("alert text keeps ids and drops contact values and secrets", () => {
   assert.match(email.text, /lead_1/);
   assert.match(email.text, /does not call Google/);
   assert.equal(email.text.includes("lead@example.com"), false);
-  const poisoned = scrubDeliveryHealthText("Bearer secret-token lead@example.com 555-010-0199");
+  const poisoned = scrubDeliveryHealthText(
+    "Bearer secret-token lead@example.com 555-010-0199 +15551212000 (555) 010-0199 5550100199 dh:inc_1:opened:warning 20261120140000"
+  );
   assert.equal(poisoned.includes("secret-token"), false);
   assert.equal(poisoned.includes("lead@example.com"), false);
+  assert.equal(poisoned.includes("555-010-0199"), false);
+  assert.equal(poisoned.includes("+15551212000"), false);
+  assert.equal(poisoned.includes("5550100199"), false);
+  assert.match(poisoned, /dh:inc_1:opened:warning/);
+  assert.match(poisoned, /20261120140000/);
   const monitor = composeMonitorHeartbeatEmail({
     reason: "scanner_failed",
     consecutiveFailures: 1,

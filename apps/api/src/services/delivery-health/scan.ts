@@ -525,10 +525,6 @@ async function deliverNotices(
   let suppressedResolved = 0;
   let skipped: string | null = null;
   for (const notice of notices) {
-    await db.deliveryHealthIncident.update({
-      where: { id: notice.incidentId },
-      data: { lastNotificationKey: notice.plan.key, lastNotificationKind: notice.plan.kind },
-    });
     const email = composeDeliveryHealthEmail({
       kind: notice.plan.kind,
       severity: notice.severity,

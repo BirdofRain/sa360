@@ -497,7 +497,7 @@ describe("delivery health scan", { concurrency: 1 }, () => {
       now: SCAN_NOW,
       send: mailer(sent),
       loadSnapshot: async () => {
-        throw new Error(`Bearer secret-token ${PII_EMAIL}`);
+        throw new Error(`Bearer secret-token ${PII_EMAIL} ${PII_PHONE} +15550100199`);
       },
     });
     assert.equal(result.ok, false);
@@ -506,9 +506,13 @@ describe("delivery health scan", { concurrency: 1 }, () => {
     assert.equal(beat.consecutiveFailures >= 1, true);
     assert.equal(beat.lastError?.includes("secret-token"), false);
     assert.equal(beat.lastError?.includes(PII_EMAIL), false);
+    assert.equal(beat.lastError?.includes(PII_PHONE), false);
+    assert.equal(beat.lastError?.includes("+15550100199"), false);
     assert.equal(sent.length, 1);
     assertNoPii(sent[0]?.text ?? "");
     assert.equal(sent[0]?.text.includes("secret-token"), false);
+    assert.equal(sent[0]?.text.includes(PII_PHONE), false);
+    assert.equal(sent[0]?.text.includes("+15550100199"), false);
     const after = await db.sourceLeadEvent.findUniqueOrThrow({ where: { id: lead.id } });
     assert.equal(after.updatedAt.getTime(), before.getTime());
     const incidents = await db.deliveryHealthIncident.count({ where: { clientAccountId: world.clientAccountId } });
@@ -689,5 +693,208 @@ describe("delivery health scan", { concurrency: 1 }, () => {
     });
     assert.match(beat.lastMonitorNotificationKey ?? "", /dh-monitor:recovered:/);
     assert.equal(beat.lastSucceededAt?.toISOString(), secondAt.toISOString());
+  });
+
+  test("accepted notice state changes only after the sender accepts", async () => {
+    await resetHeartbeat();
+    const world = await createClient("notice-retry");
+    const lead = await createLead(world.clientAccountId, 6);
+    const { job } = await createJob({
+      world,
+      leadId: lead.id,
+      status: "retryable",
+      lastError: "network_error",
+      rowsWritten: 0,
+      rowStatus: "pending",
+      finishedAt: null,
+      intentStatus: "retryable",
+    });
+    const sent: Sent[] = [];
+    let accept = false;
+    const send = async (input: SendTransactionalEmailInput) => {
+      if (!accept) return { ok: false as const, error: "send_failed" };
+      sent.push({ subject: input.subject, text: input.text, idempotencyKey: input.idempotencyKey });
+      return { ok: true as const, id: "mail_test" };
+    };
+    const env = envFor(world.clientAccountId, true);
+    const incident = () =>
+      db.deliveryHealthIncident.findFirstOrThrow({
+        where: { clientAccountId: world.clientAccountId, failureClass: "sheets_receipt_delayed" },
+      });
+    const incidentMails = () => sent.filter((message) => message.idempotencyKey?.startsWith("dh:"));
+
+    await runDeliveryHealthMonitor({ db, env, now: SCAN_NOW, send });
+    assert.equal(incidentMails().length, 0);
+    let row = await incident();
+    assert.equal(row.lastNotifiedAt, null);
+    assert.equal(row.lastNotificationKey, null);
+    assert.equal(row.lastNotificationKind, null);
+    assert.equal(row.lastNotifiedSeverity, null);
+    assert.equal(row.resolvedAt, null);
+
+    accept = true;
+    await runDeliveryHealthMonitor({ db, env, now: SCAN_NOW, send });
+    assert.equal(incidentMails().length, 1);
+    const openedKey = incidentMails()[0]?.idempotencyKey ?? "";
+    assert.match(openedKey, /:opened:warning$/);
+    row = await incident();
+    assert.equal(row.lastNotificationKey, openedKey);
+    assert.equal(row.lastNotificationKind, "opened");
+    assert.equal(row.lastNotifiedSeverity, "warning");
+    const acceptedAt = row.lastNotifiedAt;
+    assert.ok(acceptedAt);
+
+    accept = false;
+    const later = new Date(SCAN_NOW.getTime() + 10 * 60 * 1000);
+    const escalatedFail = await runDeliveryHealthMonitor({ db, env, now: later, send });
+    assert.equal(escalatedFail.notified, 0);
+    assert.equal(incidentMails().length, 1);
+    row = await incident();
+    assert.equal(row.severity, "critical");
+    assert.equal(row.lastNotificationKey, openedKey);
+    assert.equal(row.lastNotificationKind, "opened");
+    assert.equal(row.lastNotifiedSeverity, "warning");
+    assert.equal(row.lastNotifiedAt?.toISOString(), acceptedAt?.toISOString());
+    assert.equal(row.resolvedAt, null);
+
+    accept = true;
+    await runDeliveryHealthMonitor({ db, env, now: later, send });
+    await runDeliveryHealthMonitor({ db, env, now: later, send });
+    const escalations = incidentMails().filter((message) => message.idempotencyKey?.includes(":escalated:critical"));
+    assert.equal(escalations.length, 1);
+    const escalatedKey = escalations[0]?.idempotencyKey ?? "";
+    row = await incident();
+    assert.equal(row.lastNotificationKey, escalatedKey);
+    assert.equal(row.lastNotificationKind, "escalated");
+    assert.equal(row.lastNotifiedSeverity, "critical");
+    const escalatedAt = row.lastNotifiedAt;
+
+    await db.companySheetsDeliveryRow.updateMany({ where: { jobId: job.id }, data: { status: "written" } });
+    await db.companySheetsDeliveryJob.update({
+      where: { id: job.id },
+      data: { status: "succeeded", rowsWritten: 1, finishedAt: minutesAgo(1), lastError: null, uncertainReason: null },
+    });
+    await db.companySheetsDispatchIntent.updateMany({
+      where: { jobId: job.id },
+      data: { status: "completed", lastError: null },
+    });
+    accept = false;
+    const recoveryFailed = await runDeliveryHealthMonitor({ db, env, now: later, send });
+    assert.equal(recoveryFailed.resolved, 0);
+    assert.equal(incidentMails().filter((message) => message.idempotencyKey?.includes(":recovered")).length, 0);
+    row = await incident();
+    assert.equal(row.resolvedAt, null);
+    assert.equal(row.lastNotificationKey, escalatedKey);
+    assert.equal(row.lastNotificationKind, "escalated");
+    assert.equal(row.lastNotifiedAt?.toISOString(), escalatedAt?.toISOString());
+
+    accept = true;
+    const recovered = await runDeliveryHealthMonitor({ db, env, now: later, send });
+    assert.equal(recovered.resolved, 1);
+    const recoveries = incidentMails().filter((message) => message.idempotencyKey?.includes(":recovered"));
+    assert.equal(recoveries.length, 1);
+    await runDeliveryHealthMonitor({ db, env, now: later, send });
+    assert.equal(incidentMails().filter((message) => message.idempotencyKey?.includes(":recovered")).length, 1);
+    const closed = await incident();
+    assert.equal(closed.resolvedAt?.toISOString(), later.toISOString());
+    assert.equal(closed.lastNotificationKey, recoveries[0]?.idempotencyKey);
+    assert.equal(closed.lastNotificationKind, "recovered");
+    assertNoPii(incidentMails().map((message) => message.text).join("\n"));
+  });
+
+  test("a database failure after sender acceptance retries the same idempotency key", async () => {
+    await resetHeartbeat();
+    const world = await createClient("notice-db");
+    const lead = await createLead(world.clientAccountId, 6);
+    await createJob({
+      world,
+      leadId: lead.id,
+      status: "retryable",
+      lastError: "network_error",
+      rowsWritten: 0,
+      rowStatus: "pending",
+      finishedAt: null,
+      intentStatus: "retryable",
+    });
+    const sent: Sent[] = [];
+    const send = async (input: SendTransactionalEmailInput) => {
+      sent.push({ subject: input.subject, text: input.text, idempotencyKey: input.idempotencyKey });
+      return { ok: true as const, id: "mail_test" };
+    };
+    const incidentMails = () => sent.filter((message) => message.idempotencyKey?.startsWith("dh:"));
+    const originalUpdate = db.deliveryHealthIncident.update.bind(db.deliveryHealthIncident);
+    let failAcceptedWrite = true;
+    db.deliveryHealthIncident.update = (async (args: Parameters<typeof originalUpdate>[0]) => {
+      const data = args.data as { lastNotifiedAt?: Date | null };
+      if (failAcceptedWrite && data?.lastNotifiedAt) throw new Error("accepted_notice_write_failed");
+      return originalUpdate(args);
+    }) as typeof db.deliveryHealthIncident.update;
+    try {
+      const env = envFor(world.clientAccountId, true);
+      const first = await runDeliveryHealthMonitor({ db, env, now: SCAN_NOW, send });
+      assert.equal(first.ok, false);
+      assert.equal(incidentMails().length, 1);
+      const key = incidentMails()[0]?.idempotencyKey ?? "";
+      assert.match(key, /:opened:warning$/);
+      const pending = await db.deliveryHealthIncident.findFirstOrThrow({
+        where: { clientAccountId: world.clientAccountId, failureClass: "sheets_receipt_delayed" },
+      });
+      assert.equal(pending.lastNotifiedAt, null);
+      assert.equal(pending.lastNotificationKey, null);
+      failAcceptedWrite = false;
+      const second = await runDeliveryHealthMonitor({ db, env, now: SCAN_NOW, send });
+      assert.equal(second.ok, true);
+      assert.equal(second.notified, 1);
+      assert.equal(incidentMails().length, 2);
+      assert.equal(incidentMails()[1]?.idempotencyKey, key);
+      const stored = await db.deliveryHealthIncident.findFirstOrThrow({
+        where: { clientAccountId: world.clientAccountId, failureClass: "sheets_receipt_delayed" },
+      });
+      assert.equal(stored.lastNotificationKey, key);
+      assert.equal(stored.lastNotificationKind, "opened");
+      assert.ok(stored.lastNotifiedAt);
+      const third = await runDeliveryHealthMonitor({ db, env, now: SCAN_NOW, send });
+      assert.equal(third.notified, 0);
+      assert.equal(incidentMails().length, 2);
+    } finally {
+      db.deliveryHealthIncident.update = originalUpdate;
+    }
+  });
+
+  test("a lead outside the stored evidence sample cannot age out into a false recovery", async () => {
+    await resetHeartbeat();
+    const world = await createClient("evidence-cap");
+    const leads = [];
+    for (let index = 0; index < 21; index += 1) {
+      leads.push(await createLead(world.clientAccountId, 10));
+    }
+    const env = envFor(world.clientAccountId, false);
+    const opened = await runDeliveryHealthMonitor({ db, env, now: SCAN_NOW, send: async () => ({ ok: true, id: "unused" }) });
+    assert.deepEqual(opened.failureClasses, ["missing_dispatch"]);
+    const row = await db.deliveryHealthIncident.findFirstOrThrow({
+      where: { clientAccountId: world.clientAccountId, failureClass: "missing_dispatch", resolvedAt: null },
+    });
+    const evidence = row.evidenceJson as { affectedCount?: number; subjects?: Array<{ sourceLeadEventId?: string | null }> };
+    assert.equal(evidence.affectedCount, 21);
+    assert.equal(evidence.subjects?.length, 21);
+    const kept = leads[0];
+    assert.ok(kept);
+    const aged = new Date(SCAN_NOW.getTime() - 72 * 60 * 60 * 1000);
+    for (const leadRow of leads) {
+      await db.sourceLeadEvent.update({
+        where: { id: leadRow.id },
+        data: { receivedAt: aged, routedAt: aged },
+      });
+      if (leadRow.id === kept.id) continue;
+      await createJob({ world, leadId: leadRow.id });
+    }
+    const again = await runDeliveryHealthMonitor({ db, env, now: SCAN_NOW, send: async () => ({ ok: true, id: "unused" }) });
+    assert.deepEqual(again.failureClasses, ["missing_dispatch"]);
+    assert.equal(again.resolved, 0);
+    const stillOpen = await db.deliveryHealthIncident.findFirstOrThrow({
+      where: { clientAccountId: world.clientAccountId, failureClass: "missing_dispatch", resolvedAt: null },
+    });
+    assert.equal(stillOpen.affectedCount, 1);
+    assert.equal(JSON.stringify(stillOpen.evidenceJson).includes(PII_EMAIL), false);
   });
 });

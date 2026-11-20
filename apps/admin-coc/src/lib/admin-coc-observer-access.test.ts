@@ -265,4 +265,11 @@ test("admin API key allowlist is read-only and excludes secrets", () => {
     false
   );
   assert.equal(isObserverDocumentPath("/clients/alex_gross/source-campaign-requests"), false);
+  assert.equal(isObserverAdminApiGetAllowed("/admin/v1/clients/alex_gross/campaigns"), false);
+  assert.equal(
+    isObserverAdminApiGetAllowed("/admin/v1/clients/alex_gross/campaigns/c123456789012345678901234/source-bindings"),
+    false
+  );
+  assert.equal(isObserverBffReadAllowed("GET", "/api/clients/alex_gross/campaigns"), false);
+  assert.equal(isObserverBffReadAllowed("POST", "/api/clients/alex_gross/campaigns"), false);
 });

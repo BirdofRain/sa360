@@ -52,6 +52,13 @@ test("workspace reads stay on the client and configuration-request list", () => 
   assert.equal(staffWorkspaceAdminApiAllowed(MANAGER, "POST", `/admin/v1/clients/${CLIENT}/ghl-config`), false);
   assert.equal(staffWorkspaceAdminApiAllowed(OPERATIONS, "POST", `/admin/v1/clients/${CLIENT}/ghl-config`), false);
   assert.equal(staffWorkspaceAdminApiAllowed([], "GET", "/admin/v1/clients"), false);
+  const campaign = "c123456789012345678901234";
+  assert.equal(staffWorkspaceAdminApiAllowed(WORKSPACE, "GET", `/admin/v1/clients/${CLIENT}/campaigns`), true);
+  assert.equal(staffWorkspaceAdminApiAllowed(WORKSPACE, "GET", `/admin/v1/clients/${CLIENT}/campaigns/${campaign}`), true);
+  assert.equal(staffWorkspaceAdminApiAllowed(OPERATIONS, "GET", `/admin/v1/clients/${CLIENT}/campaigns`), true);
+  assert.equal(staffWorkspaceAdminApiAllowed([], "GET", `/admin/v1/clients/${CLIENT}/campaigns`), false);
+  assert.equal(staffWorkspaceAdminApiAllowed(WORKSPACE, "GET", `/admin/v1/clients/${CLIENT}/campaign-inventory`), false);
+  assert.equal(staffWorkspaceAdminApiAllowed(WORKSPACE, "GET", `/admin/v1/clients/${CLIENT}/campaigns/source:facebook:1`), false);
 });
 
 test("manager writes are the request paths and operations cannot use them", () => {
@@ -83,6 +90,25 @@ test("manager writes are the request paths and operations cannot use them", () =
   assert.equal(staffWorkspaceAdminApiAllowed([], "GET", `/admin/v1/team-workspace/clients/${CLIENT}/sms-consent-status`), false);
   assert.equal(staffWorkspaceAdminApiAllowed(OPERATIONS, "POST", `/admin/v1/team-workspace/clients/${CLIENT}/sms-verbal-consent`), true);
   assert.equal(staffWorkspaceAdminApiAllowed([], "POST", `/admin/v1/team-workspace/clients/${CLIENT}/sms-verbal-consent`), false);
+  const campaign = "c123456789012345678901234";
+  assert.equal(staffWorkspaceAdminApiAllowed(MANAGER, "POST", `/admin/v1/clients/${CLIENT}/campaigns`), true);
+  assert.equal(staffWorkspaceAdminApiAllowed(MANAGER, "POST", `/admin/v1/clients/${CLIENT}/campaigns/${campaign}`), true);
+  assert.equal(
+    staffWorkspaceAdminApiAllowed(MANAGER, "POST", `/admin/v1/clients/${CLIENT}/campaigns/${campaign}/source-bindings`),
+    true
+  );
+  assert.equal(
+    staffWorkspaceAdminApiAllowed(MANAGER, "POST", `/admin/v1/clients/${CLIENT}/campaigns/${campaign}/destination-selection`),
+    true
+  );
+  assert.equal(staffWorkspaceAdminApiAllowed(WORKSPACE, "POST", `/admin/v1/clients/${CLIENT}/campaigns`), false);
+  assert.equal(staffWorkspaceAdminApiAllowed(OPERATIONS, "POST", `/admin/v1/clients/${CLIENT}/campaigns/${campaign}`), false);
+  assert.equal(
+    staffWorkspaceAdminApiAllowed(OPERATIONS, "POST", `/admin/v1/clients/${CLIENT}/campaigns/${campaign}/source-bindings`),
+    false
+  );
+  assert.equal(staffWorkspaceAdminApiAllowed(MANAGER, "PATCH", `/admin/v1/clients/${CLIENT}/campaigns/${campaign}`), false);
+  assert.equal(staffWorkspaceAdminApiAllowed(MANAGER, "DELETE", `/admin/v1/clients/${CLIENT}/campaigns/${campaign}`), false);
 });
 
 test("delivery, correction, diagnostics, and path tricks stay closed", () => {

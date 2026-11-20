@@ -5,6 +5,7 @@ import { signStaffAssertion, STAFF_ASSERTION_HEADER, StaffAssertionError } from 
 import type { AdminCocAccess } from "../admin-coc-session-guard.ts";
 
 const CLIENT_ID = "[A-Za-z0-9][A-Za-z0-9_-]{0,127}";
+const CAMPAIGN_ID = "c[a-z0-9]{24}";
 
 const ONBOARDING_WRITES: Array<{ method: string; pattern: RegExp }> = [
   { method: "PATCH", pattern: new RegExp(`^/admin/v1/clients/${CLIENT_ID}/setup$`) },
@@ -14,6 +15,10 @@ const ONBOARDING_WRITES: Array<{ method: string; pattern: RegExp }> = [
   { method: "POST", pattern: new RegExp(`^/admin/v1/team-workspace/clients/${CLIENT_ID}/sms-verbal-consent$`) },
   { method: "POST", pattern: new RegExp(`^/admin/v1/team-workspace/clients/${CLIENT_ID}/sms-opt-in-link$`) },
   { method: "GET", pattern: new RegExp(`^/admin/v1/team-workspace/clients/${CLIENT_ID}/sms-consent-status$`) },
+  { method: "POST", pattern: new RegExp(`^/admin/v1/clients/${CLIENT_ID}/campaigns$`) },
+  { method: "POST", pattern: new RegExp(`^/admin/v1/clients/${CLIENT_ID}/campaigns/${CAMPAIGN_ID}$`) },
+  { method: "POST", pattern: new RegExp(`^/admin/v1/clients/${CLIENT_ID}/campaigns/${CAMPAIGN_ID}/source-bindings$`) },
+  { method: "POST", pattern: new RegExp(`^/admin/v1/clients/${CLIENT_ID}/campaigns/${CAMPAIGN_ID}/destination-selection$`) },
 ];
 
 export function onboardingWriteAttributesStaff(method: string, path: string): boolean {

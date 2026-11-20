@@ -4,6 +4,7 @@ import { useCallback, useState, useTransition } from "react";
 import Link from "next/link";
 import {
   approveSourceLeadAction,
+  loadCampaignShadowAction,
   loadSourceLeadDetailAction,
   rejectSourceLeadAction,
   requeueMetaLeadgenFetchAction,
@@ -19,7 +20,9 @@ import type { SourceLeadListItem } from "@/lib/source-intake/types";
 import { SOURCE_LEAD_APPROVE_CONFIRMATION } from "@/lib/source-intake/types";
 import type { DeliveryRuntimeModeStatus } from "@/lib/delivery-runtime-mode/types";
 import { useAdminCocCanMutate } from "@/components/auth/admin-coc-access";
+import { CampaignShadowPanel } from "@/components/source-intake/campaign-shadow-panel";
 import { SourceLeadDeliveryResult } from "@/components/source-intake/source-lead-delivery-result";
+import type { CampaignShadowView } from "@/lib/source-intake/campaign-shadow";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -78,23 +81,34 @@ export function SourceIntakeView({
   const canMutate = useAdminCocCanMutate();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<Awaited<ReturnType<typeof loadSourceLeadDetailAction>>["detail"]>(null);
+  const [shadow, setShadow] = useState<CampaignShadowView | null>(null);
   const [confirmation, setConfirmation] = useState("");
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
+  const loadDetail = useCallback(async (id: string) => {
+    const [res, shadowRes] = await Promise.all([
+      loadSourceLeadDetailAction(id),
+      loadCampaignShadowAction(id),
+    ]);
+    setDetail(res.detail);
+    setShadow(shadowRes.view);
+    if (res.error) setActionMessage(res.error);
+    else if (shadowRes.error) setActionMessage(shadowRes.error);
+  }, []);
+
   const openDetail = useCallback((id: string) => {
     setSelectedId(id);
     setActionMessage(null);
-    startTransition(async () => {
-      const res = await loadSourceLeadDetailAction(id);
-      setDetail(res.detail);
-      if (res.error) setActionMessage(res.error);
+    startTransition(() => {
+      void loadDetail(id);
     });
-  }, []);
+  }, [loadDetail]);
 
   const closeDetail = () => {
     setSelectedId(null);
     setDetail(null);
+    setShadow(null);
     setConfirmation("");
     setActionMessage(null);
   };
@@ -106,8 +120,7 @@ export function SourceIntakeView({
       setActionMessage(res.ok ? (res.summary ?? "Approved.") : res.error ?? "Failed.");
       // Always refresh so updated status and deliveryResultJson (incl. failed
       // step details) render, even when the delivery attempt failed.
-      const refreshed = await loadSourceLeadDetailAction(selectedId);
-      setDetail(refreshed.detail);
+      await loadDetail(selectedId);
     });
   };
 
@@ -116,10 +129,7 @@ export function SourceIntakeView({
     startTransition(async () => {
       const res = await rejectSourceLeadAction(selectedId);
       setActionMessage(res.ok ? "Rejected." : res.error ?? "Failed.");
-      if (res.ok) {
-        const refreshed = await loadSourceLeadDetailAction(selectedId);
-        setDetail(refreshed.detail);
-      }
+      if (res.ok) await loadDetail(selectedId);
     });
   };
 
@@ -133,10 +143,7 @@ export function SourceIntakeView({
           ? `Requeued to ${res.status ?? "routing"} — review, then approve again.`
           : res.error ?? "Requeue failed."
       );
-      if (res.ok) {
-        const refreshed = await loadSourceLeadDetailAction(selectedId);
-        setDetail(refreshed.detail);
-      }
+      if (res.ok) await loadDetail(selectedId);
     });
   };
 
@@ -150,10 +157,7 @@ export function SourceIntakeView({
           ? `Meta Graph fetch requeued (job ${res.jobId ?? "queued"}). Refresh in a minute to see the result.`
           : res.error ?? "Meta Graph requeue failed."
       );
-      if (res.ok) {
-        const refreshed = await loadSourceLeadDetailAction(selectedId);
-        setDetail(refreshed.detail);
-      }
+      if (res.ok) await loadDetail(selectedId);
     });
   };
 
@@ -269,6 +273,7 @@ export function SourceIntakeView({
                 <p className="font-mono">{detail.matchedRuleId ?? "—"}</p>
               </div>
             </div>
+            <CampaignShadowPanel view={shadow} />
             {detail.sourceSystem === "meta_lead_ads" ? (
               <div className="space-y-2 rounded-lg border p-3" data-testid="meta-graph-fetch">
                 <div className="flex items-center justify-between gap-2">

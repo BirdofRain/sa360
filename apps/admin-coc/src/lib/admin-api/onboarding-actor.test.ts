@@ -160,6 +160,22 @@ test("a browser assertion header cannot replace the server-minted token", async 
   if (verified.ok) assert.equal(verified.claims.sub, PRINCIPAL);
 });
 
+test("campaign registry writes require a named staff assertion and reads do not", async () => {
+  const actor = await import("./onboarding-actor.ts");
+  const campaign = "c123456789012345678901234";
+  const paths = [
+    "/admin/v1/clients/alex_gross/campaigns",
+    `/admin/v1/clients/alex_gross/campaigns/${campaign}`,
+    `/admin/v1/clients/alex_gross/campaigns/${campaign}/source-bindings`,
+    `/admin/v1/clients/alex_gross/campaigns/${campaign}/destination-selection`,
+  ];
+  for (const path of paths) {
+    assert.equal(actor.onboardingWriteAttributesStaff("POST", path), true, path);
+    assert.equal(actor.onboardingWriteAttributesStaff("GET", path), false, path);
+  }
+  assert.equal(actor.onboardingWriteAttributesStaff("PATCH", paths[1] ?? ""), false);
+});
+
 function snapshotEnv(): NodeJS.ProcessEnv {
   return { ...process.env };
 }

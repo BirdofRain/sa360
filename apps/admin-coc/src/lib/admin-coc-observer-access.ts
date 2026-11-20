@@ -28,6 +28,7 @@ export const OBSERVER_READ_SERVER_ACTIONS = [
   "loadSynthflowDetailAction",
   "loadSynthflowOutboundDetailAction",
   "loadSourceLeadDetailAction",
+  "loadCampaignShadowAction",
   "loadDeliveryPlanForDecisionAction",
   "loadDeliveryRuntimeModeAction",
 ] as const;
@@ -157,6 +158,7 @@ export function isObserverAdminApiGetAllowed(path: string): boolean {
   if (matchOneId(pathname, "/admin/v1/coc/synthflow-outbound-results/")) return true;
   if (matchOneId(pathname, "/admin/v1/lead-inventory/review/items/")) return true;
   if (matchOneId(pathname, "/admin/v1/source-leads/")) return true;
+  if (matchOneId(pathname, "/admin/v1/source-leads/", "/campaign-shadow")) return true;
   if (matchOneId(pathname, "/admin/v1/lead-inventory/review/actions/")) return true;
   if (matchOneId(pathname, "/admin/v1/routing/dry-run-decisions/", "/delivery-plan")) return true;
   if (matchOneId(pathname, "/admin/v1/routing/dry-run-decisions/", "/duplicate-risk")) return true;

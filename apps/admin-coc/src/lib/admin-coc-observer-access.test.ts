@@ -201,6 +201,8 @@ test("admin API key allowlist is read-only and excludes secrets", () => {
   assert.equal(isObserverAdminApiGetAllowed("/admin/v1/coc/source-intake-trace?sourceLeadEventId=evt_1"), true);
   assert.equal(isObserverReadServerAction("loadSourceIntakeTraceAction"), true);
   assert.equal(isObserverAdminApiGetAllowed("/admin/v1/source-leads/lead_1"), true);
+  assert.equal(isObserverAdminApiGetAllowed("/admin/v1/source-leads/lead_1/campaign-shadow"), true);
+  assert.equal(isObserverReadServerAction("loadCampaignShadowAction"), true);
   assert.equal(isObserverAdminApiGetAllowed("/admin/v1/routing/dry-run-decisions/d1/delivery-plan"), true);
   assert.equal(isObserverAdminApiGetAllowed("/admin/v1/delivery-runtime-mode"), true);
   assert.equal(isObserverAdminApiGetAllowed("/admin/v1/source-leads/lead_1/reject"), false);

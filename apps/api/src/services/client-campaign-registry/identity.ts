@@ -73,13 +73,22 @@ export type PreparedBinding = {
   identities: IdentityDraft[];
 };
 
-const EXACT_FIELDS: Array<{ field: keyof BindingDraft; kind: IdentifierKind; max: number }> = [
-  { field: "providerFunnelId", kind: "provider_funnel_id", max: 200 },
-  { field: "parentUrlKey", kind: "parent_url_key", max: 500 },
-  { field: "campaignId", kind: "campaign_id", max: 200 },
-  { field: "formId", kind: "form_id", max: 200 },
-  { field: "adsetId", kind: "adset_id", max: 200 },
-  { field: "adId", kind: "ad_id", max: 200 },
+const IDENTIFIER_LIMITS: Record<IdentifierKind, number> = {
+  provider_funnel_id: 200,
+  parent_url_key: 500,
+  campaign_id: 200,
+  form_id: 200,
+  adset_id: 200,
+  ad_id: 200,
+};
+
+const EXACT_FIELDS: Array<{ field: keyof BindingDraft; kind: IdentifierKind }> = [
+  { field: "providerFunnelId", kind: "provider_funnel_id" },
+  { field: "parentUrlKey", kind: "parent_url_key" },
+  { field: "campaignId", kind: "campaign_id" },
+  { field: "formId", kind: "form_id" },
+  { field: "adsetId", kind: "adset_id" },
+  { field: "adId", kind: "ad_id" },
 ];
 
 const LOOSE_RULE_MATCHES = new Set<CampaignRoutingMatchType>(["utm_campaign", "keyword_fallback"]);
@@ -141,7 +150,7 @@ export function prepareBinding(input: BindingDraft): { ok: true; binding: Prepar
     if (!input.provider || input.provider === "unknown") {
       return { ok: false, statusCode: 409, error: "provider_identity_missing" };
     }
-    const normalized = normalizeIdentifier(field.kind, raw, field.max);
+    const normalized = normalizeCampaignIdentifier(field.kind, raw);
     if (!normalized) return { ok: false, statusCode: 400, error: "identifier_invalid" };
     const draft = { provider: input.provider, kind: field.kind, normalizedValue: normalized };
     const key = identityKey(draft);
@@ -218,6 +227,11 @@ function normalizeIdentifier(kind: IdentifierKind, value: string, max: number): 
   if (trimmed.length < 1 || trimmed.length > max) return null;
   if (/\s/.test(trimmed) || trimmed.includes("?") || trimmed.includes("#") || trimmed.includes("*")) return null;
   return trimmed;
+}
+
+/** Provider-scoped exact identifier. Display names, UTM text, and keywords do not pass. */
+export function normalizeCampaignIdentifier(kind: IdentifierKind, value: string): string | null {
+  return normalizeIdentifier(kind, value, IDENTIFIER_LIMITS[kind]);
 }
 
 export function normalizeParentUrlIdentity(value: string): string | null {

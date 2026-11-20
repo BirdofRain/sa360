@@ -2355,6 +2355,8 @@ model SourceLeadEvent {
   leadAllocations        LeadAllocation[]
   leadInventoryItem      LeadInventoryItem?
   onboardingTestRuns     ClientOnboardingTestRun[]
+  /// Observational campaign shadow decisions. Routing and delivery do not read them.
+  clientCampaignShadowDecisions ClientCampaignShadowDecision[]
 
   @@index([receivedAt])
   @@index([status, receivedAt])
@@ -5152,4 +5154,59 @@ model ClientCampaignRegistryCommand {
 
   @@index([clientAccountId, createdAt])
   @@index([clientCampaignId, createdAt])
+}
+
+/// Observational status for one frozen campaign shadow decision.
+/// MATCHED is identity agreement only. It does not arm delivery.
+enum ClientCampaignShadowStatus {
+  MATCHED
+  UNRESOLVED
+  REVIEW_REQUIRED
+}
+
+/// Incoming niche compared with the saved campaign niche.
+/// UNRESOLVED means no campaign identity was accepted.
+enum ClientCampaignNicheClassificationStatus {
+  MATCH
+  MISSING
+  CONFLICT
+  UNRESOLVED
+}
+
+/// One immutable shadow decision for one SourceLeadEvent and decision version.
+/// The row copies campaign configuration at evaluation time.
+/// Later campaign edits do not update it. Routing and delivery do not read it.
+model ClientCampaignShadowDecision {
+  id                         String                                  @id @default(cuid())
+  sourceLeadEventId          String
+  sourceLeadEvent            SourceLeadEvent                         @relation(fields: [sourceLeadEventId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  decisionVersion            Int
+  status                     ClientCampaignShadowStatus
+  /// Client already chosen by live routing. Null when routing assigned none.
+  clientAccountId            String?
+  /// Set when one exact campaign identity is consistent. Null when ambiguous.
+  clientCampaignId           String?
+  campaignRevision           Int?
+  campaignSlug               String?
+  campaignDisplayName        String?
+  campaignStatus             String?
+  configuredNicheKey         String?
+  configuredProductType      String?
+  winningRoutingAuthority    String?
+  matchType                  String?
+  provider                   String?
+  matchedBindingIds          Json
+  reviewCandidateCampaignIds Json
+  reasonCodes                Json
+  sourceEvidenceJson         Json
+  incomingNicheJson          Json
+  nicheClassificationStatus  ClientCampaignNicheClassificationStatus
+  leadTypeDecisionJson       Json
+  proposedTagsJson           Json
+  destinationSelectionJson   Json
+  evaluatedAt                DateTime                                @default(now())
+
+  @@unique([sourceLeadEventId, decisionVersion])
+  @@index([clientAccountId, evaluatedAt])
+  @@index([status, evaluatedAt])
 }

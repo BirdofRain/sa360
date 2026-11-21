@@ -13,7 +13,8 @@ import { after, before, describe, it } from "node:test";
 import {
   candidateDir,
   integrationUrl,
-  migrate,
+  migrateExcluding,
+  postBoundaryAMigrations,
   psqlFile,
   repoRoot,
   scalar,
@@ -184,6 +185,7 @@ function cleanup(): void {
 
 describe("production boundary A files", () => {
   it("keeps the production script out of migrations and deploy wiring", () => {
+    // The Sheets grant proof runs this script on disposable PostgreSQL. It is not deploy wiring.
     const hit = spawnSync(
       "rg",
       [
@@ -191,6 +193,10 @@ describe("production boundary A files", () => {
         "production-boundary-a",
         "-g",
         "!**/historical-catalog-summary-role-security.boundary-a.test.ts",
+        "-g",
+        "!**/historical-catalog-summary-boundary-b.test.ts",
+        "-g",
+        "!**/company-sheets-setup-grants.integration.test.ts",
         "prisma/migrations",
         "package.json",
         "apps",
@@ -272,7 +278,7 @@ describe("production boundary A on disposable PostgreSQL 18.6", { skip: !run, ti
        CREATE DATABASE ${decoy} OWNER doadmin;`,
     );
     const adminUrl = roleUrl("doadmin");
-    migrate(adminUrl);
+    migrateExcluding(adminUrl, postBoundaryAMigrations);
     asPostgres(
       database,
       `DO $owners$

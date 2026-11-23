@@ -424,7 +424,7 @@ async function retryDrain(seeded: Awaited<ReturnType<typeof seed>>) {
     orderBy: { startedAt: "desc" },
     include: { stepRuns: true },
   });
-  let recovery: AssociationDispatchRecovery | "missing" = "missing";
+  let recovery: AssociationDispatchRecovery | "missing" | "seen" = "missing";
   const drain = await processDueGhlAssociationDispatches({
     listDue: async () =>
       fresh
@@ -590,9 +590,13 @@ test("beta GHL crash-before-receipt recovery", { skip: !enabled }, async () => {
     assert.equal(storedContact.contactReceived.received, true);
     assert.equal(storedContact.contactReceived.contactId, "contact_1");
 
-    const afterEnrollment = reports.case2AfterRetryAgain as typeof afterContact & {
+    const afterEnrollment = reports.case2AfterRetryAgain as {
+      provider: { contactWrites: number; contacts: string[]; enrollmentCalls: number; enrollments: string[] };
       receipts: Array<{ stepType: string; receipt: { operation: string; outcome: string; externalId: string | null } | null }>;
-      contactReceived: { received: boolean };
+      lifecycle: Array<{ eventNameInternal: string }>;
+      alex: { customerLastEvent: string | null };
+      canonical: { canonical: boolean };
+      run: { status: string };
     };
     assert.equal(afterEnrollment.provider.contactWrites, 1);
     assert.deepEqual(afterEnrollment.provider.contacts, ["contact_1"]);

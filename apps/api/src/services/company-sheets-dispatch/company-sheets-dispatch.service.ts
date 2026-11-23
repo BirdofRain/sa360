@@ -118,12 +118,37 @@ function terminalHold(intent: CompanySheetsDispatchIntent, code: string): "await
   return null;
 }
 
+/**
+ * Delivery health already treats a non-active client as ineligible.
+ * The drain rechecks that here so recovery cannot append for a paused,
+ * onboarding, or archived account. The per-client campaign switch is not
+ * rechecked: a committed intent still drains after that switch is turned off.
+ * The API dispatch flag returns before a claim, so this function does not run.
+ */
+async function campaignClientInactive(db: PrismaClient, intent: CompanySheetsDispatchIntent): Promise<boolean> {
+  if (intent.kind !== "campaign_lead") return false;
+  const account = await db.clientAccount.findUnique({
+    where: { clientAccountId: intent.clientAccountId },
+    select: { status: true },
+  });
+  return account?.status !== "active";
+}
+
 async function handleClaimedIntent(
   intent: CompanySheetsDispatchIntent,
   deps: CompanySheetsDeliveryDeps,
   env: NodeJS.ProcessEnv,
   db: PrismaClient
 ): Promise<{ executed: boolean }> {
+  if (await campaignClientInactive(db, intent)) {
+    await markIntent(db, intent.id, {
+      status: "retryable",
+      reason: "client_not_active",
+      lastError: "client_not_active",
+      availableAt: new Date(Date.now() + 30_000),
+    });
+    return { executed: false };
+  }
   const queued = await enqueueForIntent(intent, { ...deps, env, db });
   if (!queued.ok) {
     const personStatus = PERSON_GATE_STATUS[queued.code];

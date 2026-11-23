@@ -13,6 +13,7 @@ import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
 import { prisma } from "../../lib/db.js";
 import { ROUTING_AUTHORITY_SOURCE_ASSOCIATION } from "../routing-source-association.service.js";
 import { deliverConfirmedAssociationIfActivated } from "../association-ongoing-delivery.js";
+import { markGhlLiveDeliveryRunRolledBack } from "../ghl-delivery-adapter/ghl-live-canary.service.js";
 import {
   ASSOCIATION_DISPATCH_LEASE_MS,
   claimPendingAssociationOutbox,
@@ -76,6 +77,8 @@ type Provider = {
   contactWrites: number;
   enrollmentCalls: number;
   otherCalls: string[];
+  workflowHttpStatus: number;
+  contactPutHttpStatus: number;
 };
 
 async function listen(state: Provider): Promise<{ server: Server; baseUrl: string }> {
@@ -97,6 +100,11 @@ async function listen(state: Provider): Promise<{ server: Server; baseUrl: strin
     const enrollment = path.match(/\/contacts\/([^/]+)\/workflow\/([^/]+)$/);
     if (method === "POST" && enrollment) {
       state.enrollmentCalls += 1;
+      if (state.workflowHttpStatus !== 200) {
+        res.writeHead(state.workflowHttpStatus, { "content-type": "application/json" });
+        res.end(JSON.stringify({ message: "workflow not accepted" }));
+        return;
+      }
       const id = `enrollment_${state.enrollments.length + 1}`;
       state.enrollments.push({
         id,
@@ -105,6 +113,12 @@ async function listen(state: Provider): Promise<{ server: Server; baseUrl: strin
       });
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ enrollmentId: id }));
+      return;
+    }
+    if (method === "PUT" && /\/contacts\/[^/]+$/.test(path)) {
+      state.otherCalls.push(`${method} ${path}`);
+      res.writeHead(state.contactPutHttpStatus, { "content-type": "application/json" });
+      res.end(JSON.stringify(state.contactPutHttpStatus === 200 ? { contact: { id: "owner_ok" } } : { message: "owner rejected" }));
       return;
     }
     state.otherCalls.push(`${method} ${path}`);
@@ -118,7 +132,15 @@ async function listen(state: Provider): Promise<{ server: Server; baseUrl: strin
 }
 
 function provider(): Provider {
-  return { contacts: [], enrollments: [], contactWrites: 0, enrollmentCalls: 0, otherCalls: [] };
+  return {
+    contacts: [],
+    enrollments: [],
+    contactWrites: 0,
+    enrollmentCalls: 0,
+    otherCalls: [],
+    workflowHttpStatus: 200,
+    contactPutHttpStatus: 200,
+  };
 }
 
 type Crash = { event: string | null; commit: boolean; blockReceiptWrite: boolean };
@@ -172,6 +194,8 @@ async function seed(input: {
   stamp: string;
   suffix: string;
   fieldMap: Record<string, string>;
+  workflowStartRequired?: boolean;
+  ownerId?: string | null;
 }) {
   const clientAccountId = `alex_gross_${input.stamp}_${input.suffix}`;
   const locationId = `loc_${input.stamp}_${input.suffix}`;
@@ -187,7 +211,8 @@ async function seed(input: {
       locationName: "Alex Gross CRM",
       destinationWorkflowIdGhl: WORKFLOW_ID,
       workflowTriggerMode: "direct_api",
-      workflowStartRequired: true,
+      workflowStartRequired: input.workflowStartRequired !== false,
+      defaultAssignedUserIdGhl: input.ownerId ?? null,
       opportunityCreationEnabled: false,
       deliveryMode: "live",
       deliveryEnabled: true,
@@ -617,5 +642,213 @@ test("beta GHL crash-before-receipt recovery", { skip: !enabled }, async () => {
     await new Promise<void>((resolve) => fake2.server.close(() => resolve()));
     if (seeded1) await cleanup(seeded1);
     if (seeded2) await cleanup(seeded2);
+  }
+});
+
+type DeliveryView = Awaited<ReturnType<typeof snapshot>>;
+
+function receiptOutcome(view: DeliveryView, stepType: string): string | null {
+  return view.receipts.find((step) => step.stepType === stepType)?.receipt?.outcome ?? null;
+}
+
+test("required enrollment failure is not Delivered and recovery does not resend", { skip: !enabled }, async () => {
+  assertSafeTestDatabaseUrl(integrationUrl);
+  process.env.SA360_GHL_ONGOING_DELIVERY_ENABLED = "true";
+  process.env.GHL_PRIVATE_INTEGRATION_TOKEN = "local-fake-ghl-token";
+  const stamp = `${Date.now()}`;
+  const ghl = provider();
+  const fake = await listen(ghl);
+  process.env.GHL_API_BASE_URL = fake.baseUrl;
+  const crash: Crash = { event: null, commit: false, blockReceiptWrite: false };
+  const restoreCrash = installCrash(crash);
+  const seeded: Array<Awaited<ReturnType<typeof seed>>> = [];
+  const review: Record<string, unknown> = {};
+  try {
+    ghl.workflowHttpStatus = 500;
+    const ambiguous = await seed({ stamp, suffix: "wf500", fieldMap: {} });
+    seeded.push(ambiguous);
+    await deliver(ambiguous);
+    const ambiguousView = await snapshot(ambiguous.sourceId, ghl);
+    review.requiredAmbiguous = {
+      run: ambiguousView.run?.status,
+      contact: receiptOutcome(ambiguousView, "create_or_update_contact"),
+      workflow: receiptOutcome(ambiguousView, "start_workflow"),
+      canonical: ambiguousView.canonical,
+      leadDelivered: ambiguousView.lifecycle.some((event) => event.eventNameInternal === "lead_delivered"),
+      alex: ambiguousView.alex,
+      calls: ambiguousView.provider,
+    };
+    assert.equal(ambiguousView.run?.status, "failed");
+    assert.equal(receiptOutcome(ambiguousView, "create_or_update_contact"), "completed");
+    assert.equal(receiptOutcome(ambiguousView, "start_workflow"), "ambiguous");
+    assert.equal(ambiguousView.canonical?.canonical, false);
+    assert.equal(review.requiredAmbiguous && (review.requiredAmbiguous as { leadDelivered: boolean }).leadDelivered, false);
+    assert.notEqual(ambiguousView.alex?.customerLastEvent, "Delivered");
+    assert.notEqual(ambiguousView.alex?.deliveryLabel, "Delivered");
+    assert.equal(ghl.contactWrites, 1);
+    assert.equal(ghl.enrollmentCalls, 1);
+    assert.equal(ghl.enrollments.length, 0);
+
+    ghl.workflowHttpStatus = 422;
+    ghl.contactWrites = 0;
+    ghl.enrollmentCalls = 0;
+    ghl.contacts.length = 0;
+    ghl.enrollments.length = 0;
+    const rejected = await seed({ stamp, suffix: "wf422", fieldMap: {} });
+    seeded.push(rejected);
+    await deliver(rejected);
+    const rejectedView = await snapshot(rejected.sourceId, ghl);
+    review.requiredRejected = {
+      run: rejectedView.run?.status,
+      contact: receiptOutcome(rejectedView, "create_or_update_contact"),
+      workflow: receiptOutcome(rejectedView, "start_workflow"),
+      canonical: rejectedView.canonical,
+      leadDelivered: rejectedView.lifecycle.some((event) => event.eventNameInternal === "lead_delivered"),
+      alex: rejectedView.alex,
+      calls: { contactWrites: ghl.contactWrites, enrollmentCalls: ghl.enrollmentCalls, enrollments: ghl.enrollments.length },
+    };
+    assert.equal(rejectedView.run?.status, "failed");
+    assert.equal(receiptOutcome(rejectedView, "start_workflow"), "rejected");
+    assert.equal(rejectedView.canonical?.canonical, false);
+    assert.equal(rejectedView.lifecycle.some((event) => event.eventNameInternal === "lead_delivered"), false);
+    assert.notEqual(rejectedView.alex?.customerLastEvent, "Delivered");
+    assert.notEqual(rejectedView.alex?.deliveryLabel, "Delivered");
+
+    ghl.workflowHttpStatus = 200;
+    ghl.contactPutHttpStatus = 500;
+    ghl.contactWrites = 0;
+    ghl.enrollmentCalls = 0;
+    ghl.contacts.length = 0;
+    ghl.enrollments.length = 0;
+    const optional = await seed({ stamp, suffix: "owner", fieldMap: {}, ownerId: "user_owner_alex" });
+    seeded.push(optional);
+    await deliver(optional);
+    const optionalView = await snapshot(optional.sourceId, ghl);
+    review.optionalOwner = {
+      run: optionalView.run?.status,
+      contact: receiptOutcome(optionalView, "create_or_update_contact"),
+      workflow: receiptOutcome(optionalView, "start_workflow"),
+      owner: optionalView.receipts.find((step) => step.stepType === "assign_owner")?.status,
+      canonical: optionalView.canonical,
+      leadDelivered: optionalView.lifecycle.some((event) => event.eventNameInternal === "lead_delivered"),
+      alex: optionalView.alex,
+      calls: { contactWrites: ghl.contactWrites, enrollmentCalls: ghl.enrollmentCalls, enrollments: ghl.enrollments.length },
+    };
+    assert.equal(optionalView.run?.status, "partial_success");
+    assert.equal(receiptOutcome(optionalView, "create_or_update_contact"), "completed");
+    assert.equal(receiptOutcome(optionalView, "start_workflow"), "completed");
+    assert.equal(optionalView.lifecycle.some((event) => event.eventNameInternal === "lead_delivered"), true);
+    assert.equal(optionalView.canonical?.canonical, true, optionalView.canonical?.reasons.join(","));
+    assert.equal(ghl.contactWrites, 1);
+    assert.equal(ghl.enrollmentCalls, 1);
+    assert.equal(ghl.enrollments.length, 1);
+
+    ghl.contactPutHttpStatus = 200;
+    ghl.contactWrites = 0;
+    ghl.enrollmentCalls = 0;
+    ghl.contacts.length = 0;
+    ghl.enrollments.length = 0;
+    crash.event = "lead_delivered";
+    const missingEvent = await seed({ stamp, suffix: "event", fieldMap: {}, ownerId: "user_owner_alex" });
+    seeded.push(missingEvent);
+    await deliver(missingEvent);
+    const beforeRetry = await snapshot(missingEvent.sourceId, ghl);
+    const writesBefore = ghl.contactWrites;
+    const enrollmentsBefore = ghl.enrollmentCalls;
+    crash.event = null;
+    await retryDrain(missingEvent);
+    await deliverConfirmedAssociationIfActivated({
+      sourceLeadEventId: missingEvent.sourceId,
+      status: "routing_matched",
+      routing: missingEvent.routing,
+      lifecyclePayload: missingEvent.body as never,
+    });
+    const afterRetry = await snapshot(missingEvent.sourceId, ghl);
+    review.missingDeliveredEvent = {
+      before: beforeRetry.alex,
+      after: afterRetry.alex,
+      canonicalBefore: beforeRetry.canonical,
+      run: afterRetry.run?.status,
+      extraContactWrites: ghl.contactWrites - writesBefore,
+      extraEnrollmentCalls: ghl.enrollmentCalls - enrollmentsBefore,
+      leadDelivered: afterRetry.lifecycle.some((event) => event.eventNameInternal === "lead_delivered"),
+    };
+    assert.equal(beforeRetry.run?.status, "partial_success");
+    assert.equal(receiptOutcome(beforeRetry, "start_workflow"), "completed");
+    assert.equal(beforeRetry.lifecycle.some((event) => event.eventNameInternal === "lead_delivered"), false);
+    assert.equal(ghl.contactWrites - writesBefore, 0);
+    assert.equal(ghl.enrollmentCalls - enrollmentsBefore, 0);
+
+    ghl.contactWrites = 0;
+    ghl.enrollmentCalls = 0;
+    ghl.contacts.length = 0;
+    ghl.enrollments.length = 0;
+    ghl.otherCalls.length = 0;
+    const uncertain = await seed({
+      stamp,
+      suffix: "replay",
+      fieldMap: { sa360_lead_uid: SHARED_FIELD, sa360_lifecycle_stage: SHARED_FIELD },
+    });
+    seeded.push(uncertain);
+    await deliver(uncertain);
+    await prisma.clientGhlDestination.update({
+      where: { clientAccountId: uncertain.clientAccountId },
+      data: { sa360CustomFieldIdMapJson: {} },
+    });
+    crash.blockReceiptWrite = true;
+    await prisma.ghlAssociationDispatchOutbox.updateMany({
+      where: { sourceLeadEventId: uncertain.sourceId },
+      data: { status: "executing", executingAt: new Date(Date.now() - ASSOCIATION_DISPATCH_LEASE_MS - 5_000), settledAt: null },
+    });
+    await retryDrain(uncertain);
+    crash.blockReceiptWrite = false;
+    const afterCrash = await snapshot(uncertain.sourceId, ghl);
+    await retryDrain(uncertain);
+    await deliverConfirmedAssociationIfActivated({
+      sourceLeadEventId: uncertain.sourceId,
+      status: "routing_matched",
+      routing: uncertain.routing,
+      lifecyclePayload: uncertain.body as never,
+    });
+    if (afterCrash.run?.id) await markGhlLiveDeliveryRunRolledBack(afterCrash.run.id, "review");
+    await deliverConfirmedAssociationIfActivated({
+      sourceLeadEventId: uncertain.sourceId,
+      status: "routing_matched",
+      routing: uncertain.routing,
+      lifecyclePayload: uncertain.body as never,
+    });
+    await prisma.ghlAssociationDispatchOutbox.updateMany({
+      where: { sourceLeadEventId: uncertain.sourceId },
+      data: { status: "executing", executingAt: new Date(Date.now() - ASSOCIATION_DISPATCH_LEASE_MS - 5_000), settledAt: null },
+    });
+    await retryDrain(uncertain);
+    const afterRecovery = await snapshot(uncertain.sourceId, ghl);
+    review.uncertainRecovery = {
+      afterCrash: {
+        run: afterCrash.run?.status,
+        workflow: receiptOutcome(afterCrash, "start_workflow"),
+        outbox: afterCrash.outbox,
+        alex: afterCrash.alex,
+      },
+      afterRecovery: {
+        run: afterRecovery.run?.status,
+        workflow: receiptOutcome(afterRecovery, "start_workflow"),
+        outbox: afterRecovery.outbox,
+        alex: afterRecovery.alex,
+      },
+      contactWrites: ghl.contactWrites,
+      enrollmentCalls: ghl.enrollmentCalls,
+      enrollments: ghl.enrollments.length,
+    };
+    assert.equal(ghl.contactWrites, 1);
+    assert.equal(ghl.enrollmentCalls, 1);
+    assert.equal(ghl.enrollments.length, 1);
+    assert.equal(receiptOutcome(afterRecovery, "start_workflow"), "failed_before_send");
+    assert.notEqual(afterRecovery.alex?.customerLastEvent, "Delivered");
+    void review;
+  } finally {
+    restoreCrash();
+    await new Promise<void>((resolve) => fake.server.close(() => resolve()));
+    for (const row of seeded) await cleanup(row);
   }
 });

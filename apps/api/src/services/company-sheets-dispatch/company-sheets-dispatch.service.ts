@@ -120,11 +120,27 @@ function terminalHold(intent: CompanySheetsDispatchIntent, code: string): "await
 
 /**
  * Delivery health already treats a non-active client as ineligible.
- * The drain rechecks that here so recovery cannot append for a paused,
- * onboarding, or archived account. The per-client campaign switch is not
- * rechecked: a committed intent still drains after that switch is turned off.
- * The API dispatch flag returns before a claim, so this function does not run.
+ * A paused, onboarding, or archived account is left out of the due query so
+ * its backlog does not fill the batch ahead of an active client. This recheck
+ * covers a pause that lands after that snapshot. An uncertain job keeps its
+ * hold. The per-client campaign switch is not rechecked: a committed intent
+ * still drains after that switch is turned off.
  */
+async function inactiveCampaignClientIds(db: PrismaClient): Promise<string[]> {
+  const rows = await db.clientAccount.findMany({
+    where: { status: { not: "active" } },
+    select: { clientAccountId: true },
+  });
+  return rows.map((row) => row.clientAccountId);
+}
+
+function withoutInactiveCampaigns(
+  inactiveClientIds: readonly string[]
+): Prisma.CompanySheetsDispatchIntentWhereInput {
+  if (inactiveClientIds.length === 0) return {};
+  return { NOT: { kind: "campaign_lead", clientAccountId: { in: [...inactiveClientIds] } } };
+}
+
 async function campaignClientInactive(db: PrismaClient, intent: CompanySheetsDispatchIntent): Promise<boolean> {
   if (intent.kind !== "campaign_lead") return false;
   const account = await db.clientAccount.findUnique({
@@ -139,15 +155,28 @@ async function handleClaimedIntent(
   deps: CompanySheetsDeliveryDeps,
   env: NodeJS.ProcessEnv,
   db: PrismaClient
-): Promise<{ executed: boolean }> {
+): Promise<{ executed: boolean; inactive?: boolean }> {
   if (await campaignClientInactive(db, intent)) {
+    const job = intent.jobId
+      ? await db.companySheetsDeliveryJob.findUnique({ where: { id: intent.jobId } })
+      : null;
+    if (job?.status === "uncertain" || job?.appendStartedAt) {
+      await markIntent(db, intent.id, {
+        status: "scheduled",
+        jobId: job.id,
+        lastError: "uncertain",
+        reason: "append_outcome_unresolved",
+        availableAt: new Date(Date.now() + 30_000),
+      });
+      return { executed: false, inactive: true };
+    }
     await markIntent(db, intent.id, {
       status: "retryable",
       reason: "client_not_active",
       lastError: "client_not_active",
       availableAt: new Date(Date.now() + 30_000),
     });
-    return { executed: false };
+    return { executed: false, inactive: true };
   }
   const queued = await enqueueForIntent(intent, { ...deps, env, db });
   if (!queued.ok) {
@@ -221,12 +250,21 @@ async function handleClaimedIntent(
   return { executed: true };
 }
 
-function dueWhere(now: Date, excludeIds: string[]): Prisma.CompanySheetsDispatchIntentWhereInput {
+function dueWhere(
+  now: Date,
+  excludeIds: string[],
+  inactiveClientIds: readonly string[] = []
+): Prisma.CompanySheetsDispatchIntentWhereInput {
   return {
-    ...(excludeIds.length > 0 ? { id: { notIn: excludeIds } } : {}),
-    OR: [
-      { status: { in: ["pending", "scheduled", "retryable"] }, availableAt: { lte: now } },
-      { status: "awaiting_setup", kind: "campaign_lead" },
+    AND: [
+      ...(excludeIds.length > 0 ? [{ id: { notIn: excludeIds } }] : []),
+      withoutInactiveCampaigns(inactiveClientIds),
+      {
+        OR: [
+          { status: { in: ["pending", "scheduled", "retryable"] }, availableAt: { lte: now } },
+          { status: "awaiting_setup", kind: "campaign_lead" },
+        ],
+      },
     ],
   };
 }
@@ -239,9 +277,10 @@ function dueWhere(now: Date, excludeIds: string[]): Prisma.CompanySheetsDispatch
 async function selectFairIntent(
   tx: Prisma.TransactionClient,
   now: Date,
-  excludeIds: string[]
+  excludeIds: string[],
+  inactiveClientIds: readonly string[]
 ): Promise<CompanySheetsDispatchIntent | null> {
-  const where = dueWhere(now, excludeIds);
+  const where = dueWhere(now, excludeIds, inactiveClientIds);
   const oldestCampaign = await tx.companySheetsDispatchIntent.findFirst({
     where: { AND: [where, { kind: "campaign_lead" }] },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
@@ -330,7 +369,8 @@ type ClaimResult =
 async function claimNextDispatchIntent(
   db: PrismaClient,
   now: Date,
-  excludeIds: string[]
+  excludeIds: string[],
+  inactiveClientIds: readonly string[]
 ): Promise<ClaimResult> {
   const leaseCutoff = new Date(now.getTime() - COMPANY_SHEETS_EXECUTION_LEASE_MS);
   return db.$transaction(
@@ -347,7 +387,7 @@ async function claimNextDispatchIntent(
       });
       if (stillRunning || processingLive) return { outcome: "in_flight" };
       await parkExpiredProcessing(tx, now, leaseCutoff);
-      const intent = await selectFairIntent(tx, now, excludeIds);
+      const intent = await selectFairIntent(tx, now, excludeIds, inactiveClientIds);
       if (!intent) return { outcome: "empty" };
       const claimed = await tx.companySheetsDispatchIntent.updateMany({
         where: { id: intent.id, status: intent.status },
@@ -399,6 +439,7 @@ export async function processDueCompanySheetsDispatches(
   if (!isCompanyGoogleSheetsDispatchEnabled(env)) return finish(0, 0, 0, null, "dispatch_disabled");
   const db = deps.db ?? prisma;
   const clock = () => deps.now?.() ?? new Date();
+  const inactiveClientIds = await inactiveCampaignClientIds(db);
   await recoverDueSheetsPersonHolds(db, clock(), limit);
   const executionEnabled = isCompanyGoogleSheetsExecutionEnabled(env);
   if (!executionEnabled) {
@@ -417,10 +458,15 @@ export async function processDueCompanySheetsDispatches(
     );
     const due = await db.companySheetsDispatchIntent.findMany({
       where: {
-        OR: [
-          { status: { in: ["pending", "scheduled", "retryable"] }, availableAt: { lte: now } },
-          { status: "processing", processingAt: { lt: stale } },
-          { status: "awaiting_setup", kind: "campaign_lead" },
+        AND: [
+          withoutInactiveCampaigns(inactiveClientIds),
+          {
+            OR: [
+              { status: { in: ["pending", "scheduled", "retryable"] }, availableAt: { lte: now } },
+              { status: "processing", processingAt: { lt: stale } },
+              { status: "awaiting_setup", kind: "campaign_lead" },
+            ],
+          },
         ],
       },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
@@ -456,7 +502,7 @@ export async function processDueCompanySheetsDispatches(
       stopReason = "time_budget";
       break;
     }
-    const claim = await claimNextDispatchIntent(db, now, excludeIds);
+    const claim = await claimNextDispatchIntent(db, now, excludeIds, inactiveClientIds);
     if (claim.outcome === "in_flight") {
       stopReason = "execution_in_flight";
       break;
@@ -465,10 +511,13 @@ export async function processDueCompanySheetsDispatches(
     if (claim.outcome === "lost") continue;
     excludeIds.push(claim.intent.id);
     const outcome = await handleClaimedIntent(claim.intent, deps, env, db);
+    if (outcome.inactive) continue;
     processed += 1;
     if (outcome.executed) executed += 1;
   }
-  const deferred = stopReason ? await db.companySheetsDispatchIntent.count({ where: dueWhere(clock(), []) }) : 0;
+  const deferred = stopReason
+    ? await db.companySheetsDispatchIntent.count({ where: dueWhere(clock(), [], inactiveClientIds) })
+    : 0;
   return finish(processed, executed, deferred, stopReason, stopReason ?? "completed");
 }
 

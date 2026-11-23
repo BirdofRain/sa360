@@ -595,14 +595,12 @@ describe("campaign sheets delivery recovery (local sa360_test)", { skip: !runInt
       const parked = await db.companySheetsDispatchIntent.findFirstOrThrow({
         where: { sourceLeadEventId: pausedLead.id },
       });
-      assert.equal(parked.status, "retryable");
-      assert.equal(parked.lastError, "client_not_active");
+      assert.equal(parked.status, "pending");
+      assert.equal(parked.attemptCount, 0);
       const operator = await getCompanySheetsDispatchStatus(clientId, { db, env: envFor(true, true) });
       const shown = operator.intents.find((intent) => intent.sourceLeadEventId === pausedLead.id);
       assert.equal(shown?.delivered, false);
-      assert.equal(shown?.headline, "Retryable");
-      assert.match(shown?.detail ?? "", /Not delivered/);
-      assert.match(shown?.detail ?? "", /client_not_active/);
+      assert.equal(shown?.headline, "Waiting to schedule");
       nowMs += 1_000;
       const repeated = await processDueCompanySheetsDispatches(pausedDeps);
       assert.equal(repeated.processed, 0);
@@ -648,8 +646,12 @@ describe("campaign sheets delivery recovery (local sa360_test)", { skip: !runInt
       assert.equal(held.status, "queued");
       assert.equal(held.attemptCount, 0);
       const intent = await db.companySheetsDispatchIntent.findFirstOrThrow({ where: { sourceLeadEventId: lead.id } });
-      assert.equal(intent.status, "retryable");
-      assert.equal(intent.lastError, "client_not_active");
+      assert.equal(intent.status, "scheduled");
+      assert.equal(intent.attemptCount, 1);
+      const operator = await getCompanySheetsDispatchStatus(clientId, { db, env: envFor(true, true) });
+      const shown = operator.intents.find((row) => row.sourceLeadEventId === lead.id);
+      assert.equal(shown?.delivered, false);
+      assert.equal(shown?.headline, "Scheduled");
 
       nowMs += 1_000;
       const repeated = await processDueCompanySheetsDispatches(pausedDeps);
@@ -672,6 +674,204 @@ describe("campaign sheets delivery recovery (local sa360_test)", { skip: !runInt
       assert.equal(leadRowsAppended(sheet), 1);
     } finally {
       await db.clientAccount.update({ where: { clientAccountId: clientId }, data: { status: "active" } });
+    }
+  });
+
+  it("keeps an uncertain append discoverable when the account is paused before lease recovery", async () => {
+    await resetSheet();
+    await arm();
+    const lead = await commitLead("+15551110008");
+    let nowMs = Date.now();
+    const running = deps(true, true);
+    running.now = () => new Date(nowMs);
+    let release = () => {};
+    const hang = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let recorded = () => {};
+    const recordedPromise = new Promise<void>((resolve) => {
+      recorded = resolve;
+    });
+    sheet.hangAfterRecord = hang;
+    sheet.onAppendRecorded = () => recorded();
+    const first = processDueCompanySheetsDispatches(running);
+    try {
+      await Promise.race([
+        recordedPromise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error("append was not recorded")), 8000)),
+      ]);
+      assert.equal(leadRowsAppended(sheet), 1);
+      await db.clientAccount.update({ where: { clientAccountId: clientId }, data: { status: "paused" } });
+      nowMs += COMPANY_SHEETS_EXECUTION_LEASE_MS + 60_000;
+      const recovered = await processDueCompanySheetsDispatches(running);
+      assert.equal(recovered.executed, 0);
+      assert.equal(leadRowsAppended(sheet), 1);
+      const held = await receiptFor(lead.id);
+      assert.equal(held.job?.status, "uncertain");
+      assert.equal(held.job?.uncertainReason, "worker_lost");
+      assert.ok(held.job?.appendStartedAt);
+      assert.equal(held.rows.filter((row) => row.status === "written").length, 0);
+      assert.equal(held.intent.status, "scheduled");
+      assert.equal(held.intent.reason, "append_outcome_unresolved");
+      assert.notEqual(held.intent.lastError, "client_not_active");
+      assert.equal(held.verdict?.canonical, false);
+      const operator = await getCompanySheetsDispatchStatus(clientId, { db, env: envFor(true, true) });
+      const shown = operator.intents.find((intent) => intent.sourceLeadEventId === lead.id);
+      assert.equal(shown?.delivered, false);
+      assert.equal(shown?.headline, "Scheduled, append outcome unknown");
+      assert.equal(operator.lastCampaignDelivery?.status, "uncertain");
+      assert.equal(operator.lastCampaignDelivery?.uncertainReason, "worker_lost");
+      const account = await db.clientAccount.findUniqueOrThrow({ where: { clientAccountId: clientId } });
+      const destination = await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId: clientId } });
+      const findings = evaluateDeliveryHealth(
+        {
+          clients: [
+            {
+              clientAccountId: clientId,
+              status: account.status,
+              destination: {
+                campaignDispatchEnabled: destination.campaignDispatchEnabled,
+                campaignDispatchNotBefore: destination.campaignDispatchNotBefore,
+              },
+            },
+          ],
+          leads: [
+            {
+              id: lead.id,
+              clientAccountId: clientId,
+              status: "routing_matched",
+              routedAt: lead.routedAt,
+              receivedAt: lead.receivedAt,
+              sourceRouteKey: lead.sourceRouteKey,
+              cleanupStatus: null,
+              enrichmentMetadataJson: lead.enrichmentMetadataJson,
+            },
+          ],
+          intents: [
+            {
+              id: held.intent.id,
+              clientAccountId: clientId,
+              sourceLeadEventId: lead.id,
+              kind: held.intent.kind,
+              status: held.intent.status,
+              reason: held.intent.reason,
+              lastError: held.intent.lastError,
+              jobId: held.intent.jobId,
+              createdAt: held.intent.createdAt,
+            },
+          ],
+          jobs: held.job
+            ? [
+                {
+                  id: held.job.id,
+                  kind: held.job.kind,
+                  status: held.job.status,
+                  clientAccountId: held.job.clientAccountId,
+                  sourceLeadEventId: held.job.sourceLeadEventId,
+                  idempotencyKey: held.job.idempotencyKey,
+                  rowsWritten: held.job.rowsWritten,
+                  appendStartedAt: held.job.appendStartedAt,
+                  finishedAt: held.job.finishedAt,
+                  lastError: held.job.lastError,
+                  uncertainReason: held.job.uncertainReason,
+                  createdAt: held.job.createdAt,
+                },
+              ]
+            : [],
+          rows: held.rows.map((row) => ({ jobId: row.jobId, status: row.status })),
+          onboardingTestAttemptKeys: [],
+          intake: [],
+        },
+        new Date(nowMs)
+      );
+      assert.equal(findings[0]?.failureClass, "uncertain_append");
+      assert.equal(findings[0]?.severity, "critical");
+
+      await db.clientAccount.update({ where: { clientAccountId: clientId }, data: { status: "active" } });
+      nowMs += 1_000;
+      const immediate = await processDueCompanySheetsDispatches(running);
+      assert.equal(immediate.executed, 0);
+      assert.equal(leadRowsAppended(sheet), 1);
+      const duringHold = await receiptFor(lead.id);
+      assert.equal(duringHold.intent.reason, "append_outcome_unresolved");
+      assert.equal(duringHold.job?.status, "uncertain");
+
+      nowMs += 60_000;
+      const resumed = await processDueCompanySheetsDispatches(running);
+      assert.equal(resumed.executed, 0);
+      assert.equal(leadRowsAppended(sheet), 1);
+      assert.equal(sheet.appends.length, 1);
+      const after = await receiptFor(lead.id);
+      assert.equal(after.job?.status, "uncertain");
+      assert.equal(after.job?.uncertainReason, "worker_lost");
+      assert.equal(after.job?.attemptCount, 1);
+      assert.equal(after.intent.status, "scheduled");
+      assert.equal(after.intent.reason, "append_outcome_unresolved");
+      assert.equal(after.verdict?.canonical, false);
+      const operatorAfter = await getCompanySheetsDispatchStatus(clientId, { db, env: envFor(true, true) });
+      assert.equal(
+        operatorAfter.intents.find((intent) => intent.sourceLeadEventId === lead.id)?.headline,
+        "Scheduled, append outcome unknown"
+      );
+    } finally {
+      release();
+      sheet.hangAfterRecord = null;
+      sheet.onAppendRecorded = null;
+      await db.clientAccount.update({ where: { clientAccountId: clientId }, data: { status: "active" } });
+      await first.catch(() => undefined);
+    }
+    assert.equal(leadRowsAppended(sheet), 1);
+    const finished = await db.companySheetsDeliveryJob.findFirstOrThrow({ where: { sourceLeadEventId: lead.id } });
+    assert.equal(finished.status, "uncertain");
+  });
+
+  it("does not let a paused backlog take the batch ahead of a committed active intent", async () => {
+    await resetSheet();
+    const pausedId = `cs_recover_paused_${suffix}`;
+    const older = new Date("1970-01-01T00:00:00.000Z");
+    const newer = new Date("1970-01-02T00:00:00.000Z");
+    try {
+      await db.clientAccount.create({
+        data: { clientAccountId: pausedId, clientDisplayName: pausedId, status: "paused" },
+      });
+      for (const index of [1, 2]) {
+        await db.companySheetsDispatchIntent.create({
+          data: {
+            idempotencyKey: `campaign:${pausedId}:backlog-${index}`,
+            kind: "campaign_lead",
+            status: "pending",
+            clientAccountId: pausedId,
+            availableAt: older,
+            createdAt: older,
+          },
+        });
+      }
+      await arm();
+      const lead = await commitLead("+15551110009");
+      await db.companySheetsDestination.update({
+        where: { id: destinationId },
+        data: { campaignDispatchEnabled: false },
+      });
+      await db.companySheetsDispatchIntent.update({
+        where: { idempotencyKey: `campaign:${clientId}:${lead.id}` },
+        data: { createdAt: newer, availableAt: newer },
+      });
+      const limited = deps(true, true);
+      limited.now = () => new Date("2026-08-15T00:00:00.000Z");
+      const drained = await processDueCompanySheetsDispatches(limited, 1);
+      assert.equal(drained.executed, 1);
+      assert.equal(leadRowsAppended(sheet), 1);
+      const pausedRows = await db.companySheetsDispatchIntent.findMany({ where: { clientAccountId: pausedId } });
+      assert.equal(pausedRows.length, 2);
+      assert.ok(pausedRows.every((intent) => intent.status === "pending" && intent.attemptCount === 0));
+      const again = await processDueCompanySheetsDispatches(limited, 1);
+      assert.equal(again.executed, 0);
+      assert.equal(leadRowsAppended(sheet), 1);
+      const stillPaused = await db.companySheetsDispatchIntent.findMany({ where: { clientAccountId: pausedId } });
+      assert.ok(stillPaused.every((intent) => intent.attemptCount === 0));
+    } finally {
+      await db.companySheetsDispatchIntent.deleteMany({ where: { clientAccountId: pausedId } });
+      await db.clientAccount.deleteMany({ where: { clientAccountId: pausedId } });
     }
   });
 });

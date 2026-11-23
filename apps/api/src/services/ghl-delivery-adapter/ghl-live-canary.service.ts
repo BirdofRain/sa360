@@ -27,7 +27,7 @@ import {
   validateLiveCanaryExecuteBody,
   type LiveCanaryExecuteInput,
 } from "./ghl-live-canary-gates.service.js";
-import { executeLiveCanaryGhlSteps } from "./ghl-live-canary-executor.service.js";
+import { emitRecordedGhlLifecycleEvent, executeLiveCanaryGhlSteps } from "./ghl-live-canary-executor.service.js";
 import type { GhlLiveHttpDeps } from "./ghl-live-transport.js";
 import {
   GHL_LIVE_CANARY_SAFETY_COPY,
@@ -366,7 +366,6 @@ export async function executeRecordedGhlDelivery(
     priorReceipts = existing.stepRuns
       .map((step) => receiptFromPersistedStep(step))
       .filter((receipt): receipt is VetOperationReceipt => receipt !== null);
-    await prisma.ghlLiveDeliveryStepRun.deleteMany({ where: { liveRunId: runId } });
     await updateGhlLiveDeliveryRun(runId, {
       status: "executing",
       mode: input.mode,
@@ -425,62 +424,73 @@ export async function executeRecordedGhlDelivery(
     ),
   };
 
+  const unrecorded = (): RecordedGhlDeliveryResult => ({
+    held: true,
+    ok: false,
+    runId,
+    // The row stays `executing`. That claim is what stops the next retry.
+    // `failed` here only classifies the outbox as uncertain.
+    status: "failed",
+    contactIdGhl: null,
+    opportunityIdGhl: null,
+    workflowStarted: false,
+    externalCallExecuted: true,
+    errors: ["delivery_outcome_unrecorded"],
+    ...NO_SEPARATED_RESULTS,
+  });
+
   let execution;
   try {
     execution = await runWithOngoingGhlWrite(() =>
-      executeLiveCanaryGhlSteps(adapterCtx, idempotencyKey, deps, { priorReceipts })
+      executeLiveCanaryGhlSteps(adapterCtx, idempotencyKey, deps, {
+        priorReceipts,
+        deferDeliveredEvent: true,
+      })
     );
   } catch {
-    const completedAt = new Date();
-    const failed = await updateGhlLiveDeliveryRun(runId!, {
-      status: "failed",
-      completedAt,
-      durationMs: completedAt.getTime() - startedAt.getTime(),
-      summary: "GHL delivery stopped before a step result was recorded.",
-      errors: ["delivery_outcome_unrecorded"] as Prisma.InputJsonValue,
-    });
-    return {
-      held: true,
-      ok: false,
-      runId: failed.id,
-      status: failed.status,
-      contactIdGhl: null,
-      opportunityIdGhl: null,
-      workflowStarted: false,
-      externalCallExecuted: false,
-      errors: ["delivery_outcome_unrecorded"],
-      ...NO_SEPARATED_RESULTS,
-    };
+    return unrecorded();
   }
 
   const completedAt = new Date();
   const externalCallExecuted = execution.stepOutcomes.some((step) => step.externalCallExecuted);
-  await updateGhlLiveDeliveryRun(runId!, {
-    status: execution.runStatus,
-    completedAt,
-    durationMs: completedAt.getTime() - startedAt.getTime(),
-    summary: execution.summary,
-    warnings: execution.warnings.length ? (execution.warnings as Prisma.InputJsonValue) : undefined,
-    errors: execution.errors.length ? (execution.errors as Prisma.InputJsonValue) : undefined,
-    stepRuns: {
-      create: execution.stepOutcomes.map((step) => ({
-        deliveryPlanStepId: step.deliveryPlanStepId,
-        stepOrder: step.stepOrder,
-        stepType: step.stepType,
-        targetSystem: step.targetSystem,
-        targetId: step.targetId,
-        status: step.status,
-        requestRedactedJson: step.requestRedactedJson ?? undefined,
-        responseRedactedJson: step.responseRedactedJson ?? undefined,
-        externalId: step.externalId,
-        errorCode: step.errorCode,
-        errorSummary: step.errorSummary,
-        warnings: step.warnings.length ? (step.warnings as Prisma.InputJsonValue) : undefined,
-        startedAt: step.startedAt,
-        completedAt: step.completedAt,
-      })),
-    },
-  });
+  try {
+    await updateGhlLiveDeliveryRun(runId!, {
+      status: execution.runStatus,
+      completedAt,
+      durationMs: completedAt.getTime() - startedAt.getTime(),
+      summary: execution.summary,
+      warnings: execution.warnings.length ? (execution.warnings as Prisma.InputJsonValue) : undefined,
+      errors: execution.errors.length ? (execution.errors as Prisma.InputJsonValue) : undefined,
+      stepRuns: {
+        deleteMany: {},
+        create: execution.stepOutcomes.map((step) => ({
+          deliveryPlanStepId: step.deliveryPlanStepId,
+          stepOrder: step.stepOrder,
+          stepType: step.stepType,
+          targetSystem: step.targetSystem,
+          targetId: step.targetId,
+          status: step.status,
+          requestRedactedJson: step.requestRedactedJson ?? undefined,
+          responseRedactedJson: step.responseRedactedJson ?? undefined,
+          externalId: step.externalId,
+          errorCode: step.errorCode,
+          errorSummary: step.errorSummary,
+          warnings: step.warnings.length ? (step.warnings as Prisma.InputJsonValue) : undefined,
+          startedAt: step.startedAt,
+          completedAt: step.completedAt,
+        })),
+      },
+    });
+  } catch {
+    return unrecorded();
+  }
+  if (execution.runStatus === "succeeded" || execution.runStatus === "partial_success") {
+    try {
+      await emitRecordedGhlLifecycleEvent(adapterCtx, "lead_delivered", execution.contactIdGhl);
+    } catch {
+      // The step receipt is already committed. A timeline row is not that receipt.
+    }
+  }
   return {
     held: false,
     ok: execution.runStatus === "succeeded",

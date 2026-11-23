@@ -59,9 +59,11 @@ Read `docs/development/PARALLEL_AGENT_WORK.md` before starting: it defines the w
 
 The Cloud environment (`.cursor/environment.json`) provisions everything automatically:
 
-- **Install** (`scripts/cloud-agent-install.sh`): installs local Postgres + Redis, runs
-  `pnpm install --frozen-lockfile`, `pnpm prisma:generate`, builds `@sa360/shared`, and writes a
-  localhost-only `.env`.
+- **Install** (`scripts/cloud-agent-install.sh`): installs local Postgres + Redis, installs
+  `doctl` 2.0.0 on `/usr/local/bin`, runs `pnpm install --frozen-lockfile`,
+  `pnpm prisma:generate`, builds `@sa360/shared`, and writes a localhost-only `.env`.
+  `doctl` uses `DIGITALOCEAN_ACCESS_TOKEN` from the agent environment. Do not run
+  `doctl auth init` and do not print the token.
 - **Start** (`scripts/cloud-agent-start.sh`): starts local Postgres + Redis, ensures the `sa360`
   and `sa360_test` databases exist, and applies migrations to those **local** databases only.
 

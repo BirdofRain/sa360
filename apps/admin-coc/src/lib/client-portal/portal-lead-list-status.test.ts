@@ -5,10 +5,14 @@ import {
   firstPortalSearchParam,
   parsePortalLeadListStatus,
   portalLeadListApiStatus,
+  portalLeadListCursorPath,
   portalLeadListEmptyCopy,
   portalLeadListHeading,
   portalLeadListPageSubtitle,
   portalLeadListPath,
+  portalLeadsContinuation,
+  PORTAL_LEAD_LIST_CONTINUE_LABEL,
+  PORTAL_LEAD_LIST_NEXT_LABEL,
   PORTAL_LEAD_LIST_STATUS_OPTIONS,
 } from "./portal-lead-list-status.ts";
 
@@ -39,6 +43,47 @@ test("All and Delivered keep the same search and date filters", () => {
     "/portal/leads?status=delivered&q=Quartz&from=2026-11-01T00%3A00%3A00.000Z&to=2026-11-30T23%3A59%3A59.999Z"
   );
   assert.equal(portalLeadListPath("delivered", { q: "  " }), "/portal/leads?status=delivered");
+});
+
+test("Delivered Next keeps status, search, and dates, and filter links drop the cursor", () => {
+  const filters = { q: "Quartz", from: "2026-11-01T00:00:00.000Z", to: "2026-11-30T23:59:59.999Z" };
+  const next = portalLeadListCursorPath("delivered", filters, "evt_50");
+  const parsed = new URL(next, "http://portal.local").searchParams;
+  assert.equal(parsed.get("status"), "delivered");
+  assert.equal(parsed.get("q"), "Quartz");
+  assert.equal(parsed.get("from"), filters.from);
+  assert.equal(parsed.get("to"), filters.to);
+  assert.equal(parsed.get("cursor"), "evt_50");
+  assert.equal(parsed.get("clientAccountId"), null);
+  assert.equal(portalLeadListPath("delivered", filters).includes("cursor="), false);
+  assert.equal(portalLeadListPath("all", filters).includes("cursor="), false);
+  assert.equal(
+    portalLeadsContinuation({
+      status: "delivered",
+      filters,
+      itemCount: 50,
+      nextCursor: "evt_50",
+    })?.label,
+    PORTAL_LEAD_LIST_NEXT_LABEL
+  );
+  assert.equal(
+    portalLeadsContinuation({
+      status: "delivered",
+      filters,
+      itemCount: 0,
+      nextCursor: "evt_200",
+    })?.label,
+    PORTAL_LEAD_LIST_CONTINUE_LABEL
+  );
+  assert.equal(
+    portalLeadsContinuation({
+      status: "delivered",
+      filters,
+      itemCount: 0,
+      nextCursor: null,
+    }),
+    null
+  );
 });
 
 test("list and detail paths reject invalid status values", () => {

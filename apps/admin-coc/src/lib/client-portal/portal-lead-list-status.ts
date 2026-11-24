@@ -19,6 +19,11 @@ export type PortalLeadListFilters = {
 };
 
 export const PORTAL_LEAD_LIST_STATUS_QUERY = "status";
+export const PORTAL_LEAD_LIST_CURSOR_QUERY = "cursor";
+/** One customer page. The API scan budget stays separate and can end a page early. */
+export const PORTAL_LEAD_LIST_PAGE_SIZE = 50;
+export const PORTAL_LEAD_LIST_NEXT_LABEL = "Next";
+export const PORTAL_LEAD_LIST_CONTINUE_LABEL = "Continue searching older leads";
 
 export const PORTAL_LEAD_LIST_STATUSES = ["all", "delivered"] as const;
 
@@ -72,6 +77,41 @@ export function portalLeadListPath(
   appendPortalLeadListFilters(params, filters);
   const query = params.toString();
   return query ? `/portal/leads?${query}` : "/portal/leads";
+}
+
+/**
+ * Next page of the current Delivered filters. Filter changes use
+ * `portalLeadListPath`, which omits the cursor.
+ */
+export function portalLeadListCursorPath(
+  status: PortalLeadListStatus | string,
+  filters: PortalLeadListFilters | undefined,
+  cursor: string
+): string {
+  const trimmed = cursor.trim();
+  const base = portalLeadListPath(status, filters);
+  const url = new URL(base, "http://localhost");
+  url.searchParams.set(PORTAL_LEAD_LIST_CURSOR_QUERY, trimmed);
+  return `${url.pathname}${url.search}`;
+}
+
+/**
+ * Delivered pagination. A full page of matches offers Next. A bounded scan
+ * that matched nothing still offers the cursor. The final empty state is only
+ * when that cursor is absent.
+ */
+export function portalLeadsContinuation(input: {
+  status: PortalLeadListStatus;
+  filters?: PortalLeadListFilters;
+  itemCount: number;
+  nextCursor: string | null;
+}): { href: string; label: string } | null {
+  const cursor = input.nextCursor?.trim();
+  if (input.status !== "delivered" || !cursor) return null;
+  return {
+    href: portalLeadListCursorPath(input.status, input.filters, cursor),
+    label: input.itemCount === 0 ? PORTAL_LEAD_LIST_CONTINUE_LABEL : PORTAL_LEAD_LIST_NEXT_LABEL,
+  };
 }
 
 /** Value forwarded to GET /client/v1/lead-delivery. Omit for All. */

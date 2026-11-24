@@ -24,6 +24,8 @@ test("lead detail does not invent order linkage or change list navigation helper
 
 test("leads list still uses the same detail path helper", () => {
   assert.match(listPage, /portalLeadListPath/);
-  assert.match(listPage, /PortalLeadsList/);
+  assert.match(listPage, /PortalLeadsResults/);
   assert.match(listPage, /PortalLeadsStatusFilter/);
+  assert.match(listPage, /ctx\.clientAccountId/);
+  assert.doesNotMatch(listPage, /sp\.clientAccountId/);
 });

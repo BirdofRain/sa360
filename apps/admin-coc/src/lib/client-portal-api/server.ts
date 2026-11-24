@@ -1,5 +1,7 @@
 import "server-only";
 
+import { PORTAL_LEAD_LIST_PAGE_SIZE } from "../client-portal/portal-lead-list-status.ts";
+
 import {
   clientLeadOrderExportsPath,
   parseClientLeadOrderExportsPayload,
@@ -498,31 +500,26 @@ export async function fetchClientLeadDeliveryList(opts: {
   q?: string;
   from?: string;
   to?: string;
-}): Promise<{ items: unknown[]; error: string | null }> {
+  cursor?: string;
+}): Promise<{ items: unknown[]; nextCursor: string | null; error: string | null }> {
   const params = new URLSearchParams({ clientAccountId: opts.clientAccountId });
+  params.set("limit", String(PORTAL_LEAD_LIST_PAGE_SIZE));
   if (opts.status) params.set("status", opts.status);
   if (opts.q?.trim()) params.set("q", opts.q.trim());
   if (opts.from?.trim()) params.set("from", opts.from.trim());
   if (opts.to?.trim()) params.set("to", opts.to.trim());
-  // One portal page. Delivered membership may stop a response early at the
-  // scan budget; follow that cursor until the page is full or the list ends.
-  const pageSize = 50;
-  const maxRounds = opts.status === "delivered" ? 8 : 1;
-  params.set("limit", String(pageSize));
-  const items: unknown[] = [];
-  for (let round = 0; round < maxRounds && items.length < pageSize; round += 1) {
-    const res = await clientPortalFetchJson<{
-      ok: boolean;
-      items: unknown[];
-      nextCursor: string | null;
-    }>(`/client/v1/lead-delivery?${params.toString()}`);
-    if (!res.ok) return { items: [], error: res.body };
-    items.push(...(res.data.items ?? []));
-    if (!res.data.nextCursor || opts.status !== "delivered") break;
-    params.set("cursor", res.data.nextCursor);
-    params.set("limit", String(pageSize - items.length));
-  }
-  return { items: items.slice(0, pageSize), error: null };
+  if (opts.cursor?.trim()) params.set("cursor", opts.cursor.trim());
+  const res = await clientPortalFetchJson<{
+    ok: boolean;
+    items: unknown[];
+    nextCursor: string | null;
+  }>(`/client/v1/lead-delivery?${params.toString()}`);
+  if (!res.ok) return { items: [], nextCursor: null, error: res.body };
+  return {
+    items: res.data.items ?? [],
+    nextCursor: typeof res.data.nextCursor === "string" && res.data.nextCursor.trim() ? res.data.nextCursor : null,
+    error: null,
+  };
 }
 
 export async function fetchClientLeadDeliveryDetail(opts: {

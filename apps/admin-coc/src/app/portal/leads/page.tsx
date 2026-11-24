@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 
 import { PortalAccessGate } from "@/components/client-portal/portal-access-gate";
 import { PortalAppFrame } from "@/components/client-portal/portal-app-frame";
-import { PortalLeadsList } from "@/components/client-portal/portal-leads-list";
+import { PortalLeadsResults } from "@/components/client-portal/portal-leads-results";
 import { PortalLeadsStatusFilter } from "@/components/client-portal/portal-leads-status-filter";
 import { PortalUnavailableState } from "@/components/client-portal/portal-unavailable-state";
 import { fetchClientLeadDeliveryList } from "@/lib/client-portal-api/server";
@@ -14,6 +14,7 @@ import {
   firstPortalSearchParam,
   parsePortalLeadListStatus,
   portalLeadListApiStatus,
+  portalLeadListCursorPath,
   portalLeadListPageSubtitle,
   portalLeadListPath,
   type PortalLeadListFilters,
@@ -40,7 +41,12 @@ export default async function PortalLeadsPage({
     from: firstPortalSearchParam(sp.from),
     to: firstPortalSearchParam(sp.to),
   };
-  const nextPath = portalLeadListPath(statusFilter, listFilters);
+  // Delivered pagination only. Filter links omit this, so a filter change starts over.
+  const requestedCursor =
+    statusFilter === "delivered" ? firstPortalSearchParam(sp.cursor)?.trim() || undefined : undefined;
+  const nextPath = requestedCursor
+    ? portalLeadListCursorPath(statusFilter, listFilters, requestedCursor)
+    : portalLeadListPath(statusFilter, listFilters);
 
   const ctx = await loadPortalPageContext({ nextPath });
   if (ctx.mode === "login_required") redirect(portalLoginPath(ctx.nextPath));
@@ -52,7 +58,7 @@ export default async function PortalLeadsPage({
         displayName={ctx.displayName}
         previewCopy={resolvePortalPreviewBannerCopy("not_configured")}
       >
-        <div className="space-y-4" data-lead-list-status={statusFilter} key={statusFilter}>
+        <div className="space-y-4" data-lead-list-status={statusFilter} key={`${statusFilter}:${requestedCursor ?? ""}`}>
           <LeadsPageHeader statusFilter={statusFilter} filters={listFilters} />
           <PortalUnavailableState
             title="Leads are not connected yet"
@@ -69,6 +75,7 @@ export default async function PortalLeadsPage({
     q: listFilters.q,
     from: listFilters.from,
     to: listFilters.to,
+    cursor: requestedCursor,
   });
   const leads = mapClientLeadDeliveryRows(result.items);
   const previewCopy = result.error
@@ -77,7 +84,7 @@ export default async function PortalLeadsPage({
 
   return (
     <PortalAppFrame displayName={ctx.displayName} showSignOut previewCopy={previewCopy}>
-      <div className="space-y-4" data-lead-list-status={statusFilter} key={statusFilter}>
+      <div className="space-y-4" data-lead-list-status={statusFilter} key={`${statusFilter}:${requestedCursor ?? ""}`}>
         <LeadsPageHeader statusFilter={statusFilter} filters={listFilters} />
         {result.error ? (
           <PortalUnavailableState
@@ -85,7 +92,12 @@ export default async function PortalLeadsPage({
             hint="We could not load leads. Try again shortly, or contact your SA360 team."
           />
         ) : (
-          <PortalLeadsList leads={leads} statusFilter={statusFilter} />
+          <PortalLeadsResults
+            statusFilter={statusFilter}
+            filters={listFilters}
+            leads={leads}
+            nextCursor={result.nextCursor}
+          />
         )}
       </div>
     </PortalAppFrame>

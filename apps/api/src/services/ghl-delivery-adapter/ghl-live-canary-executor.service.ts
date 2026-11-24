@@ -153,6 +153,14 @@ function findPlanStepId(ctx: GhlAdapterPlanContext, stepType: string): string | 
   return step?.id ?? null;
 }
 
+export async function emitRecordedGhlLifecycleEvent(
+  ctx: GhlAdapterPlanContext,
+  eventName: LifecycleEventNameInternal,
+  contactIdGhl?: string | null
+) {
+  await emitDeliveryLifecycleEvent(ctx, eventName, contactIdGhl);
+}
+
 async function emitDeliveryLifecycleEvent(
   ctx: GhlAdapterPlanContext,
   eventName: LifecycleEventNameInternal,
@@ -192,6 +200,8 @@ export async function executeLiveCanaryGhlSteps(
       contactIdGhl?: string | null
     ) => Promise<void>;
     priorReceipts?: VetOperationReceipt[];
+    /** Beta delivery emits this only after the step receipt commits. */
+    deferDeliveredEvent?: boolean;
   }
 ): Promise<LiveCanaryExecutionResult> {
   const emitLifecycle =
@@ -1765,7 +1775,7 @@ export async function executeLiveCanaryGhlSteps(
   if (duplicateTargetsBlocked) runStatus = "failed";
 
   if (runStatus === "succeeded" || runStatus === "partial_success") {
-    await emitLifecycle("lead_delivered", contactIdGhl);
+    if (opts?.deferDeliveredEvent !== true) await emitLifecycle("lead_delivered", contactIdGhl);
   } else {
     await emitLifecycle("delivery_failed", contactIdGhl);
   }

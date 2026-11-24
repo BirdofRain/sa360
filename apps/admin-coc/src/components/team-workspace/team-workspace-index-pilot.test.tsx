@@ -70,6 +70,31 @@ test("the index pilot adds no identity line and keeps the existing names", () =>
   assert.equal((screen.getByRole("button", { name: "Create client" }) as HTMLButtonElement).type, "button");
 });
 
+test("only the repeated Team Workspace title is marked for hiding", async () => {
+  const { TeamWorkspaceDisabled, TeamWorkspaceIntro, TeamWorkspaceMessage } = await import("./workspace-states.tsx");
+  render(
+    <TeamWorkspaceIndexPilot>
+      <TeamWorkspaceIntro />
+      <TeamWorkspaceMessage title="Clients could not be loaded" body="The client list could not be loaded." />
+      <TeamWorkspaceDisabled />
+    </TeamWorkspaceIndexPilot>
+  );
+
+  const repeated = screen.getAllByRole("heading", { name: "Team Workspace" });
+  assert.equal(repeated.length, 2);
+  for (const heading of repeated) {
+    assert.equal(heading.getAttribute("data-team-workspace-repeated-title"), "");
+  }
+  assert.equal(
+    screen.getByRole("heading", { name: "Clients could not be loaded" }).hasAttribute("data-team-workspace-repeated-title"),
+    false
+  );
+  assert.equal(
+    screen.getByRole("heading", { name: "Team Workspace is turned off" }).hasAttribute("data-team-workspace-repeated-title"),
+    false
+  );
+});
+
 test("the pilot stylesheet records the website commit and stays on the index", () => {
   const css = readFileSync(join(here, "life-agent-launch-pilot.module.css"), "utf8");
   const indexPage = readFileSync(join(appRoot, "src/app/(dashboard)/team-workspace/page.tsx"), "utf8");
@@ -86,7 +111,11 @@ test("the pilot stylesheet records the website commit and stays on the index", (
   assert.doesNotMatch(css, /DD0426|logo-dark|logo-light|SA360 · Life Agent Launch/);
   assert.match(css, /#006fff/i);
   assert.match(css, /label\.text-slate-800\)\s*\{[^}]*background-color:\s*var\(--lal-night-sky\)/);
-  assert.match(css, /:global\(header\) > :global\(h1\)\s*\{[^}]*display:\s*none/);
+  assert.match(css, /data-team-workspace-repeated-title\]\)\s*\{[^}]*display:\s*none/);
+  assert.doesNotMatch(css, /:global\(header\) > :global\(h1\)/);
+  assert.match(css, /\[data-slot="button"\]:not\(\.bg-primary\)/);
+  assert.match(css, /padding:\s*8px;/);
+  assert.doesNotMatch(css, /8px 4px 4px/);
   assert.match(indexPage, /TeamWorkspaceIndexPilot/);
   for (const source of [detailPage, dashboardLayout, rootLayout, tailwind, globals]) {
     assert.equal(source.includes("TeamWorkspaceIndexPilot"), false);

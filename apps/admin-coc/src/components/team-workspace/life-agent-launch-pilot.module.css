@@ -47,13 +47,13 @@
 
 /*
  * The shell header already shows "Team Workspace" at both widths.
- * Hide only that repeated index title. Error and access titles are not in this header.
+ * Hide only the repeated intro title. Error and disabled headings are unmarked.
  */
-.boundary :global(header) > :global(h1) {
+.boundary :global(h1[data-team-workspace-repeated-title]) {
   display: none;
 }
 
-.boundary :global(header) > :global(p:first-of-type) {
+.boundary :global(header:has(h1[data-team-workspace-repeated-title])) > :global(p:first-of-type) {
   margin-top: 0;
 }
 
@@ -172,7 +172,7 @@
   color: var(--lal-night-sky);
 }
 
-.boundary :global([data-slot="button"]) {
+.boundary :global([data-slot="button"]:not(.bg-primary)) {
   border: 2px solid var(--lal-night-sky);
   border-radius: 8px;
   background-color: transparent;
@@ -184,12 +184,12 @@
   transition: none;
 }
 
-.boundary :global([data-slot="button"]:hover) {
+.boundary :global([data-slot="button"]:not(.bg-primary):hover) {
   background-color: var(--lal-haze);
   color: var(--lal-night-sky);
 }
 
-.boundary :global([data-slot="button"]:active) {
+.boundary :global([data-slot="button"]:not(.bg-primary):active) {
   transform: none;
 }
 
@@ -214,6 +214,6 @@
   margin-right: 0;
   margin-bottom: 0;
   margin-left: 0;
-  padding: 8px 4px 4px;
+  padding: 8px;
   overflow-x: auto;
 }

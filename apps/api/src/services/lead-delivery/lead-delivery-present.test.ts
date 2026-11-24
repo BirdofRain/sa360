@@ -181,6 +181,175 @@ test("detail copies canonical consumer age only when source attributes have none
   assert.equal(explicit.attribution.sourceAttributes.consumer_age, undefined);
 });
 
+test("client badge and delivery text follow a canonical partial_success without a timeline event", () => {
+  const ctx = baseContext({
+    portalGhlDelivery: {
+      evaluated: true,
+      canonical: true,
+      at: "2026-11-23T18:05:00.000Z",
+      reasons: [],
+      liveRunId: "run_1",
+      liveRunStatus: "partial_success",
+      optionalStepFailures: [{ stepType: "assign_owner", status: "optional_failed", errorCode: "http_500" }],
+    },
+    liveRun: {
+      id: "run_1",
+      status: "partial_success",
+      completedAt: new Date("2026-11-23T18:05:00.000Z"),
+      summary: "partial",
+    },
+  });
+  const row = presentLeadDeliveryListRow(ctx, "client");
+  assert.equal(row.deliveryStatus, "delivered");
+  assert.equal(row.lastEventName, "lead_delivered");
+  const clientDetail = presentLeadDeliveryDetail(ctx, "client");
+  assert.equal(clientDetail.deliveryStatus, "delivered");
+  assert.equal(clientDetail.delivery.deliveredAt, "2026-11-23T18:05:00.000Z");
+  assert.equal(clientDetail.adminDetail, undefined);
+  const admin = presentLeadDeliveryDetail(ctx, "admin");
+  assert.equal(admin.deliveryStatus, "not_started");
+  assert.equal(admin.delivery.liveRunStatus, "partial_success");
+  assert.equal(admin.lastEventName, "lead_routed");
+  assert.equal(admin.adminDetail?.ghlRunStatus, "partial_success");
+  assert.deepEqual(admin.adminDetail?.ghlOptionalStepFailures, [
+    { stepType: "assign_owner", status: "optional_failed", errorCode: "http_500" },
+  ]);
+});
+
+test("a later customer event stays on the subline when required delivery is canonical", () => {
+  const ctx = baseContext({
+    portalGhlDelivery: {
+      evaluated: true,
+      canonical: true,
+      at: "2026-11-23T18:05:00.000Z",
+      reasons: [],
+      liveRunId: "run_1",
+      liveRunStatus: "succeeded",
+      optionalStepFailures: [],
+    },
+    timeline: {
+      ok: true,
+      identity: {
+        leadUid: "uid_1",
+        contactIdGhl: null,
+        displayName: null,
+        phoneE164: null,
+        email: null,
+        clientAccountId: "client_a",
+        subaccountIdGhl: null,
+      },
+      currentState: {
+        lifecycleStage: null,
+        appointmentStatus: "set",
+        agentDisposition: null,
+        policyStatus: null,
+        aiStatus: null,
+        routingStatus: null,
+        lastSeenAt: null,
+      },
+      timeline: [
+        {
+          id: "evt_appt",
+          source: "lifecycle_event",
+          sourceTable: "LifecycleEvent",
+          requestId: null,
+          eventUuid: null,
+          eventNameInternal: "appointment_set",
+          eventNameMeta: null,
+          receivedAt: "2026-11-23T19:00:00.000Z",
+          validity: "valid",
+          processingStatus: "received",
+          httpStatus: null,
+          leadName: null,
+          phoneE164: null,
+          email: null,
+          summary: null,
+          errorSummary: null,
+        },
+      ],
+      missingMilestones: [],
+      warnings: [],
+    },
+  });
+  const row = presentLeadDeliveryListRow(ctx, "client");
+  assert.equal(row.deliveryStatus, "delivered");
+  assert.equal(row.lastEventName, "appointment_set");
+});
+
+test("a completed contact does not present Delivered when required enrollment is not canonical", () => {
+  const ctx = baseContext({
+    sourceLead: baseSourceLead({
+      deliveryResultJson: { contactIdGhl: "contact_1", status: "created" },
+    }),
+    liveRun: {
+      id: "run_failed",
+      status: "failed",
+      completedAt: new Date("2026-11-23T18:05:00.000Z"),
+      summary: "failed",
+    },
+    portalGhlDelivery: {
+      evaluated: true,
+      canonical: false,
+      at: null,
+      reasons: ["workflow_not_enrolled", "operation_outcome_ambiguous"],
+      liveRunId: "run_failed",
+      liveRunStatus: "failed",
+      optionalStepFailures: [],
+    },
+    timeline: {
+      ok: true,
+      identity: {
+        leadUid: "uid_1",
+        contactIdGhl: "contact_1",
+        displayName: "Jane Doe",
+        phoneE164: null,
+        email: null,
+        clientAccountId: "client_a",
+        subaccountIdGhl: null,
+      },
+      currentState: {
+        lifecycleStage: null,
+        appointmentStatus: null,
+        agentDisposition: null,
+        policyStatus: null,
+        aiStatus: null,
+        routingStatus: null,
+        lastSeenAt: null,
+      },
+      timeline: [
+        {
+          id: "evt_delivered",
+          source: "lifecycle_event",
+          sourceTable: "LifecycleEvent",
+          requestId: null,
+          eventUuid: "evt_delivered",
+          eventNameInternal: "lead_delivered",
+          eventNameMeta: "lead_delivered",
+          receivedAt: "2026-11-23T18:05:01.000Z",
+          validity: "valid",
+          processingStatus: "received",
+          httpStatus: null,
+          leadName: null,
+          phoneE164: null,
+          email: null,
+          summary: null,
+          errorSummary: null,
+        },
+      ],
+      missingMilestones: [],
+      warnings: [],
+    },
+  });
+  const client = presentLeadDeliveryDetail(ctx, "client");
+  assert.notEqual(client.deliveryStatus, "delivered");
+  assert.notEqual(client.lastEventName, "lead_delivered");
+  assert.equal(client.delivery.deliveredAt, null);
+  const admin = presentLeadDeliveryDetail(ctx, "admin");
+  assert.equal(admin.delivery.liveRunStatus, "failed");
+  assert.equal(admin.lastEventName, "lead_delivered");
+  assert.ok(admin.adminDetail?.ghlCanonicalReasons?.includes("workflow_not_enrolled"));
+});
+
 test("missing routing/delivery data does not crash presenter", () => {
   const ctx = baseContext({
     sourceLead: baseSourceLead({

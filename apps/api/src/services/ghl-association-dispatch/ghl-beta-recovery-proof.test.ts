@@ -739,6 +739,8 @@ test("required enrollment failure is not Delivered and recovery does not resend"
     assert.equal(receiptOutcome(optionalView, "start_workflow"), "completed");
     assert.equal(optionalView.lifecycle.some((event) => event.eventNameInternal === "lead_delivered"), true);
     assert.equal(optionalView.canonical?.canonical, true, optionalView.canonical?.reasons.join(","));
+    assert.equal(optionalView.alex?.deliveryLabel, "Delivered");
+    assert.equal(optionalView.alex?.customerLastEvent, "Delivered");
     assert.equal(ghl.contactWrites, 1);
     assert.equal(ghl.enrollmentCalls, 1);
     assert.equal(ghl.enrollments.length, 1);
@@ -776,6 +778,9 @@ test("required enrollment failure is not Delivered and recovery does not resend"
     assert.equal(beforeRetry.run?.status, "partial_success");
     assert.equal(receiptOutcome(beforeRetry, "start_workflow"), "completed");
     assert.equal(beforeRetry.lifecycle.some((event) => event.eventNameInternal === "lead_delivered"), false);
+    assert.equal(beforeRetry.canonical?.canonical, true, beforeRetry.canonical?.reasons.join(","));
+    assert.equal(beforeRetry.alex?.deliveryLabel, "Delivered");
+    assert.equal(beforeRetry.alex?.customerLastEvent, "Delivered");
     assert.equal(ghl.contactWrites - writesBefore, 0);
     assert.equal(ghl.enrollmentCalls - enrollmentsBefore, 0);
 

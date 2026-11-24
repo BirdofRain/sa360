@@ -17,6 +17,10 @@ import {
 } from "../../repositories/source-lead-event.repository.js";
 import { getLeadTimeline } from "../lead-timeline.service.js";
 import type { LeadTimelineResponse } from "../lead-timeline.types.js";
+import {
+  loadPortalGhlDeliveryFacts,
+  type PortalGhlDeliveryFacts,
+} from "./portal-ghl-delivery.js";
 
 export type LeadDeliveryJoinContext = {
   sourceLead: SourceLeadEvent;
@@ -29,6 +33,11 @@ export type LeadDeliveryJoinContext = {
   liveRun: Pick<GhlLiveDeliveryRun, "id" | "status" | "completedAt" | "summary"> | null;
   clientDisplayName: string | null;
   timeline: LeadTimelineResponse | null;
+  /**
+   * Committed association receipt verdict for this lead, client, and destination.
+   * Null when no matching outbox was stored. Reading it does not call GoHighLevel.
+   */
+  portalGhlDelivery?: PortalGhlDeliveryFacts | null;
 };
 
 export type LeadDeliveryReadServiceDeps = {
@@ -145,6 +154,20 @@ async function joinSourceLeads(
 
   const planByDecision = new Map(planSummaries.map((p) => [p.routingDryRunDecisionId, p]));
   const clientNameById = new Map(clientAccounts.map((c) => [c.clientAccountId, c.clientDisplayName]));
+  const portalGhlDelivery = await loadPortalGhlDeliveryFacts(
+    rows.map((sourceLead) => {
+      const decision = sourceLead.routingDryRunDecisionId
+        ? decisionMap.get(sourceLead.routingDryRunDecisionId) ?? null
+        : null;
+      return {
+        id: sourceLead.id,
+        clientAccountId: sourceLead.clientAccountIdResolved ?? decision?.destinationClientAccountId ?? null,
+        destinationLocationId:
+          sourceLead.destinationLocationIdResolved ?? decision?.destinationSubaccountIdGhl ?? null,
+      };
+    }),
+    db
+  );
 
   return Promise.all(
     rows.map(async (sourceLead) => {
@@ -196,6 +219,7 @@ async function joinSourceLeads(
         liveRun,
         clientDisplayName: clientAccountId ? clientNameById.get(clientAccountId) ?? null : null,
         timeline,
+        portalGhlDelivery: portalGhlDelivery.get(sourceLead.id) ?? null,
       };
     })
   );

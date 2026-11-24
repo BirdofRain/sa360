@@ -112,6 +112,12 @@ export type LeadDeliveryAdminDetail = {
   webhookRequestLogId: string | null;
   duplicateRiskSummary: string | null;
   enrichmentWarnings: string[];
+  /** Stored run status. Customer Delivered does not replace partial_success. */
+  ghlRunStatus?: string | null;
+  /** Canonical receipt reasons. Empty when required delivery completed. */
+  ghlCanonicalReasons?: string[];
+  /** Optional steps that did not succeed. Required-path failures stay on the run. */
+  ghlOptionalStepFailures?: Array<{ stepType: string; status: string; errorCode: string | null }>;
 };
 
 export type LeadDeliveryDetail = LeadDeliveryListRow & {

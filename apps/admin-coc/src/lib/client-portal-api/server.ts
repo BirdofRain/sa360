@@ -495,14 +495,34 @@ export async function fetchClientLeadsOnDemandAvailability(opts: {
 export async function fetchClientLeadDeliveryList(opts: {
   clientAccountId: string;
   status?: string;
+  q?: string;
+  from?: string;
+  to?: string;
 }): Promise<{ items: unknown[]; error: string | null }> {
   const params = new URLSearchParams({ clientAccountId: opts.clientAccountId });
   if (opts.status) params.set("status", opts.status);
-  const res = await clientPortalFetchJson<{ ok: boolean; items: unknown[] }>(
-    `/client/v1/lead-delivery?${params.toString()}`
-  );
-  if (!res.ok) return { items: [], error: res.body };
-  return { items: res.data.items ?? [], error: null };
+  if (opts.q?.trim()) params.set("q", opts.q.trim());
+  if (opts.from?.trim()) params.set("from", opts.from.trim());
+  if (opts.to?.trim()) params.set("to", opts.to.trim());
+  // One portal page. Delivered membership may stop a response early at the
+  // scan budget; follow that cursor until the page is full or the list ends.
+  const pageSize = 50;
+  const maxRounds = opts.status === "delivered" ? 8 : 1;
+  params.set("limit", String(pageSize));
+  const items: unknown[] = [];
+  for (let round = 0; round < maxRounds && items.length < pageSize; round += 1) {
+    const res = await clientPortalFetchJson<{
+      ok: boolean;
+      items: unknown[];
+      nextCursor: string | null;
+    }>(`/client/v1/lead-delivery?${params.toString()}`);
+    if (!res.ok) return { items: [], error: res.body };
+    items.push(...(res.data.items ?? []));
+    if (!res.data.nextCursor || opts.status !== "delivered") break;
+    params.set("cursor", res.data.nextCursor);
+    params.set("limit", String(pageSize - items.length));
+  }
+  return { items: items.slice(0, pageSize), error: null };
 }
 
 export async function fetchClientLeadDeliveryDetail(opts: {

@@ -79,6 +79,12 @@ export type SourceLeadEventListFilters = {
    * rows with no stored result are excluded.
    */
   liveExternalFailure?: boolean;
+  /** Case-insensitive match on campaign, funnel, or source lead id. Applied in the same WHERE as the client. */
+  search?: string;
+  /** Inclusive receivedAt lower bound. Applied in the same WHERE as the client. */
+  receivedFrom?: Date;
+  /** Inclusive receivedAt upper bound. Applied in the same WHERE as the client. */
+  receivedTo?: Date;
   limit?: number;
   cursor?: string;
 };
@@ -112,6 +118,33 @@ export function buildSourceLeadEventWhere(
     where.deliveryResultJson = {
       path: ["externalCallExecuted"],
       equals: true,
+    };
+  }
+  const search = filters.search?.trim();
+  if (search) {
+    where.AND = [
+      ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
+      {
+        OR: [
+          { sourceCampaignName: { contains: search, mode: "insensitive" } },
+          { sourceFunnelName: { contains: search, mode: "insensitive" } },
+          { sourceLeadUid: { contains: search, mode: "insensitive" } },
+          { sourceLeadId: { contains: search, mode: "insensitive" } },
+        ],
+      },
+    ];
+  }
+  if (
+    (filters.receivedFrom && !Number.isNaN(filters.receivedFrom.getTime())) ||
+    (filters.receivedTo && !Number.isNaN(filters.receivedTo.getTime()))
+  ) {
+    where.receivedAt = {
+      ...(filters.receivedFrom && !Number.isNaN(filters.receivedFrom.getTime())
+        ? { gte: filters.receivedFrom }
+        : {}),
+      ...(filters.receivedTo && !Number.isNaN(filters.receivedTo.getTime())
+        ? { lte: filters.receivedTo }
+        : {}),
     };
   }
   return where;

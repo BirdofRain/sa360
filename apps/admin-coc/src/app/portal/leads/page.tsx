@@ -16,6 +16,7 @@ import {
   portalLeadListApiStatus,
   portalLeadListPageSubtitle,
   portalLeadListPath,
+  type PortalLeadListFilters,
 } from "@/lib/client-portal/portal-lead-list-status";
 import { loadPortalPageContext } from "@/lib/client-portal/portal-page-context";
 
@@ -34,7 +35,12 @@ export default async function PortalLeadsPage({
 }) {
   const sp = await searchParams;
   const statusFilter = parsePortalLeadListStatus(firstPortalSearchParam(sp.status));
-  const nextPath = portalLeadListPath(statusFilter);
+  const listFilters = {
+    q: firstPortalSearchParam(sp.q),
+    from: firstPortalSearchParam(sp.from),
+    to: firstPortalSearchParam(sp.to),
+  };
+  const nextPath = portalLeadListPath(statusFilter, listFilters);
 
   const ctx = await loadPortalPageContext({ nextPath });
   if (ctx.mode === "login_required") redirect(portalLoginPath(ctx.nextPath));
@@ -47,7 +53,7 @@ export default async function PortalLeadsPage({
         previewCopy={resolvePortalPreviewBannerCopy("not_configured")}
       >
         <div className="space-y-4" data-lead-list-status={statusFilter} key={statusFilter}>
-          <LeadsPageHeader statusFilter={statusFilter} />
+          <LeadsPageHeader statusFilter={statusFilter} filters={listFilters} />
           <PortalUnavailableState
             title="Leads are not connected yet"
             hint="This preview does not invent lead history. Live leads appear after the portal API is configured for your account."
@@ -60,6 +66,9 @@ export default async function PortalLeadsPage({
   const result = await fetchClientLeadDeliveryList({
     clientAccountId: ctx.clientAccountId,
     status: portalLeadListApiStatus(statusFilter),
+    q: listFilters.q,
+    from: listFilters.from,
+    to: listFilters.to,
   });
   const leads = mapClientLeadDeliveryRows(result.items);
   const previewCopy = result.error
@@ -69,7 +78,7 @@ export default async function PortalLeadsPage({
   return (
     <PortalAppFrame displayName={ctx.displayName} showSignOut previewCopy={previewCopy}>
       <div className="space-y-4" data-lead-list-status={statusFilter} key={statusFilter}>
-        <LeadsPageHeader statusFilter={statusFilter} />
+        <LeadsPageHeader statusFilter={statusFilter} filters={listFilters} />
         {result.error ? (
           <PortalUnavailableState
             title="Leads could not be loaded"
@@ -85,8 +94,10 @@ export default async function PortalLeadsPage({
 
 function LeadsPageHeader({
   statusFilter,
+  filters,
 }: {
   statusFilter: ReturnType<typeof parsePortalLeadListStatus>;
+  filters?: PortalLeadListFilters;
 }) {
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -96,7 +107,7 @@ function LeadsPageHeader({
           {portalLeadListPageSubtitle(statusFilter)}
         </p>
       </div>
-      <PortalLeadsStatusFilter active={statusFilter} />
+      <PortalLeadsStatusFilter active={statusFilter} filters={filters} />
     </div>
   );
 }

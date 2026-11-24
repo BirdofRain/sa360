@@ -1,5 +1,6 @@
 import {
   portalLeadListPath,
+  type PortalLeadListFilters,
   type PortalLeadListStatus,
 } from "./portal-lead-list-status.ts";
 
@@ -32,6 +33,9 @@ export function portalLeadListNeedsExplicitRefresh(
   return current !== next;
 }
 
-export function portalLeadListHref(status: PortalLeadListStatus): string {
-  return portalLeadListPath(status);
+export function portalLeadListHref(
+  status: PortalLeadListStatus,
+  filters?: PortalLeadListFilters
+): string {
+  return portalLeadListPath(status, filters);
 }

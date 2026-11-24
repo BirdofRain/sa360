@@ -1,0 +1,219 @@
+/*
+ * Life Agent Launch visual pilot for the /team-workspace index only.
+ * Website source: BirdofRain/life-agent-launch @ e10d4d76e3ec8dc7b9553fd670e5ece84091df74
+ * Text treatment only. The website SVG marks were not copied.
+ * Values used: Figtree 600/700, Inter (existing), Geist Mono (existing),
+ * #F8F7FF starlight, #FFFFFF, #E3E0FA haze, #1B1F3B night sky,
+ * #34396C stratosphere, #0058CC deep blue, #006FFF Launch Blue focus.
+ * Ignition red is intentionally absent.
+ * Every rule is under .boundary so the sheet is inert without that class.
+ */
+
+.boundary {
+  --lal-starlight: #f8f7ff;
+  --lal-white: #ffffff;
+  --lal-haze: #e3e0fa;
+  --lal-night-sky: #1b1f3b;
+  --lal-stratosphere: #34396c;
+  --lal-blue-deep: #0058cc;
+  --lal-blue-focus: #006fff;
+  box-sizing: border-box;
+  width: calc(100% + 1.5rem);
+  min-width: 0;
+  margin: -0.75rem;
+  padding: 0.75rem;
+  min-height: calc(100% + 1.5rem);
+  background-color: var(--lal-starlight);
+  color: var(--lal-night-sky);
+  font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+}
+
+@media (min-width: 640px) {
+  .boundary {
+    width: calc(100% + 3rem);
+    margin: -1.5rem;
+    padding: 1.5rem;
+    min-height: calc(100% + 3rem);
+  }
+}
+
+/* Keep wide index content from stretching the scrolling main. */
+.boundary :global(.grid),
+.boundary :global(.grid) > *,
+.boundary :global([class*="space-y-"]) {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/*
+ * The shell header already shows "Team Workspace" at both widths.
+ * Hide only the repeated intro title. Error and disabled headings are unmarked.
+ */
+.boundary :global(h1[data-team-workspace-repeated-title]) {
+  display: none;
+}
+
+.boundary :global(header:has(h1[data-team-workspace-repeated-title])) > :global(p:first-of-type) {
+  margin-top: 0;
+}
+
+.boundary :global(h1),
+.boundary :global(h2),
+.boundary :global(h3) {
+  color: var(--lal-night-sky);
+  font-family: var(--font-lal-heading), system-ui, sans-serif;
+  font-weight: 600;
+  letter-spacing: normal;
+}
+
+.boundary :global(.text-slate-950):not(:global(.rounded-full)),
+.boundary :global(.text-slate-900):not(:global(.rounded-full)),
+.boundary :global(.text-slate-800):not(:global(.rounded-full)),
+.boundary :global(.text-slate-700):not(:global(.rounded-full)) {
+  color: var(--lal-night-sky);
+}
+
+.boundary :global(.text-slate-600):not(:global(.rounded-full)),
+.boundary :global(.text-slate-500):not(:global(.rounded-full)) {
+  color: var(--lal-stratosphere);
+}
+
+.boundary :global(section[aria-label="Clients"]) :global(a) :global(.text-slate-500) {
+  color: #64748b;
+}
+
+.boundary :global(section[aria-label="Clients"]) :global(a) :global(.text-slate-200) {
+  color: #e2e8f0;
+}
+
+.boundary :global(section[aria-label="Clients"]) :global(a.bg-slate-900) {
+  color: #ffffff;
+}
+
+.boundary :global(section.rounded-xl),
+.boundary :global(div.rounded-xl.border.bg-white) {
+  border-color: var(--lal-haze);
+  border-radius: 12px;
+  background-color: var(--lal-white);
+  box-shadow: none;
+}
+
+.boundary :global(p.rounded-md.border.bg-white) {
+  border-color: var(--lal-haze);
+  background-color: var(--lal-white);
+  box-shadow: none;
+}
+
+/* Compact Night Sky bar on the existing "Find a client" label. Search and rows stay white. */
+.boundary :global(section[aria-label="Clients"]) {
+  padding: 0;
+  overflow: hidden;
+  background-color: var(--lal-white);
+}
+
+.boundary :global(section[aria-label="Clients"]) > :global(label.text-slate-800) {
+  display: block;
+  margin: 0;
+  padding: 0.375rem 1rem;
+  background-color: var(--lal-night-sky);
+  color: var(--lal-white);
+  font-family: var(--font-lal-heading), system-ui, sans-serif;
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: normal;
+  line-height: 1.25rem;
+}
+
+.boundary :global(section[aria-label="Clients"]) > :global(input) {
+  box-sizing: border-box;
+  width: calc(100% - 2rem);
+  margin: 0.75rem 1rem 0;
+  background-color: var(--lal-white);
+}
+
+.boundary :global(section[aria-label="Clients"]) > :global(ul),
+.boundary :global(section[aria-label="Clients"]) > :global(p) {
+  margin-right: 1rem;
+  margin-left: 1rem;
+}
+
+.boundary :global(section[aria-label="Clients"]) > :global(ul),
+.boundary :global(section[aria-label="Clients"]) > :global(p:last-child) {
+  margin-bottom: 1rem;
+}
+
+.boundary :global(section[aria-label="Clients"]) :global(li) + :global(li) {
+  border-top: 1px solid var(--lal-haze);
+}
+
+.boundary :global(input),
+.boundary :global(select),
+.boundary :global(textarea) {
+  border-radius: 8px;
+}
+
+.boundary :global(.font-mono) {
+  font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
+  font-weight: 400;
+}
+
+.boundary :global(a.text-sky-800),
+.boundary :global(button.text-sky-800) {
+  color: var(--lal-blue-deep);
+  font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition: none;
+}
+
+.boundary :global(a.text-sky-800:hover),
+.boundary :global(button.text-sky-800:hover) {
+  color: var(--lal-night-sky);
+}
+
+.boundary :global([data-slot="button"]:not(.bg-primary)) {
+  border: 2px solid var(--lal-night-sky);
+  border-radius: 8px;
+  background-color: transparent;
+  color: var(--lal-night-sky);
+  font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  font-weight: 700;
+  box-shadow: none;
+  transform: none;
+  transition: none;
+}
+
+.boundary :global([data-slot="button"]:not(.bg-primary):hover) {
+  background-color: var(--lal-haze);
+  color: var(--lal-night-sky);
+}
+
+.boundary :global([data-slot="button"]:not(.bg-primary):active) {
+  transform: none;
+}
+
+.boundary :global(:focus-visible) {
+  outline: 3px solid var(--lal-blue-focus);
+  outline-offset: 3px;
+}
+
+.boundary :global(button:focus-visible) {
+  outline: 3px solid var(--lal-blue-focus);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 3px var(--lal-white), 0 0 0 6px var(--lal-blue-focus);
+}
+
+/* The step strip scrolls inside itself. Do not let it widen the page. */
+.boundary :global(ol[aria-label="Guided setup steps"]) {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  margin-top: 0.5rem;
+  margin-right: 0;
+  margin-bottom: 0;
+  margin-left: 0;
+  padding: 8px;
+  overflow-x: auto;
+}

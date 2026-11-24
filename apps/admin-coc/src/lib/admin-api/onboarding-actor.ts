@@ -14,6 +14,7 @@ const ONBOARDING_WRITES: Array<{ method: string; pattern: RegExp }> = [
   { method: "POST", pattern: new RegExp(`^/admin/v1/clients/${CLIENT_ID}/company-sheets-destination-configuration$`) },
   { method: "POST", pattern: new RegExp(`^/admin/v1/team-workspace/clients/${CLIENT_ID}/sms-verbal-consent$`) },
   { method: "POST", pattern: new RegExp(`^/admin/v1/team-workspace/clients/${CLIENT_ID}/sms-opt-in-link$`) },
+  { method: "POST", pattern: new RegExp(`^/admin/v1/team-workspace/clients/${CLIENT_ID}/sms-ghl-program-link$`) },
   { method: "GET", pattern: new RegExp(`^/admin/v1/team-workspace/clients/${CLIENT_ID}/sms-consent-status$`) },
   { method: "POST", pattern: new RegExp(`^/admin/v1/clients/${CLIENT_ID}/campaigns$`) },
   { method: "POST", pattern: new RegExp(`^/admin/v1/clients/${CLIENT_ID}/campaigns/${CAMPAIGN_ID}$`) },

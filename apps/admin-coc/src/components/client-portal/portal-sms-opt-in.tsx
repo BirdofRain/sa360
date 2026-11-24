@@ -28,7 +28,8 @@ export function PortalSmsOptInForm({
   const [result, setResult] = useState<SmsOptInSubmitResult | null>(null);
   const lock = useRef(false);
   const unknown = result?.outcome === "unknown" || preview.statusKnown === false;
-  const canSubmit = preview.recordable && affirmed && !preview.smsEnabled && !submitting && !result?.ok && !unknown;
+  const replacingPrior = preview.priorProgram === "external-webhook-sms-v1" || preview.priorProgram === "external-webhook-sms-v2";
+  const canSubmit = preview.recordable && affirmed && (replacingPrior || !preview.smsEnabled) && !submitting && !result?.ok && !unknown;
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     if (!action) return;
@@ -106,7 +107,11 @@ export function PortalSmsOptInForm({
           checked={affirmed}
           onChange={(event) => setAffirmed(event.target.checked)}
         />
-        <span>I agree to receive these operational text messages at the mobile number on this form.</span>
+        <span>
+          {replacingPrior
+            ? "I agree to the GoHighLevel lead notice above. This is a new consent. My earlier delivery-webhook consent stays on file and is not deleted."
+            : "I agree to receive these operational text messages at the mobile number on this form."}
+        </span>
       </label>
       {preview.phoneMasked ? (
         <p className="text-sm text-slate-700">Mobile number on this link: {preview.phoneMasked}</p>

@@ -16,7 +16,13 @@ import { isTeamWorkspaceApiEnabled } from "../lib/team-workspace-env.js";
 import { WORKSPACE_KEY_HEADER } from "../lib/workspace-auth.js";
 import { CLIENT_PORTAL_ASSERTION_HEADER } from "@sa360/shared/client-portal-assertion";
 import { smsVerbalOperatorAllowed } from "../services/external-webhook-notification/sms-disclosure.js";
-import { issueSmsOptInLink, readSmsConsentStatus, recordVerbalSmsConsent, type SmsLinkCode } from "../services/external-webhook-notification/sms-opt-in-link.js";
+import {
+  issueSmsOptInLink,
+  issueSupersedingGhlConsentLink,
+  readSmsConsentStatus,
+  recordVerbalSmsConsent,
+  type SmsLinkCode,
+} from "../services/external-webhook-notification/sms-opt-in-link.js";
 
 const CLIENT_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const E164 = /^\+[1-9]\d{7,14}$/;
@@ -113,6 +119,33 @@ export async function adminSmsVerbalConsentRoutes(app: FastifyInstance, opts: { 
       ok: true,
       consentRecorded: false,
       smsEnabled: false,
+      email: issued.email,
+      url: issued.email === "sent" ? null : issued.url,
+      expiresAt: issued.expiresAt.toISOString(),
+    });
+  });
+
+  app.post("/team-workspace/clients/:clientAccountId/sms-ghl-program-link", async (request, reply) => {
+    if (!(await authorize(request, reply, env))) return;
+    const clientAccountId = pathClient(request);
+    if (!clientAccountId) return reply.status(404).send({ ok: false, error: "client_not_found" });
+    const operator = await resolveVerbalOperator(request, env);
+    if (!operator.ok) return reply.status(operator.status).send({ ok: false, error: operator.error });
+    const parsed = linkSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.status(400).send({ ok: false, error: "invalid_e164" });
+    const issued = await issueSupersedingGhlConsentLink(prisma, {
+      clientAccountId,
+      phoneE164: parsed.data.phoneE164,
+      confirmationEmail: parsed.data.confirmationEmail,
+      env,
+    });
+    if (!issued.ok) return reply.status(STATUS[issued.code] ?? 409).send({ ok: false, error: issued.code });
+    return reply.send({
+      ok: true,
+      consentRecorded: true,
+      consentReplaced: false,
+      smsEnabled: issued.smsEnabled,
+      priorProgram: issued.priorProgram,
       email: issued.email,
       url: issued.email === "sent" ? null : issued.url,
       expiresAt: issued.expiresAt.toISOString(),

@@ -2,7 +2,7 @@ import {
   reloadDeliveryNotificationPreferenceAction,
   saveDeliveryNotificationPreferenceAction,
 } from "@/app/actions/delivery-notification-preference";
-import { issueSmsOptInLinkAction, readSmsConsentStatusAction, recordVerbalSmsConsentAction } from "@/app/actions/sms-verbal-consent";
+import { issueGhlProgramLinkAction, issueSmsOptInLinkAction, readSmsConsentStatusAction, recordVerbalSmsConsentAction } from "@/app/actions/sms-verbal-consent";
 import { AdminCocForbiddenError, readAdminCocAccess } from "@/lib/admin-coc-session-guard";
 import { loadTeamWorkspaceClient } from "@/lib/team-workspace/load";
 import { parseGuideStep } from "@/lib/team-workspace/onboarding-guide";
@@ -95,6 +95,7 @@ export default async function TeamWorkspaceClientPage({
           smsActions={{
             recordVerbal: recordVerbalSmsConsentAction,
             issueLink: issueSmsOptInLinkAction,
+            issueGhlProgramLink: issueGhlProgramLinkAction,
             readStatus: readSmsConsentStatusAction,
           }}
         />

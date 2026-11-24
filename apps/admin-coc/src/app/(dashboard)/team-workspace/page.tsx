@@ -1,7 +1,10 @@
+import type { ReactNode } from "react";
+
 import { AdminCocForbiddenError, readAdminCocAccess } from "@/lib/admin-coc-session-guard";
 import { loadTeamWorkspaceIndex } from "@/lib/team-workspace/load";
 
 import { GuidedOnboarding } from "@/components/team-workspace/guided-onboarding";
+import { TeamWorkspaceIndexPilot } from "@/components/team-workspace/team-workspace-index-pilot";
 import { TeamWorkspaceHome } from "@/components/team-workspace/workspace-board";
 import { TeamWorkspaceDisabled, TeamWorkspaceIntro, TeamWorkspaceMessage } from "@/components/team-workspace/workspace-states";
 
@@ -14,37 +17,41 @@ export default async function TeamWorkspacePage() {
     access.kind === "staff_workspace" &&
     access.permissions.includes("team_operations") &&
     !access.permissions.includes("team_manager");
+  let content: ReactNode;
   try {
     const model = await loadTeamWorkspaceIndex();
-    if (model.kind === "disabled") return <TeamWorkspaceDisabled />;
-    if (model.kind === "error") {
-      return (
+    if (model.kind === "disabled") content = <TeamWorkspaceDisabled />;
+    else if (model.kind === "error") {
+      content = (
         <div className="space-y-6">
           <TeamWorkspaceIntro />
           <TeamWorkspaceMessage title="Clients could not be loaded" body={model.message} retryHref="/team-workspace" />
         </div>
       );
+    } else {
+      content = (
+        <div className="space-y-4">
+          {operationsOnly ? <OperationsNotice /> : null}
+          <TeamWorkspaceHome
+            clients={model.clients}
+            start={<GuidedOnboarding model={null} step="client" clients={model.clients} />}
+          />
+        </div>
+      );
     }
-    return (
-      <div className="space-y-4">
-        {operationsOnly ? <OperationsNotice /> : null}
-        <TeamWorkspaceHome
-          clients={model.clients}
-          start={<GuidedOnboarding model={null} step="client" clients={model.clients} />}
-        />
-      </div>
-    );
   } catch (error) {
     if (error instanceof AdminCocForbiddenError) {
-      return (
+      content = (
         <TeamWorkspaceMessage
           title="Admin session required"
           body="Team Workspace is an admin preview. Observers and portal sessions cannot open it."
         />
       );
+    } else {
+      throw error;
     }
-    throw error;
   }
+  return <TeamWorkspaceIndexPilot>{content}</TeamWorkspaceIndexPilot>;
 }
 
 function OperationsNotice() {

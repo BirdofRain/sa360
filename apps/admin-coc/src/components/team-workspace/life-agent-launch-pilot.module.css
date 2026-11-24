@@ -1,0 +1,171 @@
+/*
+ * Life Agent Launch visual pilot for the /team-workspace index only.
+ * Website source: BirdofRain/life-agent-launch @ e10d4d76e3ec8dc7b9553fd670e5ece84091df74
+ * Text identity only. The website SVG marks were not copied.
+ * Values used: Figtree 600/700, Inter (existing), Geist Mono (existing),
+ * #F8F7FF starlight, #FFFFFF, #E3E0FA haze, #1B1F3B night sky,
+ * #34396C stratosphere, #0058CC deep blue, #006FFF focus.
+ * Ignition red is intentionally absent.
+ * Every rule is under .boundary so the sheet is inert without that class.
+ */
+
+.boundary {
+  --lal-starlight: #f8f7ff;
+  --lal-white: #ffffff;
+  --lal-haze: #e3e0fa;
+  --lal-night-sky: #1b1f3b;
+  --lal-stratosphere: #34396c;
+  --lal-blue-deep: #0058cc;
+  --lal-blue-focus: #006fff;
+  box-sizing: border-box;
+  margin: -0.75rem;
+  padding: 0.75rem;
+  min-height: calc(100% + 1.5rem);
+  background-color: var(--lal-starlight);
+  color: var(--lal-night-sky);
+  font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+}
+
+@media (min-width: 640px) {
+  .boundary {
+    margin: -1.5rem;
+    padding: 1.5rem;
+    min-height: calc(100% + 3rem);
+  }
+}
+
+.identity {
+  margin: 0 0 0.75rem;
+  color: var(--lal-stratosphere);
+  font-family: var(--font-lal-heading), system-ui, sans-serif;
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: normal;
+  line-height: 1.25rem;
+}
+
+.boundary :global(h1),
+.boundary :global(h2),
+.boundary :global(h3) {
+  color: var(--lal-night-sky);
+  font-family: var(--font-lal-heading), system-ui, sans-serif;
+  font-weight: 600;
+  letter-spacing: normal;
+}
+
+/* The page title is text-2xl (24px). Tighter tracking stays on that title only. */
+.boundary :global(header) > :global(h1) {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.boundary :global(.text-slate-950):not(:global(.rounded-full)),
+.boundary :global(.text-slate-900):not(:global(.rounded-full)),
+.boundary :global(.text-slate-800):not(:global(.rounded-full)),
+.boundary :global(.text-slate-700):not(:global(.rounded-full)) {
+  color: var(--lal-night-sky);
+}
+
+.boundary :global(.text-slate-600):not(:global(.rounded-full)),
+.boundary :global(.text-slate-500):not(:global(.rounded-full)) {
+  color: var(--lal-stratosphere);
+}
+
+/* Status chips keep the colors on their own rounded-full classes. */
+
+.boundary :global(section[aria-label="Clients"]) :global(a) :global(.text-slate-500) {
+  color: #64748b;
+}
+
+.boundary :global(section[aria-label="Clients"]) :global(a) :global(.text-slate-200) {
+  color: #e2e8f0;
+}
+
+.boundary :global(section[aria-label="Clients"]) :global(a.bg-slate-900) {
+  color: #ffffff;
+}
+
+.boundary :global(section.rounded-xl),
+.boundary :global(div.rounded-xl.border.bg-white) {
+  border-color: var(--lal-haze);
+  border-radius: 12px;
+  background-color: var(--lal-white);
+  box-shadow: none;
+}
+
+.boundary :global(p.rounded-md.border.bg-white) {
+  border-color: var(--lal-haze);
+  background-color: var(--lal-white);
+  box-shadow: none;
+}
+
+.boundary :global(section[aria-label="Clients"]) :global(li) + :global(li) {
+  border-top: 1px solid var(--lal-haze);
+}
+
+.boundary :global(input),
+.boundary :global(select),
+.boundary :global(textarea) {
+  border-radius: 8px;
+}
+
+.boundary :global(.font-mono) {
+  font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
+  font-weight: 400;
+}
+
+.boundary :global(a.text-sky-800),
+.boundary :global(button.text-sky-800) {
+  color: var(--lal-blue-deep);
+  font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition: none;
+}
+
+.boundary :global(a.text-sky-800:hover),
+.boundary :global(button.text-sky-800:hover) {
+  color: var(--lal-night-sky);
+}
+
+.boundary :global([data-slot="button"]) {
+  border: 2px solid var(--lal-night-sky);
+  border-radius: 8px;
+  background-color: transparent;
+  color: var(--lal-night-sky);
+  font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  font-weight: 700;
+  box-shadow: none;
+  transform: none;
+  transition: none;
+}
+
+.boundary :global([data-slot="button"]:hover) {
+  background-color: var(--lal-haze);
+  color: var(--lal-night-sky);
+}
+
+.boundary :global([data-slot="button"]:active) {
+  transform: none;
+}
+
+.boundary :global(:focus-visible) {
+  outline: 3px solid var(--lal-blue-focus);
+  outline-offset: 3px;
+}
+
+.boundary :global(button:focus-visible) {
+  outline: 3px solid var(--lal-blue-focus);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 3px var(--lal-white), 0 0 0 6px var(--lal-blue-focus);
+}
+
+/* The step row scrolls. Keep the focus ring inside that scrollport. */
+.boundary :global(ol[aria-label="Guided setup steps"]) {
+  margin-top: calc(1rem - 8px);
+  margin-right: -8px;
+  margin-bottom: -8px;
+  margin-left: -8px;
+  padding: 8px;
+}

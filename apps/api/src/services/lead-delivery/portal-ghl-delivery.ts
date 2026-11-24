@@ -44,6 +44,13 @@ export type PortalGhlOptionalStepFailure = {
 export type PortalGhlDeliveryFacts = {
   evaluated: true;
   canonical: boolean;
+  /**
+   * The two requirement values disagree and the run did not record one.
+   * Customer surfaces say "Delivery unverified".
+   */
+  unverified: boolean;
+  /** Null when this run did not record the requirement. */
+  workflowStartRequired: boolean | null;
   at: string | null;
   reasons: string[];
   liveRunId: string | null;
@@ -74,6 +81,7 @@ type StoredRun = {
   destinationClientAccountId: string;
   destinationSubaccountIdGhl: string;
   idempotencyKey: string;
+  workflowStartRequired: boolean | null;
   stepRuns: StoredStep[];
 };
 
@@ -106,6 +114,12 @@ export function applyCustomerPortalGhlDelivery(input: {
   const facts = input.facts;
   if (!facts?.evaluated) {
     return { deliveryStatus: input.deliveryStatus, lastEvent: input.lastEvent };
+  }
+  if (facts.unverified) {
+    return {
+      deliveryStatus: "unverified",
+      lastEvent: { name: "delivery_unverified", at: input.lastEvent.at },
+    };
   }
   if (facts.canonical) {
     const key = eventKey(input.lastEvent.name);
@@ -178,6 +192,7 @@ export async function loadPortalGhlDeliveryFacts(
             destinationClientAccountId: true,
             destinationSubaccountIdGhl: true,
             idempotencyKey: true,
+            workflowStartRequired: true,
             stepRuns: {
               orderBy: { stepOrder: "asc" },
               select: {
@@ -265,7 +280,7 @@ function factsForRun(input: {
     errorCode: step.errorCode,
     responseRedactedJson: step.responseRedactedJson,
   }));
-  const canonicalInput: GhlCanonicalInput = {
+  const base: Omit<GhlCanonicalInput, "destination"> = {
     run: {
       id: input.run.id,
       mode: input.run.mode,
@@ -275,12 +290,6 @@ function factsForRun(input: {
       idempotencyKey: input.run.idempotencyKey,
     },
     steps,
-    destination: input.destination
-      ? {
-          clientAccountId: input.destination.clientAccountId,
-          workflowStartRequired: input.destination.workflowStartRequired,
-        }
-      : null,
     opportunityConfigured:
       input.destination != null &&
       policy?.lalAiBot1VetWebform !== true &&
@@ -301,18 +310,49 @@ function factsForRun(input: {
     onboardingTestAttemptId: input.onboardingTestAttemptId,
     onboardingTestAttemptKeys: input.onboardingKeys,
   };
-  const verdict = canonicalGhlDelivery(canonicalInput);
+  const saved = input.run.workflowStartRequired;
+  const verdictFor = (required: boolean) =>
+    canonicalGhlDelivery({
+      ...base,
+      destination: input.destination
+        ? { clientAccountId: input.destination.clientAccountId, workflowStartRequired: required }
+        : null,
+    });
+  if (saved === true || saved === false) {
+    return packFacts(input.run, verdictFor(saved), false, saved);
+  }
+  const requiredVerdict = verdictFor(true);
+  const optionalVerdict = verdictFor(false);
+  if (requiredVerdict.canonical === optionalVerdict.canonical) {
+    const reasons = requiredVerdict.canonical
+      ? []
+      : requiredVerdict.reasons.filter((reason) => optionalVerdict.reasons.includes(reason));
+    return packFacts(input.run, { ...requiredVerdict, canonical: requiredVerdict.canonical, reasons }, false, null);
+  }
+  return packFacts(
+    input.run,
+    { ...requiredVerdict, canonical: false, at: null, reasons: ["workflow_requirement_unknown"] },
+    true,
+    null
+  );
+}
+
+function packFacts(
+  run: StoredRun,
+  verdict: { canonical: boolean; at: string | null; reasons: string[] },
+  unverified: boolean,
+  workflowStartRequired: boolean | null
+): PortalGhlDeliveryFacts {
   return {
     evaluated: true,
     canonical: verdict.canonical,
+    unverified,
+    workflowStartRequired,
     at: verdict.at,
     reasons: verdict.reasons,
-    liveRunId: input.run.id,
-    liveRunStatus: input.run.status,
-    optionalStepFailures: optionalStepFailures(
-      input.run.stepRuns,
-      input.destination?.workflowStartRequired === true
-    ),
+    liveRunId: run.id,
+    liveRunStatus: run.status,
+    optionalStepFailures: optionalStepFailures(run.stepRuns, workflowStartRequired === true),
   };
 }
 
@@ -320,6 +360,8 @@ function unevaluatedRun(liveRunId: string | null, reasons: string[]): PortalGhlD
   return {
     evaluated: true,
     canonical: false,
+    unverified: false,
+    workflowStartRequired: null,
     at: null,
     reasons,
     liveRunId,

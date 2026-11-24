@@ -313,9 +313,10 @@ export function presentLeadDeliveryDetail(
   }
 
   if (audience === "client" && ctx.portalGhlDelivery?.evaluated) {
-    detail.delivery.deliveredAt = ctx.portalGhlDelivery.canonical
-      ? detail.delivery.deliveredAt ?? ctx.portalGhlDelivery.at
-      : null;
+    detail.delivery.deliveredAt =
+      ctx.portalGhlDelivery.canonical && !ctx.portalGhlDelivery.unverified
+        ? detail.delivery.deliveredAt ?? ctx.portalGhlDelivery.at
+        : null;
   }
 
   return detail;

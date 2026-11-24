@@ -65,6 +65,7 @@ const PORTAL_TOKEN_LABELS: Record<string, string> = {
   lead_routed: "Routed",
   lead_delivery_started: "Delivery started",
   lead_delivered: "Delivered",
+  delivery_unverified: "Delivery unverified",
   client_contact_created: "Contact created",
   client_workflow_started: "Follow-up started",
   first_touch_sent: "First outreach",

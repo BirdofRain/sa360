@@ -17,6 +17,7 @@ export type NormalizedDeliveryStatus =
   | "partial"
   | "failed"
   | "skipped"
+  | "unverified"
   | "unknown";
 
 export type NormalizedGhlContactStatus =

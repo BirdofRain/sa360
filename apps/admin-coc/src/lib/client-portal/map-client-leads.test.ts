@@ -1,12 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { portalCustomerLastEvent } from "./portal-lead-customer.ts";
 import {
   mapClientLeadDeliveryDetail,
   mapClientLeadDeliveryRow,
   mapClientLeadDeliveryRows,
   portalDeliveryStatusLabel,
   portalDeliveryStatusTone,
+  portalLeadStatusHeadline,
   portalLeadTimelineLabel,
   portalRoutingStatusLabel,
 } from "./map-client-leads.ts";
@@ -150,6 +152,22 @@ test("partial detail payloads omit empty optional blocks", () => {
     "No InboundContactIndex snapshot found for this lead scope."
   );
   assert.deepEqual(detail?.timeline, []);
+});
+
+test("an unknown historical requirement reads Delivery unverified on every customer surface", () => {
+  const row = mapClientLeadDeliveryRow({
+    id: "lead_unknown",
+    leadName: "Alex Gross",
+    deliveryStatus: "unverified",
+    lastEventName: "delivery_unverified",
+    receivedAt: "2026-11-23T17:59:00.000Z",
+  });
+  assert.equal(row?.deliveryLabel, "Delivery unverified");
+  assert.equal(portalDeliveryStatusLabel("unverified"), "Delivery unverified");
+  assert.equal(portalCustomerLastEvent(row?.lastEvent), "Delivery unverified");
+  assert.equal(portalLeadStatusHeadline("unverified", "Nov 23, 2026", "Nov 23, 2026"), "Delivery unverified");
+  assert.equal(portalLeadStatusHeadline("delivered", "Nov 23, 2026", "Nov 23, 2026"), "Delivered Nov 23, 2026");
+  assert.equal(portalLeadStatusHeadline("not_started", null, "Nov 23, 2026"), "Generated Nov 23, 2026");
 });
 
 test("routing and timeline labels stay customer-facing", () => {

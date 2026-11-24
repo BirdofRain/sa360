@@ -17,6 +17,7 @@ import { presentLeadDeliveryDetail, presentLeadDeliveryListRow } from "./lead-de
 const CUSTOMER_MILESTONES = new Set([
   "source_lead_received",
   "lead_delivered",
+  "delivery_unverified",
   "first_touch_sent",
   "contact_replied",
   "appointment_set",
@@ -30,6 +31,8 @@ const PORTAL_LABELS: Record<string, string> = {
   skipped: "Skipped",
   pending: "Pending",
   not_started: "Not started",
+  unverified: "Delivery unverified",
+  delivery_unverified: "Delivery unverified",
   partial: "In progress",
   simulated: "In progress",
   in_progress: "In progress",
@@ -127,6 +130,8 @@ async function seed(input: {
   sourceStatus?: "routing_matched" | "delivered";
   contactOnResult?: boolean;
   skipRun?: boolean;
+  /** Null is a historical run that did not record the requirement. */
+  recordedWorkflowStartRequired?: boolean | null;
 }) {
   const clientAccountId = `alex_${input.stamp}_${input.suffix}`;
   const locationId = `loc_${input.stamp}_${input.suffix}`;
@@ -215,6 +220,10 @@ async function seed(input: {
         idempotencyKey: `ghl-association:${source.id}`,
         completedAt: new Date("2026-11-23T18:05:00.000Z"),
         summary: input.runStatus ?? "succeeded",
+        workflowStartRequired:
+          input.recordedWorkflowStartRequired === undefined
+            ? input.workflowStartRequired
+            : input.recordedWorkflowStartRequired,
         stepRuns: {
           create: (input.steps ?? []).map((step, index) => ({
             stepOrder: index + 1,
@@ -275,10 +284,17 @@ async function portalRead(sourceId: string, clientAccountId: string) {
 }
 
 function customerView(row: { deliveryStatus: string; lastEventName: string | null; delivery?: { deliveredAt: string | null } } | null) {
+  const headline = !row?.delivery
+    ? null
+    : row.deliveryStatus === "unverified"
+      ? "Delivery unverified"
+      : row.delivery.deliveredAt
+        ? "Delivered"
+        : "Generated";
   return {
     badge: row ? portalBadge(row.deliveryStatus) : null,
     subline: row ? portalSubline(row.lastEventName) : null,
-    headline: row?.delivery ? (row.delivery.deliveredAt ? "Delivered" : "Generated") : null,
+    headline,
   };
 }
 
@@ -445,6 +461,103 @@ test("portal readers agree with canonical GHL receipts", { skip: !enabled }, asy
       assert.equal(customerView(view.listRow).badge, "Delivered");
       assert.equal(customerView(view.listRow).subline, "Delivered");
       assert.equal(customerView(view.detail).badge, "Delivered");
+    }
+
+    const recordedMissing = await seed({
+      stamp,
+      suffix: "recorded_missing",
+      workflowStartRequired: true,
+      recordedWorkflowStartRequired: true,
+      runStatus: "partial_success",
+      steps: [contactStep, tagStep, ownerFailed],
+    });
+    const recordedOptional = await seed({
+      stamp,
+      suffix: "recorded_optional",
+      workflowStartRequired: false,
+      recordedWorkflowStartRequired: false,
+      runStatus: "succeeded",
+      steps: [contactStep, tagStep],
+    });
+    const missingBefore = await portalRead(recordedMissing.sourceId, recordedMissing.clientAccountId);
+    const optionalBefore = await portalRead(recordedOptional.sourceId, recordedOptional.clientAccountId);
+    await db.clientGhlDestination.update({
+      where: { clientAccountId: recordedMissing.clientAccountId },
+      data: { workflowStartRequired: false },
+    });
+    await db.clientGhlDestination.update({
+      where: { clientAccountId: recordedOptional.clientAccountId },
+      data: { workflowStartRequired: true },
+    });
+    const missingAfter = await portalRead(recordedMissing.sourceId, recordedMissing.clientAccountId);
+    const optionalAfter = await portalRead(recordedOptional.sourceId, recordedOptional.clientAccountId);
+    for (const view of [missingBefore, missingAfter]) {
+      assert.equal(customerView(view.listRow).badge, "Not started");
+      assert.notEqual(customerView(view.listRow).subline, "Delivered");
+      assert.equal(customerView(view.detail).badge, "Not started");
+      assert.equal(customerView(view.detail).headline, "Generated");
+    }
+    for (const view of [optionalBefore, optionalAfter]) {
+      assert.equal(customerView(view.listRow).badge, "Delivered");
+      assert.equal(customerView(view.listRow).subline, "Delivered");
+      assert.equal(customerView(view.detail).badge, "Delivered");
+      assert.equal(customerView(view.detail).headline, "Delivered");
+    }
+
+    const historicalMissing = await seed({
+      stamp,
+      suffix: "hist_missing",
+      workflowStartRequired: false,
+      recordedWorkflowStartRequired: null,
+      runStatus: "partial_success",
+      steps: [contactStep, tagStep, ownerFailed],
+    });
+    const historicalOptional = await seed({
+      stamp,
+      suffix: "hist_optional",
+      workflowStartRequired: true,
+      recordedWorkflowStartRequired: null,
+      runStatus: "succeeded",
+      steps: [contactStep, tagStep],
+    });
+    const historicalOwner = await seed({
+      stamp,
+      suffix: "hist_owner",
+      workflowStartRequired: false,
+      recordedWorkflowStartRequired: null,
+      runStatus: "partial_success",
+      steps: [contactStep, tagStep, workflowCompleted, ownerFailed],
+    });
+    const historicalFailed = await seed({
+      stamp,
+      suffix: "hist_failed",
+      workflowStartRequired: false,
+      recordedWorkflowStartRequired: null,
+      runStatus: "failed",
+      outboxStatus: "uncertain",
+      lastError: "failed",
+      steps: [
+        contactStep,
+        tagStep,
+        { stepType: "start_workflow", status: "failed", externalId: null, response: receipt("workflow", "ambiguous", null) },
+      ],
+    });
+    for (const seeded of [historicalMissing, historicalOptional, historicalOwner, historicalFailed]) {
+      const view = await portalRead(seeded.sourceId, seeded.clientAccountId);
+      if (seeded === historicalOwner) {
+        assert.equal(customerView(view.listRow).badge, "Delivered");
+        assert.equal(customerView(view.detail).headline, "Delivered");
+      } else if (seeded === historicalFailed) {
+        assert.equal(customerView(view.listRow).badge, "Not started");
+        assert.notEqual(customerView(view.detail).headline, "Delivered");
+        assert.notEqual(customerView(view.listRow).badge, "Delivery unverified");
+      } else {
+        assert.equal(customerView(view.listRow).badge, "Delivery unverified");
+        assert.equal(customerView(view.listRow).subline, "Delivery unverified");
+        assert.equal(customerView(view.detail).badge, "Delivery unverified");
+        assert.equal(customerView(view.detail).subline, "Delivery unverified");
+        assert.equal(customerView(view.detail).headline, "Delivery unverified");
+      }
     }
   } finally {
     globalThis.fetch = originalFetch;

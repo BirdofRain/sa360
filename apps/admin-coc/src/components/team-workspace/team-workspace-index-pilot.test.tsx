@@ -18,7 +18,7 @@ moduleLoader._load = function (request: string, parent: NodeModule, isMain: bool
     };
   }
   if (request.includes("life-agent-launch-pilot.module.css")) {
-    return { boundary: "boundary", identity: "identity" };
+    return { boundary: "boundary" };
   }
   return originalLoad.call(this, request, parent, isMain);
 };
@@ -36,12 +36,19 @@ test.afterEach(() => {
   cleanup();
 });
 
-test("the index pilot keeps the existing names and stays a text identity", () => {
+test("the index pilot adds no identity line and keeps the existing names", () => {
   render(
     <TeamWorkspaceIndexPilot>
       <header>
         <h1>Team Workspace</h1>
+        <p>Named team access is not turned on. An admin session is required.</p>
       </header>
+      <section aria-label="Clients">
+        <label className="text-slate-800" htmlFor="team-workspace-client-filter">
+          Find a client
+        </label>
+        <input id="team-workspace-client-filter" />
+      </section>
       <a className="text-sky-800" href="https://example.invalid/clients">
         Clients and subaccounts
       </a>
@@ -51,15 +58,15 @@ test("the index pilot keeps the existing names and stays a text identity", () =>
     </TeamWorkspaceIndexPilot>
   );
 
-  const identity = screen.getByText("SA360 · Life Agent Launch");
-  assert.equal(identity.tagName, "P");
-  assert.equal(identity.closest("a"), null);
-  assert.equal(identity.parentElement?.getAttribute("data-lal-pilot"), "team-workspace-index");
-  assert.equal(screen.getByRole("heading", { name: "Team Workspace" }).tagName, "H1");
+  assert.equal(screen.queryByText("SA360 · Life Agent Launch"), null);
+  assert.equal(screen.queryByText(/Life Agent Launch/), null);
+  assert.equal(document.querySelector("[data-lal-pilot]")?.getAttribute("data-lal-pilot"), "team-workspace-index");
+  assert.equal(screen.getByLabelText("Find a client").id, "team-workspace-client-filter");
+  assert.equal(screen.getByText("Named team access is not turned on. An admin session is required.").tagName, "P");
   assert.equal(
     screen.getByRole("link", { name: "Clients and subaccounts" }).getAttribute("href"),
     "https://example.invalid/clients"
-  )
+  );
   assert.equal((screen.getByRole("button", { name: "Create client" }) as HTMLButtonElement).type, "button");
 });
 
@@ -76,8 +83,10 @@ test("the pilot stylesheet records the website commit and stays on the index", (
   const globals = readFileSync(join(appRoot, "src/app/globals.css"), "utf8");
 
   assert.match(css, /e10d4d76e3ec8dc7b9553fd670e5ece84091df74/);
-  assert.doesNotMatch(css, /DD0426|logo-dark|logo-light/);
+  assert.doesNotMatch(css, /DD0426|logo-dark|logo-light|SA360 · Life Agent Launch/);
   assert.match(css, /#006fff/i);
+  assert.match(css, /label\.text-slate-800\)\s*\{[^}]*background-color:\s*var\(--lal-night-sky\)/);
+  assert.match(css, /:global\(header\) > :global\(h1\)\s*\{[^}]*display:\s*none/);
   assert.match(indexPage, /TeamWorkspaceIndexPilot/);
   for (const source of [detailPage, dashboardLayout, rootLayout, tailwind, globals]) {
     assert.equal(source.includes("TeamWorkspaceIndexPilot"), false);

@@ -18,7 +18,6 @@ const figtree = Figtree({
 export function TeamWorkspaceIndexPilot({ children }: { children: ReactNode }) {
   return (
     <div className={`${figtree.variable} ${styles.boundary}`} data-lal-pilot="team-workspace-index">
-      <p className={styles.identity}>SA360 · Life Agent Launch</p>
       {children}
     </div>
   );

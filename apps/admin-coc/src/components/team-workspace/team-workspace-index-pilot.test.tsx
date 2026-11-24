@@ -12,11 +12,6 @@ const moduleLoader = module as unknown as {
 };
 const originalLoad = moduleLoader._load;
 moduleLoader._load = function (request: string, parent: NodeModule, isMain: boolean) {
-  if (request === "next/font/google") {
-    return {
-      Figtree: () => ({ variable: "--font-lal-heading", className: "figtree" }),
-    };
-  }
   if (request.includes("life-agent-launch-pilot.module.css")) {
     return { boundary: "boundary" };
   }
@@ -110,6 +105,9 @@ test("the pilot stylesheet records the website commit and stays on the index", (
   assert.match(css, /e10d4d76e3ec8dc7b9553fd670e5ece84091df74/);
   assert.doesNotMatch(css, /DD0426|logo-dark|logo-light|SA360 · Life Agent Launch/);
   assert.match(css, /#006fff/i);
+  assert.doesNotMatch(css, /Figtree|font-lal-heading/);
+  assert.match(css, /font-family:\s*var\(--font-inter\)/);
+  assert.doesNotMatch(readFileSync(join(here, "team-workspace-index-pilot.tsx"), "utf8"), /next\/font|Figtree/);
   assert.match(css, /label\.text-slate-800\)\s*\{[^}]*background-color:\s*var\(--lal-night-sky\)/);
   assert.match(css, /data-team-workspace-repeated-title\]\)\s*\{[^}]*display:\s*none/);
   assert.doesNotMatch(css, /:global\(header\) > :global\(h1\)/);

@@ -33,7 +33,11 @@ import {
   GHL_LIVE_CANARY_SAFETY_COPY,
   presentGhlLiveDeliveryRun,
 } from "./ghl-live-canary.present.js";
-import type { GhlAdapterPlanContext, SourceEnrichmentPlanContext } from "./ghl-delivery-adapter.types.js";
+import type {
+  GhlAdapterPlanContext,
+  GhlDestinationFieldMappingConfig,
+  SourceEnrichmentPlanContext,
+} from "./ghl-delivery-adapter.types.js";
 import { buildSourceEnrichmentDeliveryContext } from "../source-intake/source-enrichment.service.js";
 import { persistedCampaignRoutingRuleId } from "../association-ghl-delivery-source.js";
 import { ongoingRunDisposition } from "../ghl-destination-authorization.js";
@@ -321,6 +325,22 @@ const NO_SEPARATED_RESULTS = {
   workflowResult: null,
 } as const;
 
+/** The boolean the planner will give the executor. Absent config is not required. */
+export function recordedWorkflowStartRequired(
+  mapping: { workflowStartRequired?: boolean | null } | null | undefined
+): boolean {
+  return mapping?.workflowStartRequired === true;
+}
+
+/** Same object when it already carries the requirement the run recorded. */
+export function planWithRecordedWorkflowRequirement<T extends GhlDestinationFieldMappingConfig>(
+  mapping: T | null | undefined,
+  required: boolean
+): T | null | undefined {
+  if (!mapping || mapping.workflowStartRequired === required) return mapping;
+  return { ...mapping, workflowStartRequired: required };
+}
+
 /**
  * Writes one GHL run for an existing plan and records the outcome on that same row.
  * It does not check a confirmation phrase, a simulation, or deliveryEnabled.
@@ -341,6 +361,8 @@ export async function executeRecordedGhlDelivery(
   const startedAt = new Date();
   const idempotencyKey = ctx.idempotencyKey;
   let runId = input.reuseRunId ?? null;
+  const plannedRequirement = recordedWorkflowStartRequired(ctx.destinationFieldMapping);
+  let requirementForPlan = plannedRequirement;
 
   let priorReceipts: VetOperationReceipt[] = [];
   if (runId) {
@@ -366,6 +388,9 @@ export async function executeRecordedGhlDelivery(
     priorReceipts = existing.stepRuns
       .map((step) => receiptFromPersistedStep(step))
       .filter((receipt): receipt is VetOperationReceipt => receipt !== null);
+    if (existing.workflowStartRequired === true || existing.workflowStartRequired === false) {
+      requirementForPlan = existing.workflowStartRequired;
+    }
     await updateGhlLiveDeliveryRun(runId, {
       status: "executing",
       mode: input.mode,
@@ -391,8 +416,10 @@ export async function executeRecordedGhlDelivery(
         operatorConfirmationText: input.operatorConfirmationText,
         startedAt,
         executedBy: input.executedBy,
+        workflowStartRequired: plannedRequirement,
       });
       runId = created.id;
+      requirementForPlan = plannedRequirement;
     } catch (err) {
       const code = (err as { code?: string }).code;
       if (code !== "P2002") throw err;
@@ -415,7 +442,10 @@ export async function executeRecordedGhlDelivery(
   const adapterCtx: GhlAdapterPlanContext = {
     plan: input.plan,
     rule: ctx.rule,
-    destinationFieldMapping: ctx.destinationFieldMapping,
+    destinationFieldMapping: planWithRecordedWorkflowRequirement(
+      ctx.destinationFieldMapping,
+      requirementForPlan
+    ),
     sourceEnrichment: await sourceEnrichmentPlanContext(
       input.lifecyclePayload,
       input.plan.destinationClientAccountId,

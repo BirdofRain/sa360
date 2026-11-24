@@ -19,6 +19,7 @@ const INTERNAL_SOURCE_TOKENS = new Set([
 const CUSTOMER_TIMELINE_MILESTONES = new Set([
   "source_lead_received",
   "lead_delivered",
+  "delivery_unverified",
   "first_touch_sent",
   "contact_replied",
   "appointment_set",

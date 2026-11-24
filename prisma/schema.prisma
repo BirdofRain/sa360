@@ -1515,6 +1515,8 @@ model GhlLiveDeliveryRun {
   summary                    String?
   warnings                   Json?
   errors                     Json?
+  /// Requirement used to plan this attempt. Null means the run did not record it.
+  workflowStartRequired      Boolean?
   createdAt                  DateTime                 @default(now())
   updatedAt                  DateTime                 @updatedAt
   stepRuns                   GhlLiveDeliveryStepRun[]

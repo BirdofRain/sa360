@@ -5,6 +5,7 @@ import { formatRelativeTime } from "@/lib/client-portal/map-client-dashboard";
 import { formatPortalDate } from "@/lib/client-portal/map-client-orders";
 import {
   portalDeliveryStatusTone,
+  portalLeadStatusHeadline,
   type PortalLeadDetailView,
   type PortalLeadTimelineItem,
 } from "@/lib/client-portal/map-client-leads";
@@ -87,6 +88,7 @@ export function PortalLeadDetail({
 }) {
   const generatedAt = formatPortalDate(lead.receivedAt);
   const deliveredAt = formatPortalDate(lead.deliveredAt);
+  const statusHeadline = portalLeadStatusHeadline(lead.deliveryStatus, deliveredAt, generatedAt);
   const campaign = portalCustomerCampaign(lead.campaign);
   const sourceLabel = portalCustomerSourceLabel(lead.sourceLabel);
   const backHref = portalLeadListPath(listStatus);
@@ -121,11 +123,7 @@ export function PortalLeadDetail({
           <div className="min-w-0">
             <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Lead</p>
             <h1 className="text-2xl font-semibold tracking-tight text-slate-900">{lead.leadName}</h1>
-            {deliveredAt ? (
-              <p className="mt-1 text-sm text-slate-500">Delivered {deliveredAt}</p>
-            ) : generatedAt ? (
-              <p className="mt-1 text-sm text-slate-500">Generated {generatedAt}</p>
-            ) : null}
+            {statusHeadline ? <p className="mt-1 text-sm text-slate-500">{statusHeadline}</p> : null}
           </div>
           <PortalStatusPill
             label={lead.deliveryLabel}

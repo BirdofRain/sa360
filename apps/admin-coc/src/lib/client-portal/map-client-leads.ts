@@ -66,6 +66,17 @@ function formatLabel(value: string): string {
   return formatPortalDisplayLabel(value) || value.replace(/_/g, " ");
 }
 
+export function portalLeadStatusHeadline(
+  status: string,
+  deliveredLabel: string | null,
+  generatedLabel: string | null
+): string | null {
+  if (status === "unverified") return "Delivery unverified";
+  if (deliveredLabel) return `Delivered ${deliveredLabel}`;
+  if (generatedLabel) return `Generated ${generatedLabel}`;
+  return null;
+}
+
 export function portalDeliveryStatusLabel(status: string): string {
   switch (status) {
     case "delivered":
@@ -80,6 +91,8 @@ export function portalDeliveryStatusLabel(status: string): string {
       return "In progress";
     case "pending":
       return "Pending";
+    case "unverified":
+      return "Delivery unverified";
     default:
       return formatLabel(status);
   }

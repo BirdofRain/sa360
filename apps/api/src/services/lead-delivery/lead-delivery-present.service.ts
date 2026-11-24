@@ -6,6 +6,10 @@ import {
   normalizeRoutingStatus,
 } from "./lead-delivery-status.js";
 import {
+  applyCustomerPortalGhlDelivery,
+  customerBaselineWithoutContact,
+} from "./portal-ghl-delivery.js";
+import {
   contactIdFromDeliveryResult,
   deliveryResultContactStatus,
   deliveryResultStatus,
@@ -141,7 +145,7 @@ export function presentLeadDeliveryListRow(
     deliveryMode: ctx.plan?.deliveryMode ?? ctx.decision?.deliveryMode,
     planStatus: ctx.plan?.status,
   });
-  const deliveryStatus = normalizeDeliveryStatus({
+  const deliveryInput = {
     sourceStatus: ctx.sourceLead.status,
     deliveryMode: ctx.plan?.deliveryMode ?? ctx.decision?.deliveryMode,
     planStatus: ctx.plan?.status,
@@ -149,13 +153,24 @@ export function presentLeadDeliveryListRow(
     liveRunStatus: ctx.liveRun?.status,
     deliveryResultStatus: deliveryResultStatus(ctx.sourceLead.deliveryResultJson),
     hasContactId: Boolean(contactId),
-  });
+  };
+  let deliveryStatus = normalizeDeliveryStatus(deliveryInput);
+  let lastEvent = resolveLastEvent(ctx);
+  if (audience === "client") {
+    const presented = applyCustomerPortalGhlDelivery({
+      deliveryStatus,
+      lastEvent,
+      facts: ctx.portalGhlDelivery,
+      baselineWithoutContact: customerBaselineWithoutContact(deliveryInput),
+    });
+    deliveryStatus = presented.deliveryStatus;
+    lastEvent = presented.lastEvent;
+  }
   const ghlContactStatus = normalizeGhlContactStatus({
     contactIdGhl: contactId,
     deliveryResultContactStatus: deliveryResultContactStatus(ctx.sourceLead.deliveryResultJson),
     liveRunContactCreated: ctx.liveRun?.status === "completed" || ctx.liveRun?.status === "succeeded",
   });
-  const lastEvent = resolveLastEvent(ctx);
   const phoneRaw = contact.phoneE164;
   const emailRaw = contact.email;
 
@@ -287,7 +302,21 @@ export function presentLeadDeliveryDetail(
             ? "Duplicate risk flagged"
             : null,
       enrichmentWarnings: enrichment?.deliveryWarnings?.map((w) => redactSecrets(w) ?? w) ?? [],
+      ...(ctx.portalGhlDelivery
+        ? {
+            ghlRunStatus: ctx.portalGhlDelivery.liveRunStatus,
+            ghlCanonicalReasons: ctx.portalGhlDelivery.reasons,
+            ghlOptionalStepFailures: ctx.portalGhlDelivery.optionalStepFailures,
+          }
+        : {}),
     };
+  }
+
+  if (audience === "client" && ctx.portalGhlDelivery?.evaluated) {
+    detail.delivery.deliveredAt =
+      ctx.portalGhlDelivery.canonical && !ctx.portalGhlDelivery.unverified
+        ? detail.delivery.deliveredAt ?? ctx.portalGhlDelivery.at
+        : null;
   }
 
   return detail;

@@ -10,14 +10,17 @@ import {
 } from "@/lib/client-portal/portal-lead-list-navigation";
 import {
   PORTAL_LEAD_LIST_STATUS_OPTIONS,
+  type PortalLeadListFilters,
   type PortalLeadListStatus,
 } from "@/lib/client-portal/portal-lead-list-status";
 import { cn } from "@/lib/utils";
 
 export function PortalLeadsStatusFilter({
   active,
+  filters,
 }: {
   active: PortalLeadListStatus;
+  filters?: PortalLeadListFilters;
 }) {
   const router = useRouter();
 
@@ -28,7 +31,7 @@ export function PortalLeadsStatusFilter({
     >
       {PORTAL_LEAD_LIST_STATUS_OPTIONS.map((option) => {
         const isActive = option.value === active;
-        const href = portalLeadListHref(option.value);
+        const href = portalLeadListHref(option.value, filters);
         return (
           <Link
             key={option.value}

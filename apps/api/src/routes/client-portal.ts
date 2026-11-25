@@ -51,6 +51,7 @@ import {
   listLeadDeliveryReadModel,
   type LeadDeliveryReadServiceDeps,
 } from "../services/lead-delivery/lead-delivery-read.service.js";
+import { listCustomerDeliveredLeadDelivery } from "../services/lead-delivery/portal-delivered-list.js";
 import {
   presentLeadDeliveryDetail,
   presentLeadDeliveryListRow,
@@ -124,6 +125,7 @@ export type ClientPortalRoutesOptions = {
   ) => Promise<ClientDashboardResponse>;
   leadDeliveryDeps?: LeadDeliveryReadServiceDeps & {
     listLeadDeliveryReadModelImpl?: typeof listLeadDeliveryReadModel;
+    listCustomerDeliveredLeadDeliveryImpl?: typeof listCustomerDeliveredLeadDelivery;
     getLeadDeliveryReadModelByIdImpl?: typeof getLeadDeliveryReadModelById;
   };
   frontOfficeDeps?: FrontOfficeSummaryServiceDeps & {
@@ -146,6 +148,8 @@ export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> =
   const tenantDeps = opts.tenantDeps;
   const leadDeliveryDeps = opts.leadDeliveryDeps ?? {};
   const listRead = leadDeliveryDeps.listLeadDeliveryReadModelImpl ?? listLeadDeliveryReadModel;
+  const listDelivered =
+    leadDeliveryDeps.listCustomerDeliveredLeadDeliveryImpl ?? listCustomerDeliveredLeadDelivery;
   const getById = leadDeliveryDeps.getLeadDeliveryReadModelByIdImpl ?? getLeadDeliveryReadModelById;
 
   app.get("/lead-delivery", async (request: FastifyRequest, reply: FastifyReply) => {
@@ -170,17 +174,31 @@ export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> =
       });
     }
 
-    const { items, nextCursor } = await listRead(
-      {
-        limit: parsed.data.limit,
-        cursor: parsed.data.cursor,
-        clientAccountIdResolved: resolved.tenant.clientAccountId,
-        matched: parsed.data.matched,
-        status: parsed.data.status as never,
-        sourceProvider: parsed.data.sourceProvider,
-      },
-      leadDeliveryDeps
-    );
+    const receivedFrom = parsed.data.from ? new Date(parsed.data.from) : undefined;
+    const receivedTo = parsed.data.to ? new Date(parsed.data.to) : undefined;
+    if (receivedFrom && receivedTo && receivedFrom.getTime() > receivedTo.getTime()) {
+      return reply.status(400).send({ ok: false, error: "Invalid query" });
+    }
+    const sharedFilters = {
+      limit: parsed.data.limit,
+      cursor: parsed.data.cursor,
+      clientAccountIdResolved: resolved.tenant.clientAccountId,
+      matched: parsed.data.matched,
+      sourceProvider: parsed.data.sourceProvider,
+      search: parsed.data.q,
+      receivedFrom,
+      receivedTo,
+    };
+    const { items, nextCursor } =
+      parsed.data.status === "delivered"
+        ? await listDelivered(sharedFilters, leadDeliveryDeps)
+        : await listRead(
+            {
+              ...sharedFilters,
+              status: parsed.data.status as never,
+            },
+            leadDeliveryDeps
+          );
 
     const response: LeadDeliveryListResponse = {
       ok: true,

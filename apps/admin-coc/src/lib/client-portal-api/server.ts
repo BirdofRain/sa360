@@ -1,5 +1,7 @@
 import "server-only";
 
+import { PORTAL_LEAD_LIST_PAGE_SIZE } from "../client-portal/portal-lead-list-status.ts";
+
 import {
   clientLeadOrderExportsPath,
   parseClientLeadOrderExportsPayload,
@@ -495,14 +497,29 @@ export async function fetchClientLeadsOnDemandAvailability(opts: {
 export async function fetchClientLeadDeliveryList(opts: {
   clientAccountId: string;
   status?: string;
-}): Promise<{ items: unknown[]; error: string | null }> {
+  q?: string;
+  from?: string;
+  to?: string;
+  cursor?: string;
+}): Promise<{ items: unknown[]; nextCursor: string | null; error: string | null }> {
   const params = new URLSearchParams({ clientAccountId: opts.clientAccountId });
+  params.set("limit", String(PORTAL_LEAD_LIST_PAGE_SIZE));
   if (opts.status) params.set("status", opts.status);
-  const res = await clientPortalFetchJson<{ ok: boolean; items: unknown[] }>(
-    `/client/v1/lead-delivery?${params.toString()}`
-  );
-  if (!res.ok) return { items: [], error: res.body };
-  return { items: res.data.items ?? [], error: null };
+  if (opts.q?.trim()) params.set("q", opts.q.trim());
+  if (opts.from?.trim()) params.set("from", opts.from.trim());
+  if (opts.to?.trim()) params.set("to", opts.to.trim());
+  if (opts.cursor?.trim()) params.set("cursor", opts.cursor.trim());
+  const res = await clientPortalFetchJson<{
+    ok: boolean;
+    items: unknown[];
+    nextCursor: string | null;
+  }>(`/client/v1/lead-delivery?${params.toString()}`);
+  if (!res.ok) return { items: [], nextCursor: null, error: res.body };
+  return {
+    items: res.data.items ?? [],
+    nextCursor: typeof res.data.nextCursor === "string" && res.data.nextCursor.trim() ? res.data.nextCursor : null,
+    error: null,
+  };
 }
 
 export async function fetchClientLeadDeliveryDetail(opts: {

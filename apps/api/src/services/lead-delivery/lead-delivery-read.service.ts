@@ -235,6 +235,14 @@ export async function listLeadDeliveryReadModel(
   return { items: joined, nextCursor };
 }
 
+/** List-shaped join. Does not load the customer timeline or start a delivery. */
+export async function joinLeadDeliveryListContexts(
+  rows: SourceLeadEvent[],
+  deps: LeadDeliveryReadServiceDeps = {}
+): Promise<LeadDeliveryJoinContext[]> {
+  return joinSourceLeads(rows, { includeTimeline: false }, deps);
+}
+
 export async function getLeadDeliveryReadModelById(
   id: string,
   deps: LeadDeliveryReadServiceDeps = {}

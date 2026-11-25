@@ -389,7 +389,7 @@ type RequirementContext = {
   opportunityConfigured: boolean;
 };
 
-function requirementFor(stepType: string, ctx: RequirementContext): {
+function requirementFor(stepType: string, status: string, ctx: RequirementContext): {
   required: boolean | null;
   source: GhlStepRequirementSource;
 } {
@@ -398,6 +398,9 @@ function requirementFor(stepType: string, ctx: RequirementContext): {
     return { required: ctx.workflowRecorded, source: "run_recorded" };
   }
   if (stepType === "create_or_update_opportunity") {
+    // The executor fails the run on any failed opportunity step, whatever the
+    // destination says now.
+    if (status === "failed") return { required: true, source: "fixed" };
     return ctx.destination
       ? { required: ctx.opportunityConfigured, source: "current_destination" }
       : { required: null, source: "unrecorded" };
@@ -482,7 +485,7 @@ export function buildGhlRunDiagnostic(input: {
   const stepOf = (stepType: string) => run.stepRuns.find((step) => step.stepType === stepType);
 
   const steps: GhlStepDiagnostic[] = run.stepRuns.map((step) => {
-    const req = requirementFor(step.stepType, ctx);
+    const req = requirementFor(step.stepType, step.status, ctx);
     const receipt = receiptFromPersistedStep(step);
     const code = sanitizeCode(step.errorCode) ?? (step.errorCode?.startsWith("http_") ? step.errorCode : null);
     const httpStatus = httpStatusFromErrorCode(step.errorCode);

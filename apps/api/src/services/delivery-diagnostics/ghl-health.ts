@@ -13,6 +13,7 @@
 
 import type { Prisma } from "@prisma/client";
 
+import type { DeliveryRetryDisposition } from "../ghl-delivery-adapter/vet-ghl-delivery-contract.js";
 import { isPersistedLiveDestination } from "../ghl-destination-authorization.js";
 import { loadAttemptIds, loadOnboardingKeys } from "../lead-delivery/portal-ghl-delivery.js";
 import {
@@ -59,6 +60,9 @@ export type GhlAttentionItem = {
   runId: string | null;
   failedRequiredSteps: Array<{ stepType: string; errorCode: string | null; httpStatus: number | null }>;
   code: string | null;
+  /** Retry state, reported beside the delivery class and never folded into it. */
+  retryDisposition: DeliveryRetryDisposition | null;
+  outboxStatus: string;
 };
 
 export type GhlHealth = {
@@ -142,7 +146,9 @@ export function classifyGhlDelivery(input: {
     const stale = now.getTime() - started > GHL_EXECUTING_STALE_MS;
     return { class: stale ? "held_stale_executing" : "in_flight", failedRequiredSteps: none, code: null };
   }
-  if (outbox.status === "uncertain") {
+  // The dispatcher also settles a failed run that called GHL as uncertain. A
+  // stored run decides fulfillment; the outbox row only reports the hold.
+  if (outbox.status === "uncertain" && (!diagnostic || diagnostic.run.status === "executing")) {
     return { class: "held_uncertain", failedRequiredSteps: none, code: outbox.lastError ?? null };
   }
 
@@ -165,7 +171,7 @@ export function classifyGhlDelivery(input: {
       .filter((step) => step.status === "failed" && step.required === true)
       .map((step) => ({ stepType: step.stepType, errorCode: step.errorCode, httpStatus: step.httpStatus }));
     const code = failedRequiredSteps[0]?.errorCode ?? null;
-    if (diagnostic.retry.disposition === "hold") {
+    if (diagnostic.retry.disposition === "hold" || !diagnostic.retry.automaticRetryPending) {
       return { class: "terminal_required_step_failure", failedRequiredSteps, code };
     }
     return { class: "retryable_failure", failedRequiredSteps, code };
@@ -338,7 +344,7 @@ export async function loadGhlHealth(
       const recorded = diagnostic.run.workflowStartRequiredRecorded;
       if (recorded === true) {
         requiredWorkflow.required += 1;
-        if (classified.class === "contact_delivered_required_workflow_incomplete") requiredWorkflow.incomplete += 1;
+        if (diagnostic.verdict.canonicalReasons.some((reason) => reason.startsWith("workflow_"))) requiredWorkflow.incomplete += 1;
         else requiredWorkflow.completed += 1;
       } else if (recorded === null) {
         requiredWorkflow.unrecorded += 1;
@@ -366,6 +372,8 @@ export async function loadGhlHealth(
         runId: run?.id ?? null,
         failedRequiredSteps: classified.failedRequiredSteps,
         code: classified.code,
+        retryDisposition: diagnostic?.retry.disposition ?? null,
+        outboxStatus: row.status,
       });
     }
   }

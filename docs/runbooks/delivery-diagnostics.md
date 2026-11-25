@@ -39,7 +39,7 @@ Counts come from SA360's own tables (`SourceLeadEvent`, `WebhookRequestLog`). Th
 
 ### Sheets
 
-Success is the existing `canonicalCompanySheetsDelivery`: a succeeded campaign job with written rows and a finish time. A job marked `succeeded` without durable rows is reported as `missingProof`. Sheets jobs have no `failed` status. Failure is `retryable` with a code, or `uncertain`. Expected intent holds (`awaiting_setup`, `needs_explicit_schedule`, `duplicate_held`, `review_held`, `assessment_held`, `assessment_failed`) are counted separately and are not failures. When a `clientAccountId` is given, `monitorPreview` shows what the existing monitor rules would find. Nothing is stored or sent.
+Success is the existing `canonicalCompanySheetsDelivery`: a succeeded campaign job with written rows and a finish time. A job marked `succeeded` without durable rows is reported as `missingProof`. Delivery failure is `retryable` with a code, or `uncertain`. A `failed` lead job is a person-gate hold settled before any Google call; it appears in `jobsByStatus` only. Expected intent holds (`awaiting_setup`, `needs_explicit_schedule`, `duplicate_held`, `review_held`, `assessment_held`, `assessment_failed`) are counted separately and are not failures. When a `clientAccountId` is given, `monitorPreview` shows what the existing monitor rules would find. Nothing is stored or sent.
 
 ### GHL
 
@@ -51,14 +51,15 @@ The unit is one `GhlAssociationDispatchOutbox` row. Each is classified from its 
 | `delivered_optional_warnings` | Contact and required path complete. An optional owner, note, or field step failed or was skipped with a reason |
 | `contact_delivered_required_workflow_incomplete` | Verified contact, but the workflow was required (recorded on the run) and not enrolled |
 | `contact_delivered_workflow_requirement_unrecorded` | Verified contact, and the run did not record whether the workflow was required. The requirement is not guessed |
-| `terminal_required_step_failure` | A required step failed and the retry disposition is hold, so the drain will not send it again |
-| `retryable_failure` | Failed, and the drain can retry |
-| `pending`, `pending_overdue`, `in_flight`, `held_stale_executing`, `held_uncertain` | Outbox state |
+| `terminal_required_step_failure` | The stored run failed and no automatic retry is pending, so the drain will not send it again. This includes a failed run whose outbox row is `uncertain` |
+| `retryable_failure` | Failed, and an automatic retry is pending |
+| `pending`, `pending_overdue`, `in_flight`, `held_stale_executing` | Outbox state |
+| `held_uncertain` | Outbox `uncertain` with no settled run to read, so the outcome is unknown |
 | `intentional_non_delivery` | Shadow, disabled, not approved, location mismatch, no destination, or a non-active client. Not a failure |
 | `duplicate_skipped` | Duplicate decision |
 | `settled_without_run_unexplained` | Settled with no run, a live destination, and an active client. Needs investigation |
 
-A skipped owner, note, or custom-field step never counts as a failed contact delivery. Destination state uses the destination as saved now. A destination edited after a lead settled can read differently than it did at delivery time. `workflowNameFromContract` is a code constant for the VET webform contract, not a live GoHighLevel read.
+The stored run decides the class; the outbox status is reported beside it. Each attention item carries `retryDisposition` and `outboxStatus` separately from `kind`. `requiredWorkflow` counts come from the canonical workflow reasons, so a required workflow skipped after a failed step counts as incomplete. A skipped owner, note, or custom-field step never counts as a failed contact delivery. Destination state uses the destination as saved now. A destination edited after a lead settled can read differently than it did at delivery time. `workflowNameFromContract` is a code constant for the VET webform contract, not a live GoHighLevel read.
 
 ### Infrastructure
 
@@ -72,7 +73,7 @@ Stored request or response bodies, lead names, emails, phones, addresses, spread
 
 - Every database read runs in one transaction that the server marks `READ ONLY`, with `statement_timeout` 8 s, `lock_timeout` 1 s, and `idle_in_transaction_session_timeout` 30 s as `SET LOCAL`. A write, DDL, or `SELECT ... FOR UPDATE` raises on the server.
 - Queue reads use BullMQ handles with `skipMetasUpdate` and call count, list, and set-cardinality reads only. Every Valkey wait has a 2.5 s deadline.
-- Per-section evaluation is capped (500 outbox rows, 500 succeeded Sheets jobs, 50 run-index rows per page). A capped section sets `truncated`.
+- Per-section evaluation is capped (500 outbox rows, 500 succeeded Sheets jobs, 50 run-index rows per page). A capped section sets `truncated` and adds a `ghl_evaluation_truncated` or `sheets_receipts_truncated` attention entry. A truncated GHL section still reports the full window count in `intendedDeliveries`.
 - Limits: 30 requests per minute per client IP and at most 2 concurrent diagnostics per API process. State is per process.
 - Each section reads in its own transaction. A section that times out returns `available: false` and the others still return.
 - Audit: each authenticated request logs `delivery_diagnostics.access` (route, outcome, request id, IP, duration, validated filters). A rejected key logs `delivery_diagnostics.auth_denied`. The key is never logged.

@@ -378,7 +378,7 @@ export async function loadSheetsHealth(
     lastSuccessfulDeliveryAt: lastSuccess?.finishedAt?.toISOString() ?? null,
     lastSuccessfulDeliveryScope: "latest_succeeded_lead_job_with_written_rows",
     failedJobsNote:
-      "Sheets jobs have no failed status. Failure is retryable (with a code) or uncertain. Expected intent holds are counted separately and are not failures.",
+      "Delivery failure is retryable (with a code) or uncertain. A failed lead job is a person-gate hold settled before any Google call and appears only in jobsByStatus. Expected intent holds are counted separately and are not failures.",
     attention: attention.slice(0, ATTENTION_CAP),
     attentionTruncated: attention.length > ATTENTION_CAP,
     leadScope: { campaignFilterApplied: leadFilter != null, leadIdsCapped: input.campaignLeadIds.capped },

@@ -224,7 +224,7 @@ export async function runDeliveryHealthMonitor(deps: DeliveryHealthScanDeps): Pr
 }
 
 export async function loadDeliveryHealthSnapshot(
-  db: PrismaClient,
+  db: PrismaClient | Prisma.TransactionClient,
   config: DeliveryHealthConfig,
   now: Date
 ): Promise<{ snapshot: DeliveryHealthSnapshot; truncated: boolean }> {

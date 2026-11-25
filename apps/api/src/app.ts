@@ -37,6 +37,7 @@ import { adminExternalWebhookDispatchRoutes } from "./routes/admin-external-webh
 import { adminExternalWebhookConfigRoutes } from "./routes/admin-external-webhook-config.js";
 import { adminExternalWebhookNoticeDispatchRoutes } from "./routes/admin-external-webhook-notice-dispatch.js";
 import { adminGhlLeadNoticeDispatchRoutes } from "./routes/admin-ghl-lead-notice-dispatch.js";
+import { adminDeliveryDiagnosticsRoutes } from "./routes/admin-delivery-diagnostics.js";
 import { adminDeliveryHealthRoutes } from "./routes/admin-delivery-health.js";
 import { externalWebhookNoticeCallbackRoutes } from "./routes/external-webhook-notice-callbacks.js";
 import { clientSmsOptInRoutes } from "./routes/client-sms-opt-in.js";
@@ -193,6 +194,7 @@ export async function buildApp() {
   await app.register(adminGhlLeadNoticeDispatchRoutes, { prefix: "/admin/v1" });
   // Delivery health scan. Both flags stay off, so this route does not query or send.
   await app.register(adminDeliveryHealthRoutes, { prefix: "/admin/v1" });
+  await app.register(adminDeliveryDiagnosticsRoutes, { prefix: "/admin/v1" });
   await app.register(externalWebhookNoticeCallbackRoutes);
   // Public GHL OAuth callback: GET /integrations/oauth/callback (alias: /integrations/ghl/oauth/callback)
   await app.register(integrationsGhlRoutes, { prefix: "/integrations" });

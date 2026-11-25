@@ -97,7 +97,11 @@ export function buildAttention(input: {
   if (!ghl.available) {
     push({ section: "ghl", severity: "warning", kind: "ghl_section_unreadable", count: null });
   } else {
-    const by = ghl.data.windowFlow.byClass;
+    const flow = ghl.data.windowFlow;
+    if (flow.truncated) {
+      push({ section: "ghl", severity: "warning", kind: "ghl_evaluation_truncated", count: flow.intendedDeliveries - flow.evaluated });
+    }
+    const by = flow.byClass;
     push({ section: "ghl", severity: "critical", kind: "terminal_required_step_failure", count: by.terminal_required_step_failure ?? 0 });
     push({ section: "ghl", severity: "critical", kind: "required_workflow_incomplete", count: by.contact_delivered_required_workflow_incomplete ?? 0 });
     push({ section: "ghl", severity: "critical", kind: "contact_not_verified", count: by.contact_not_verified ?? 0 });
@@ -113,6 +117,7 @@ export function buildAttention(input: {
     push({ section: "sheets", severity: "warning", kind: "sheets_section_unreadable", count: null });
   } else {
     const data = sheets.data;
+    if (data.receipts.truncated) push({ section: "sheets", severity: "warning", kind: "sheets_receipts_truncated", count: null });
     push({ section: "sheets", severity: "critical", kind: "succeeded_job_missing_durable_rows", count: data.receipts.missingProof });
     push({ section: "sheets", severity: "critical", kind: "uncertain_job", count: data.openWork.uncertainJobs });
     push({ section: "sheets", severity: "warning", kind: "retryable_job", count: data.openWork.retryableJobs });

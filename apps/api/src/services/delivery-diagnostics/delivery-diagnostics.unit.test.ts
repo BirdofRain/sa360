@@ -16,9 +16,10 @@ import {
   workflowSkipped,
 } from "../../test/delivery-diagnostics-fixtures.js";
 import { buildGhlRunDiagnostic } from "./ghl-run-diagnostic.js";
-import { classifyGhlDelivery, destinationState, type GhlDestinationState } from "./ghl-health.js";
+import { GHL_EVALUATION_CAP, classifyGhlDelivery, destinationState, loadGhlHealth, type GhlDestinationState } from "./ghl-health.js";
 import { deriveDrainStatus, type QueueSnapshot } from "./infra-health.js";
 import { createConcurrencyGate, createFixedWindowRateLimiter } from "./limits.js";
+import type { DiagnosticsDb } from "./read-only.js";
 import { sanitizeErrorText, sanitizedGhlErrorBody } from "./sanitize.js";
 import { buildAttention } from "./summary.js";
 import {
@@ -272,4 +273,44 @@ test("attention flags terminal failures and incomplete required workflows but ig
   assert.equal(find("required_workflow_incomplete")?.count, 2);
   assert.equal(find("optional_warnings")?.severity, "info");
   assert.equal(find("held_uncertain"), undefined);
+});
+
+test("a truncated GHL window reports the real intended count and raises attention", async () => {
+  const outbox = Array.from({ length: GHL_EVALUATION_CAP + 1 }, (_, index) => ({
+    ...outboxFixture({ status: "pending", liveRunId: null, availableAt: new Date(FIXTURE_NOW.getTime() - 60_000) }),
+    id: `outbox_${index}`,
+  }));
+  const none = async () => [];
+  const db = {
+    ghlAssociationDispatchOutbox: {
+      findMany: async () => outbox,
+      count: async () => 686,
+      groupBy: none,
+      findFirst: async () => null,
+    },
+    ghlLiveDeliveryRun: { findMany: none, findFirst: async () => null, groupBy: none },
+    clientGhlDestination: { findMany: async () => [destinationFixture()] },
+    clientAccount: { findMany: none },
+    sourceLeadEvent: { findMany: none },
+  } as unknown as DiagnosticsDb;
+  const health = await loadGhlHealth(db, {
+    window: resolveDiagnosticWindow("24h", FIXTURE_NOW),
+    now: FIXTURE_NOW,
+    clientAccountId: null,
+    campaignLeadIds: { ids: null, capped: false },
+  });
+  assert.equal(health.windowFlow.truncated, true);
+  assert.equal(health.windowFlow.evaluated, GHL_EVALUATION_CAP);
+  assert.equal(health.windowFlow.intendedDeliveries, 686);
+
+  const attention = buildAttention({
+    intake: { available: false, error: "x" },
+    sheets: { available: true, data: { receipts: { truncated: true, missingProof: 0 }, openWork: { uncertainJobs: 0, retryableJobs: 0, oldestPendingIntentAgeSeconds: null, pendingIntents: 0 } } } as never,
+    ghl: { available: true, data: health },
+    infrastructure: { available: false, error: "x" },
+  });
+  const find = (kind: string) => attention.find((entry) => entry.kind === kind);
+  assert.equal(find("ghl_evaluation_truncated")?.count, 686 - GHL_EVALUATION_CAP);
+  assert.equal(find("ghl_evaluation_truncated")?.severity, "warning");
+  assert.equal(find("sheets_receipts_truncated")?.count, null);
 });

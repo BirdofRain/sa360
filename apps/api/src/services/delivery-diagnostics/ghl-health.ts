@@ -259,6 +259,7 @@ export async function loadGhlHealth(
       });
   const truncated = outboxRows.length > GHL_EVALUATION_CAP;
   const rows = outboxRows.slice(0, GHL_EVALUATION_CAP);
+  const intendedDeliveries = truncated ? await db.ghlAssociationDispatchOutbox.count({ where: outboxWhere }) : rows.length;
 
   const runIds = [...new Set(rows.flatMap((row) => (row.liveRunId ? [row.liveRunId] : [])))];
   const clientIds = [...new Set(rows.map((row) => row.clientAccountId))];
@@ -425,7 +426,7 @@ export async function loadGhlHealth(
 
   return {
     windowFlow: {
-      intendedDeliveries: rows.length,
+      intendedDeliveries,
       evaluated: rows.length,
       truncated,
       byClass,

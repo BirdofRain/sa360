@@ -233,3 +233,25 @@ test("the GHL summary counts the incident as a terminal failure and never as a c
   assert.equal(attention.find((entry) => entry.kind === "terminal_required_step_failure")?.count, 1);
   assert.equal(attention.find((entry) => entry.kind === "terminal_required_step_failure")?.severity, "critical");
 });
+
+test("a succeeded run without contact step evidence is unverified, never delivered", () => {
+  const classify = (run: ReturnType<typeof runFixture>) =>
+    classifyGhlDelivery({
+      outbox: outboxFixture({ liveRunId: run.id }),
+      diagnostic: buildGhlRunDiagnostic({
+        run,
+        destination: destinationFixture(),
+        accountStatus: "active",
+        outbox: outboxFixture({ liveRunId: run.id }),
+        sourceLead: sourceLeadFixture,
+        onboardingTestAttemptKeys: [],
+        onboardingTestAttemptId: null,
+      }),
+      destinationState: "live",
+      accountStatus: "active",
+      now: FIXTURE_NOW,
+    }).class;
+  const noReceipt = { ...contactStep(1), externalId: null, responseRedactedJson: null };
+  assert.equal(classify(runFixture({ status: "succeeded", stepRuns: [noReceipt, tagStep(2)] })), "contact_not_verified");
+  assert.equal(classify(runFixture({ status: "succeeded", stepRuns: [] })), "contact_not_verified");
+});

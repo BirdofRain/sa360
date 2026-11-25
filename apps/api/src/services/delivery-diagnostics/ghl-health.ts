@@ -350,7 +350,7 @@ export async function loadGhlHealth(
           benignSkips += 1;
           continue;
         }
-        bump(optionalByStep as Partial<Record<string, number>>, item.stepType);
+        bump(optionalByStep, item.stepType);
         counted = true;
       }
       if (counted) optionalRuns += 1;
@@ -410,7 +410,7 @@ export async function loadGhlHealth(
     _count: { _all: true },
   });
   const nonAssociation: Record<string, number> = {};
-  for (const group of otherRuns) bump(nonAssociation as Partial<Record<string, number>>, `${group.mode}:${group.status}`, group._count._all);
+  for (const group of otherRuns) bump(nonAssociation, `${group.mode}:${group.status}`, group._count._all);
 
   const clientRows = [...perClient.values()].sort((a, b) => b.needsAttention - a.needsAttention || b.intended - a.intended);
   const oldestAvailable = oldestPending?.availableAt ?? null;

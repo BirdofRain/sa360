@@ -16,7 +16,7 @@ import {
   workflowSkipped,
 } from "../../test/delivery-diagnostics-fixtures.js";
 import { buildGhlRunDiagnostic } from "./ghl-run-diagnostic.js";
-import { classifyGhlDelivery, destinationState } from "./ghl-health.js";
+import { classifyGhlDelivery, destinationState, type GhlDestinationState } from "./ghl-health.js";
 import { deriveDrainStatus, type QueueSnapshot } from "./infra-health.js";
 import { createConcurrencyGate, createFixedWindowRateLimiter } from "./limits.js";
 import { sanitizeErrorText, sanitizedGhlErrorBody } from "./sanitize.js";
@@ -46,7 +46,7 @@ function diagnose(input: {
   });
 }
 
-function classify(diagnostic: ReturnType<typeof diagnose> | null, outbox = outboxFixture(), state = "live" as const) {
+function classify(diagnostic: ReturnType<typeof diagnose> | null, outbox = outboxFixture(), state: GhlDestinationState = "live") {
   return classifyGhlDelivery({ outbox, diagnostic, destinationState: state, accountStatus: "active", now: FIXTURE_NOW });
 }
 

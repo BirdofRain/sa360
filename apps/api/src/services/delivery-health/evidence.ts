@@ -21,7 +21,7 @@ export function machineCode(value: string | null | undefined): string | null {
   return MACHINE_CODE.test(head) ? head : null;
 }
 
-function internalId(value: string | null | undefined): string | null {
+export function internalId(value: string | null | undefined): string | null {
   if (!value) return null;
   const trimmed = value.trim();
   if (!trimmed || trimmed.length > 128) return null;

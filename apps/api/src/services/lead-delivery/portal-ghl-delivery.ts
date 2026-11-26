@@ -6,7 +6,7 @@
  * retry a delivery, or write a timeline event.
  */
 
-import type { PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
 
 import {
   canonicalGhlDelivery,
@@ -63,6 +63,9 @@ export type PortalLeadDeliveryKey = {
   clientAccountId: string | null;
   destinationLocationId: string | null;
 };
+
+/** Read-only callers may pass a transaction client. This module only reads. */
+export type PortalGhlDeliveryDb = PrismaClient | Prisma.TransactionClient;
 
 type StoredStep = {
   stepOrder: number;
@@ -157,7 +160,7 @@ export function customerBaselineWithoutContact(input: {
 
 export async function loadPortalGhlDeliveryFacts(
   leads: PortalLeadDeliveryKey[],
-  db: PrismaClient
+  db: PortalGhlDeliveryDb
 ): Promise<Map<string, PortalGhlDeliveryFacts>> {
   const ids = [...new Set(leads.map((lead) => lead.id).filter(Boolean))];
   const out = new Map<string, PortalGhlDeliveryFacts>();
@@ -381,7 +384,7 @@ function matchingOutbox(outboxes: StoredOutbox[], lead: PortalLeadDeliveryKey): 
   return matches[0] ?? null;
 }
 
-function optionalStepFailures(steps: StoredStep[], workflowRequired: boolean): PortalGhlOptionalStepFailure[] {
+export function optionalStepFailures(steps: StoredStep[], workflowRequired: boolean): PortalGhlOptionalStepFailure[] {
   const failures: PortalGhlOptionalStepFailure[] = [];
   for (const step of steps) {
     const optional =
@@ -397,7 +400,7 @@ function optionalStepFailures(steps: StoredStep[], workflowRequired: boolean): P
   return failures;
 }
 
-async function loadOnboardingKeys(db: PrismaClient, runs: StoredRun[]): Promise<string[]> {
+export async function loadOnboardingKeys(db: PortalGhlDeliveryDb, runs: Array<{ idempotencyKey: string; stepRuns: Array<{ responseRedactedJson: unknown }> }>): Promise<string[]> {
   const candidates = new Set<string>();
   for (const run of runs) {
     if (run.idempotencyKey.trim()) candidates.add(run.idempotencyKey.trim());
@@ -412,7 +415,7 @@ async function loadOnboardingKeys(db: PrismaClient, runs: StoredRun[]): Promise<
   return rows.map((row) => row.idempotencyKey);
 }
 
-async function loadAttemptIds(db: PrismaClient, runs: StoredRun[]): Promise<Map<string, string>> {
+export async function loadAttemptIds(db: PortalGhlDeliveryDb, runs: Array<{ idempotencyKey: string }>): Promise<Map<string, string>> {
   const keys = runs.map((run) => run.idempotencyKey.trim()).filter(Boolean);
   const ids = new Map<string, string>();
   if (keys.length === 0) return ids;

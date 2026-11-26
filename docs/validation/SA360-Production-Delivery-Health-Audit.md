@@ -18,6 +18,141 @@ No consumer names, emails, phones, or payload bodies are included. Internal acco
 
 ---
 
+## 0. Update — 25 Nov 2026, 9:55 PM ET: read-only delivery diagnostics deployed, production diagnostics not yet run
+
+Everything in this section is read-only except the merge and its normal deployment, which were authorized. No delivery was replayed or repaired. No monitor was enabled. No credential was rotated. No client configuration, routing, workflow enrollment, retry behavior, or migration changed.
+
+### 0.1 Final PR and deployment SHAs — verified
+
+| Item | Value |
+| --- | --- |
+| `master` before the merge | `b2fcd0369862b5e6ee20c53837a32b083eb8b5fe` |
+| #379 original head | `0708242cbe78e3a2f04cc5fbe5f9bbae89d8f65b` |
+| #380 corrections, merged into #379 | `3fd29ff1` plus `b5e97452` (provider error text naming a person or address is withheld) and `168af216` (diagnostics plan no longer claims all secrets are encrypted) |
+| Final reviewed candidate (#379 head) | `168af216e9522b937045ae63b1126c7cd4945665` |
+| Squash commit on `master` | `7d7dcc8e7abb3af5865319b1deca3140ca1baa5a`. Parent `b2fcd03`. Tree identical to the candidate. 25 files, no migrations, no package or deploy changes |
+| `sa360` deployment | `fb3a59cd-a432-46fa-844d-5ab8962b7dca`, ACTIVE 9:40 PM ET, 12/12 steps, 0 errors. `sa360-api`, `sa360-worker`, `sa360-migrate` all on `7d7dcc8e` |
+| `sa360-admin-coc` deployment | `777be42e-b488-4256-bfff-bdbf28a675d4`, ACTIVE 9:40 PM ET, 7/7 steps, 0 errors, on `7d7dcc8e` |
+
+Before merging, the candidate passed 139/139 focused tests and API typecheck and build. The PR CI production builds for the API and Admin C.O.C. also passed. The full API suite was completed on the #379 head: 4,313 tests, 21 failures. Every failure was rerun on clean `b2fcd03` with identical settings:
+
+- 11 files fail the same way on master, with or without an admin key. These are baseline.
+- 2 admin route files fail only because no admin key was configured locally. They pass with a test-only key.
+- 1 file hit a filesystem `EIO` error and passes in isolation.
+
+### 0.2 Post-deployment verification — verified
+
+| Check | Result |
+| --- | --- |
+| `GET /health` | 200. `commitSha` `7d7dcc8e7abb3af5865319b1deca3140ca1baa5a`, the exact merge |
+| `GET /health/db`, `GET /health/queue` | 200 `connected`, 200 `PONG` |
+| Portal `GET /api/health` | 200 `admin-coc` |
+| Unauthenticated `summary`, `ghl-runs`, `ghl-runs/:id` | 401 `Unauthorized` on all three (404 before the deploy). A wrong key also returns 401. Each denial wrote a `delivery_diagnostics.auth_denied` audit line |
+| `Cache-Control` | 401 responses carry `private`. `no-store` is set after authentication, so it can only be checked with the key. **Unverified** in production. Covered by route tests |
+| Authenticated, sanitized response | **Unverified in production.** No admin key was available (see 0.3) |
+| Delivery processing after the deploy (API and worker run log, 9:40–9:51 PM ET, counts only) | 11 `process-association-dispatch` calls and 11 company Sheets `process-dispatch` calls, all 200. 11 `Company sheets dispatch job completed`. Every worker schedule registered, including `ghl_association_dispatch` and `company_sheets_dispatch`. No error-level line and no 5xx |
+| Intake after the deploy | No public intake post arrived in that 11-minute evening window. Intake code is unchanged by this merge. Live intake was **not exercised** |
+
+### 0.3 Production security prerequisites — verified, values not read
+
+The check used the DigitalOcean API, reading env names and types only:
+
+- **API app `sa360`:** `ADMIN_API_KEY` (declared twice at app level, both type `SECRET`) and `SA360_ADMIN_API_KEY` (`SECRET`).
+- **Admin C.O.C. app `sa360-admin-coc`:** `ADMIN_API_KEY` (`SECRET`) and `SA360_ADMIN_API_KEY` (`SECRET`).
+- **No other copies:** `SA360_ADMIN_KEY` is not deployed anywhere, and `goldfish-app` has no admin key.
+
+All encrypted values were present. The API reads `ADMIN_API_KEY` first and the CLI sends the same header, so the diagnostics CLI needs no new environment variable.
+
+Limits of this check:
+
+- Copies under unrelated names, or outside App Platform, cannot be ruled out without reading values.
+- The duplicate `ADMIN_API_KEY` declaration on `sa360` should be collapsed to one entry. That is a spec change and was not made.
+
+This check also extends critical issue 4. These credentials on the live spec are type `GENERAL`, which means plaintext:
+
+- **`sa360`:** `WEBHOOK_SECRET`, `GHL_PRIVATE_INTEGRATION_TOKEN`, `GHL_OAUTH_CLIENT_SECRET`, `SA360_LEADCAPTURE_WEBHOOK_SECRET`, `META_WEBHOOK_VERIFY_TOKEN`.
+- **`sa360-admin-coc`:** `WEBHOOK_SECRET`, `ADMIN_COC_PASSWORD`, `ADMIN_COC_SESSION_SECRET`, `ADMIN_COC_OBSERVER_PASSWORD`, `SA360_AGENT_WORKSPACE_API_KEY`, `CLIENT_PORTAL_API_KEY`, `CLIENT_PORTAL_SESSION_SECRET`, `RESEND_API_KEY`, `SA360_META_REVIEWER_PASSWORD`, `SA360_META_REVIEWER_SESSION_SECRET`.
+
+Rotation was not authorized and was not done.
+
+**Missing prerequisite for production diagnostics:** an operator-issued production admin key available to whoever runs the CLI. The key in App Platform is encrypted and is not readable through the API, and it was not extracted from a running container. To unblock:
+
+- **For a Cloud Agent:** add the key as a Cursor Cloud Agent secret named `SA360_ADMIN_KEY`, scoped to this repository.
+- **For an operator running it locally:** enter it with `read -rs SA360_ADMIN_KEY && export SA360_ADMIN_KEY`.
+
+In both cases set `SA360_API_BASE_URL=https://api.lifeagentlaunch.com` and follow `docs/runbooks/delivery-diagnostics.md`.
+
+### 0.4 and 0.5 — 24-hour and 7-day production delivery summaries: unavailable
+
+Not run. The reason is in 0.3. These are not zero. These commands produce them, run one at a time:
+
+```
+node scripts/delivery-diagnostics.readonly.mjs summary --window 24h
+node scripts/delivery-diagnostics.readonly.mjs summary --window 7d
+node scripts/delivery-diagnostics.readonly.mjs runs --status failed --window 7d --limit 50
+```
+
+When they run, check each section's `available` flag and the attention list for `ghl_evaluation_truncated` and `sheets_receipts_truncated` before reading totals as complete.
+
+### 0.6 Jason Newman incident — no new production evidence
+
+The run-detail command is `node scripts/delivery-diagnostics.readonly.mjs run cmwvjeutx00iohn0u95v1d578 cmwvktviw00nhhn0uc3ru5eer cmwvy9fwa017lhn0uxyly0cq6`. It was not run. Its items stay as section 1a left them:
+
+| Item | 10:01 PM `cmwvjeutx00iohn0u95v1d578` | Ralph D. / Terry H. (`partial_success`) |
+| --- | --- | --- |
+| Verified contact fulfillment | **Unavailable.** Code inference: an id was returned, because the opportunity POST requires one. No new contact was seen at 10:01 PM | Contact seen in GHL and on the sheet (section 1a) |
+| Contact external id, destination location | **Unavailable** | **Unavailable** |
+| Opportunity step | HTTP 400 in the log. Stored status **unavailable** | No GHL error logged. Stored status **unavailable** |
+| Workflow enrollment | SA360's own step is skipped after an opportunity failure, per code. Native GHL enrollment **unverified** | **Unavailable** |
+| Recorded workflow requirement | **Unavailable** | **Unavailable** |
+| Optional warnings | **Unavailable** | Which optional step forced `partial_success` is **unavailable** |
+| Retry disposition | Code says `hold` (failed with a 4xx receipt). Stored state **unavailable** | Code says `hold` |
+| Current `lalAiBot1VetWebform` | **Unavailable** | Same client |
+| Historical configuration | Even when the current value is read, it does not show what was configured at 10:01 PM. The run's own behavior (it posted an opportunity) is the only execution-time evidence that the flag was off for that run | Same limit |
+
+The deployed diagnostics now classify the 10:01 PM shape as `terminal_required_step_failure`, naming the opportunity step and its HTTP status, with `retryDisposition: hold` reported beside it. On the pre-review code it would have read `held_uncertain` with no failed step named.
+
+### 0.7 Other affected clients or unresolved exceptions — unavailable
+
+No database or diagnostics read was possible. The previous container's run log (24 Nov 7:30 PM ET to 25 Nov 9:40 PM ET) was discarded when deployment `fb3a59cd` superseded it. The platform log API now answers `final_cleanup` for that deployment, so no further log-derived counts can be taken for that period from DigitalOcean. Better Stack may hold it. Nothing in the first 11 minutes on the new build was an error.
+
+### 0.8 Sheets and GHL fulfillment breakdown — unavailable
+
+Since the deploy, both drains are running on schedule and returning 200 (0.2). Per-client Sheets and GHL counts need the summary in 0.4.
+
+### 0.9 Reconciliation coverage and evidence gaps
+
+| Gap | Status |
+| --- | --- |
+| Production DB and Valkey reads | Still **unavailable**: firewall plus no read role, as in critical issue 3 |
+| Diagnostics endpoints | Deployed and verified unauthenticated. Authenticated output **unavailable** until an admin key is provided |
+| Logs for the 26 hours before the deploy | Lost from the platform log API at the deploy. Better Stack **unverified** |
+| GHL and Google destination reads | Not performed. Not authorized as part of this pass |
+| Execution-time destination configuration | Not stored per run. Cannot be reconstructed from current configuration |
+
+### 0.10 Updated verdict: YELLOW, unchanged
+
+Production is healthy on `7d7dcc8e`, and delivery drains are running. The tooling to answer the open questions is deployed, but those questions are still open:
+
+- the Jason Newman 10:01 PM run
+- 24-hour and 7-day totals
+- other clients
+
+Also unchanged: the delivery-health monitor is still off, and the plaintext secrets remain.
+
+### 0.11 Recommended next actions
+
+1. **Operator:** provide the admin key as described in 0.3, then run the four diagnostics commands one at a time and attach the output to this audit. Do not replay anything they show.
+2. **GHL delivery owner:** using the run-detail output, record the 10:01 PM contact id and location and read Jason's current `lalAiBot1VetWebform`. Report the current value as current only.
+3. **Whoever holds the DigitalOcean spec:**
+   - Rotate the plaintext credentials listed in 0.3 and store them as `SECRET`.
+   - Collapse the duplicate `ADMIN_API_KEY` entry.
+   - Both are separate, authorized changes.
+4. **Operator:** the earlier recommendation to enable the delivery-health monitor still stands. Use the existing runbook, after the diagnostics summary looks right.
+5. **Platform:** ship API logs to a store that survives a deploy, or confirm Better Stack retention, so the next audit doesn't lose its log window.
+
+---
+
 ## 1. Overall verdict: YELLOW
 
 Production is up. The API, worker, and portal are on the current `master` commit. LeadCapture NextGen and one legacy LeadCapture route are accepting posts with HTTP 200. The Sheets drain is running every minute and completed 10 Google write attempts in this window. There is no evidence of a platform-wide outage in the retained logs (no API 5xx, no worker job exceptions).

@@ -26,6 +26,7 @@ import {
   type StoredRunForDiagnostic,
 } from "./ghl-run-diagnostic.js";
 import type { DiagnosticsDb } from "./read-only.js";
+import { sanitizeCode } from "./sanitize.js";
 import type { DiagnosticWindow } from "./window.js";
 
 export const GHL_EVALUATION_CAP = 500;
@@ -149,7 +150,7 @@ export function classifyGhlDelivery(input: {
   // The dispatcher also settles a failed run that called GHL as uncertain. A
   // stored run decides fulfillment; the outbox row only reports the hold.
   if (outbox.status === "uncertain" && (!diagnostic || diagnostic.run.status === "executing")) {
-    return { class: "held_uncertain", failedRequiredSteps: none, code: outbox.lastError ?? null };
+    return { class: "held_uncertain", failedRequiredSteps: none, code: sanitizeCode(outbox.lastError) };
   }
 
   if (!diagnostic) {
@@ -159,7 +160,7 @@ export function classifyGhlDelivery(input: {
     if (input.accountStatus && input.accountStatus !== "active") {
       return { class: "intentional_non_delivery", failedRequiredSteps: none, code: `client_${input.accountStatus}` };
     }
-    return { class: "settled_without_run_unexplained", failedRequiredSteps: none, code: outbox.outcome ?? null };
+    return { class: "settled_without_run_unexplained", failedRequiredSteps: none, code: sanitizeCode(outbox.outcome) };
   }
 
   const status = diagnostic.run.status;

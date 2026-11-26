@@ -93,6 +93,27 @@ test("sanitizers scrub consumer identifiers and keep only whitelisted GHL error 
   assert.equal(text.includes("contact\":"), false);
 });
 
+test("provider text naming a person or an address is withheld while validator text is kept", () => {
+  assert.equal(sanitizeErrorText("Contact Jason Newman already exists"), "[withheld]");
+  assert.equal(sanitizeErrorText("Invalid address 123 Main Street, Springfield 62704"), "[withheld]");
+  assert.equal(sanitizeErrorText("name 'jason newman' is invalid"), "name [redacted] is invalid");
+  assert.equal(sanitizeErrorText("pipelineStageId must be a string"), "pipelineStageId must be a string");
+  assert.equal(
+    sanitizeErrorText("GHL adapter is disabled (GHL_DELIVERY_ADAPTER_MODE=disabled)."),
+    "GHL adapter is disabled (GHL_DELIVERY_ADAPTER_MODE=disabled)."
+  );
+
+  const leaked = "Contact Jason Newman at 123 Main Street already exists";
+  const failed = { ...opportunityFailed(3), errorSummary: leaked };
+  const diagnostic = diagnose({
+    run: { status: "failed", errors: [leaked], summary: leaked, stepRuns: [contactStep(), tagStep(), failed] },
+    outbox: { status: "uncertain", outcome: "failed", lastError: leaked },
+  });
+  const outbox = outboxFixture({ status: "uncertain", outcome: "failed", lastError: leaked });
+  const out = JSON.stringify({ diagnostic, classified: classifyGhlDelivery({ outbox, diagnostic: null, destinationState: "live", accountStatus: "active", now: FIXTURE_NOW }) });
+  for (const fragment of ["Jason", "Newman", "Main Street"]) assert.equal(out.includes(fragment), false, fragment);
+});
+
 test("a required workflow that was skipped is a partial success with contact delivered and workflow incomplete", () => {
   const diagnostic = diagnose({
     run: { status: "partial_success", stepRuns: [contactStep(), tagStep(), workflowSkipped(), ownerFailed(4)] },

@@ -67,7 +67,7 @@ Postgres and Valkey round trip, per-queue counts, oldest waiting job, stalled ca
 
 ## What is never returned
 
-Stored request or response bodies, lead names, emails, phones, addresses, spreadsheet row values, GHL tokens, Google tokens, and portal credentials. Error text is scrubbed and capped. GHL error bodies are reduced to `statusCode`, `error`, and a scrubbed `message`. The response carries `evidence: { storedBodiesReturned: false, consumerFieldsReturned: false, externalCallsMade: false }` on a run.
+Stored request or response bodies, lead names, emails, phones, addresses, spreadsheet row values, GHL tokens, Google tokens, and portal credentials. Error text is scrubbed and capped. Quoted values become `[redacted]`, and any text with an unrecognised capitalised word or a run of four or more digits (a name, a street number, a ZIP) is returned as `[withheld]`; use `errorCode` and `httpStatus` instead. GHL error bodies are reduced to `statusCode`, `error`, and a scrubbed `message`. The response carries `evidence: { storedBodiesReturned: false, consumerFieldsReturned: false, externalCallsMade: false }` on a run.
 
 ## Safety properties
 

@@ -12,11 +12,43 @@ import { machineCode, scrubDeliveryHealthText } from "../delivery-health/evidenc
 const MAX_ERROR_TEXT = 300;
 const MAX_LIST_ITEMS = 5;
 
+export const WITHHELD_TEXT = "[withheld]";
+
+/**
+ * Step summaries and run errors carry LeadConnector's raw error text, which can
+ * echo a submitted name or address. Pattern scrubbing cannot recognise those,
+ * so free text is returned only when every capitalised word is known
+ * vocabulary and no long digit run (street number, ZIP) appears. Anything
+ * else is replaced by WITHHELD_TEXT; the error code and HTTP status still
+ * identify the failure.
+ */
+const KNOWN_CAPITALISED = new Set([
+  "A", "API", "Ambiguous", "Already", "Association", "Bad", "Blocked", "Campaign", "CampaignRoutingRule", "Cannot",
+  "Conflict", "Contact", "Contacts", "Custom", "Delivery", "Duplicate", "Entity", "Error", "Existing", "Failed",
+  "Field", "Fields", "Forbidden", "Found", "GHL", "Gateway", "Google", "HTTP", "ID", "Internal", "Intake",
+  "Invalid", "LeadConnector", "Live", "Location", "Many", "Missing", "No", "Not", "Note", "OAuth", "OK", "Neither",
+  "Opportunity", "Option", "Phase", "Pipeline", "Possible", "Request", "Requests", "Required", "SA360", "Server",
+  "Service", "Sheet", "Skipped", "Source", "Stage", "TEXT", "Tag", "Tags", "The", "This", "Timeout", "Too",
+  "Unauthorized", "Unavailable", "Unprocessable", "Validated", "Withheld", "Workflow",
+]);
+
+const QUOTED_VALUE = /"[^"]*"|`[^`]*`|“[^”]*”|‘[^’]*’|(^|[\s:=(])'[^']*'/g;
+
+function isKnownVocabulary(text: string): boolean {
+  if (/\d{4,}/.test(text)) return false;
+  for (const word of text.split(/[^A-Za-z0-9_]+/)) {
+    if (/^[A-Z][A-Z0-9]*(_[A-Z0-9]+)+$/.test(word)) continue;
+    if (/^[A-Z]/.test(word) && !KNOWN_CAPITALISED.has(word)) return false;
+  }
+  return true;
+}
+
 export function sanitizeErrorText(value: string | null | undefined, max = MAX_ERROR_TEXT): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   if (!trimmed) return null;
-  return scrubDeliveryHealthText(trimmed, max);
+  const scrubbed = scrubDeliveryHealthText(trimmed, max).replace(QUOTED_VALUE, "$1[redacted]");
+  return isKnownVocabulary(scrubbed) ? scrubbed : WITHHELD_TEXT;
 }
 
 export function sanitizeErrorList(value: unknown): string[] {

@@ -34,7 +34,8 @@ Verified from outside the application, without credentials:
 
 - Public health endpoints return 200 and the API reports build `b2fcd03`.
 - Admin endpoints return 401 without a key.
-- The App Platform spec stores secrets encrypted.
+
+Not verifiable without credentials, so not claimed above: how App Platform stores each variable. A later read-only DigitalOcean API check (env names and types only, no values) found every deployed admin key copy (`ADMIN_API_KEY` and `SA360_ADMIN_API_KEY` on `sa360` and `sa360-admin-coc`) is type `SECRET`. Several other credentials on both apps are plaintext `GENERAL` variables; see the production delivery health audit.
 
 Inaccessible in this session, because no admin key and no production database credential was provided and none may be used:
 
